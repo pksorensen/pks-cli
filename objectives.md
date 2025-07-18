@@ -107,3 +107,13 @@ we need to provdie mcp prompts files for devlopment flow with github issues and 
 Need to investigate a good bridge between local command files in .claude (ultimately we want to support other tools than claude but github copilot also have local commands) - sounds like a initializer for the init command if it should generate local command files or one just uses the mcp provided promps.
 
 For initializing prompt/command files we need to know the agent tool (github copilot or claude code, or gemini-cli also).
+
+# Name
+
+PKS, Thats my name Poul Kjeldager Sørensen, but i like that we tried to find a name that also made sense like Professionel Kubernetes Simplifier, but its nothing to do with kubernetes. What may we call it that fits with PKS then? that fits the agentic development stuff.
+
+# Readme
+
+We need to explain people what it means to work agentic, and that we use llm and ai exesive to develop this meaning we dont inspect all the code. We work from a simulate -> build / "mock" -> "real" principe where the users might run into something that is mocked and not ready yet. However we also want it to be enterprice ready so we do need to have alot of focus on evaluation/testing so when we release we know things work.
+
+We will try to use issues alot to track changes.
