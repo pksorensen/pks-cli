@@ -3,6 +3,7 @@ using PKS.CLI.Tests.Infrastructure;
 using PKS.Infrastructure.Initializers.Base;
 using PKS.Infrastructure.Initializers.Context;
 using System.IO.Abstractions.TestingHelpers;
+using Xunit;
 using Xunit.Abstractions;
 
 namespace PKS.CLI.Tests.Unit;

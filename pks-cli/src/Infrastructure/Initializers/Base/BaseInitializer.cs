@@ -81,7 +81,7 @@ public abstract class BaseInitializer : IInitializer
     /// <summary>
     /// Helper method to ensure a directory exists
     /// </summary>
-    protected void EnsureDirectoryExists(string directoryPath)
+    protected virtual void EnsureDirectoryExists(string directoryPath)
     {
         if (!Directory.Exists(directoryPath))
         {
@@ -92,7 +92,7 @@ public abstract class BaseInitializer : IInitializer
     /// <summary>
     /// Helper method to write a file with proper directory creation
     /// </summary>
-    protected async Task WriteFileAsync(string filePath, string content, InitializationContext context)
+    protected virtual async Task WriteFileAsync(string filePath, string content, InitializationContext context)
     {
         var directory = Path.GetDirectoryName(filePath);
         if (!string.IsNullOrEmpty(directory))
@@ -109,7 +109,7 @@ public abstract class BaseInitializer : IInitializer
     /// <summary>
     /// Helper method to copy a file with proper handling
     /// </summary>
-    protected async Task<bool> CopyFileAsync(string sourcePath, string destinationPath, InitializationContext context)
+    protected virtual async Task<bool> CopyFileAsync(string sourcePath, string destinationPath, InitializationContext context)
     {
         if (!File.Exists(sourcePath))
         {

@@ -3,6 +3,7 @@ using PKS.CLI.Tests.Infrastructure;
 using Spectre.Console.Cli;
 using Spectre.Console.Testing;
 using System.IO.Abstractions.TestingHelpers;
+using Xunit;
 using Xunit.Abstractions;
 
 namespace PKS.CLI.Tests.Integration;
@@ -278,7 +279,7 @@ public class InitCommandTests : TestBase
             data: null);
     }
 
-    protected override void Dispose()
+    public override void Dispose()
     {
         _console?.Dispose();
         base.Dispose();

@@ -5,6 +5,7 @@ using PKS.Infrastructure.Initializers;
 using PKS.Infrastructure.Initializers.Context;
 using PKS.Infrastructure.Initializers.Registry;
 using PKS.Infrastructure.Initializers.Service;
+using Xunit;
 using Xunit.Abstractions;
 
 namespace PKS.CLI.Tests.Unit;
