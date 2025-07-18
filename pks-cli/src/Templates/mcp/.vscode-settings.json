@@ -1,0 +1,73 @@
+{
+  // VS Code workspace settings for {{ProjectName}} MCP integration
+  "terminal.integrated.env.linux": {
+    "{{MCP.EnvPrefix}}_LOG_LEVEL": "Information",
+    "{{MCP.EnvPrefix}}_CONFIG_PATH": "./config",
+    "{{MCP.EnvPrefix}}_WORK_DIR": "./",
+    "DOTNET_ENVIRONMENT": "Development"
+  },
+  "terminal.integrated.env.osx": {
+    "{{MCP.EnvPrefix}}_LOG_LEVEL": "Information",
+    "{{MCP.EnvPrefix}}_CONFIG_PATH": "./config",
+    "{{MCP.EnvPrefix}}_WORK_DIR": "./",
+    "DOTNET_ENVIRONMENT": "Development"
+  },
+  "terminal.integrated.env.windows": {
+    "{{MCP.EnvPrefix}}_LOG_LEVEL": "Information",
+    "{{MCP.EnvPrefix}}_CONFIG_PATH": "./config",
+    "{{MCP.EnvPrefix}}_WORK_DIR": "./",
+    "DOTNET_ENVIRONMENT": "Development"
+  },
+  "{{project_name}}.mcp": {
+    "enabled": true,
+    "configPath": "./.mcp.json",
+    "logLevel": "info",
+    "tools": "{{MCP.Tools}}".split(","),
+    "autoStart": true
+  },
+  "files.associations": {
+    ".mcp.json": "json",
+    ".mcp.*.json": "json",
+    "agent-config.json": "json"
+  },
+  "json.schemas": [
+    {
+      "fileMatch": [".mcp.json", ".mcp.*.json"],
+      "url": "https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/main/schema/mcp.json"
+    }
+  ],
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "Test MCP Configuration",
+        "type": "shell",
+        "command": "dnx",
+        "args": ["{{project_name}}-cli", "mcp", "--test"],
+        "group": "test",
+        "presentation": {
+          "echo": true,
+          "reveal": "always",
+          "focus": false,
+          "panel": "shared"
+        },
+        "problemMatcher": []
+      },
+      {
+        "label": "Start MCP Server",
+        "type": "shell",
+        "command": "dnx",
+        "args": ["{{project_name}}-cli", "mcp", "--server"],
+        "group": "build",
+        "isBackground": true,
+        "presentation": {
+          "echo": true,
+          "reveal": "always",
+          "focus": false,
+          "panel": "dedicated"
+        },
+        "problemMatcher": []
+      }
+    ]
+  }
+}

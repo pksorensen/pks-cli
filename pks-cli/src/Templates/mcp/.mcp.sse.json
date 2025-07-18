@@ -1,0 +1,196 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/main/schema/mcp.json",
+  "description": "MCP SSE configuration for {{ProjectName}} - Remote AI-powered development tool integration",
+  "version": "1.0.0",
+  "mcpServers": {
+    "{{project_name}}-remote": {
+      "description": "Remote {{ProjectName}} CLI service with agentic capabilities",
+      "type": "sse",
+      "url": "${{{MCP.EnvPrefix}}_SERVER_URL:-{{MCP.ServerUrl}}}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${{{MCP.EnvPrefix}}_API_KEY}",
+        "Content-Type": "application/json",
+        "X-Client-Version": "1.0.0",
+        "X-Project-Name": "{{ProjectName}}"
+      },
+      "transport": {
+        "type": "sse",
+        "reconnect": true,
+        "reconnectInterval": 5000,
+        "maxReconnectAttempts": 10
+      },
+      "capabilities": {
+        "tools": true,
+        "resources": true,
+        "prompts": true,
+        "logging": true,
+        "streaming": true
+      },
+      "tools": [
+        {
+          "name": "remote-init",
+          "description": "Initialize projects using remote template service",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "template": {
+                "type": "string",
+                "description": "Remote template identifier"
+              },
+              "name": {
+                "type": "string",
+                "description": "Project name"
+              },
+              "repository": {
+                "type": "string",
+                "description": "Git repository URL"
+              },
+              "features": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Features to enable"
+              }
+            },
+            "required": ["template", "name"]
+          }
+        },
+        {
+          "name": "cloud-deploy",
+          "description": "Deploy to cloud environments with intelligent orchestration",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string",
+                "description": "Cloud provider",
+                "enum": ["azure", "aws", "gcp", "kubernetes"]
+              },
+              "region": {
+                "type": "string",
+                "description": "Target region"
+              },
+              "tier": {
+                "type": "string",
+                "description": "Service tier",
+                "enum": ["free", "basic", "standard", "premium"]
+              },
+              "scaling": {
+                "type": "object",
+                "properties": {
+                  "min": { "type": "integer", "minimum": 0 },
+                  "max": { "type": "integer", "minimum": 1 },
+                  "target": { "type": "integer", "minimum": 1 }
+                }
+              }
+            },
+            "required": ["provider"]
+          }
+        },
+        {
+          "name": "ai-assist",
+          "description": "AI-powered development assistance and code generation",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "task": {
+                "type": "string",
+                "description": "Development task to assist with",
+                "enum": ["generate", "review", "optimize", "test", "document", "refactor"]
+              },
+              "context": {
+                "type": "string",
+                "description": "Code or project context"
+              },
+              "language": {
+                "type": "string",
+                "description": "Programming language"
+              },
+              "framework": {
+                "type": "string",
+                "description": "Framework or technology stack"
+              }
+            },
+            "required": ["task"]
+          }
+        },
+        {
+          "name": "collaborative-session",
+          "description": "Start collaborative development sessions with remote teams",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "sessionType": {
+                "type": "string",
+                "description": "Type of collaborative session",
+                "enum": ["pair-programming", "code-review", "architecture-planning", "troubleshooting"]
+              },
+              "participants": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Participant identifiers"
+              },
+              "duration": {
+                "type": "integer",
+                "description": "Session duration in minutes"
+              }
+            },
+            "required": ["sessionType"]
+          }
+        }
+      ],
+      "resources": [
+        {
+          "name": "remote-templates",
+          "description": "Available remote project templates",
+          "uri": "{{MCP.ServerUrl}}/api/templates",
+          "mimeType": "application/json"
+        },
+        {
+          "name": "deployment-status",
+          "description": "Real-time deployment status and logs",
+          "uri": "{{MCP.ServerUrl}}/api/deployments/status",
+          "mimeType": "application/json"
+        },
+        {
+          "name": "ai-models",
+          "description": "Available AI models and capabilities",
+          "uri": "{{MCP.ServerUrl}}/api/ai/models",
+          "mimeType": "application/json"
+        }
+      ],
+      "authentication": {
+        "type": "oauth2",
+        "authorizationUrl": "{{MCP.ServerUrl}}/oauth/authorize",
+        "tokenUrl": "{{MCP.ServerUrl}}/oauth/token",
+        "scopes": ["read", "write", "deploy", "ai-assist"],
+        "clientId": "${{{MCP.EnvPrefix}}_CLIENT_ID}",
+        "clientSecret": "${{{MCP.EnvPrefix}}_CLIENT_SECRET}"
+      },
+      "metadata": {
+        "version": "1.0.0",
+        "author": "{{ProjectName}} Team",
+        "license": "MIT",
+        "homepage": "{{MCP.ServerUrl}}",
+        "tags": ["development", "automation", "ai", "cloud", "remote", "collaborative"]
+      }
+    }
+  },
+  "configuration": {
+    "logLevel": "${{{MCP.EnvPrefix}}_MCP_LOG_LEVEL:-info}",
+    "timeout": 60000,
+    "retries": 5,
+    "security": {
+      "allowRemoteServers": true,
+      "allowFileAccess": false,
+      "allowNetworkAccess": true,
+      "validateSSL": true
+    },
+    "networking": {
+      "connectTimeout": 10000,
+      "readTimeout": 30000,
+      "maxConcurrentConnections": 5
+    }
+  }
+}
