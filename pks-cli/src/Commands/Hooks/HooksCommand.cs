@@ -45,12 +45,13 @@ public class HooksCommand : AsyncCommand<HooksSettings>
 
         try
         {
-            var success = await _hooksService.InitializeClaudeCodeHooksAsync(settings.Force);
+            var success = await _hooksService.InitializeClaudeCodeHooksAsync(settings.Force, settings.Scope);
             
             if (success)
             {
                 AnsiConsole.MarkupLine("[green]✓ Claude Code hooks configuration created[/]");
                 
+                var configPath = GetConfigurationPath(settings.Scope);
                 var panel = new Panel(
                     "[yellow]Claude Code hooks have been configured![/]\n\n" +
                     "The following commands are now available for Claude Code:\n" +
@@ -58,7 +59,7 @@ public class HooksCommand : AsyncCommand<HooksSettings>
                     "• [cyan]pks hooks post-tool-use[/] - After tool execution\n" +
                     "• [cyan]pks hooks user-prompt-submit[/] - Before prompt processing\n" +
                     "• [cyan]pks hooks stop[/] - When agent stops responding\n\n" +
-                    "[dim]Configuration written to ~/.claude/settings.json[/]"
+                    $"[dim]Configuration written to {configPath}[/]"
                 );
                 panel.Header = new PanelHeader("[cyan]Setup Complete[/]");
                 panel.Border = BoxBorder.Rounded;
@@ -123,14 +124,28 @@ public class HooksCommand : AsyncCommand<HooksSettings>
         AnsiConsole.MarkupLine("[yellow]PKS Hooks - Claude Code Integration[/]");
         AnsiConsole.MarkupLine("");
         AnsiConsole.MarkupLine("[cyan]Usage:[/]");
-        AnsiConsole.MarkupLine("  pks hooks init                   - Initialize Claude Code hooks");
-        AnsiConsole.MarkupLine("  pks hooks init --force           - Force overwrite existing hooks");
-        AnsiConsole.MarkupLine("  pks hooks list                   - List available hook events");
-        AnsiConsole.MarkupLine("  pks hooks pre-tool-use           - Handle PreToolUse event");
-        AnsiConsole.MarkupLine("  pks hooks post-tool-use          - Handle PostToolUse event");
-        AnsiConsole.MarkupLine("  pks hooks user-prompt-submit     - Handle UserPromptSubmit event");
-        AnsiConsole.MarkupLine("  pks hooks stop                   - Handle Stop event");
+        AnsiConsole.MarkupLine("  pks hooks init                          - Initialize Claude Code hooks (project scope)");
+        AnsiConsole.MarkupLine("  pks hooks init --force                  - Force overwrite existing hooks");
+        AnsiConsole.MarkupLine("  pks hooks init --scope user             - Initialize in user global settings");
+        AnsiConsole.MarkupLine("  pks hooks init --scope project          - Initialize in project settings (default)");
+        AnsiConsole.MarkupLine("  pks hooks init --scope local            - Initialize in local .claude folder");
+        AnsiConsole.MarkupLine("  pks hooks list                          - List available hook events");
+        AnsiConsole.MarkupLine("  pks hooks pre-tool-use                  - Handle PreToolUse event");
+        AnsiConsole.MarkupLine("  pks hooks post-tool-use                 - Handle PostToolUse event");
+        AnsiConsole.MarkupLine("  pks hooks user-prompt-submit            - Handle UserPromptSubmit event");
+        AnsiConsole.MarkupLine("  pks hooks stop                          - Handle Stop event");
         return 0;
+    }
+    
+    private static string GetConfigurationPath(SettingsScope scope)
+    {
+        return scope switch
+        {
+            SettingsScope.User => "~/.claude/settings.json",
+            SettingsScope.Project => "./.claude/settings.json",
+            SettingsScope.Local => "./.claude/settings.json",
+            _ => "settings.json"
+        };
     }
 }
 
@@ -139,22 +154,34 @@ public class HooksCommand : AsyncCommand<HooksSettings>
 /// </summary>
 public class HooksSettings : CommandSettings
 {
-    [CommandOption("-a|--action")]
-    [Description("Action to perform (init, list)")]
-    [DefaultValue(HookAction.List)]
-    public HookAction Action { get; set; } = HookAction.List;
-    
     [CommandOption("-f|--force")]
     [Description("Force overwrite existing hooks configuration")]
     [DefaultValue(false)]
     public bool Force { get; set; } = false;
+    
+    [CommandOption("-s|--scope")]
+    [Description("Settings scope: user (global), project (current directory), or local (.claude folder)")]
+    [DefaultValue(SettingsScope.Project)]
+    public SettingsScope Scope { get; set; } = SettingsScope.Project;
 }
 
 /// <summary>
-/// Available hook actions
+/// Settings scope for Claude Code hooks configuration
 /// </summary>
-public enum HookAction
+public enum SettingsScope
 {
-    Init,
-    List
+    /// <summary>
+    /// Global user settings (~/.claude/settings.json)
+    /// </summary>
+    User,
+    
+    /// <summary>
+    /// Project-specific settings (current directory/.claude/settings.json)
+    /// </summary>
+    Project,
+    
+    /// <summary>
+    /// Local directory settings (./.claude/settings.json)
+    /// </summary>
+    Local
 }

@@ -1,3 +1,5 @@
+using PKS.Commands.Hooks;
+
 namespace PKS.Infrastructure.Services;
 
 /// <summary>
@@ -9,5 +11,6 @@ public interface IHooksService
     /// Initializes Claude Code hooks by creating proper settings.json configuration
     /// </summary>
     /// <param name="force">Force overwrite existing hooks configuration</param>
-    Task<bool> InitializeClaudeCodeHooksAsync(bool force = false);
+    /// <param name="scope">Settings scope (user, project, local) - defaults to project</param>
+    Task<bool> InitializeClaudeCodeHooksAsync(bool force = false, SettingsScope scope = SettingsScope.Project);
 }

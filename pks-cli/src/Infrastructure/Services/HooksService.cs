@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using PKS.Commands.Hooks;
 using Spectre.Console;
 
 namespace PKS.Infrastructure.Services;
@@ -9,12 +10,11 @@ namespace PKS.Infrastructure.Services;
 /// </summary>
 public class HooksService : IHooksService
 {
-    public async Task<bool> InitializeClaudeCodeHooksAsync(bool force = false)
+    public async Task<bool> InitializeClaudeCodeHooksAsync(bool force = false, SettingsScope scope = SettingsScope.Project)
     {
         try
         {
-            var claudeDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
-            var settingsPath = Path.Combine(claudeDir, "settings.json");
+            var (claudeDir, settingsPath) = GetSettingsPaths(scope);
 
             // Ensure .claude directory exists
             if (!Directory.Exists(claudeDir))
@@ -287,5 +287,34 @@ public class HooksService : IHooksService
                 }
             }
         };
+    }
+    
+    private static (string claudeDir, string settingsPath) GetSettingsPaths(SettingsScope scope)
+    {
+        string claudeDir;
+        string settingsPath;
+        
+        switch (scope)
+        {
+            case SettingsScope.User:
+                claudeDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
+                settingsPath = Path.Combine(claudeDir, "settings.json");
+                break;
+                
+            case SettingsScope.Project:
+                claudeDir = Path.Combine(Directory.GetCurrentDirectory(), ".claude");
+                settingsPath = Path.Combine(claudeDir, "settings.json");
+                break;
+                
+            case SettingsScope.Local:
+                claudeDir = ".claude";
+                settingsPath = Path.Combine(claudeDir, "settings.json");
+                break;
+                
+            default:
+                throw new ArgumentException($"Unsupported settings scope: {scope}");
+        }
+        
+        return (claudeDir, settingsPath);
     }
 }
