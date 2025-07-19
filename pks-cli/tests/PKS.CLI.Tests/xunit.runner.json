@@ -1,0 +1,10 @@
+{
+  "parallelizeAssembly": false,
+  "parallelizeTestCollections": true,
+  "maxParallelThreads": 4,
+  "methodDisplay": "classAndMethod",
+  "diagnosticMessages": false,
+  "preEnumerateTheories": false,
+  "shadowCopy": false,
+  "stopOnFail": false
+}
