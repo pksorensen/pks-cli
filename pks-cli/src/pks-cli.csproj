@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
@@ -12,7 +13,7 @@
     <PackageId>pks-cli</PackageId>
     <PackageVersion>1.0.0</PackageVersion>
     <Authors>PKS Team</Authors>
-    <Description>The next agentic CLI for .NET developers - Professional Kubernetes Simplifier</Description>
+    <Description>The next agentic CLI for .NET developers - Poul's Killer Swarms</Description>
     <PackageTags>cli;dotnet;kubernetes;agentic;developer-tools</PackageTags>
     <RepositoryUrl>https://github.com/pks-team/pks-cli</RepositoryUrl>
     <PackageOutputPath>./bin/Release</PackageOutputPath>

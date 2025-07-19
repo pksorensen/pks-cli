@@ -7,7 +7,7 @@
 [38;5;51m██║     ██║  ██╗███████║[0m
 [38;5;51m╚═╝     ╚═╝  ╚═╝╚══════╝[0m
 
-[38;5;50m🤖 Professional Agentic Simplifier[0m
+[38;5;50m🤖 Poul's Killer Swarms[0m
 [38;5;50m🚀 The Next Agentic CLI for .NET Developers[0m
 
 [2mType 'pks --help' to get started with your agentic development journey![0m

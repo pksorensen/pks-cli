@@ -34,6 +34,9 @@ services.AddSingleton<PKS.CLI.Infrastructure.Services.IMcpServerService, PKS.CLI
 services.AddSingleton<IAgentFrameworkService, AgentFrameworkService>();
 services.AddSingleton<IPrdService, PrdService>();
 
+// Register PRD branch command
+services.AddTransient<PrdBranchCommand>();
+
 // Register GitHub and Project Identity services
 services.AddHttpClient<IGitHubService, GitHubService>();
 services.AddSingleton<IProjectIdentityService, ProjectIdentityService>();
@@ -96,27 +99,35 @@ app.Configure(config =>
     config.AddCommand<HooksCommand>("hooks")
         .WithDescription("Manage Claude Code hooks with smart dispatcher pattern");
         
-    // Add PRD commands
-    config.AddCommand<PrdCommand>("prd")
-        .WithDescription("Manage Product Requirements Documents (PRDs) with AI-powered generation");
+    // Add PRD branch command with subcommands
+    config.AddBranch<PrdSettings>("prd", prd =>
+    {
+        prd.SetDescription("Manage Product Requirements Documents (PRDs) with AI-powered generation");
         
-    config.AddCommand<PrdGenerateCommand>("prd-generate")
-        .WithDescription("Generate comprehensive PRD from idea description");
-        
-    config.AddCommand<PrdLoadCommand>("prd-load")
-        .WithDescription("Load and parse existing PRD file");
-        
-    config.AddCommand<PrdRequirementsCommand>("prd-requirements")
-        .WithDescription("List and filter requirements from PRD");
-        
-    config.AddCommand<PrdStatusCommand>("prd-status")
-        .WithDescription("Display PRD status, progress, and statistics");
-        
-    config.AddCommand<PrdValidateCommand>("prd-validate")
-        .WithDescription("Validate PRD for completeness and consistency");
-        
-    config.AddCommand<PrdTemplateCommand>("prd-template")
-        .WithDescription("Generate PRD templates for different project types");
+        prd.AddCommand<PrdGenerateCommand>("generate")
+            .WithDescription("Generate comprehensive PRD from idea description")
+            .WithExample(new[] { "prd", "generate", "A mobile app for task management" });
+            
+        prd.AddCommand<PrdLoadCommand>("load")
+            .WithDescription("Load and parse existing PRD file")
+            .WithExample(new[] { "prd", "load", "docs/PRD.md" });
+            
+        prd.AddCommand<PrdRequirementsCommand>("requirements")
+            .WithDescription("List and filter requirements from PRD")
+            .WithExample(new[] { "prd", "requirements", "--status", "pending" });
+            
+        prd.AddCommand<PrdStatusCommand>("status")
+            .WithDescription("Display PRD status, progress, and statistics")
+            .WithExample(new[] { "prd", "status" });
+            
+        prd.AddCommand<PrdValidateCommand>("validate")
+            .WithDescription("Validate PRD for completeness and consistency")
+            .WithExample(new[] { "prd", "validate", "--strict" });
+            
+        prd.AddCommand<PrdTemplateCommand>("template")
+            .WithDescription("Generate PRD templates for different project types")
+            .WithExample(new[] { "prd", "template", "MyProject", "--type", "web" });
+    });
 });
 
 return await app.RunAsync(args);
@@ -131,7 +142,7 @@ static void DisplayWelcomeBanner()
     ██║     ██║  ██╗███████║
     ╚═╝     ╚═╝  ╚═╝╚══════╝
     
-    🤖 Professional Agentic Simplifier
+    🤖 Poul's Killer Swarms
     🚀 The Next Agentic CLI for .NET Developers
     """;
 
