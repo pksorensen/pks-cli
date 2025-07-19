@@ -96,8 +96,29 @@ app.Configure(config =>
     config.AddCommand<PKS.CLI.Commands.Mcp.McpCommand>("mcp")
         .WithDescription("Model Context Protocol (MCP) server for AI integration");
         
-    config.AddCommand<HooksCommand>("hooks")
-        .WithDescription("Manage Claude Code hooks with smart dispatcher pattern");
+    // Add hooks branch command with subcommands
+    config.AddBranch<HooksSettings>("hooks", hooks =>
+    {
+        hooks.SetDescription("Manage Claude Code hooks integration");
+        
+        hooks.AddCommand<HooksCommand>("init")
+            .WithDescription("Initialize Claude Code hooks configuration");
+            
+        hooks.AddCommand<HooksCommand>("list")
+            .WithDescription("List available hook events");
+            
+        hooks.AddCommand<PreToolUseCommand>("pre-tool-use")
+            .WithDescription("Handle PreToolUse hook event from Claude Code");
+            
+        hooks.AddCommand<PostToolUseCommand>("post-tool-use")
+            .WithDescription("Handle PostToolUse hook event from Claude Code");
+            
+        hooks.AddCommand<UserPromptSubmitCommand>("user-prompt-submit")
+            .WithDescription("Handle UserPromptSubmit hook event from Claude Code");
+            
+        hooks.AddCommand<StopCommand>("stop")
+            .WithDescription("Handle Stop hook event from Claude Code");
+    });
         
     // Add PRD branch command with subcommands
     config.AddBranch<PrdSettings>("prd", prd =>

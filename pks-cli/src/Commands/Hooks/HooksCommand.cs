@@ -1,13 +1,13 @@
 using System.ComponentModel;
 using PKS.Infrastructure.Services;
-using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
 namespace PKS.Commands.Hooks;
 
 /// <summary>
-/// Command for managing Claude Code hooks integration with smart dispatcher pattern
+/// Command for managing Claude Code hooks integration
+/// Handles Claude Code hook events: pre-tool-use, post-tool-use, etc.
 /// </summary>
 public class HooksCommand : AsyncCommand<HooksSettings>
 {
@@ -22,200 +22,115 @@ public class HooksCommand : AsyncCommand<HooksSettings>
     {
         try
         {
-            return settings.Action switch
+            // Check the command name to determine action
+            var commandName = context.Name?.ToLower();
+            
+            return commandName switch
             {
-                HookAction.List => await ListHooksAsync(),
-                HookAction.Execute => await ExecuteHookAsync(settings),
-                HookAction.Install => await InstallHookAsync(settings),
-                HookAction.Remove => await RemoveHookAsync(settings),
-                _ => await ListHooksAsync()
+                "init" => await InitHooksAsync(settings),
+                "list" => await ListHooksAsync(),
+                _ => await ShowHelpAsync()
             };
         }
-        catch (ArgumentException ex)
+        catch (Exception ex)
         {
             AnsiConsole.MarkupLine($"[red]Error: {ex.Message}[/]");
             return 1;
         }
+    }
+
+    private async Task<int> InitHooksAsync(HooksSettings settings)
+    {
+        AnsiConsole.MarkupLine("[cyan]Initializing Claude Code hooks integration[/]");
+
+        try
+        {
+            var success = await _hooksService.InitializeClaudeCodeHooksAsync(settings.Force);
+            
+            if (success)
+            {
+                AnsiConsole.MarkupLine("[green]✓ Claude Code hooks configuration created[/]");
+                
+                var panel = new Panel(
+                    "[yellow]Claude Code hooks have been configured![/]\n\n" +
+                    "The following commands are now available for Claude Code:\n" +
+                    "• [cyan]pks hooks pre-tool-use[/] - Before tool execution\n" +
+                    "• [cyan]pks hooks post-tool-use[/] - After tool execution\n" +
+                    "• [cyan]pks hooks user-prompt-submit[/] - Before prompt processing\n" +
+                    "• [cyan]pks hooks stop[/] - When agent stops responding\n\n" +
+                    "[dim]Configuration written to ~/.claude/settings.json[/]"
+                );
+                panel.Header = new PanelHeader("[cyan]Setup Complete[/]");
+                panel.Border = BoxBorder.Rounded;
+                
+                AnsiConsole.Write(panel);
+                return 0;
+            }
+            else
+            {
+                AnsiConsole.MarkupLine("[red]✗ Failed to initialize Claude Code hooks[/]");
+                return 1;
+            }
+        }
         catch (Exception ex)
         {
-            AnsiConsole.MarkupLine($"[red]Unexpected error: {ex.Message}[/]");
+            AnsiConsole.MarkupLine($"[red]Error initializing hooks: {ex.Message}[/]");
             return 1;
         }
     }
 
     private async Task<int> ListHooksAsync()
     {
-        AnsiConsole.MarkupLine("[cyan]Available Hooks[/]");
+        AnsiConsole.MarkupLine("[cyan]Available Claude Code Hook Events[/]");
         
-        var hooks = await _hooksService.GetAvailableHooksAsync();
-        
-        if (!hooks.Any())
-        {
-            AnsiConsole.MarkupLine("[dim]No hooks found.[/]");
-            return 0;
-        }
-
         var table = new Table();
-        table.AddColumn("Name");
+        table.AddColumn("Command");
+        table.AddColumn("Event Type");
         table.AddColumn("Description");
-        table.AddColumn("Parameters");
 
-        foreach (var hook in hooks.OrderBy(h => h.Name))
-        {
-            var parameters = hook.Parameters.Any() 
-                ? string.Join(", ", hook.Parameters)
-                : "[dim]none[/]";
-            
-            table.AddRow(
-                $"[green]{hook.Name}[/]",
-                hook.Description,
-                parameters
-            );
-        }
+        table.AddRow(
+            "[green]pks hooks pre-tool-use[/]",
+            "PreToolUse",
+            "Called before Claude Code executes a tool"
+        );
+        
+        table.AddRow(
+            "[green]pks hooks post-tool-use[/]",
+            "PostToolUse", 
+            "Called after Claude Code executes a tool"
+        );
+        
+        table.AddRow(
+            "[green]pks hooks user-prompt-submit[/]",
+            "UserPromptSubmit",
+            "Called before Claude Code processes user prompts"
+        );
+        
+        table.AddRow(
+            "[green]pks hooks stop[/]",
+            "Stop",
+            "Called when Claude Code agent stops responding"
+        );
 
         AnsiConsole.Write(table);
+        
+        AnsiConsole.MarkupLine("\n[dim]Use 'pks hooks init' to configure Claude Code integration[/]");
         return 0;
     }
 
-    private async Task<int> ExecuteHookAsync(HooksSettings settings)
+    private async Task<int> ShowHelpAsync()
     {
-        if (string.IsNullOrEmpty(settings.HookName))
-        {
-            throw new ArgumentException("Hook name is required for execute action");
-        }
-
-        AnsiConsole.MarkupLine($"[cyan]Executing hook[/]: [yellow]{settings.HookName}[/]");
-
-        // Create hook context from parameters
-        var context = new HookContext
-        {
-            WorkingDirectory = Directory.GetCurrentDirectory(),
-            Parameters = ParseParameters(settings.Parameters)
-        };
-
-        // Show progress while executing
-        var result = await AnsiConsole.Progress()
-            .StartAsync(async ctx =>
-            {
-                var task = ctx.AddTask($"[green]Executing {settings.HookName}[/]");
-                
-                var hookResult = await _hooksService.ExecuteHookAsync(settings.HookName, context);
-                task.Increment(100);
-                
-                return hookResult;
-            });
-
-        // Display results
-        if (result.Success)
-        {
-            AnsiConsole.MarkupLine($"[green]✓ Hook executed successfully[/]");
-            AnsiConsole.MarkupLine($"[dim]{result.Message}[/]");
-            
-            if (result.Output.Any())
-            {
-                AnsiConsole.MarkupLine("[cyan]Output:[/]");
-                foreach (var output in result.Output)
-                {
-                    AnsiConsole.MarkupLine($"  [dim]{output.Key}:[/] {output.Value}");
-                }
-            }
-            return 0;
-        }
-        else
-        {
-            AnsiConsole.MarkupLine($"[red]✗ Hook execution failed[/]");
-            AnsiConsole.MarkupLine($"[red]{result.Message}[/]");
-            return 1;
-        }
-    }
-
-    private async Task<int> InstallHookAsync(HooksSettings settings)
-    {
-        if (string.IsNullOrEmpty(settings.Source))
-        {
-            AnsiConsole.MarkupLine("[red]Source is required for install action[/]");
-            return 1;
-        }
-
-        AnsiConsole.MarkupLine($"[cyan]Installing hook[/] from: [yellow]{settings.Source}[/]");
-
-        var result = await AnsiConsole.Progress()
-            .StartAsync(async ctx =>
-            {
-                var task = ctx.AddTask("[green]Installing hook[/]");
-                
-                var installResult = await _hooksService.InstallHookAsync(settings.Source);
-                task.Increment(100);
-                
-                return installResult;
-            });
-
-        if (result.Success)
-        {
-            AnsiConsole.MarkupLine("[green]✓ Hook installed successfully[/]");
-            AnsiConsole.MarkupLine($"[dim]Hook name: {result.HookName}[/]");
-            AnsiConsole.MarkupLine($"[dim]Installed to: {result.InstalledPath}[/]");
-            
-            if (result.Dependencies.Any())
-            {
-                AnsiConsole.MarkupLine("[cyan]Dependencies:[/]");
-                foreach (var dependency in result.Dependencies)
-                {
-                    AnsiConsole.MarkupLine($"  [dim]- {dependency}[/]");
-                }
-            }
-            return 0;
-        }
-        else
-        {
-            AnsiConsole.MarkupLine("[red]✗ Hook installation failed[/]");
-            AnsiConsole.MarkupLine($"[red]{result.Message}[/]");
-            return 1;
-        }
-    }
-
-    private async Task<int> RemoveHookAsync(HooksSettings settings)
-    {
-        if (string.IsNullOrEmpty(settings.HookName))
-        {
-            AnsiConsole.MarkupLine("[red]Hook name is required for remove action[/]");
-            return 1;
-        }
-
-        AnsiConsole.MarkupLine($"[cyan]Removing hook[/]: [yellow]{settings.HookName}[/]");
-
-        var success = await _hooksService.RemoveHookAsync(settings.HookName);
-
-        if (success)
-        {
-            AnsiConsole.MarkupLine("[green]✓ Hook removed successfully[/]");
-            return 0;
-        }
-        else
-        {
-            AnsiConsole.MarkupLine("[red]✗ Failed to remove hook[/]");
-            return 1;
-        }
-    }
-
-    private Dictionary<string, object> ParseParameters(string[] parameters)
-    {
-        var result = new Dictionary<string, object>();
-
-        foreach (var param in parameters)
-        {
-            var parts = param.Split('=', 2);
-            if (parts.Length == 2)
-            {
-                result[parts[0]] = parts[1];
-            }
-            else
-            {
-                result[param] = true; // Boolean flag
-            }
-        }
-
-        return result;
+        AnsiConsole.MarkupLine("[yellow]PKS Hooks - Claude Code Integration[/]");
+        AnsiConsole.MarkupLine("");
+        AnsiConsole.MarkupLine("[cyan]Usage:[/]");
+        AnsiConsole.MarkupLine("  pks hooks init                   - Initialize Claude Code hooks");
+        AnsiConsole.MarkupLine("  pks hooks init --force           - Force overwrite existing hooks");
+        AnsiConsole.MarkupLine("  pks hooks list                   - List available hook events");
+        AnsiConsole.MarkupLine("  pks hooks pre-tool-use           - Handle PreToolUse event");
+        AnsiConsole.MarkupLine("  pks hooks post-tool-use          - Handle PostToolUse event");
+        AnsiConsole.MarkupLine("  pks hooks user-prompt-submit     - Handle UserPromptSubmit event");
+        AnsiConsole.MarkupLine("  pks hooks stop                   - Handle Stop event");
+        return 0;
     }
 }
 
@@ -225,21 +140,14 @@ public class HooksCommand : AsyncCommand<HooksSettings>
 public class HooksSettings : CommandSettings
 {
     [CommandOption("-a|--action")]
-    [Description("Action to perform (list, execute, install, remove)")]
+    [Description("Action to perform (init, list)")]
     [DefaultValue(HookAction.List)]
     public HookAction Action { get; set; } = HookAction.List;
-
-    [CommandOption("-n|--name")]
-    [Description("Name of the hook to execute or remove")]
-    public string HookName { get; set; } = string.Empty;
-
-    [CommandOption("-s|--source")]
-    [Description("Source URL or path for hook installation")]
-    public string Source { get; set; } = string.Empty;
-
-    [CommandOption("-p|--parameter")]
-    [Description("Parameters to pass to the hook (format: key=value)")]
-    public string[] Parameters { get; set; } = Array.Empty<string>();
+    
+    [CommandOption("-f|--force")]
+    [Description("Force overwrite existing hooks configuration")]
+    [DefaultValue(false)]
+    public bool Force { get; set; } = false;
 }
 
 /// <summary>
@@ -247,8 +155,6 @@ public class HooksSettings : CommandSettings
 /// </summary>
 public enum HookAction
 {
-    List,
-    Execute,
-    Install,
-    Remove
+    Init,
+    List
 }
