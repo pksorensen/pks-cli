@@ -15,7 +15,8 @@ public class PrdMainSettings : CommandSettings
 }
 
 /// <summary>
-/// Main PRD command with subcommands for PRD management
+/// Main PRD command that shows help when used without subcommands
+/// This will be replaced by PrdBranchCommand for the new branch structure
 /// </summary>
 [Description("Manage Product Requirements Documents (PRDs) with AI-powered generation")]
 public class PrdCommand : Command<PrdMainSettings>
@@ -40,413 +41,102 @@ public class PrdCommand : Command<PrdMainSettings>
 }
 
 /// <summary>
-/// Generate PRD from idea description
+/// Branch command for PRD management - this is the new structure that acts as a branch
 /// </summary>
-[Description("Generate a comprehensive PRD from an idea description")]
-public class PrdGenerateCommand : Command<PrdGenerateSettings>
+[Description("Manage Product Requirements Documents (PRDs) with AI-powered generation")]
+public class PrdBranchCommand : Command<PrdBranchMainSettings>
 {
-    private readonly IPrdService _prdService;
-
-    public PrdGenerateCommand(IPrdService prdService)
+    public override int Execute(CommandContext context, PrdBranchMainSettings settings)
     {
-        _prdService = prdService;
-    }
-
-    public override int Execute(CommandContext context, PrdGenerateSettings settings)
-    {
-        return ExecuteAsync(context, settings).GetAwaiter().GetResult();
-    }
-
-    public async Task<int> ExecuteAsync(CommandContext context, PrdGenerateSettings settings)
-    {
-        try
+        if (settings.ShowVersion)
         {
-            // Interactive mode for detailed input
-            if (settings.Interactive)
-            {
-                await CollectInteractiveInputAsync(settings);
-            }
-
-            // Validate required inputs
-            if (string.IsNullOrEmpty(settings.IdeaDescription))
-            {
-                AnsiConsole.MarkupLine("[red]Error: Idea description is required[/]");
-                return 1;
-            }
-
-            // Set default project name if not provided
-            if (string.IsNullOrEmpty(settings.ProjectName))
-            {
-                settings.ProjectName = Path.GetFileName(Environment.CurrentDirectory);
-            }
-
-            // Set default output path if not provided
-            if (string.IsNullOrEmpty(settings.OutputPath))
-            {
-                var docsDir = Path.Combine(Environment.CurrentDirectory, "docs");
-                if (!Directory.Exists(docsDir))
-                {
-                    Directory.CreateDirectory(docsDir);
-                }
-                settings.OutputPath = Path.Combine(docsDir, "PRD.md");
-            }
-
-            // Check if file exists and force flag
-            if (File.Exists(settings.OutputPath) && !settings.Force)
-            {
-                var overwrite = AnsiConsole.Confirm($"PRD file already exists at [yellow]{settings.OutputPath}[/]. Overwrite?");
-                if (!overwrite)
-                {
-                    AnsiConsole.MarkupLine("[yellow]Operation cancelled[/]");
-                    return 0;
-                }
-            }
-
-            // Parse template type
-            if (!Enum.TryParse<PrdTemplateType>(settings.Template, true, out var templateType))
-            {
-                AnsiConsole.MarkupLine($"[red]Invalid template type: {settings.Template}[/]");
-                AnsiConsole.MarkupLine("Valid types: standard, technical, mobile, web, api, minimal, enterprise");
-                return 1;
-            }
-
-            // Create generation request
-            var request = new PrdGenerationRequest
-            {
-                IdeaDescription = settings.IdeaDescription,
-                ProjectName = settings.ProjectName,
-                TargetAudience = settings.TargetAudience ?? "",
-                Stakeholders = ParseCommaSeparatedList(settings.Stakeholders),
-                BusinessContext = settings.BusinessContext ?? "",
-                TechnicalConstraints = ParseCommaSeparatedList(settings.TechnicalConstraints)
-            };
-
-            // Generate PRD with progress indicator
-            PrdDocument document = null!;
-            
-            await AnsiConsole.Status()
-                .Spinner(Spinner.Known.Star2)
-                .SpinnerStyle(Style.Parse("green bold"))
-                .StartAsync("Generating PRD...", async ctx =>
-                {
-                    ctx.Status("Analyzing idea and requirements...");
-                    await Task.Delay(500);
-                    
-                    ctx.Status("Generating sections and requirements...");
-                    document = await _prdService.GeneratePrdAsync(request, settings.OutputPath);
-                    
-                    ctx.Status("Formatting and saving PRD...");
-                    await Task.Delay(300);
-                });
-
-            // Display success message
-            var panel = new Panel($"""
-                🎉 [bold green]PRD generated successfully![/]
-                
-                [cyan1]Project:[/] {settings.ProjectName}
-                [cyan1]Output:[/] {settings.OutputPath}
-                [cyan1]Requirements:[/] {document.Requirements.Count}
-                [cyan1]User Stories:[/] {document.UserStories.Count}
-                [cyan1]Sections:[/] {document.Sections.Count}
-                
-                Next steps:
-                • [cyan]pks prd validate[/] - Validate PRD completeness
-                • [cyan]pks prd requirements[/] - Review requirements
-                • [cyan]pks prd status[/] - Track progress
-                
-                [dim]Your AI-powered PRD is ready for review! 📋[/]
-                """)
-                .Border(BoxBorder.Double)
-                .BorderStyle("cyan1")
-                .Header(" [bold cyan]🚀 PRD Generation Complete[/] ");
-
-            AnsiConsole.Write(panel);
-
-            // Show validation summary if verbose
-            if (settings.Verbose)
-            {
-                var validation = await _prdService.ValidatePrdAsync(document);
-                DisplayValidationSummary(validation);
-            }
-
+            AnsiConsole.MarkupLine("[cyan]PKS PRD Management v1.0.0[/]");
             return 0;
         }
-        catch (Exception ex)
+
+        if (settings.ListCommands)
         {
-            AnsiConsole.WriteException(ex);
-            return 1;
+            DisplayCommandList();
+            return 0;
         }
+
+        // Default behavior: show help
+        DisplayHelp();
+        return 0;
     }
 
-    private async Task CollectInteractiveInputAsync(PrdGenerateSettings settings)
+    private void DisplayHelp()
     {
-        AnsiConsole.MarkupLine("[cyan]🤖 Interactive PRD Generation[/]");
+        var helpContent = GetHelpContent();
+        AnsiConsole.Write(new Markup(helpContent));
+    }
+
+    private void DisplayCommandList()
+    {
+        AnsiConsole.MarkupLine("[bold cyan]Available PRD Commands:[/]");
         AnsiConsole.WriteLine();
 
-        if (string.IsNullOrEmpty(settings.IdeaDescription))
+        var commands = new[]
         {
-            settings.IdeaDescription = AnsiConsole.Ask<string>("What's your [green]idea or project description[/]?");
-        }
+            ("generate", "Generate a comprehensive PRD from an idea description"),
+            ("load", "Load and parse an existing PRD file"),
+            ("requirements", "List and filter requirements from a PRD document"),
+            ("status", "Display PRD status, progress, and statistics"),
+            ("validate", "Validate PRD for completeness, consistency, and quality"),
+            ("template", "Generate PRD templates for different project types")
+        };
 
-        if (string.IsNullOrEmpty(settings.ProjectName))
+        foreach (var (name, description) in commands)
         {
-            settings.ProjectName = AnsiConsole.Ask<string>("What's the [cyan]project name[/]?", 
-                Path.GetFileName(Environment.CurrentDirectory));
+            AnsiConsole.MarkupLine($"  [green]{name,-12}[/] {description}");
         }
-
-        if (string.IsNullOrEmpty(settings.TargetAudience))
-        {
-            settings.TargetAudience = AnsiConsole.Ask<string>("Who is the [yellow]target audience[/]?", "End users");
-        }
-
-        var templateOptions = new[] { "standard", "technical", "mobile", "web", "api", "minimal", "enterprise" };
-        settings.Template = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("Select PRD [blue]template type[/]:")
-                .AddChoices(templateOptions)
-                .HighlightStyle("cyan"));
-
-        var addMoreDetails = AnsiConsole.Confirm("Would you like to add [yellow]business context[/] and [yellow]stakeholders[/]?");
-        if (addMoreDetails)
-        {
-            settings.BusinessContext = AnsiConsole.Ask<string>("Business context:", "");
-            settings.Stakeholders = AnsiConsole.Ask<string>("Stakeholders (comma-separated):", "");
-        }
-
-        await Task.CompletedTask;
     }
 
-    private List<string> ParseCommaSeparatedList(string? input)
+    public string GetHelpContent()
     {
-        if (string.IsNullOrEmpty(input))
-            return new List<string>();
+        return """
+            [cyan]PKS PRD Management - Manage Product Requirements Documents (PRDs) with AI-powered generation[/]
 
-        return input.Split(',', StringSplitOptions.RemoveEmptyEntries)
-                   .Select(s => s.Trim())
-                   .ToList();
-    }
+            [bold]USAGE:[/]
+                pks prd [COMMAND] [OPTIONS]
 
-    private void DisplayValidationSummary(PrdValidationResult validation)
-    {
-        AnsiConsole.WriteLine();
-        var table = new Table()
-            .Title("[bold]PRD Validation Summary[/]")
-            .Border(TableBorder.Rounded)
-            .BorderStyle("cyan");
+            [bold]COMMANDS:[/]
+                [green]generate[/]        Generate a comprehensive PRD from an idea description
+                [green]load[/]           Load and parse an existing PRD file
+                [green]requirements[/]   List and filter requirements from a PRD document
+                [green]status[/]         Display PRD status, progress, and statistics
+                [green]validate[/]       Validate PRD for completeness, consistency, and quality
+                [green]template[/]       Generate PRD templates for different project types
 
-        table.AddColumn("Metric");
-        table.AddColumn("Value");
+            [bold]EXAMPLES:[/]
+                pks prd generate "Build a task management app"
+                pks prd load docs/PRD.md
+                pks prd requirements --status draft
+                pks prd status --watch
+                pks prd validate --strict
+                pks prd template MyProject --type web
 
-        table.AddRow("Completeness Score", $"{validation.CompletenessScore:F1}%");
-        table.AddRow("Validation Status", validation.IsValid ? "[green]Valid[/]" : "[red]Issues Found[/]");
-        table.AddRow("Errors", validation.Errors.Count.ToString());
-        table.AddRow("Warnings", validation.Warnings.Count.ToString());
-        table.AddRow("Suggestions", validation.Suggestions.Count.ToString());
+            [bold]OPTIONS:[/]
+                -h, --help     Show this help message
+                -v, --version  Show version information
+                -l, --list     List all available commands
 
-        AnsiConsole.Write(table);
+            Use 'pks prd [COMMAND] --help' for more information about a specific command.
+            """;
     }
 }
 
 /// <summary>
-/// Load and parse existing PRD
+/// Settings for the main PRD branch command
 /// </summary>
-[Description("Load and parse an existing PRD file")]
-public class PrdLoadCommand : Command<PrdLoadSettings>
+public class PrdBranchMainSettings : CommandSettings
 {
-    private readonly IPrdService _prdService;
+    [CommandOption("-v|--version")]
+    [Description("Show version information")]
+    public bool ShowVersion { get; set; }
 
-    public PrdLoadCommand(IPrdService prdService)
-    {
-        _prdService = prdService;
-    }
-
-    public override int Execute(CommandContext context, PrdLoadSettings settings)
-    {
-        return ExecuteAsync(context, settings).GetAwaiter().GetResult();
-    }
-
-    public async Task<int> ExecuteAsync(CommandContext context, PrdLoadSettings settings)
-    {
-        try
-        {
-            if (!File.Exists(settings.FilePath))
-            {
-                AnsiConsole.MarkupLine($"[red]Error: PRD file not found: {settings.FilePath}[/]");
-                return 1;
-            }
-
-            // Load PRD with progress indicator
-            PrdParsingResult result = null!;
-            
-            await AnsiConsole.Status()
-                .Spinner(Spinner.Known.Star2)
-                .SpinnerStyle(Style.Parse("green bold"))
-                .StartAsync($"Loading PRD from {settings.FilePath}...", async ctx =>
-                {
-                    ctx.Status("Parsing PRD file...");
-                    result = await _prdService.LoadPrdAsync(settings.FilePath);
-                    
-                    ctx.Status("Processing content...");
-                    await Task.Delay(200);
-                });
-
-            if (!result.Success)
-            {
-                AnsiConsole.MarkupLine($"[red]Failed to load PRD: {result.ErrorMessage}[/]");
-                return 1;
-            }
-
-            var document = result.Document!;
-
-            // Display basic information
-            var panel = new Panel($"""
-                📋 [bold green]PRD loaded successfully![/]
-                
-                [cyan1]Project:[/] {document.Configuration.ProjectName}
-                [cyan1]Version:[/] {document.Configuration.Version}
-                [cyan1]Author:[/] {document.Configuration.Author}
-                [cyan1]Created:[/] {document.Configuration.CreatedAt:yyyy-MM-dd}
-                [cyan1]Updated:[/] {document.Configuration.UpdatedAt:yyyy-MM-dd}
-                
-                [cyan1]Requirements:[/] {document.Requirements.Count}
-                [cyan1]User Stories:[/] {document.UserStories.Count}
-                [cyan1]Sections:[/] {document.Sections.Count}
-                """)
-                .Border(BoxBorder.Rounded)
-                .BorderStyle("cyan1")
-                .Header(" [bold cyan]📋 PRD Summary[/] ");
-
-            AnsiConsole.Write(panel);
-
-            // Show warnings if any
-            if (result.Warnings.Any())
-            {
-                AnsiConsole.WriteLine();
-                AnsiConsole.MarkupLine("[yellow]⚠️ Warnings:[/]");
-                foreach (var warning in result.Warnings)
-                {
-                    AnsiConsole.MarkupLine($"  • [yellow]{warning}[/]");
-                }
-            }
-
-            // Show metadata if requested
-            if (settings.ShowMetadata)
-            {
-                DisplayMetadata(document);
-            }
-
-            // Validate if requested
-            if (settings.Validate)
-            {
-                var validation = await _prdService.ValidatePrdAsync(document);
-                DisplayValidationResults(validation);
-            }
-
-            // Export if requested
-            if (!string.IsNullOrEmpty(settings.ExportPath))
-            {
-                await ExportPrdAsync(document, settings.ExportPath, settings.OutputFormat);
-            }
-
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            AnsiConsole.WriteException(ex);
-            return 1;
-        }
-    }
-
-    private void DisplayMetadata(PrdDocument document)
-    {
-        AnsiConsole.WriteLine();
-        var table = new Table()
-            .Title("[bold]PRD Metadata[/]")
-            .Border(TableBorder.Rounded)
-            .BorderStyle("cyan");
-
-        table.AddColumn("Property");
-        table.AddColumn("Value");
-
-        table.AddRow("Target Audience", document.Configuration.TargetAudience);
-        table.AddRow("Stakeholders", string.Join(", ", document.Configuration.Stakeholders));
-        
-        if (document.Configuration.Metadata.Any())
-        {
-            foreach (var metadata in document.Configuration.Metadata)
-            {
-                table.AddRow(metadata.Key, metadata.Value?.ToString() ?? "");
-            }
-        }
-
-        AnsiConsole.Write(table);
-    }
-
-    private void DisplayValidationResults(PrdValidationResult validation)
-    {
-        AnsiConsole.WriteLine();
-        
-        var statusColor = validation.IsValid ? "green" : "red";
-        var statusText = validation.IsValid ? "✅ Valid" : "❌ Issues Found";
-        
-        AnsiConsole.MarkupLine($"[bold]Validation Status:[/] [{statusColor}]{statusText}[/]");
-        AnsiConsole.MarkupLine($"[bold]Completeness Score:[/] {validation.CompletenessScore:F1}%");
-        
-        if (validation.Errors.Any())
-        {
-            AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[red]Errors:[/]");
-            foreach (var error in validation.Errors)
-            {
-                AnsiConsole.MarkupLine($"  • [red]{error}[/]");
-            }
-        }
-
-        if (validation.Warnings.Any())
-        {
-            AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[yellow]Warnings:[/]");
-            foreach (var warning in validation.Warnings)
-            {
-                AnsiConsole.MarkupLine($"  • [yellow]{warning}[/]");
-            }
-        }
-
-        if (validation.Suggestions.Any())
-        {
-            AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[cyan]Suggestions:[/]");
-            foreach (var suggestion in validation.Suggestions)
-            {
-                AnsiConsole.MarkupLine($"  • [cyan]{suggestion}[/]");
-            }
-        }
-    }
-
-    private async Task ExportPrdAsync(PrdDocument document, string exportPath, string format)
-    {
-        try
-        {
-            var directory = Path.GetDirectoryName(exportPath);
-            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            var success = await _prdService.SavePrdAsync(document, exportPath);
-            
-            if (success)
-            {
-                AnsiConsole.MarkupLine($"[green]✅ PRD exported to: {exportPath}[/]");
-            }
-            else
-            {
-                AnsiConsole.MarkupLine($"[red]❌ Failed to export PRD to: {exportPath}[/]");
-            }
-        }
-        catch (Exception ex)
-        {
-            AnsiConsole.MarkupLine($"[red]Export error: {ex.Message}[/]");
-        }
-    }
+    [CommandOption("-l|--list")]
+    [Description("List all available commands")]
+    public bool ListCommands { get; set; }
 }
+

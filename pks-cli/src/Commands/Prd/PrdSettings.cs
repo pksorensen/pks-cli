@@ -5,18 +5,26 @@ using PKS.Infrastructure.Services;
 namespace PKS.Commands.Prd;
 
 /// <summary>
-/// Base settings for PRD commands
+/// Base settings for all PRD commands with shared options
 /// </summary>
 public abstract class PrdSettings : CommandSettings
 {
     [CommandOption("-v|--verbose")]
-    [Description("Enable verbose output")]
+    [Description("Enable verbose output with detailed information")]
     public bool Verbose { get; set; }
 
     [CommandOption("--output-format <FORMAT>")]
-    [Description("Output format (markdown, json)")]
+    [Description("Output format: markdown, json")]
     [DefaultValue("markdown")]
     public string OutputFormat { get; set; } = "markdown";
+
+    [CommandOption("--config <CONFIG_FILE>")]
+    [Description("Path to PRD configuration file")]
+    public string? ConfigFile { get; set; }
+
+    [CommandOption("--no-color")]
+    [Description("Disable colored output")]
+    public bool NoColor { get; set; }
 }
 
 /// <summary>
@@ -64,6 +72,7 @@ public class PrdGenerateSettings : PrdSettings
     [CommandOption("--interactive")]
     [Description("Interactive mode for detailed PRD generation")]
     public bool Interactive { get; set; }
+
 }
 
 /// <summary>
@@ -86,6 +95,7 @@ public class PrdLoadSettings : PrdSettings
     [CommandOption("--show-metadata")]
     [Description("Display PRD metadata and statistics")]
     public bool ShowMetadata { get; set; }
+
 }
 
 /// <summary>
@@ -120,6 +130,7 @@ public class PrdRequirementsSettings : PrdSettings
     [CommandOption("--show-details")]
     [Description("Show detailed requirement information")]
     public bool ShowDetails { get; set; }
+
 }
 
 /// <summary>
@@ -146,6 +157,7 @@ public class PrdStatusSettings : PrdSettings
     [CommandOption("--include-history")]
     [Description("Include change history in status report")]
     public bool IncludeHistory { get; set; }
+
 }
 
 /// <summary>
@@ -168,6 +180,7 @@ public class PrdValidateSettings : PrdSettings
     [CommandOption("--report <REPORT_PATH>")]
     [Description("Generate validation report file")]
     public string? ReportPath { get; set; }
+
 }
 
 /// <summary>
@@ -191,4 +204,5 @@ public class PrdTemplateSettings : PrdSettings
     [CommandOption("--list")]
     [Description("List available template types")]
     public bool ListTemplates { get; set; }
+
 }
