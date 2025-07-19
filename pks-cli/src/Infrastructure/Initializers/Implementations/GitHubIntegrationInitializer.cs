@@ -77,8 +77,8 @@ public class GitHubIntegrationInitializer : CodeInitializer
                 context.Description
             );
 
-            // Store project ID in context for other initializers
-            context.SetValue("ProjectId", projectIdentity.ProjectId);
+            // Store project ID in metadata for other initializers
+            context.SetMetadata("ProjectId", projectIdentity.ProjectId);
 
             // Create .pks/project-info.md for documentation
             var projectInfoContent = GenerateProjectInfoMarkdown(projectIdentity, context);
@@ -92,16 +92,16 @@ public class GitHubIntegrationInitializer : CodeInitializer
         }
         catch (Exception ex)
         {
-            result.AddError($"Failed to create project identity: {ex.Message}");
+            result.Errors.Add($"Failed to create project identity: {ex.Message}");
         }
     }
 
     private async Task SetupGitHubIntegrationAsync(InitializationContext context, InitializationResult result)
     {
-        var projectId = context.GetValue("ProjectId") as string;
+        var projectId = context.GetMetadata<string>("ProjectId");
         if (string.IsNullOrEmpty(projectId))
         {
-            result.AddWarning("Project ID not available for GitHub integration");
+            result.Warnings.Add("Project ID not available for GitHub integration");
             return;
         }
 
@@ -138,13 +138,13 @@ public class GitHubIntegrationInitializer : CodeInitializer
                 }
                 else
                 {
-                    result.AddWarning($"GitHub configuration may be incomplete: {config.ErrorMessage}");
+                    result.Warnings.Add($"GitHub configuration may be incomplete: {config.ErrorMessage}");
                 }
             }
         }
         catch (Exception ex)
         {
-            result.AddError($"Failed to setup GitHub integration: {ex.Message}");
+            result.Errors.Add($"Failed to setup GitHub integration: {ex.Message}");
         }
     }
 
@@ -162,7 +162,7 @@ public class GitHubIntegrationInitializer : CodeInitializer
         }
         catch (Exception ex)
         {
-            result.AddError($"Failed to create GitHub repository: {ex.Message}");
+            result.Errors.Add($"Failed to create GitHub repository: {ex.Message}");
             return "";
         }
     }
@@ -172,7 +172,7 @@ public class GitHubIntegrationInitializer : CodeInitializer
         var repositoryUrl = context.GetOption("remote-url", "");
         if (string.IsNullOrEmpty(repositoryUrl))
         {
-            result.AddWarning("No repository URL provided for git initialization");
+            result.Warnings.Add("No repository URL provided for git initialization");
             return;
         }
 
@@ -193,12 +193,12 @@ public class GitHubIntegrationInitializer : CodeInitializer
             }
             else
             {
-                result.AddError($"Git initialization failed: {initResult.ErrorMessage}");
+                result.Errors.Add($"Git initialization failed: {initResult.ErrorMessage}");
             }
         }
         catch (Exception ex)
         {
-            result.AddError($"Failed to initialize git repository: {ex.Message}");
+            result.Errors.Add($"Failed to initialize git repository: {ex.Message}");
         }
     }
 

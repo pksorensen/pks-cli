@@ -95,7 +95,7 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
         var includeCiCd = context.GetOption("include-ci-cd", false);
 
         // Get project identity information from context
-        var projectId = context.GetValue("ProjectId") as string ?? "not-set";
+        var projectId = context.GetMetadata<string>("ProjectId") ?? "not-set";
         var gitHubRepository = context.GetOption("remote-url", "Not configured");
         var mcpEnabled = context.GetOption("mcp", false);
         var agenticEnabled = context.GetOption("agentic", false);

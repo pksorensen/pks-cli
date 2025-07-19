@@ -70,16 +70,17 @@ public class HooksConfiguration
 }
 
 /// <summary>
-/// PRD (Product Requirements Document) configuration
+/// MCP Server configuration for a project
 /// </summary>
-public class PrdConfiguration
+public class McpServerConfiguration
 {
     public bool Enabled { get; set; }
-    public string PrdPath { get; set; } = string.Empty;
-    public string RequirementsPath { get; set; } = string.Empty;
-    public string UserStoriesPath { get; set; } = string.Empty;
-    public DateTime LastUpdated { get; set; }
-    public string[] Templates { get; set; } = Array.Empty<string>();
+    public string TransportMode { get; set; } = "stdio";
+    public int? Port { get; set; }
+    public string? ServerUrl { get; set; }
+    public bool Stateless { get; set; }
+    public Dictionary<string, string> Settings { get; set; } = new();
+    public DateTime ConfiguredAt { get; set; }
 }
 
 /// <summary>

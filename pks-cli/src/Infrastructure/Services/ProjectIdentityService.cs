@@ -305,9 +305,9 @@ public class ProjectIdentityService : IProjectIdentityService
         // Validate MCP configuration if present
         if (projectIdentity.McpConfiguration != null)
         {
-            if (string.IsNullOrWhiteSpace(projectIdentity.McpConfiguration.Name))
+            if (string.IsNullOrWhiteSpace(projectIdentity.McpConfiguration.TransportMode))
             {
-                issues.Add("MCP server name is required");
+                issues.Add("MCP transport mode is required");
             }
         }
 
