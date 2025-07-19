@@ -10,7 +10,9 @@
     "--cap-add=NET_ADMIN",
     "--cap-add=NET_RAW",
     "--tty",
-    "--interactive"
+    "--interactive",
+    "--env-file",
+    ".devcontainer/.env"
   ],
   "customizations": {
     "vscode": {

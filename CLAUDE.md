@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 PKS CLI is a .NET 8 console application built with Spectre.Console that provides an agentic CLI tool for .NET developers. It combines beautiful terminal UI with AI-powered development assistance and Kubernetes deployment capabilities.
 
+**Repository**: https://github.com/pksorensen/pks-cli
+
 ## Development Commands
 
 ### Building and Running
