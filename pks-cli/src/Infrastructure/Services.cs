@@ -119,3 +119,18 @@ public class DeploymentService : IDeploymentService
         return true;
     }
 }
+
+// Import HooksService from separate file
+// Note: IHooksService and HooksService are defined in separate files:
+// - /workspace/pks-cli/src/Infrastructure/Services/IHooksService.cs  
+// - /workspace/pks-cli/src/Infrastructure/Services/HooksService.cs
+
+// Import MCP Service from separate file  
+// Note: IMcpServerService and McpServerService are defined in separate files:
+// - /workspace/pks-cli/src/Infrastructure/Services/IMcpServerService.cs
+// - /workspace/pks-cli/src/Infrastructure/Services/McpServerService.cs
+
+// Import Agent Framework Service from separate file
+// Note: IAgentFrameworkService and AgentFrameworkService are defined in separate files:
+// - /workspace/pks-cli/src/Infrastructure/Services/IAgentFrameworkService.cs
+// - /workspace/pks-cli/src/Infrastructure/Services/AgentFrameworkService.cs

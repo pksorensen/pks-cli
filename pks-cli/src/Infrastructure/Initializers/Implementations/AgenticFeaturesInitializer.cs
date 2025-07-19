@@ -39,6 +39,15 @@ public class AgenticFeaturesInitializer : CodeInitializer
 
         // Create Agents directory structure
         CreateDirectoryStructure(projectPath, "Agents", "Agents/Core", "Agents/Implementations", "Configuration");
+        
+        // Create .pks/agents directory structure for PKS CLI agent management
+        var pksDir = Path.Combine(projectPath, ".pks");
+        var agentsDir = Path.Combine(pksDir, "agents");
+        CreateDirectoryStructure(projectPath, ".pks", ".pks/agents");
+        
+        // Create README for agents directory
+        var agentReadmeContent = GenerateAgentsDirectoryReadme();
+        await CreateFileAsync(Path.Combine(agentsDir, "README.md"), agentReadmeContent, context, result);
 
         // Create base agent interface
         var agentInterfaceContent = GenerateAgentInterface();
@@ -74,6 +83,63 @@ public class AgenticFeaturesInitializer : CodeInitializer
         {
             result.Data["auto-scaling"] = "enabled";
         }
+    }
+
+    private string GenerateAgentsDirectoryReadme()
+    {
+        return @"# Agents Directory
+
+This directory contains AI agents for your project. Each agent has its own subdirectory with:
+
+- `knowledge.md` - Agent-specific knowledge and documentation
+- `persona.md` - Agent personality and behavior configuration
+
+## Agent Structure
+
+```
+.pks/agents/
+├── agent-name/
+│   ├── knowledge.md
+│   └── persona.md
+```
+
+## Managing Agents
+
+Use the PKS CLI to manage agents:
+
+```bash
+# Create a new agent
+pks agent create my-agent --type automation
+
+# List all agents
+pks agent list
+
+# Get agent status
+pks agent status my-agent
+
+# Start/stop agents
+pks agent start my-agent
+pks agent stop my-agent
+
+# Remove an agent
+pks agent remove my-agent
+```
+
+## Agent Types
+
+- **automation** - General development automation
+- **monitoring** - System and application monitoring
+- **deployment** - Deployment and CI/CD automation
+- **testing** - Test automation and quality assurance
+
+## Integration
+
+Agents integrate with your project through:
+- File system access to project structure
+- Environment variable configuration
+- Message queue communication between agents
+- Context injection via MCP (Model Context Protocol)
+";
     }
 
     private string GenerateAgentInterface()

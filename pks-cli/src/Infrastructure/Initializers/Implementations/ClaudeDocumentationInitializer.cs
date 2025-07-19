@@ -13,7 +13,7 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
     public override string Description => "Creates comprehensive CLAUDE.md project documentation for AI assistants";
     public override int Order => 85; // Run after project files but before README
 
-    protected override string TemplateDirectory => "claude-docs";
+    protected override string TemplateDirectory => "claude-modular";
 
     public override IEnumerable<InitializerOption> GetOptions()
     {
@@ -74,6 +74,9 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
 
     protected override async Task<string> ProcessTemplateContentAsync(string content, string templateFile, string targetFile, InitializationContext context)
     {
+        // Process file inclusions first
+        content = await ProcessFileInclusionsAsync(content, context);
+        
         // Add custom placeholder replacements for CLAUDE.md specific content
         var customPlaceholders = GetCustomPlaceholders(context);
         return ReplacePlaceholdersWithCustom(content, context, customPlaceholders);
@@ -91,6 +94,13 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
         var includeAzure = context.GetOption("include-azure", false);
         var includeCiCd = context.GetOption("include-ci-cd", false);
 
+        // Get project identity information from context
+        var projectId = context.GetValue("ProjectId") as string ?? "not-set";
+        var gitHubRepository = context.GetOption("remote-url", "Not configured");
+        var mcpEnabled = context.GetOption("mcp", false);
+        var agenticEnabled = context.GetOption("agentic", false);
+        var hooksEnabled = context.GetOption("hooks", false);
+
         return new Dictionary<string, string>
         {
             { "{{TechStack}}", techStack },
@@ -106,8 +116,62 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
             { "{{DeploymentCommands}}", GenerateDeploymentCommands(context, includeDocker, includeK8s, includeAzure) },
             { "{{CiCdSection}}", includeCiCd ? GenerateCiCdSection(context) : "" },
             { "{{DependencyList}}", GenerateDependencyList(context, projectType) },
-            { "{{KeyComponents}}", GenerateKeyComponents(context, projectType) }
+            { "{{KeyComponents}}", GenerateKeyComponents(context, projectType) },
+            
+            // Project Identity placeholders
+            { "{{ProjectId}}", projectId },
+            { "{{GitHubRepository}}", gitHubRepository },
+            { "{{CreatedAt}}", DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss") + " UTC" },
+            { "{{DateTime}}", DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss") + " UTC" },
+            
+            // Integration status placeholders
+            { "{{GitHubStatus}}", gitHubRepository != "Not configured" ? $"Connected to {gitHubRepository}" : "Not configured" },
+            { "{{McpStatus}}", mcpEnabled ? "Enabled" : "Not configured" },
+            { "{{McpServerId}}", mcpEnabled ? $"pks-{projectId}" : "Not configured" },
+            { "{{McpTransport}}", mcpEnabled ? "stdio" : "N/A" },
+            { "{{AgentCount}}", agenticEnabled ? "Multiple agents registered" : "0" },
+            { "{{HooksEnabled}}", hooksEnabled ? "Yes" : "No" }
         };
+    }
+
+    private async Task<string> ProcessFileInclusionsAsync(string content, InitializationContext context)
+    {
+        // Process @FILENAME.md patterns for file inclusion
+        var includePattern = @"@([A-Z]+\.md)";
+        var matches = System.Text.RegularExpressions.Regex.Matches(content, includePattern);
+        
+        foreach (System.Text.RegularExpressions.Match match in matches)
+        {
+            var fileName = match.Groups[1].Value;
+            var includePath = Path.Combine(TemplatePath, fileName);
+            
+            if (File.Exists(includePath))
+            {
+                try
+                {
+                    var includeContent = await File.ReadAllTextAsync(includePath);
+                    
+                    // Process placeholders in the included content
+                    var customPlaceholders = GetCustomPlaceholders(context);
+                    includeContent = ReplacePlaceholdersWithCustom(includeContent, context, customPlaceholders);
+                    
+                    // Replace the @FILENAME.md with the actual content
+                    content = content.Replace(match.Value, includeContent);
+                }
+                catch (Exception ex)
+                {
+                    // If file inclusion fails, replace with a comment
+                    content = content.Replace(match.Value, $"<!-- Failed to include {fileName}: {ex.Message} -->");
+                }
+            }
+            else
+            {
+                // If file doesn't exist, replace with a comment
+                content = content.Replace(match.Value, $"<!-- {fileName} not found -->");
+            }
+        }
+        
+        return content;
     }
 
     private string GenerateClaudeDocumentation(InitializationContext context)
