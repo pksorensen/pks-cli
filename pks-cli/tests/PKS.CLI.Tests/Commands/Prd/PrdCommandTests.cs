@@ -15,7 +15,7 @@ public class PrdCommandTests
     public PrdCommandTests()
     {
         _mockPrdService = new Mock<IPrdService>();
-        _context = new CommandContext(Array.Empty<string>(), "prd", null);
+        _context = new CommandContext(Mock.Of<IRemainingArguments>(), "prd", null);
     }
 
     [Fact]
@@ -25,7 +25,8 @@ public class PrdCommandTests
         var command = new PrdCommand();
 
         // Act
-        var result = command.Execute(_context);
+        var settings = new PrdMainSettings();
+        var result = command.Execute(_context, settings);
 
         // Assert
         Assert.Equal(0, result);

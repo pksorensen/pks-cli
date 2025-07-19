@@ -188,7 +188,7 @@ public class PrdServiceTests
     public async Task FindPrdFilesAsync_WithValidDirectory_ShouldFindPrdFiles()
     {
         // Arrange
-        var tempDir = Path.GetTempDirectoryName();
+        var tempDir = Path.GetTempPath();
         var prdFile1 = Path.Combine(tempDir, "PRD.md");
         var prdFile2 = Path.Combine(tempDir, "requirements.md");
         
