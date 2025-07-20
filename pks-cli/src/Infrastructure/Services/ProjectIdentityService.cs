@@ -266,7 +266,7 @@ public class ProjectIdentityService : IProjectIdentityService
         return $"pks-{sanitizedName}-{timestamp:x}";
     }
 
-    public async Task<ProjectValidationResult> ValidateProjectAsync(ProjectIdentity projectIdentity)
+    public Task<ProjectValidationResult> ValidateProjectAsync(ProjectIdentity projectIdentity)
     {
         var result = new ProjectValidationResult
         {
@@ -314,7 +314,7 @@ public class ProjectIdentityService : IProjectIdentityService
         result.Issues = issues.ToArray();
         result.IsValid = issues.Count == 0;
 
-        return result;
+        return Task.FromResult(result);
     }
 
     public async Task<ProjectExport?> ExportProjectAsync(string projectId)

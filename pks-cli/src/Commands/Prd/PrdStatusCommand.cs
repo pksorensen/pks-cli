@@ -20,8 +20,9 @@ public class PrdStatusCommand : Command<PrdStatusSettings>
         _prdService = prdService;
     }
 
-    public override int Execute(CommandContext context, PrdStatusSettings settings)
+    public override int Execute(CommandContext context, PrdStatusSettings? settings)
     {
+        if (settings == null) throw new ArgumentNullException(nameof(settings));
         return ExecuteAsync(context, settings).GetAwaiter().GetResult();
     }
 

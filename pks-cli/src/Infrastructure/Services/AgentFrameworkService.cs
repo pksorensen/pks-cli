@@ -530,14 +530,14 @@ The agent should be aware of:
 ";
     }
 
-    private async Task LoadAgentsFromFileSystemAsync()
+    private Task LoadAgentsFromFileSystemAsync()
     {
         try
         {
             var agentsDir = GetAgentsDirectory();
             if (!Directory.Exists(agentsDir))
             {
-                return;
+                return Task.CompletedTask;
             }
 
             var agentDirs = Directory.GetDirectories(agentsDir);
@@ -580,5 +580,7 @@ The agent should be aware of:
         {
             _logger.LogError(ex, "Failed to load agents from file system");
         }
+        
+        return Task.CompletedTask;
     }
 }

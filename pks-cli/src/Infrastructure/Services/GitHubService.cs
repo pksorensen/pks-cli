@@ -201,7 +201,7 @@ public class GitHubService : IGitHubService
                 ValidatedAt = DateTime.UtcNow
             };
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             // Simulate token validation for development/testing
             await Task.Delay(100);

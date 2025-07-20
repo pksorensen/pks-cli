@@ -19,8 +19,9 @@ public class PrdTemplateCommand : Command<PrdTemplateSettings>
         _prdService = prdService;
     }
 
-    public override int Execute(CommandContext context, PrdTemplateSettings settings)
+    public override int Execute(CommandContext context, PrdTemplateSettings? settings)
     {
+        if (settings == null) throw new ArgumentNullException(nameof(settings));
         return ExecuteAsync(context, settings).GetAwaiter().GetResult();
     }
 

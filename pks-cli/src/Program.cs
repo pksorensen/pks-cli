@@ -40,6 +40,7 @@ services.AddSingleton<IDevcontainerFeatureRegistry, DevcontainerFeatureRegistry>
 services.AddSingleton<IDevcontainerTemplateService, DevcontainerTemplateService>();
 services.AddSingleton<IDevcontainerFileGenerator, DevcontainerFileGenerator>();
 services.AddSingleton<IVsCodeExtensionService, VsCodeExtensionService>();
+services.AddHttpClient<INuGetTemplateDiscoveryService, NuGetTemplateDiscoveryService>();
 
 // Register PRD branch command
 services.AddTransient<PrdBranchCommand>();
@@ -56,7 +57,6 @@ services.AddTransient<PKS.Infrastructure.Initializers.Implementations.AgenticFea
 services.AddTransient<PKS.Infrastructure.Initializers.Implementations.ReadmeInitializer>();
 services.AddTransient<PKS.Infrastructure.Initializers.Implementations.ClaudeDocumentationInitializer>();
 services.AddTransient<PKS.Infrastructure.Initializers.Implementations.McpConfigurationInitializer>();
-services.AddTransient<PKS.Infrastructure.Initializers.Implementations.HooksInitializer>();
 
 // Register initializer system with configured registry
 services.AddSingleton<IInitializerRegistry>(serviceProvider =>
@@ -71,7 +71,6 @@ services.AddSingleton<IInitializerRegistry>(serviceProvider =>
     registry.Register<PKS.Infrastructure.Initializers.Implementations.ReadmeInitializer>();
     registry.Register<PKS.Infrastructure.Initializers.Implementations.ClaudeDocumentationInitializer>();
     registry.Register<PKS.Infrastructure.Initializers.Implementations.McpConfigurationInitializer>();
-    registry.Register<PKS.Infrastructure.Initializers.Implementations.HooksInitializer>();
     
     return registry;
 });
@@ -120,7 +119,10 @@ app.Configure(config =>
             .WithDescription("Interactive wizard for comprehensive devcontainer setup")
             .WithExample(new[] { "devcontainer", "wizard" })
             .WithExample(new[] { "devcontainer", "wizard", "--expert-mode" })
-            .WithExample(new[] { "devcontainer", "wizard", "--quick-setup" });
+            .WithExample(new[] { "devcontainer", "wizard", "--quick-setup" })
+            .WithExample(new[] { "devcontainer", "wizard", "--from-templates" })
+            .WithExample(new[] { "devcontainer", "wizard", "--from-templates", "--sources", "https://api.nuget.org/v3/index.json" })
+            .WithExample(new[] { "devcontainer", "wizard", "--from-templates", "--add-sources", "https://custom-feed.example.com/v3/index.json" });
             
         devcontainer.AddCommand<PKS.Commands.Devcontainer.DevcontainerValidateCommand>("validate")
             .WithDescription("Validate existing devcontainer configuration")

@@ -12,8 +12,10 @@ public class McpCommandSimple : Command<McpCommandSimple.Settings>
         public int Port { get; set; } = 3000;
     }
 
-    public override int Execute(CommandContext context, Settings settings)
+    public override int Execute(CommandContext context, Settings? settings)
     {
+        if (settings == null) throw new ArgumentNullException(nameof(settings));
+        
         AnsiConsole.WriteLine();
         var rule = new Rule("[bold cyan]MCP Server[/]")
             .RuleStyle("cyan");

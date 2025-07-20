@@ -20,8 +20,9 @@ public class PrdRequirementsCommand : Command<PrdRequirementsSettings>
         _prdService = prdService;
     }
 
-    public override int Execute(CommandContext context, PrdRequirementsSettings settings)
+    public override int Execute(CommandContext context, PrdRequirementsSettings? settings)
     {
+        if (settings == null) throw new ArgumentNullException(nameof(settings));
         return ExecuteAsync(context, settings).GetAwaiter().GetResult();
     }
 
@@ -145,7 +146,8 @@ public class PrdRequirementsCommand : Command<PrdRequirementsSettings>
                 RequirementPriority.High => "orange1",
                 RequirementPriority.Medium => "yellow",
                 RequirementPriority.Low => "cyan",
-                RequirementPriority.Nice => "dim"
+                RequirementPriority.Nice => "dim",
+                _ => "white"
             };
 
             table.AddRow(

@@ -24,8 +24,10 @@ public class McpCommand : Command<McpCommand.Settings>
         public bool ListTools { get; set; }
     }
 
-    public override int Execute(CommandContext context, Settings settings)
+    public override int Execute(CommandContext context, Settings? settings)
     {
+        if (settings == null) throw new ArgumentNullException(nameof(settings));
+        
         if (settings.ShowConfig)
         {
             return ShowConfiguration(settings);

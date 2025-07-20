@@ -20,8 +20,9 @@ public class PrdValidateCommand : Command<PrdValidateSettings>
         _prdService = prdService;
     }
 
-    public override int Execute(CommandContext context, PrdValidateSettings settings)
+    public override int Execute(CommandContext context, PrdValidateSettings? settings)
     {
+        if (settings == null) throw new ArgumentNullException(nameof(settings));
         return ExecuteAsync(context, settings).GetAwaiter().GetResult();
     }
 

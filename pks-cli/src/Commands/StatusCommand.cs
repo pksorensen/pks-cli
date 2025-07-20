@@ -20,8 +20,10 @@ public class StatusCommand : Command<StatusCommand.Settings>
         public bool IncludeAIInsights { get; set; }
     }
 
-    public override int Execute(CommandContext context, Settings settings)
+    public override int Execute(CommandContext context, Settings? settings)
     {
+        if (settings == null) throw new ArgumentNullException(nameof(settings));
+        
         if (settings.Watch)
         {
             return WatchStatus(settings);

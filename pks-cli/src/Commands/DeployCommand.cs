@@ -25,8 +25,10 @@ public class DeployCommand : Command<DeployCommand.Settings>
         public int Replicas { get; set; } = 3;
     }
 
-    public override int Execute(CommandContext context, Settings settings)
+    public override int Execute(CommandContext context, Settings? settings)
     {
+        if (settings == null) throw new ArgumentNullException(nameof(settings));
+        
         AnsiConsole.MarkupLine($"🚀 [bold green]Starting deployment to {settings.Environment.ToUpper()}[/]");
         
         if (settings.UseAI)

@@ -80,7 +80,7 @@ public class HooksCommand : AsyncCommand<HooksSettings>
         }
     }
 
-    private async Task<int> ListHooksAsync()
+    private Task<int> ListHooksAsync()
     {
         AnsiConsole.MarkupLine("[cyan]Available Claude Code Hook Events[/]");
         
@@ -116,10 +116,10 @@ public class HooksCommand : AsyncCommand<HooksSettings>
         AnsiConsole.Write(table);
         
         AnsiConsole.MarkupLine("\n[dim]Use 'pks hooks init' to configure Claude Code integration[/]");
-        return 0;
+        return Task.FromResult(0);
     }
 
-    private async Task<int> ShowHelpAsync()
+    private Task<int> ShowHelpAsync()
     {
         AnsiConsole.MarkupLine("[yellow]PKS Hooks - Claude Code Integration[/]");
         AnsiConsole.MarkupLine("");
@@ -134,7 +134,7 @@ public class HooksCommand : AsyncCommand<HooksSettings>
         AnsiConsole.MarkupLine("  pks hooks post-tool-use                 - Handle PostToolUse event");
         AnsiConsole.MarkupLine("  pks hooks user-prompt-submit            - Handle UserPromptSubmit event");
         AnsiConsole.MarkupLine("  pks hooks stop                          - Handle Stop event");
-        return 0;
+        return Task.FromResult(0);
     }
     
     private static string GetConfigurationPath(SettingsScope scope)

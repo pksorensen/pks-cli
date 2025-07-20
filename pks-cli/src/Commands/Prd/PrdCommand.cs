@@ -21,8 +21,10 @@ public class PrdMainSettings : CommandSettings
 [Description("Manage Product Requirements Documents (PRDs) with AI-powered generation")]
 public class PrdCommand : Command<PrdMainSettings>
 {
-    public override int Execute(CommandContext context, PrdMainSettings settings)
+    public override int Execute(CommandContext context, PrdMainSettings? settings)
     {
+        if (settings == null) throw new ArgumentNullException(nameof(settings));
+        
         // Display help when no subcommand is provided
         AnsiConsole.MarkupLine("[cyan]PKS PRD Management[/]");
         AnsiConsole.WriteLine();
@@ -46,8 +48,9 @@ public class PrdCommand : Command<PrdMainSettings>
 [Description("Manage Product Requirements Documents (PRDs) with AI-powered generation")]
 public class PrdBranchCommand : Command<PrdBranchMainSettings>
 {
-    public override int Execute(CommandContext context, PrdBranchMainSettings settings)
+    public override int Execute(CommandContext context, PrdBranchMainSettings? settings)
     {
+        if (settings == null) throw new ArgumentNullException(nameof(settings));
         if (settings.ShowVersion)
         {
             AnsiConsole.MarkupLine("[cyan]PKS PRD Management v1.0.0[/]");

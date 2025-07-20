@@ -24,18 +24,18 @@ public class HooksService : IHooksService
             }
 
             // Read existing settings or create new
-            JsonNode? settingsNode = null;
+            JsonNode settingsNode;
             bool hasExistingHooks = false;
             List<string> existingHookTypes = new();
 
             if (File.Exists(settingsPath))
             {
                 var existingContent = await File.ReadAllTextAsync(settingsPath);
-                settingsNode = JsonNode.Parse(existingContent);
+                settingsNode = JsonNode.Parse(existingContent) ?? new JsonObject();
                 AnsiConsole.MarkupLine($"[dim]Loading existing settings from: {settingsPath}[/]");
 
                 // Check for existing hooks
-                if (settingsNode?["hooks"] != null)
+                if (settingsNode["hooks"] != null)
                 {
                     hasExistingHooks = true;
                     var hooksNode = settingsNode["hooks"];
@@ -73,10 +73,13 @@ public class HooksService : IHooksService
                 var pksHooksToOverwrite = new List<string>();
                 var hooksNode = settingsNode["hooks"];
                 
-                if (ContainsPksCommand(hooksNode?["preToolUse"])) pksHooksToOverwrite.Add("PreToolUse");
-                if (ContainsPksCommand(hooksNode?["postToolUse"])) pksHooksToOverwrite.Add("PostToolUse");
-                if (ContainsPksCommand(hooksNode?["userPromptSubmit"])) pksHooksToOverwrite.Add("UserPromptSubmit");
-                if (ContainsPksCommand(hooksNode?["stop"])) pksHooksToOverwrite.Add("Stop");
+                if (hooksNode != null)
+                {
+                    if (ContainsPksCommand(hooksNode["preToolUse"])) pksHooksToOverwrite.Add("PreToolUse");
+                    if (ContainsPksCommand(hooksNode["postToolUse"])) pksHooksToOverwrite.Add("PostToolUse");
+                    if (ContainsPksCommand(hooksNode["userPromptSubmit"])) pksHooksToOverwrite.Add("UserPromptSubmit");
+                    if (ContainsPksCommand(hooksNode["stop"])) pksHooksToOverwrite.Add("Stop");
+                }
 
                 if (pksHooksToOverwrite.Any())
                 {

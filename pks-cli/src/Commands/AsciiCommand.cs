@@ -29,8 +29,10 @@ public class AsciiCommand : Command<AsciiCommand.Settings>
         public bool Animate { get; set; }
     }
 
-    public override int Execute(CommandContext context, Settings settings)
+    public override int Execute(CommandContext context, Settings? settings)
     {
+        if (settings == null) throw new ArgumentNullException(nameof(settings));
+        
         if (string.IsNullOrEmpty(settings.Text))
         {
             settings.Text = AnsiConsole.Ask<string>("What text should I convert to [cyan]ASCII art[/]?");

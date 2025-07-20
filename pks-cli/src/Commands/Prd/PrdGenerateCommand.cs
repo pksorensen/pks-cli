@@ -19,8 +19,9 @@ public class PrdGenerateCommand : Command<PrdGenerateSettings>
         _prdService = prdService;
     }
 
-    public override int Execute(CommandContext context, PrdGenerateSettings settings)
+    public override int Execute(CommandContext context, PrdGenerateSettings? settings)
     {
+        if (settings == null) throw new ArgumentNullException(nameof(settings));
         return ExecuteAsync(context, settings).GetAwaiter().GetResult();
     }
 
