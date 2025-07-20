@@ -1,0 +1,11 @@
+﻿{
+  "name": "TestProject2",
+  "image": "mcr.microsoft.com/dotnet/sdk:8.0",
+  "features": {},
+  "customizations": {},
+  "forwardPorts": [],
+  "postCreateCommand": "",
+  "mounts": [],
+  "remoteEnv": {},
+  "workspaceFolder": "/workspaces"
+}
