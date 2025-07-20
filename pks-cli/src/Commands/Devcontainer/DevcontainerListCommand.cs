@@ -26,8 +26,9 @@ public class DevcontainerListCommand : Command<DevcontainerListSettings>
         _extensionService = extensionService ?? throw new ArgumentNullException(nameof(extensionService));
     }
 
-    public override int Execute(CommandContext context, DevcontainerListSettings settings)
+    public override int Execute(CommandContext context, DevcontainerListSettings? settings)
     {
+        if (settings == null) throw new ArgumentNullException(nameof(settings));
         return ExecuteAsync(context, settings).GetAwaiter().GetResult();
     }
 
@@ -547,5 +548,5 @@ public class DevcontainerListSettings : DevcontainerSettings
 
     [CommandOption("-v|--verbose")]
     [Description("Enable verbose output")]
-    public bool Verbose { get; set; }
+    public new bool Verbose { get; set; }
 }

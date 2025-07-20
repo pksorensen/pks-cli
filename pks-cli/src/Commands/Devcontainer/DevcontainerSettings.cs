@@ -219,4 +219,20 @@ public class DevcontainerWizardSettings : DevcontainerSettings
     [CommandOption("--quick-setup")]
     [Description("Use quick setup with minimal prompts")]
     public bool QuickSetup { get; set; }
+
+    [CommandOption("--from-templates")]
+    [Description("Discover and use templates from NuGet packages")]
+    public bool FromTemplates { get; set; }
+
+    [CommandOption("--sources <SOURCES>")]
+    [Description("Comma-separated list of NuGet sources to use for template discovery")]
+    public string[]? Sources { get; set; }
+
+    [CommandOption("--add-sources <SOURCES>")]
+    [Description("Comma-separated list of additional NuGet sources to include")]
+    public string[]? AddSources { get; set; }
+
+    [CommandOption("--debug")]
+    [Description("Enable debug output for troubleshooting template discovery")]
+    public bool Debug { get; set; }
 }

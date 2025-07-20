@@ -60,25 +60,25 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
         return AnsiConsole.Prompt(prompt);
     }
 
-    protected static T PromptSelection<T>(string message, IEnumerable<T> choices) where T : notnull
+    protected static TItem PromptSelection<TItem>(string message, IEnumerable<TItem> choices) where TItem : notnull
     {
         return AnsiConsole.Prompt(
-            new SelectionPrompt<T>()
+            new SelectionPrompt<TItem>()
                 .Title(message)
                 .AddChoices(choices)
         );
     }
 
-    protected static List<T> PromptMultiSelection<T>(string message, IEnumerable<T> choices) where T : notnull
+    protected static List<TItem> PromptMultiSelection<TItem>(string message, IEnumerable<TItem> choices) where TItem : notnull
     {
         return AnsiConsole.Prompt(
-            new MultiSelectionPrompt<T>()
+            new MultiSelectionPrompt<TItem>()
                 .Title(message)
                 .AddChoices(choices)
         );
     }
 
-    protected static void DisplayTable<T>(string title, IEnumerable<T> items, params (string Header, Func<T, string> ValueSelector)[] columns)
+    protected static void DisplayTable<TItem>(string title, IEnumerable<TItem> items, params (string Header, Func<TItem, string> ValueSelector)[] columns)
     {
         var table = new Table()
             .Title(title)
@@ -146,7 +146,7 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
             });
     }
 
-    protected static async Task<T> WithSpinnerAsync<T>(string message, Func<Task<T>> operation)
+    protected static async Task<TResult> WithSpinnerAsync<TResult>(string message, Func<Task<TResult>> operation)
     {
         return await AnsiConsole.Status()
             .SpinnerStyle(Style.Parse("cyan"))
@@ -213,19 +213,52 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
 
     protected static void DisplayConfigurationSummary(string name, string? image, IEnumerable<string> features, IEnumerable<string> extensions, IEnumerable<int> ports)
     {
-        var panel = new Panel(
-            new Rows(
-                new Text($"Name: {name}"),
-                new Text($"Base Image: {image ?? "N/A"}"),
-                new Text($"Features: {features.Count()}"),
-                new Text($"Extensions: {extensions.Count()}"),
-                new Text($"Forwarded Ports: {string.Join(", ", ports)}")
-            )
-        )
-        .Header("[cyan]Configuration Summary[/]")
-        .Border(BoxBorder.Rounded);
+        var table = new Table()
+            .Title("[cyan]Configuration Summary[/]")
+            .Border(TableBorder.Rounded)
+            .AddColumn(new TableColumn("Setting").Width(20))
+            .AddColumn(new TableColumn("Value").NoWrap());
 
-        AnsiConsole.Write(panel);
+        table.AddRow("[yellow]Name[/]", $"[white]{name}[/]");
+        table.AddRow("[yellow]Base Image[/]", $"[dim]{image ?? "N/A"}[/]");
+        
+        var featuresList = features.ToList();
+        if (featuresList.Any())
+        {
+            var featuresText = featuresList.Count <= 3 
+                ? string.Join(", ", featuresList)
+                : $"{string.Join(", ", featuresList.Take(3))} and {featuresList.Count - 3} more";
+            table.AddRow("[yellow]Features[/]", $"[green]{featuresText}[/]");
+        }
+        else
+        {
+            table.AddRow("[yellow]Features[/]", "[dim]None[/]");
+        }
+        
+        var extensionsList = extensions.ToList();
+        if (extensionsList.Any())
+        {
+            var extensionsText = extensionsList.Count <= 3 
+                ? string.Join(", ", extensionsList)
+                : $"{string.Join(", ", extensionsList.Take(3))} and {extensionsList.Count - 3} more";
+            table.AddRow("[yellow]Extensions[/]", $"[blue]{extensionsText}[/]");
+        }
+        else
+        {
+            table.AddRow("[yellow]Extensions[/]", "[dim]None[/]");
+        }
+        
+        var portsList = ports.ToList();
+        if (portsList.Any())
+        {
+            table.AddRow("[yellow]Forwarded Ports[/]", $"[cyan]{string.Join(", ", portsList)}[/]");
+        }
+        else
+        {
+            table.AddRow("[yellow]Forwarded Ports[/]", "[dim]None[/]");
+        }
+
+        AnsiConsole.Write(table);
     }
 
     protected static string ValidateAndResolvePath(string path)

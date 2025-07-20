@@ -26,8 +26,9 @@ public class DevcontainerValidateCommand : DevcontainerCommand<DevcontainerValid
         _extensionService = extensionService ?? throw new ArgumentNullException(nameof(extensionService));
     }
 
-    public override int Execute(CommandContext context, DevcontainerValidateSettings settings)
+    public override int Execute(CommandContext context, DevcontainerValidateSettings? settings)
     {
+        if (settings == null) throw new ArgumentNullException(nameof(settings));
         return ExecuteAsync(context, settings).GetAwaiter().GetResult();
     }
 

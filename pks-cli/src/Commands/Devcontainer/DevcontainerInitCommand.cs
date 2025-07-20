@@ -25,8 +25,9 @@ public class DevcontainerInitCommand : DevcontainerCommand<DevcontainerInitSetti
         _templateService = templateService ?? throw new ArgumentNullException(nameof(templateService));
     }
 
-    public override int Execute(CommandContext context, DevcontainerInitSettings settings)
+    public override int Execute(CommandContext context, DevcontainerInitSettings? settings)
     {
+        if (settings == null) throw new ArgumentNullException(nameof(settings));
         return ExecuteAsync(context, settings).GetAwaiter().GetResult();
     }
 
@@ -174,7 +175,7 @@ public class DevcontainerInitCommand : DevcontainerCommand<DevcontainerInitSetti
         }
     }
 
-    private async Task<DevcontainerOptions> BuildDevcontainerOptionsAsync(DevcontainerInitSettings settings, string outputPath)
+    private Task<DevcontainerOptions> BuildDevcontainerOptionsAsync(DevcontainerInitSettings settings, string outputPath)
     {
         var options = new DevcontainerOptions
         {
@@ -240,10 +241,10 @@ public class DevcontainerInitCommand : DevcontainerCommand<DevcontainerInitSetti
             }
         }
 
-        return options;
+        return Task.FromResult(options);
     }
 
-    private async Task DisplayDryRunInfoAsync(DevcontainerOptions options)
+    private Task DisplayDryRunInfoAsync(DevcontainerOptions options)
     {
         DisplayInfo("DRY RUN - No files will be created");
         AnsiConsole.WriteLine();
@@ -295,6 +296,7 @@ public class DevcontainerInitCommand : DevcontainerCommand<DevcontainerInitSetti
             var relativePath = Path.GetRelativePath(Directory.GetCurrentDirectory(), file);
             DisplayProgress($"• {relativePath}");
         }
+        return Task.CompletedTask;
     }
 
     private static IEnumerable<string> GetExtensionsFromCustomizations(Dictionary<string, object> customizations)
