@@ -37,6 +37,14 @@ public class InitCommand : Command<InitCommand.Settings>
         [CommandOption("-d|--description <DESCRIPTION>")]
         [Description("Optional project description")]
         public string? Description { get; set; }
+
+        [CommandOption("--devcontainer")]
+        [Description("Enable devcontainer configuration for isolated development")]
+        public bool EnableDevcontainer { get; set; }
+
+        [CommandOption("--devcontainer-features <FEATURES>")]
+        [Description("Comma-separated list of devcontainer features (e.g., dotnet,docker-in-docker,python)")]
+        public string? DevcontainerFeatures { get; set; }
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -66,8 +74,19 @@ public class InitCommand : Command<InitCommand.Settings>
             { "agentic", settings.EnableAgentic },
             { "mcp", settings.EnableMcp },
             { "template", settings.Template },
-            { "description", settings.Description }
+            { "description", settings.Description },
+            { "devcontainer", settings.EnableDevcontainer }
         };
+
+        // Parse devcontainer features if provided
+        if (!string.IsNullOrEmpty(settings.DevcontainerFeatures))
+        {
+            var features = settings.DevcontainerFeatures
+                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(f => f.Trim())
+                .ToArray();
+            options["devcontainer-features"] = features;
+        }
 
         // Create target directory path
         var targetDirectory = Path.Combine(Environment.CurrentDirectory, settings.ProjectName);
@@ -115,6 +134,7 @@ public class InitCommand : Command<InitCommand.Settings>
             if (summary.Success)
             {
                 var agenticInfo = settings.EnableAgentic ? "\n• [cyan]Agentic features:[/] [green]Enabled[/]" : "";
+                var devcontainerInfo = settings.EnableDevcontainer ? "\n• [cyan]Devcontainer:[/] [green]Configured[/]" : "";
                 
                 var panel = new Panel($"""
                 🎉 [bold green]Project '{settings.ProjectName}' initialized successfully![/]
@@ -122,10 +142,10 @@ public class InitCommand : Command<InitCommand.Settings>
                 [cyan1]Template:[/] {settings.Template}
                 [cyan1]Description:[/] {settings.Description}
                 [cyan1]Files created:[/] {summary.FilesCreated}
-                [cyan1]Duration:[/] {summary.Duration.TotalSeconds:F1}s{agenticInfo}
+                [cyan1]Duration:[/] {summary.Duration.TotalSeconds:F1}s{agenticInfo}{devcontainerInfo}
                 
                 Next steps:
-                • [cyan]cd {settings.ProjectName}[/] - Navigate to your project
+                • [cyan]cd {settings.ProjectName}[/] - Navigate to your project{(settings.EnableDevcontainer ? "\n• [cyan]code .[/] - Open in VS Code and 'Reopen in Container'" : "")}
                 • [cyan]pks agent create[/] - Add AI development agents  
                 • [cyan]pks deploy --watch[/] - Deploy with intelligent monitoring
                 

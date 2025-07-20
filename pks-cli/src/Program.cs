@@ -34,6 +34,13 @@ services.AddSingleton<PKS.CLI.Infrastructure.Services.IMcpServerService, PKS.CLI
 services.AddSingleton<IAgentFrameworkService, AgentFrameworkService>();
 services.AddSingleton<IPrdService, PrdService>();
 
+// Register devcontainer services
+services.AddSingleton<IDevcontainerService, DevcontainerService>();
+services.AddSingleton<IDevcontainerFeatureRegistry, DevcontainerFeatureRegistry>();
+services.AddSingleton<IDevcontainerTemplateService, DevcontainerTemplateService>();
+services.AddSingleton<IDevcontainerFileGenerator, DevcontainerFileGenerator>();
+services.AddSingleton<IVsCodeExtensionService, VsCodeExtensionService>();
+
 // Register PRD branch command
 services.AddTransient<PrdBranchCommand>();
 
@@ -43,6 +50,7 @@ services.AddSingleton<IProjectIdentityService, ProjectIdentityService>();
 
 // Register individual initializers as transient services
 services.AddTransient<PKS.Infrastructure.Initializers.Implementations.DotNetProjectInitializer>();
+services.AddTransient<PKS.Infrastructure.Initializers.Implementations.DevcontainerInitializer>();
 services.AddTransient<PKS.Infrastructure.Initializers.Implementations.GitHubIntegrationInitializer>();
 services.AddTransient<PKS.Infrastructure.Initializers.Implementations.AgenticFeaturesInitializer>();
 services.AddTransient<PKS.Infrastructure.Initializers.Implementations.ReadmeInitializer>();
@@ -57,6 +65,7 @@ services.AddSingleton<IInitializerRegistry>(serviceProvider =>
     
     // Register initializer types
     registry.Register<PKS.Infrastructure.Initializers.Implementations.DotNetProjectInitializer>();
+    registry.Register<PKS.Infrastructure.Initializers.Implementations.DevcontainerInitializer>();
     registry.Register<PKS.Infrastructure.Initializers.Implementations.GitHubIntegrationInitializer>();
     registry.Register<PKS.Infrastructure.Initializers.Implementations.AgenticFeaturesInitializer>();
     registry.Register<PKS.Infrastructure.Initializers.Implementations.ReadmeInitializer>();
@@ -95,6 +104,57 @@ app.Configure(config =>
         
     config.AddCommand<PKS.CLI.Commands.Mcp.McpCommand>("mcp")
         .WithDescription("Model Context Protocol (MCP) server for AI integration");
+        
+    // Add devcontainer branch command with subcommands
+    config.AddBranch<PKS.Commands.Devcontainer.DevcontainerSettings>("devcontainer", devcontainer =>
+    {
+        devcontainer.SetDescription("Manage devcontainer configurations for isolated development environments");
+        
+        devcontainer.AddCommand<PKS.Commands.Devcontainer.DevcontainerInitCommand>("init")
+            .WithDescription("Initialize a new devcontainer configuration")
+            .WithExample(new[] { "devcontainer", "init", "MyProject" })
+            .WithExample(new[] { "devcontainer", "init", "--features", "dotnet,docker-in-docker" })
+            .WithExample(new[] { "devcontainer", "init", "--template", "dotnet-web", "--force" });
+            
+        devcontainer.AddCommand<PKS.Commands.Devcontainer.DevcontainerWizardCommand>("wizard")
+            .WithDescription("Interactive wizard for comprehensive devcontainer setup")
+            .WithExample(new[] { "devcontainer", "wizard" })
+            .WithExample(new[] { "devcontainer", "wizard", "--expert-mode" })
+            .WithExample(new[] { "devcontainer", "wizard", "--quick-setup" });
+            
+        devcontainer.AddCommand<PKS.Commands.Devcontainer.DevcontainerValidateCommand>("validate")
+            .WithDescription("Validate existing devcontainer configuration")
+            .WithExample(new[] { "devcontainer", "validate" })
+            .WithExample(new[] { "devcontainer", "validate", ".devcontainer/devcontainer.json", "--strict" })
+            .WithExample(new[] { "devcontainer", "validate", "--check-features", "--check-extensions" });
+            
+        devcontainer.AddBranch<PKS.Commands.Devcontainer.DevcontainerListSettings>("list", list =>
+        {
+            list.SetDescription("List available devcontainer resources");
+            
+            list.AddCommand<PKS.Commands.Devcontainer.DevcontainerListCommand>("features")
+                .WithDescription("List available devcontainer features")
+                .WithExample(new[] { "devcontainer", "list", "features" })
+                .WithExample(new[] { "devcontainer", "list", "features", "--category", "language" })
+                .WithExample(new[] { "devcontainer", "list", "features", "--search", "dotnet", "--show-details" });
+                
+            list.AddCommand<PKS.Commands.Devcontainer.DevcontainerListCommand>("templates")
+                .WithDescription("List available devcontainer templates")
+                .WithExample(new[] { "devcontainer", "list", "templates" })
+                .WithExample(new[] { "devcontainer", "list", "templates", "--category", "web" })
+                .WithExample(new[] { "devcontainer", "list", "templates", "--show-details" });
+                
+            list.AddCommand<PKS.Commands.Devcontainer.DevcontainerListCommand>("extensions")
+                .WithDescription("List recommended VS Code extensions")
+                .WithExample(new[] { "devcontainer", "list", "extensions" })
+                .WithExample(new[] { "devcontainer", "list", "extensions", "--category", "language" })
+                .WithExample(new[] { "devcontainer", "list", "extensions", "--search", "dotnet" });
+                
+            list.AddCommand<PKS.Commands.Devcontainer.DevcontainerListCommand>("")
+                .WithDescription("List all available devcontainer resources")
+                .WithExample(new[] { "devcontainer", "list" });
+        });
+    });
         
     // Add hooks branch command with subcommands
     config.AddBranch<HooksSettings>("hooks", hooks =>
