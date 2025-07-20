@@ -8,34 +8,125 @@ PKS CLI is a .NET 8 console application built with Spectre.Console that provides
 
 **Repository**: https://github.com/pksorensen/pks-cli
 
-## Development Commands
+## Getting Started
 
-### Building and Running
+### TL;DR - Just Install It
 
 ```bash
-# Build the project
-cd pks-cli/src
-dotnet build
+# One command to install PKS CLI
+./install.sh
 
-# Run locally during development
+# Start using it immediately
+pks init MyFirstProject
+```
+
+That's it! The script handles everything else automatically.
+
+## Quick Start
+
+### New Users - Installation
+
+For users who want to install and use PKS CLI:
+
+```bash
+# Simple one-command installation
+./install.sh
+
+# Force reinstall if already installed
+FORCE_INSTALL=true ./install.sh
+
+# Get help and see all options
+./install.sh --help
+```
+
+The install script handles everything: validates .NET, builds the solution, creates packages, and installs as a global tool.
+
+### Developers - Development Commands
+
+For development work on PKS CLI itself:
+
+```bash
+# Build and test during development
+dotnet build PKS.CLI.sln
+dotnet test
+
+# Run locally without installing
+cd src
 dotnet run -- [command] [options]
 
-# Build and install as global tool locally
+# Example: Run init command locally
+dotnet run -- init MyTestProject --template console
+```
+
+## Installation Options
+
+### Automated Installation (Recommended)
+
+The `install.sh` script provides a complete, automated installation experience:
+
+```bash
+# Standard installation
+./install.sh
+
+# Available environment variables
+FORCE_INSTALL=true ./install.sh     # Overwrite existing installation
+CONFIGURATION=Debug ./install.sh    # Use Debug configuration
+```
+
+**What the script does:**
+1. ✅ Validates .NET 8+ is installed
+2. 🔨 Builds the entire solution (CLI + Templates)
+3. 📦 Creates NuGet packages for distribution
+4. 🌍 Installs PKS CLI as a global .NET tool
+5. ✔️ Verifies installation and provides usage tips
+
+### Manual Installation (Development)
+
+For development scenarios or manual control:
+
+```bash
+# Navigate to source directory
+cd src
+
+# Build and package
 dotnet build --configuration Release
 dotnet pack --configuration Release
+
+# Install as global tool
 dotnet tool install -g --add-source ./bin/Release pks-cli --force
 
-# Test installation
+# Verify installation
 pks --help
 ```
 
-### Using the Init Command
+## Usage Scenarios
+
+### When to Use Each Approach
+
+**Use `./install.sh` when:**
+- ✅ You want to install PKS CLI for regular use
+- ✅ You're setting up PKS CLI on a new machine
+- ✅ You want the simplest, most reliable installation
+- ✅ You're deploying PKS CLI to production/CI environments
+
+**Use manual development commands when:**
+- 🔨 You're developing PKS CLI itself
+- 🔨 You need to test changes without installing
+- 🔨 You're debugging or running specific build configurations
+- 🔨 You want granular control over the build process
+
+### Getting Started with PKS CLI
+
+After installation, try these commands:
 
 ```bash
+# See all available commands
+pks --help
+
 # Basic project initialization
 pks init MyProject
 
-# Interactive mode (prompts for project name and details)
+# Interactive mode (prompts for project details)
 pks init
 
 # Create agentic project with MCP integration
@@ -44,26 +135,117 @@ pks init MyAgent --agentic --mcp --template agent
 # API project with specific template
 pks init MyApi --template api --description "REST API for my application"
 
-# Force override existing directory
-pks init ExistingProject --force
-
 # Web application with agentic features
 pks init MyWebApp --template web --agentic --description "Intelligent web application"
 
-# Console application with custom description
-pks init MyConsole --template console --description "Command-line utility"
+# Generate ASCII art
+pks ascii "Hello PKS"
+
+# View system status
+pks status
 ```
 
-### Installation Script
+## Development Workflow
 
-The repository includes `pks-cli/install.sh` that automates the build and global tool installation process.
-
-### Testing
+### For PKS CLI Contributors
 
 ```bash
-# Run tests (when test project exists)
+# 1. Clone and build
+git clone <repository>
+cd pks-cli
+dotnet build PKS.CLI.sln
+
+# 2. Run tests
 dotnet test
+
+# 3. Test commands locally (without installing)
+cd src
+dotnet run -- init TestProject --template console
+
+# 4. Install for system-wide testing
+./install.sh
+
+# 5. Test the installed version
+pks init AnotherTest --template api
 ```
+
+### Troubleshooting
+
+**Installation Issues:**
+```bash
+# If installation fails, try force reinstall
+FORCE_INSTALL=true ./install.sh
+
+# Check .NET version
+dotnet --version  # Should be 8.0 or higher
+
+# Verify PATH includes .NET tools
+echo $PATH | grep -o '[^:]*\.dotnet[^:]*'
+```
+
+**Development Issues:**
+```bash
+# Clean and rebuild
+dotnet clean PKS.CLI.sln
+dotnet build PKS.CLI.sln
+
+# If global tool conflicts
+dotnet tool uninstall -g pks-cli
+./install.sh
+```
+
+## Simplified Script Structure
+
+PKS CLI now uses a **single, comprehensive installation script** that handles all scenarios:
+
+### What Changed
+- **Removed**: Multiple specialized scripts (build.sh, deploy.sh, etc.)
+- **Simplified**: One `install.sh` script for all installation needs
+- **Enhanced**: Better error handling, cross-platform support, and user feedback
+
+### Script Capabilities
+
+The `install.sh` script is designed to be the **one-stop solution** for PKS CLI installation:
+
+```bash
+# Core functionality
+./install.sh                      # Standard installation
+FORCE_INSTALL=true ./install.sh   # Force reinstall
+CONFIGURATION=Debug ./install.sh  # Debug build
+./install.sh --help               # Show usage help
+```
+
+**Environment Variables:**
+- `FORCE_INSTALL=true` - Override existing installations
+- `CONFIGURATION=Release|Debug` - Build configuration (default: Release)
+
+**Cross-Platform Support:**
+- ✅ Linux (Ubuntu, CentOS, etc.)
+- ✅ macOS (Intel & Apple Silicon)
+- ✅ Windows (WSL, Git Bash, MSYS2)
+
+### No More Multiple Scripts
+
+**Before** (complex):
+```bash
+./build.sh        # Build only
+./package.sh      # Package only  
+./deploy.sh       # Deploy only
+./install.sh      # Install only
+```
+
+**Now** (simplified):
+```bash
+./install.sh      # Does everything!
+```
+
+The single script intelligently handles:
+- Dependency validation (.NET 8+)
+- Solution building (CLI + Templates)
+- Package creation (NuGet packages)
+- Global tool installation
+- Installation verification
+- User guidance and tips
 
 ## Architecture
 
@@ -144,45 +326,54 @@ Services use async/await patterns with simulated delays to represent real operat
 
 ```
 pks-cli/
-├── src/
-│   ├── Commands/          # Command implementations
-│   │   └── InitCommand.cs # Project initialization command
-│   ├── Infrastructure/    # Services and DI setup
-│   │   ├── Initializers/  # Initializer system
-│   │   │   ├── Base/      # Base classes for initializers
-│   │   │   │   ├── BaseInitializer.cs
-│   │   │   │   ├── TemplateInitializer.cs
-│   │   │   │   └── CodeInitializer.cs
-│   │   │   ├── Context/   # Context and models
-│   │   │   │   ├── InitializationContext.cs
-│   │   │   │   ├── InitializationResult.cs
-│   │   │   │   └── InitializerOption.cs
-│   │   │   ├── Implementations/ # Concrete initializers
-│   │   │   │   ├── DotNetProjectInitializer.cs
-│   │   │   │   ├── AgenticFeaturesInitializer.cs
-│   │   │   │   ├── McpConfigurationInitializer.cs
-│   │   │   │   ├── ClaudeDocumentationInitializer.cs
-│   │   │   │   └── ReadmeInitializer.cs
-│   │   │   ├── Registry/   # Initializer discovery and management
-│   │   │   │   ├── IInitializerRegistry.cs
-│   │   │   │   └── InitializerRegistry.cs
-│   │   │   ├── Service/    # Orchestration service
-│   │   │   │   ├── IInitializationService.cs
-│   │   │   │   ├── InitializationService.cs
-│   │   │   │   └── Models.cs
-│   │   │   └── IInitializer.cs # Core initializer interface
-│   │   └── Services.cs    # DI service registration
-│   ├── Templates/         # Template files for initializers
-│   │   ├── mcp/          # MCP configuration templates
-│   │   ├── claude/       # Claude documentation templates
-│   │   └── docs/         # Additional documentation templates
-│   ├── Program.cs         # Entry point
-│   └── pks-cli.csproj     # Project configuration
-├── tests/                 # Test projects (empty)
-├── docs/                  # Documentation (empty)
-├── README.md              # Project documentation
-└── install.sh             # Installation script
+├── PKS.CLI.sln              # Solution file
+├── install.sh               # Single installation script
+├── README.md                # Project documentation
+├── CLAUDE.md                # This file - development guidance
+├── src/                     # Main CLI source code
+│   ├── Commands/            # Command implementations
+│   │   ├── InitCommand.cs   # Project initialization
+│   │   ├── Agent/           # AI agent management
+│   │   ├── Devcontainer/    # Development container support
+│   │   ├── Mcp/             # Model Context Protocol integration
+│   │   ├── Prd/             # Product Requirements Document tools
+│   │   └── ...              # Other commands
+│   ├── Infrastructure/      # Services and dependency injection
+│   │   ├── Initializers/    # Modular project initialization system
+│   │   ├── Services/        # Business logic services
+│   │   └── Services.cs      # DI registration
+│   ├── Program.cs           # Application entry point
+│   └── pks-cli.csproj       # Main project file
+├── templates/               # NuGet template packages
+│   ├── devcontainer/        # Dev container templates
+│   ├── claude-docs/         # Claude documentation templates
+│   ├── claude-modular/      # Modular Claude configurations
+│   ├── hooks/               # Git hooks templates
+│   ├── mcp/                 # MCP configuration templates
+│   └── prd/                 # PRD templates
+├── tests/                   # Comprehensive test suite
+│   ├── Commands/            # Command tests
+│   ├── Integration/         # End-to-end tests
+│   ├── Services/            # Service tests
+│   └── PKS.CLI.Tests.csproj # Test project file
+└── docs/                    # Additional documentation
+    ├── AGENTS.md            # AI agent documentation
+    ├── ARCHITECTURE.md      # Architecture overview
+    └── MCP.md               # MCP integration guide
 ```
+
+### Key Points
+
+**Simplified Structure:**
+- Single `install.sh` script replaces multiple build/deploy scripts
+- Clear separation between CLI source (`src/`) and templates (`templates/`)
+- Comprehensive test coverage in `tests/`
+- Rich documentation in `docs/`
+
+**Template System:**
+- Templates are separate NuGet packages in `templates/` directory
+- Each template can be independently versioned and distributed
+- Templates support both file-based and code-generated content
 
 ## Configuration
 
@@ -341,6 +532,36 @@ public class MyCodeInitializer : CodeInitializer
 
 ### Registration
 Initializers are automatically discovered and registered through reflection. Place custom initializers in the `Infrastructure/Initializers/Implementations/` directory.
+
+## Summary
+
+### Key Improvements
+
+PKS CLI now features a **dramatically simplified setup experience**:
+
+1. **Single Script Installation** - No more juggling multiple scripts
+2. **Cross-Platform Support** - Works on Linux, macOS, and Windows
+3. **Smart Error Handling** - Clear feedback and troubleshooting guidance  
+4. **Automated Verification** - Confirms installation worked correctly
+5. **Environment Flexibility** - Support for different build configurations
+
+### Command Reference
+
+| Scenario | Command | Purpose |
+|----------|---------|---------|
+| **New User** | `./install.sh` | Install PKS CLI for daily use |
+| **Developer** | `dotnet run -- <cmd>` | Test changes without installing |
+| **Force Reinstall** | `FORCE_INSTALL=true ./install.sh` | Override existing installation |
+| **Debug Build** | `CONFIGURATION=Debug ./install.sh` | Install debug version |
+| **Get Help** | `./install.sh --help` | Show installation options |
+
+### Next Steps
+
+After installation:
+1. Run `pks --help` to see all available commands
+2. Try `pks init MyProject` to create your first project
+3. Explore agentic features with `pks init MyAgent --agentic --mcp`
+4. Check out the documentation in `/docs/` for advanced features
 
 ## Orchestrator
 

@@ -169,39 +169,59 @@ pks config --get github.token
 - Git (for GitHub integration)
 - Optional: Docker (for container features)
 
-### Quick Install (Recommended)
+### One-Command Installation (Recommended)
 ```bash
-# Install from NuGet (when published)
-dotnet tool install -g pks-cli
+# Clone and install in one step
+git clone https://github.com/pksorensen/pks-cli
+cd pks-cli
+./install.sh
 
-# Verify installation
-pks --version
+# Start using immediately
+pks --help
+pks init MyFirstProject
 ```
 
-### Development Install
-```bash
-# Clone the repository
-git clone https://github.com/pksorensen/pks-cli
-cd pks-cli/src
+The `install.sh` script automatically:
+- ✅ Validates .NET 8+ installation
+- 🔨 Builds the complete solution (CLI + Templates)
+- 📦 Creates NuGet packages
+- 🌍 Installs as a global .NET tool
+- ✔️ Verifies installation success
 
-# Build and install locally
+### Advanced Installation Options
+```bash
+# Force reinstall (if already installed)
+FORCE_INSTALL=true ./install.sh
+
+# Install debug version for development
+CONFIGURATION=Debug ./install.sh
+
+# Get help and see all options
+./install.sh --help
+```
+
+### Manual Development Setup
+For PKS CLI contributors and advanced users:
+```bash
+# Build and test during development
+dotnet build PKS.CLI.sln
+dotnet test
+
+# Run commands locally without installing
+cd src
+dotnet run -- init MyTestProject --template console
+
+# Manual installation with full control
+cd src
 dotnet build --configuration Release
 dotnet pack --configuration Release
 dotnet tool install -g --add-source ./bin/Release pks-cli --force
-
-# Verify installation
-pks --help
 ```
 
-### Using the Installation Script
+### From NuGet (Coming Soon)
 ```bash
-# Quick install script (macOS/Linux)
-curl -sSL https://raw.githubusercontent.com/pksorensen/pks-cli/main/install.sh | bash
-
-# Or download and run manually
-wget https://raw.githubusercontent.com/pksorensen/pks-cli/main/install.sh
-chmod +x install.sh
-./install.sh
+# Future: Install from NuGet registry
+dotnet tool install -g pks-cli
 ```
 
 ## 🚀 Quick Start
@@ -361,14 +381,34 @@ pks-cli/
 │   ├── Templates/               # Template files for generation
 │   └── Program.cs               # Application entry point
 ├── tests/                        # Test projects
+├── test-artifacts/               # Test output (git ignored)
+│   ├── coverage/                # Code coverage reports
+│   ├── logs/                    # Test execution logs
+│   ├── results/                 # Test result files
+│   └── temp/                    # Temporary test files
 ├── docs/                         # Documentation
-└── install.sh                   # Installation script
+├── install.sh                   # Installation script
+├── clean-test-artifacts.sh      # Test cleanup script (Unix)
+└── clean-test-artifacts.ps1     # Test cleanup script (Windows)
 ```
 
 ### Running Tests
 ```bash
+# Run all tests
 dotnet test
+
+# Run with coverage
+dotnet test --collect:"XPlat Code Coverage"
+
+# Run with custom settings
+dotnet test --settings tests/.runsettings
+
+# Clean test artifacts
+./clean-test-artifacts.sh  # Unix/Linux/macOS
+./clean-test-artifacts.ps1 # Windows PowerShell
 ```
+
+All test outputs (results, coverage reports, logs) are stored in the `test-artifacts/` directory to keep the repository clean.
 
 ### Code Style
 - Follow standard .NET conventions
