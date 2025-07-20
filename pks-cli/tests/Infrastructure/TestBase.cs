@@ -1,78 +1,126 @@
+using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Moq;
-using System.IO.Abstractions;
-using System.IO.Abstractions.TestingHelpers;
-using Xunit.Abstractions;
+using Spectre.Console;
+using Spectre.Console.Testing;
+using System.Text;
 
 namespace PKS.CLI.Tests.Infrastructure;
 
 /// <summary>
-/// Base class for all PKS CLI tests providing common setup and utilities
+/// Base class for all test classes providing common utilities and setup
 /// </summary>
 public abstract class TestBase : IDisposable
 {
-    protected readonly ITestOutputHelper Output;
-    protected readonly MockFileSystem FileSystem;
-    protected readonly ServiceCollection Services;
-    protected ServiceProvider? ServiceProvider;
-    protected readonly string TestDirectory;
+    protected readonly IServiceProvider ServiceProvider;
+    protected readonly TestConsole TestConsole;
+    protected readonly StringBuilder LogOutput;
+    protected readonly Mock<ILogger> MockLogger;
 
-    protected TestBase(ITestOutputHelper output)
+    protected TestBase()
     {
-        Output = output;
-        FileSystem = new MockFileSystem();
-        Services = new ServiceCollection();
-        TestDirectory = $"/test/{Guid.NewGuid()}";
+        // Setup test console for Spectre.Console testing
+        TestConsole = new TestConsole();
         
-        SetupBaseServices();
+        // Setup logging capture
+        LogOutput = new StringBuilder();
+        MockLogger = new Mock<ILogger>();
+        
+        // Setup mock logger to capture log messages
+        MockLogger.Setup(x => x.Log(
+            It.IsAny<LogLevel>(),
+            It.IsAny<EventId>(),
+            It.IsAny<It.IsAnyType>(),
+            It.IsAny<Exception>(),
+            It.IsAny<Func<It.IsAnyType, Exception?, string>>()))
+            .Callback<LogLevel, EventId, object, Exception, Delegate>((level, eventId, state, exception, formatter) =>
+            {
+                LogOutput.AppendLine($"[{level}] {formatter.DynamicInvoke(state, exception)}");
+            });
+
+        // Create service collection for dependency injection
+        var services = new ServiceCollection();
+        ConfigureServices(services);
+        ServiceProvider = services.BuildServiceProvider();
     }
 
-    protected virtual void SetupBaseServices()
+    /// <summary>
+    /// Override this method to configure services for testing
+    /// </summary>
+    protected virtual void ConfigureServices(IServiceCollection services)
     {
-        Services.AddSingleton<IFileSystem>(FileSystem);
-        Services.AddLogging();
+        // Add common test services
+        services.AddSingleton<IAnsiConsole>(TestConsole);
+        services.AddSingleton(MockLogger.Object);
     }
 
-    protected ServiceProvider BuildServiceProvider()
+    /// <summary>
+    /// Gets a service from the test service provider
+    /// </summary>
+    protected T GetService<T>() where T : class
     {
-        ServiceProvider?.Dispose();
-        ServiceProvider = Services.BuildServiceProvider();
-        return ServiceProvider;
+        return ServiceProvider.GetRequiredService<T>();
     }
 
-    protected T GetService<T>() where T : notnull
+    /// <summary>
+    /// Creates a mock of the specified type
+    /// </summary>
+    protected Mock<T> CreateMock<T>() where T : class
     {
-        return (ServiceProvider ?? BuildServiceProvider()).GetRequiredService<T>();
+        return new Mock<T>();
     }
 
-    protected void CreateTestDirectory(string path)
+    /// <summary>
+    /// Asserts that the console output contains the expected text
+    /// </summary>
+    protected void AssertConsoleOutput(string expectedText)
     {
-        FileSystem.AddDirectory(path);
+        TestConsole.Output.Should().Contain(expectedText);
     }
 
-    protected void CreateTestFile(string path, string content = "")
+    /// <summary>
+    /// Asserts that a log message with the specified level was written
+    /// </summary>
+    protected void AssertLogMessage(LogLevel level, string expectedMessage)
     {
-        FileSystem.AddFile(path, new MockFileData(content));
+        LogOutput.ToString().Should().Contain($"[{level}]").And.Contain(expectedMessage);
     }
 
-    protected void AssertFileExists(string path)
+    /// <summary>
+    /// Clears the test console output
+    /// </summary>
+    protected void ClearConsoleOutput()
     {
-        Assert.True(FileSystem.FileExists(path), $"Expected file to exist: {path}");
+        TestConsole.Clear();
     }
 
-    protected void AssertDirectoryExists(string path)
+    /// <summary>
+    /// Creates a temporary directory for test files
+    /// </summary>
+    protected string CreateTempDirectory()
     {
-        Assert.True(FileSystem.Directory.Exists(path), $"Expected directory to exist: {path}");
+        var tempPath = Path.Combine(Path.GetTempPath(), $"pks-cli-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempPath);
+        return tempPath;
     }
 
-    protected string GetFileContent(string path)
+    /// <summary>
+    /// Creates a temporary file with the specified content
+    /// </summary>
+    protected string CreateTempFile(string content = "", string extension = ".txt")
     {
-        return FileSystem.File.ReadAllText(path);
+        var tempFile = Path.Combine(Path.GetTempPath(), $"pks-cli-test-{Guid.NewGuid():N}{extension}");
+        File.WriteAllText(tempFile, content);
+        return tempFile;
     }
 
     public virtual void Dispose()
     {
-        ServiceProvider?.Dispose();
+        if (ServiceProvider is IDisposable disposable)
+        {
+            disposable.Dispose();
+        }
         GC.SuppressFinalize(this);
     }
 }

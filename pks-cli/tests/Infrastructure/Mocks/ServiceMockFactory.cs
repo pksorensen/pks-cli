@@ -158,6 +158,46 @@ public static class ServiceMockFactory
             
         return mock;
     }
+
+    /// <summary>
+    /// Creates a mock IDevcontainerService with default behavior
+    /// </summary>
+    public static Mock<IDevcontainerService> CreateDevcontainerService()
+    {
+        return DevcontainerServiceMocks.CreateDevcontainerService();
+    }
+
+    /// <summary>
+    /// Creates a mock IDevcontainerFeatureRegistry with default behavior
+    /// </summary>
+    public static Mock<IDevcontainerFeatureRegistry> CreateDevcontainerFeatureRegistry()
+    {
+        return DevcontainerServiceMocks.CreateFeatureRegistry();
+    }
+
+    /// <summary>
+    /// Creates a mock IDevcontainerTemplateService with default behavior
+    /// </summary>
+    public static Mock<IDevcontainerTemplateService> CreateDevcontainerTemplateService()
+    {
+        return DevcontainerServiceMocks.CreateTemplateService();
+    }
+
+    /// <summary>
+    /// Creates a mock IDevcontainerFileGenerator with default behavior
+    /// </summary>
+    public static Mock<IDevcontainerFileGenerator> CreateDevcontainerFileGenerator()
+    {
+        return DevcontainerServiceMocks.CreateFileGenerator();
+    }
+
+    /// <summary>
+    /// Creates a mock IVsCodeExtensionService with default behavior
+    /// </summary>
+    public static Mock<IVsCodeExtensionService> CreateVsCodeExtensionService()
+    {
+        return DevcontainerServiceMocks.CreateVsCodeExtensionService();
+    }
 }
 
 // Placeholder interfaces for services that will be implemented
