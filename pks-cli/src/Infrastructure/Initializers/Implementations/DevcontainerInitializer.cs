@@ -41,7 +41,7 @@ public class DevcontainerInitializer : CodeInitializer
         };
     }
 
-    public override async Task<bool> ShouldRunAsync(InitializationContext context)
+    public override Task<bool> ShouldRunAsync(InitializationContext context)
     {
         // Run if devcontainer is explicitly enabled
         var enabled = context.GetOption("devcontainer", false);
@@ -60,7 +60,7 @@ public class DevcontainerInitializer : CodeInitializer
             };
         }
 
-        return enabled;
+        return Task.FromResult(enabled);
     }
 
     protected override async Task ExecuteCodeLogicAsync(InitializationContext context, InitializationResult result)
@@ -209,7 +209,7 @@ public class DevcontainerInitializer : CodeInitializer
         return options;
     }
 
-    private async Task AddDefaultFeaturesAsync(DevcontainerOptions options, InitializationContext context)
+    private Task AddDefaultFeaturesAsync(DevcontainerOptions options, InitializationContext context)
     {
         // Always include .NET feature
         options.Features.Add("ghcr.io/devcontainers/features/dotnet:2");
@@ -247,6 +247,8 @@ public class DevcontainerInitializer : CodeInitializer
         {
             options.Features.Add("ghcr.io/devcontainers/features/github-cli:1");
         }
+        
+        return Task.CompletedTask;
     }
 
     private void AddDefaultPorts(DevcontainerOptions options, string? template)

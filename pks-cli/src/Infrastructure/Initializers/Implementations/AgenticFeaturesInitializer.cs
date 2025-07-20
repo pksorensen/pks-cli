@@ -23,10 +23,10 @@ public class AgenticFeaturesInitializer : CodeInitializer
         };
     }
 
-    public override async Task<bool> ShouldRunAsync(InitializationContext context)
+    public override Task<bool> ShouldRunAsync(InitializationContext context)
     {
         // Only run if agentic features are enabled
-        return context.GetOption("agentic", false);
+        return Task.FromResult(context.GetOption("agentic", false));
     }
 
     protected override async Task ExecuteCodeLogicAsync(InitializationContext context, InitializationResult result)

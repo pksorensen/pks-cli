@@ -24,11 +24,11 @@ public class DotNetProjectInitializer : CodeInitializer
         };
     }
 
-    public override async Task<bool> ShouldRunAsync(InitializationContext context)
+    public override Task<bool> ShouldRunAsync(InitializationContext context)
     {
         // Only run for .NET-related templates
         var dotnetTemplates = new[] { "console", "api", "web", "agent", "library", "test" };
-        return dotnetTemplates.Contains(context.Template.ToLowerInvariant());
+        return Task.FromResult(dotnetTemplates.Contains(context.Template.ToLowerInvariant()));
     }
 
     protected override async Task ExecuteCodeLogicAsync(InitializationContext context, InitializationResult result)

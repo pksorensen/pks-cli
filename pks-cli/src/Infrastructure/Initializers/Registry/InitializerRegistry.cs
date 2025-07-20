@@ -28,7 +28,7 @@ public class InitializerRegistry : IInitializerRegistry
         _types.Add(typeof(T));
     }
 
-    public async Task<IEnumerable<IInitializer>> GetAllAsync()
+    public Task<IEnumerable<IInitializer>> GetAllAsync()
     {
         var allInitializers = new List<IInitializer>(_instances);
         
@@ -39,7 +39,7 @@ public class InitializerRegistry : IInitializerRegistry
             allInitializers.Add(initializer);
         }
 
-        return allInitializers.OrderBy(i => i.Order).ThenBy(i => i.Name);
+        return Task.FromResult<IEnumerable<IInitializer>>(allInitializers.OrderBy(i => i.Order).ThenBy(i => i.Name));
     }
 
     public async Task<IEnumerable<IInitializer>> GetApplicableAsync(InitializationContext context)
@@ -174,7 +174,7 @@ public class InitializerRegistry : IInitializerRegistry
                     // Fallback to direct instantiation if no parameterless constructor
                     try
                     {
-                        var instance = (IInitializer)Activator.CreateInstance(type);
+                        var instance = Activator.CreateInstance(type) as IInitializer;
                         if (instance != null)
                         {
                             Register(instance);

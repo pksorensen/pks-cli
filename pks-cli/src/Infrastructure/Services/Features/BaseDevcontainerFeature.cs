@@ -28,7 +28,7 @@ public abstract class BaseDevcontainerFeature : IDevcontainerFeature
     public virtual Dictionary<string, object> DefaultOptions => new();
     public virtual Dictionary<string, DevcontainerFeatureOption> AvailableOptions => new();
 
-    public virtual async Task<FeatureValidationResult> ValidateConfigurationAsync(object configuration)
+    public virtual Task<FeatureValidationResult> ValidateConfigurationAsync(object configuration)
     {
         var result = new FeatureValidationResult { IsValid = true };
 
@@ -63,14 +63,14 @@ public abstract class BaseDevcontainerFeature : IDevcontainerFeature
             }
 
             result.IsValid = !result.Errors.Any();
-            return result;
+            return Task.FromResult(result);
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Error validating configuration for feature {FeatureId}", Id);
             result.IsValid = false;
             result.Errors.Add($"Validation error: {ex.Message}");
-            return result;
+            return Task.FromResult(result);
         }
     }
 

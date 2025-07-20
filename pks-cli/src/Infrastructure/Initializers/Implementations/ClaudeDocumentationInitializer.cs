@@ -31,10 +31,10 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
         };
     }
 
-    public override async Task<bool> ShouldRunAsync(InitializationContext context)
+    public override Task<bool> ShouldRunAsync(InitializationContext context)
     {
         // Always run since we generate content inline when templates don't exist
-        return true;
+        return Task.FromResult(true);
     }
 
     protected override async Task<InitializationResult> ExecuteInternalAsync(InitializationContext context)
@@ -85,7 +85,7 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
     private Dictionary<string, string> GetCustomPlaceholders(InitializationContext context)
     {
         var projectType = context.GetOption("project-type", "console");
-        var techStack = context.GetOption("tech-stack", InferTechStack(context, projectType));
+        var techStack = context.GetOption("tech-stack", InferTechStack(context, projectType ?? "console")) ?? ".NET 8 Console Application";
         var testFramework = context.GetOption("test-framework", "xUnit");
         var architecturePattern = context.GetOption("architecture-pattern", "Clean");
         var includeTdd = context.GetOption("include-tdd", false);
@@ -104,23 +104,23 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
         return new Dictionary<string, string>
         {
             { "{{TechStack}}", techStack },
-            { "{{ProjectType}}", projectType },
-            { "{{TestFramework}}", testFramework },
-            { "{{ArchitecturePattern}}", architecturePattern },
-            { "{{BuildCommands}}", GenerateBuildCommands(context, projectType, includeDocker) },
-            { "{{TestingCommands}}", GenerateTestingCommands(context, testFramework, includeTdd) },
-            { "{{ArchitectureSection}}", GenerateArchitectureSection(context, projectType, architecturePattern) },
-            { "{{DevelopmentPatterns}}", GenerateDevelopmentPatterns(context, projectType, includeTdd) },
-            { "{{FileOrganization}}", GenerateFileOrganization(context, projectType, architecturePattern) },
-            { "{{ConfigurationSection}}", GenerateConfigurationSection(context, projectType) },
+            { "{{ProjectType}}", projectType ?? "console" },
+            { "{{TestFramework}}", testFramework ?? "xUnit" },
+            { "{{ArchitecturePattern}}", architecturePattern ?? "Clean" },
+            { "{{BuildCommands}}", GenerateBuildCommands(context, projectType ?? "console", includeDocker) },
+            { "{{TestingCommands}}", GenerateTestingCommands(context, testFramework ?? "xUnit", includeTdd) },
+            { "{{ArchitectureSection}}", GenerateArchitectureSection(context, projectType ?? "console", architecturePattern ?? "Clean") },
+            { "{{DevelopmentPatterns}}", GenerateDevelopmentPatterns(context, projectType ?? "console", includeTdd) },
+            { "{{FileOrganization}}", GenerateFileOrganization(context, projectType ?? "console", architecturePattern ?? "Clean") },
+            { "{{ConfigurationSection}}", GenerateConfigurationSection(context, projectType ?? "console") },
             { "{{DeploymentCommands}}", GenerateDeploymentCommands(context, includeDocker, includeK8s, includeAzure) },
             { "{{CiCdSection}}", includeCiCd ? GenerateCiCdSection(context) : "" },
-            { "{{DependencyList}}", GenerateDependencyList(context, projectType) },
-            { "{{KeyComponents}}", GenerateKeyComponents(context, projectType) },
+            { "{{DependencyList}}", GenerateDependencyList(context, projectType ?? "console") },
+            { "{{KeyComponents}}", GenerateKeyComponents(context, projectType ?? "console") },
             
             // Project Identity placeholders
             { "{{ProjectId}}", projectId },
-            { "{{GitHubRepository}}", gitHubRepository },
+            { "{{GitHubRepository}}", gitHubRepository ?? "Not configured" },
             { "{{CreatedAt}}", DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss") + " UTC" },
             { "{{DateTime}}", DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss") + " UTC" },
             
@@ -177,7 +177,7 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
     private string GenerateClaudeDocumentation(InitializationContext context)
     {
         var projectType = context.GetOption("project-type", "console");
-        var techStack = context.GetOption("tech-stack", InferTechStack(context, projectType));
+        var techStack = context.GetOption("tech-stack", InferTechStack(context, projectType ?? "console")) ?? ".NET 8 Console Application";
         var testFramework = context.GetOption("test-framework", "xUnit");
         var architecturePattern = context.GetOption("architecture-pattern", "Clean");
         var includeTdd = context.GetOption("include-tdd", false);
@@ -186,7 +186,7 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
         var includeAzure = context.GetOption("include-azure", false);
         var includeCiCd = context.GetOption("include-ci-cd", false);
 
-        var tddSection = includeTdd ? GenerateTddSection(testFramework) : "";
+        var tddSection = includeTdd ? GenerateTddSection(testFramework ?? "xUnit") : "";
         var dockerSection = includeDocker ? GenerateDockerSection() : "";
         var k8sSection = includeK8s ? GenerateKubernetesSection() : "";
         var azureSection = includeAzure ? GenerateAzureSection() : "";
@@ -267,25 +267,25 @@ dotnet add package [PackageName] --version [Version]
 
 ### Core Structure
 - **{context.ProjectName}/** - Main source code
-{GenerateProjectStructure(projectType, architecturePattern)}
+{GenerateProjectStructure(projectType ?? "console", architecturePattern ?? "Clean")}
 
 ### Key Components
 
-{GenerateKeyComponents(context, projectType)}
+{GenerateKeyComponents(context, projectType ?? "console")}
 
-### Available {(projectType == "console" ? "Commands" : "Endpoints")}
-{GenerateAvailableFeatures(projectType)}
+### Available {((projectType ?? "console") == "console" ? "Commands" : "Endpoints")}
+{GenerateAvailableFeatures(projectType ?? "console")}
 
 ### Key Dependencies
-{GenerateDependencyList(context, projectType)}
+{GenerateDependencyList(context, projectType ?? "console")}
 
 ## Development Patterns
 
-### {architecturePattern} Architecture
-{GenerateArchitectureGuidance(architecturePattern)}
+### {architecturePattern ?? "Clean"} Architecture
+{GenerateArchitectureGuidance(architecturePattern ?? "Clean")}
 
 ### Code Organization
-{GenerateCodeOrganizationGuidance(projectType)}
+{GenerateCodeOrganizationGuidance(projectType ?? "console")}
 
 ### Error Handling
 - Use custom exceptions for business logic errors
@@ -301,18 +301,18 @@ dotnet add package [PackageName] --version [Version]
 {tddSection}
 
 ### Service Implementation
-{GenerateServiceImplementationGuidance(projectType)}
+{GenerateServiceImplementationGuidance(projectType ?? "console")}
 
 ## File Organization
 
 ```
 {context.ProjectName}/
-{GenerateFileOrganization(context, projectType, architecturePattern)}
+{GenerateFileOrganization(context, projectType ?? "console", architecturePattern ?? "Clean")}
 ```
 
 ## Configuration
 
-{GenerateConfigurationSection(context, projectType)}
+{GenerateConfigurationSection(context, projectType ?? "console")}
 
 {ciCdSection}
 

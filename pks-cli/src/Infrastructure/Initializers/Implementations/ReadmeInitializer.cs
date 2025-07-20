@@ -25,10 +25,10 @@ public class ReadmeInitializer : TemplateInitializer
         };
     }
 
-    public override async Task<bool> ShouldRunAsync(InitializationContext context)
+    public override Task<bool> ShouldRunAsync(InitializationContext context)
     {
         // Always run, but create inline content since we don't have template files
-        return true;
+        return Task.FromResult(true);
     }
 
     protected override async Task<InitializationResult> ExecuteInternalAsync(InitializationContext context)

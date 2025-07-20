@@ -38,13 +38,13 @@ public class GitHubIntegrationInitializer : CodeInitializer
         };
     }
 
-    public override async Task<bool> ShouldRunAsync(InitializationContext context)
+    public override Task<bool> ShouldRunAsync(InitializationContext context)
     {
         // Run if GitHub integration is explicitly requested or if any GitHub-related options are provided
-        return context.GetOption("github", false) ||
+        return Task.FromResult(context.GetOption("github", false) ||
                context.GetOption("create-repo", false) ||
                !string.IsNullOrEmpty(context.GetOption("github-token", "")) ||
-               !string.IsNullOrEmpty(context.GetOption("remote-url", ""));
+               !string.IsNullOrEmpty(context.GetOption("remote-url", "")));
     }
 
     protected override async Task ExecuteCodeLogicAsync(InitializationContext context, InitializationResult result)
@@ -150,7 +150,7 @@ public class GitHubIntegrationInitializer : CodeInitializer
 
     private async Task<string> CreateGitHubRepositoryAsync(InitializationContext context, InitializationResult result)
     {
-        var repoName = context.GetOption("repo-name", context.ProjectName);
+        var repoName = context.GetOption("repo-name", context.ProjectName) ?? context.ProjectName;
         var isPrivate = context.GetOption("private-repo", false);
         var description = context.Description ?? $"PKS CLI project: {context.ProjectName}";
 

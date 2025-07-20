@@ -120,11 +120,11 @@ public class InitializationService : IInitializationService
         return templates.OrderBy(t => t.DisplayName);
     }
 
-    public async Task<ValidationResult> ValidateTargetDirectoryAsync(string targetDirectory, bool force)
+    public Task<ValidationResult> ValidateTargetDirectoryAsync(string targetDirectory, bool force)
     {
         if (string.IsNullOrWhiteSpace(targetDirectory))
         {
-            return ValidationResult.Invalid("Target directory cannot be empty");
+            return Task.FromResult(ValidationResult.Invalid("Target directory cannot be empty"));
         }
 
         if (Directory.Exists(targetDirectory))
@@ -132,7 +132,7 @@ public class InitializationService : IInitializationService
             var files = Directory.GetFileSystemEntries(targetDirectory);
             if (files.Length > 0 && !force)
             {
-                return ValidationResult.Invalid($"Directory '{targetDirectory}' is not empty. Use --force to overwrite.");
+                return Task.FromResult(ValidationResult.Invalid($"Directory '{targetDirectory}' is not empty. Use --force to overwrite."));
             }
         }
         else
@@ -144,11 +144,11 @@ public class InitializationService : IInitializationService
             }
             catch (Exception ex)
             {
-                return ValidationResult.Invalid($"Cannot create directory '{targetDirectory}': {ex.Message}");
+                return Task.FromResult(ValidationResult.Invalid($"Cannot create directory '{targetDirectory}': {ex.Message}"));
             }
         }
 
-        return ValidationResult.Valid();
+        return Task.FromResult(ValidationResult.Valid());
     }
 
     public InitializationContext CreateContext(string projectName, string template, string targetDirectory, bool force, Dictionary<string, object?> options)
