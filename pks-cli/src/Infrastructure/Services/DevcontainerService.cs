@@ -15,6 +15,7 @@ public class DevcontainerService : IDevcontainerService
     private readonly IDevcontainerTemplateService _templateService;
     private readonly IDevcontainerFileGenerator _fileGenerator;
     private readonly IVsCodeExtensionService _extensionService;
+    private readonly INuGetTemplateDiscoveryService _nugetTemplateService;
     private readonly ILogger<DevcontainerService> _logger;
 
     public DevcontainerService(
@@ -22,12 +23,14 @@ public class DevcontainerService : IDevcontainerService
         IDevcontainerTemplateService templateService,
         IDevcontainerFileGenerator fileGenerator,
         IVsCodeExtensionService extensionService,
+        INuGetTemplateDiscoveryService nugetTemplateService,
         ILogger<DevcontainerService> logger)
     {
         _featureRegistry = featureRegistry;
         _templateService = templateService;
         _fileGenerator = fileGenerator;
         _extensionService = extensionService;
+        _nugetTemplateService = nugetTemplateService;
         _logger = logger;
     }
 
@@ -63,11 +66,17 @@ public class DevcontainerService : IDevcontainerService
             // Start with base configuration
             DevcontainerConfiguration config;
             
-            if (!string.IsNullOrEmpty(options.Template))
+            if (options.SelectedTemplate != null)
             {
-                // Apply template
+                // Apply NuGet/external template
+                config = CreateConfigurationFromTemplate(options.SelectedTemplate, options);
+                _logger.LogDebug("Applied external template {Template}", options.SelectedTemplate.Name);
+            }
+            else if (!string.IsNullOrEmpty(options.Template))
+            {
+                // Apply built-in template
                 config = await _templateService.ApplyTemplateAsync(options.Template, options);
-                _logger.LogDebug("Applied template {Template}", options.Template);
+                _logger.LogDebug("Applied built-in template {Template}", options.Template);
             }
             else
             {
@@ -128,21 +137,52 @@ public class DevcontainerService : IDevcontainerService
                 }
             }
 
-            // Generate files
-            var generationResults = await _fileGenerator.GenerateAllFilesAsync(config, options.OutputPath, options);
-            var failedGenerations = generationResults.Where(r => !r.Success).ToList();
-
-            if (failedGenerations.Any())
+            // Generate or extract files
+            List<string> generatedFiles;
+            
+            if (options.SelectedTemplate != null)
             {
-                result.Success = false;
-                result.Errors.AddRange(failedGenerations.Select(f => f.ErrorMessage));
-                result.Message = "File generation failed";
-                return result;
+                // Extract NuGet template files
+                _logger.LogDebug("Extracting NuGet template files for {TemplateId} v{Version}", 
+                    options.SelectedTemplate.Id, options.TemplateVersion ?? "1.0.0");
+                    
+                var extractionResult = await _nugetTemplateService.ExtractTemplateAsync(
+                    options.SelectedTemplate.Id,
+                    options.TemplateVersion ?? "1.0.0",
+                    options.OutputPath,
+                    options.NuGetSources.Any() ? options.NuGetSources : null);
+                    
+                if (!extractionResult.Success)
+                {
+                    result.Success = false;
+                    result.Errors.Add(extractionResult.ErrorMessage);
+                    result.Message = "Template extraction failed";
+                    return result;
+                }
+                
+                generatedFiles = extractionResult.ExtractedFiles;
+                _logger.LogDebug("Successfully extracted {Count} files from NuGet template", generatedFiles.Count);
+            }
+            else
+            {
+                // Generate files using file generator
+                var generationResults = await _fileGenerator.GenerateAllFilesAsync(config, options.OutputPath, options);
+                var failedGenerations = generationResults.Where(r => !r.Success).ToList();
+
+                if (failedGenerations.Any())
+                {
+                    result.Success = false;
+                    result.Errors.AddRange(failedGenerations.Select(f => f.ErrorMessage));
+                    result.Message = "File generation failed";
+                    return result;
+                }
+                
+                generatedFiles = generationResults.Select(r => r.FilePath).ToList();
             }
 
             result.Success = true;
             result.Configuration = config;
-            result.GeneratedFiles = generationResults.Select(r => r.FilePath).ToList();
+            result.GeneratedFiles = generatedFiles;
             result.Message = "Devcontainer configuration created successfully";
             result.Duration = DateTime.UtcNow - startTime;
 
@@ -364,7 +404,7 @@ public class DevcontainerService : IDevcontainerService
         }
     }
 
-    public async Task<DevcontainerConfiguration> MergeConfigurationsAsync(DevcontainerConfiguration baseConfig, DevcontainerConfiguration overlayConfig)
+    public Task<DevcontainerConfiguration> MergeConfigurationsAsync(DevcontainerConfiguration baseConfig, DevcontainerConfiguration overlayConfig)
     {
         try
         {
@@ -433,7 +473,7 @@ public class DevcontainerService : IDevcontainerService
                     .ToArray();
             }
 
-            return merged;
+            return Task.FromResult(merged);
         }
         catch (Exception ex)
         {
@@ -598,7 +638,7 @@ public class DevcontainerService : IDevcontainerService
         }
     }
 
-    private async Task<DevcontainerValidationResult> ValidateOptionsAsync(DevcontainerOptions options)
+    private Task<DevcontainerValidationResult> ValidateOptionsAsync(DevcontainerOptions options)
     {
         var result = new DevcontainerValidationResult();
         var errors = new List<string>();
@@ -619,7 +659,71 @@ public class DevcontainerService : IDevcontainerService
 
         result.IsValid = !errors.Any();
         result.Errors = errors;
-        return result;
+        return Task.FromResult(result);
+    }
+
+    private DevcontainerConfiguration CreateConfigurationFromTemplate(DevcontainerTemplate template, DevcontainerOptions options)
+    {
+        var config = new DevcontainerConfiguration
+        {
+            Name = options.Name,
+            Image = template.BaseImage,
+            WorkspaceFolder = "/workspaces"
+        };
+
+        // Apply template's default customizations
+        if (template.DefaultCustomizations.Any())
+        {
+            config.Customizations = new Dictionary<string, object>(template.DefaultCustomizations);
+        }
+
+        // Apply template's default ports
+        if (template.DefaultPorts.Any())
+        {
+            var ports = template.DefaultPorts
+                .Where(p => int.TryParse(p, out _))
+                .Select(int.Parse)
+                .ToArray();
+            if (ports.Any())
+            {
+                config.ForwardPorts = ports;
+            }
+        }
+
+        // Apply template's default post-create command
+        if (!string.IsNullOrEmpty(template.DefaultPostCreateCommand))
+        {
+            config.PostCreateCommand = template.DefaultPostCreateCommand;
+        }
+
+        // Apply template's default environment variables
+        if (template.DefaultEnvVars.Any())
+        {
+            config.RemoteEnv = new Dictionary<string, string>(template.DefaultEnvVars);
+        }
+
+        // Merge with user-specified environment variables
+        if (options.EnvironmentVariables.Any())
+        {
+            config.RemoteEnv ??= new Dictionary<string, string>();
+            foreach (var kvp in options.EnvironmentVariables)
+            {
+                config.RemoteEnv[kvp.Key] = kvp.Value;
+            }
+        }
+
+        // Apply user-specified overrides
+        if (options.ForwardPorts.Any())
+        {
+            config.ForwardPorts = options.ForwardPorts.ToArray();
+        }
+
+        if (!string.IsNullOrEmpty(options.PostCreateCommand))
+        {
+            config.PostCreateCommand = options.PostCreateCommand;
+        }
+
+        return config;
     }
 
     private DevcontainerConfiguration CreateBasicConfiguration(DevcontainerOptions options)
@@ -663,7 +767,10 @@ public class DevcontainerService : IDevcontainerService
                     break;
                 default:
                     // Add to customizations
-                    config.Customizations[setting.Key] = setting.Value;
+                    if (setting.Value != null)
+                    {
+                        config.Customizations[setting.Key] = setting.Value;
+                    }
                     break;
             }
         }

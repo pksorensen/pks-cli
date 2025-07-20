@@ -124,8 +124,10 @@ public class DevcontainerTemplate
     public string[] DefaultPorts { get; set; } = Array.Empty<string>();
     public string? DefaultPostCreateCommand { get; set; }
     public Dictionary<string, string> DefaultEnvVars { get; set; } = new();
+    public Dictionary<string, string> RequiredEnvVars { get; set; } = new(); // Key: env var name, Value: description
     public bool RequiresDockerCompose { get; set; }
     public string? DockerComposeTemplate { get; set; }
+    public string? Version { get; set; } // NuGet package version
 }
 
 /// <summary>
@@ -152,6 +154,7 @@ public class DevcontainerOptions
     public string Name { get; set; } = string.Empty;
     public string OutputPath { get; set; } = string.Empty;
     public string? Template { get; set; }
+    public DevcontainerTemplate? SelectedTemplate { get; set; }
     public List<string> Features { get; set; } = new();
     public List<string> Extensions { get; set; } = new();
     public bool UseDockerCompose { get; set; }
@@ -164,6 +167,8 @@ public class DevcontainerOptions
     public bool IncludeDevPackages { get; set; } = true;
     public bool EnableGitCredentials { get; set; } = true;
     public string? WorkspaceFolder { get; set; }
+    public List<string> NuGetSources { get; set; } = new();
+    public string? TemplateVersion { get; set; }
 }
 
 /// <summary>
