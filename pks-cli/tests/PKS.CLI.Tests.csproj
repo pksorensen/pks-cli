@@ -8,6 +8,11 @@
     <IsTestProject>true</IsTestProject>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+    <!-- Configure test output paths -->
+    <VSTestResultsDirectory>$(MSBuildThisFileDirectory)../../test-artifacts/results</VSTestResultsDirectory>
+    <CoverletOutputRoot>$(MSBuildThisFileDirectory)../../test-artifacts/coverage/</CoverletOutputRoot>
+    <CoverletOutput>$(CoverletOutputRoot)</CoverletOutput>
+    <RunSettingsFilePath>$(MSBuildThisFileDirectory).runsettings</RunSettingsFilePath>
   </PropertyGroup>
 
   <ItemGroup>

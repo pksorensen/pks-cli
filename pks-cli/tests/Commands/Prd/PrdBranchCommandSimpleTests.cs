@@ -244,8 +244,10 @@ public class PrdBranchCommandSimpleTests : IDisposable
 /// </summary>
 public class PrdBranchCommand : Command<PrdBranchMainSettings>
 {
-    public override int Execute(CommandContext context, PrdBranchMainSettings settings)
+    public override int Execute(CommandContext context, PrdBranchMainSettings? settings)
     {
+        if (settings == null) throw new ArgumentNullException(nameof(settings));
+        
         if (settings.ShowVersion)
         {
             // In implementation: Display version

@@ -28,7 +28,6 @@ PKS.CLI.Tests/
 - **AgentFrameworkTests**: Tests for AI agent management
 
 ### 2. Infrastructure Tests
-- **HooksInitializerTests**: Tests for hooks system initialization
 - **InitializationServiceTests**: Tests for project initialization orchestration
 - **InitializerRegistryTests**: Tests for initializer discovery and management
 
@@ -163,7 +162,6 @@ All tests are currently failing by design as they define the expected behavior f
 
 - ✅ **Test Infrastructure**: Complete and working
 - ❌ **HooksCommandTests**: 8 failing tests defining hooks command behavior
-- ❌ **HooksInitializerTests**: 10 failing tests defining hooks initialization
 - ❌ **McpServerTests**: 9 failing tests defining MCP server management
 - ❌ **AgentFrameworkTests**: 10 failing tests defining agent framework
 
@@ -172,7 +170,6 @@ All tests are currently failing by design as they define the expected behavior f
 - ✅ Mock factories and test utilities
 - ✅ Test data generators
 - ❌ HooksCommand (to be implemented)
-- ❌ HooksInitializer (to be implemented)
 - ❌ McpCommand (to be implemented)
 - ❌ AgentCommand (to be implemented)
 - ❌ Service implementations (to be implemented)
