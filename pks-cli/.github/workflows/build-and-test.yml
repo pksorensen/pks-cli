@@ -3,6 +3,8 @@ name: Build and Test
 on:
   push:
     branches: [ main, develop, release/* ]
+    tags-ignore:
+      - 'v*' # Ignore version tags to prevent duplicate builds
   pull_request:
     branches: [ main, develop ]
 

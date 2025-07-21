@@ -1,0 +1,223 @@
+name: Semantic Release
+
+on:
+  push:
+    branches:
+      - main
+      - release/*
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  packages: write
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_NOLOGO: true
+
+jobs:
+  release:
+    name: Semantic Release
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+        
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.npm
+          ~/.nuget/packages
+        key: ${{ runner.os }}-deps-${{ hashFiles('**/package-lock.json', '**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-deps-
+          
+    - name: Install semantic-release
+      run: |
+        npm install -g \
+          semantic-release \
+          @semantic-release/changelog \
+          @semantic-release/git \
+          @semantic-release/github \
+          @semantic-release/exec \
+          conventional-changelog-conventionalcommits
+          
+    - name: Get current version and branch info
+      id: current_version
+      run: |
+        # Extract version from main project file
+        VERSION=$(grep -oP '(?<=<Version>)[^<]+' src/pks-cli.csproj || echo "0.0.0")
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Current version: $VERSION"
+        
+        # Determine if this is a release branch
+        BRANCH_NAME=${GITHUB_REF#refs/heads/}
+        echo "branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
+        echo "Current branch: $BRANCH_NAME"
+        
+        if [[ $BRANCH_NAME == release/* ]]; then
+          # Extract target version from branch name (e.g., release/1.0.0 -> 1.0.0)
+          TARGET_VERSION=${BRANCH_NAME#release/}
+          echo "target_version=$TARGET_VERSION" >> $GITHUB_OUTPUT
+          echo "Target version for pre-releases: $TARGET_VERSION"
+          echo "is_release_branch=true" >> $GITHUB_OUTPUT
+        else
+          echo "is_release_branch=false" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Semantic Release
+      id: semantic
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # Create .releaserc.json configuration
+        cat > .releaserc.json << 'EOF'
+        {
+          "branches": ["main", {"name": "release/*", "prerelease": true}],
+          "plugins": [
+            ["@semantic-release/commit-analyzer", {
+              "preset": "conventionalcommits",
+              "releaseRules": [
+                {"type": "feat", "release": "minor"},
+                {"type": "fix", "release": "patch"},
+                {"type": "perf", "release": "patch"},
+                {"type": "revert", "release": "patch"},
+                {"type": "docs", "scope": "README", "release": "patch"},
+                {"type": "style", "release": false},
+                {"type": "chore", "release": false},
+                {"type": "refactor", "release": false},
+                {"type": "test", "release": false},
+                {"type": "build", "release": false},
+                {"type": "ci", "release": false},
+                {"breaking": true, "release": "major"},
+                {"revert": true, "release": "patch"}
+              ],
+              "parserOpts": {
+                "noteKeywords": ["BREAKING CHANGE", "BREAKING CHANGES", "BREAKING"]
+              }
+            }],
+            ["@semantic-release/release-notes-generator", {
+              "preset": "conventionalcommits",
+              "presetConfig": {
+                "types": [
+                  {"type": "feat", "section": "🚀 Features", "hidden": false},
+                  {"type": "fix", "section": "🐛 Bug Fixes", "hidden": false},
+                  {"type": "perf", "section": "⚡ Performance Improvements", "hidden": false},
+                  {"type": "revert", "section": "⏪ Reverts", "hidden": false},
+                  {"type": "docs", "section": "📚 Documentation", "hidden": false},
+                  {"type": "style", "section": "💄 Styles", "hidden": false},
+                  {"type": "chore", "section": "🔧 Chores", "hidden": false},
+                  {"type": "refactor", "section": "♻️ Code Refactoring", "hidden": false},
+                  {"type": "test", "section": "✅ Tests", "hidden": false},
+                  {"type": "build", "section": "📦 Build System", "hidden": false},
+                  {"type": "ci", "section": "👷 CI/CD", "hidden": false}
+                ]
+              }
+            }],
+            ["@semantic-release/changelog", {
+              "changelogFile": "CHANGELOG.md"
+            }],
+            ["@semantic-release/exec", {
+              "prepareCmd": "echo '${nextRelease.version}' > .version && ./scripts/update-version.sh ${nextRelease.version}"
+            }],
+            ["@semantic-release/git", {
+              "assets": ["CHANGELOG.md", "src/**/*.csproj", "templates/**/*.csproj"],
+              "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
+            }],
+            ["@semantic-release/github", {
+              "successComment": false,
+              "failComment": false
+            }]
+          ]
+        }
+        EOF
+        
+        # Run semantic-release in dry-run mode first
+        npx semantic-release --dry-run
+        
+    - name: Update project versions
+      if: steps.semantic.outputs.new_release_published == 'true'
+      run: |
+        VERSION=$(cat .version)
+        echo "Updating to version: $VERSION"
+        
+        # Update all csproj files
+        find . -name "*.csproj" -type f | while read -r file; do
+          sed -i "s|<Version>.*</Version>|<Version>$VERSION</Version>|g" "$file"
+          sed -i "s|<PackageVersion>.*</PackageVersion>|<PackageVersion>$VERSION</PackageVersion>|g" "$file"
+          sed -i "s|<AssemblyVersion>.*</AssemblyVersion>|<AssemblyVersion>$VERSION</AssemblyVersion>|g" "$file"
+          sed -i "s|<FileVersion>.*</FileVersion>|<FileVersion>$VERSION</FileVersion>|g" "$file"
+        done
+        
+    - name: Build and package
+      if: steps.semantic.outputs.new_release_published == 'true'
+      run: |
+        dotnet restore PKS.CLI.sln
+        dotnet build PKS.CLI.sln --configuration Release
+        dotnet pack PKS.CLI.sln --configuration Release --output ./packages --no-build
+        
+    - name: Run semantic-release
+      if: steps.semantic.outputs.new_release_published != 'true'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: npx semantic-release
+      
+    - name: Upload packages to release
+      if: steps.semantic.outputs.new_release_published == 'true'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        VERSION=$(cat .version)
+        
+        # Wait for release to be created
+        sleep 5
+        
+        # Upload packages to the release
+        for package in packages/*.nupkg; do
+          if [ -f "$package" ]; then
+            echo "Uploading $(basename $package) to release v$VERSION"
+            gh release upload "v$VERSION" "$package" --clobber
+          fi
+        done
+        
+    - name: Publish to NuGet
+      if: steps.semantic.outputs.new_release_published == 'true'
+      env:
+        NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+      run: |
+        if [ -n "$NUGET_API_KEY" ]; then
+          BRANCH_NAME=${GITHUB_REF#refs/heads/}
+          
+          if [[ $BRANCH_NAME == release/* ]]; then
+            echo "📦 Publishing PRE-RELEASE packages to NuGet..."
+          else
+            echo "📦 Publishing RELEASE packages to NuGet..."
+          fi
+          
+          for package in packages/*.nupkg; do
+            if [ -f "$package" ]; then
+              echo "Publishing $(basename $package)"
+              dotnet nuget push "$package" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate || true
+            fi
+          done
+        else
+          echo "⚠️ NUGET_API_KEY not set, skipping NuGet publish"
+        fi
