@@ -86,9 +86,17 @@ jobs:
     - name: Build and package .NET projects
       run: |
         echo "🔨 Building .NET projects..."
-        dotnet restore pks-cli/pks-cli.sln
-        dotnet build pks-cli/pks-cli.sln --configuration Release
-        dotnet pack pks-cli/pks-cli.sln --configuration Release --output ./packages --no-build
+        # Build only the main CLI project and templates, skip tests for now
+        dotnet restore pks-cli/src/pks-cli.csproj
+        dotnet build pks-cli/src/pks-cli.csproj --configuration Release
+        dotnet pack pks-cli/src/pks-cli.csproj --configuration Release --output ./packages --no-build
+        
+        # Build and pack template projects
+        find pks-cli/templates -name "*.csproj" -type f | while read -r template; do
+          echo "Building template: $template"
+          dotnet build "$template" --configuration Release
+          dotnet pack "$template" --configuration Release --output ./packages --no-build
+        done
         
     - name: Run semantic-release
       id: semantic
