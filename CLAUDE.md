@@ -568,3 +568,19 @@ After installation:
 You should work as the coordinator of the work we are doing.
 assign sub tasks/agents to do the work and dont do things your self.
 Do TDD so you setup the test first when you have made a design and then implment.
+
+## GitHub Integration
+
+### Repository Scope
+This project is specifically for the **pksorensen/pks-cli** repository. When performing GitHub operations like triage, focus only on this repository:
+
+- **Repository**: pksorensen/pks-cli
+- **Owner**: pksorensen
+- **Repo**: pks-cli
+
+### Triage Command
+When using the `/triage` command or performing GitHub-related operations, always scope searches and queries to:
+- `repo:pksorensen/pks-cli` for repository-specific items
+- `owner:pksorensen repo:pks-cli` for more specific queries
+
+This prevents unnecessary API calls to other repositories and keeps the focus on the PKS CLI project.
