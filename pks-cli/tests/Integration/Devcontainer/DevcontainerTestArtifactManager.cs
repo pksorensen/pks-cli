@@ -116,7 +116,8 @@ public static class DevcontainerTestArtifactManager
         var fileName = customName ?? Path.GetFileName(sourceFilePath);
         var destinationPath = Path.Combine(testDir, fileName);
         
-        await File.CopyAsync(sourceFilePath, destinationPath);
+        // Use synchronous File.Copy since File.CopyAsync doesn't exist
+        await Task.Run(() => File.Copy(sourceFilePath, destinationPath, overwrite: true));
         
         return destinationPath;
     }

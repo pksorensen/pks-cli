@@ -40,8 +40,8 @@ public interface IInitializer
     string Description { get; }
     int Order { get; }
     Task<bool> ShouldRunAsync(InitializationContext context);
-    Task ExecuteAsync(InitializationContext context, InitializationResult result);
-    List<InitializerOption> GetOptions();
+    Task<InitializationResult> ExecuteAsync(InitializationContext context);
+    IEnumerable<InitializerOption> GetOptions();
 }
 
 // Result and model classes
@@ -74,18 +74,83 @@ public class InitializationOptions
 public class InitializationResult
 {
     public bool Success { get; set; } = true;
-    public List<string> CreatedFiles { get; set; } = new();
-    public List<string> Messages { get; set; } = new();
-    public string Message { get; set; } = string.Empty;
+    public string? Message { get; set; }
+    public string? Details { get; set; }
+    public List<string> AffectedFiles { get; init; } = new();
+    public List<string> Warnings { get; init; } = new();
+    public List<string> Errors { get; init; } = new();
+    public Dictionary<string, object?> Data { get; init; } = new();
+
+    public static InitializationResult CreateSuccess(string? message = null, string? details = null)
+    {
+        return new InitializationResult
+        {
+            Success = true,
+            Message = message,
+            Details = details
+        };
+    }
+
+    public static InitializationResult CreateFailure(string message, string? details = null)
+    {
+        return new InitializationResult
+        {
+            Success = false,
+            Message = message,
+            Details = details
+        };
+    }
+
+    public static InitializationResult CreateSuccessWithWarnings(string? message = null, params string[] warnings)
+    {
+        return new InitializationResult
+        {
+            Success = true,
+            Message = message,
+            Warnings = warnings.ToList()
+        };
+    }
 }
 
 public class InitializationContext
 {
-    public string ProjectName { get; set; } = string.Empty;
-    public string Description { get; set; } = string.Empty;
-    public string Template { get; set; } = string.Empty;
-    public string TargetDirectory { get; set; } = string.Empty;
-    public Dictionary<string, object> Options { get; set; } = new();
+    public required string ProjectName { get; init; }
+    public string? Description { get; init; }
+    public required string Template { get; init; }
+    public bool Force { get; init; }
+    public required string TargetDirectory { get; init; }
+    public required string WorkingDirectory { get; init; }
+    public Dictionary<string, object?> Options { get; init; } = new();
+    public bool Interactive { get; init; } = true;
+    public Dictionary<string, object?> Metadata { get; init; } = new();
+
+    public T? GetOption<T>(string key, T? defaultValue = default)
+    {
+        if (Options.TryGetValue(key, out var value) && value is T typedValue)
+        {
+            return typedValue;
+        }
+        return defaultValue;
+    }
+
+    public void SetOption(string key, object? value)
+    {
+        Options[key] = value;
+    }
+
+    public T? GetMetadata<T>(string key, T? defaultValue = default)
+    {
+        if (Metadata.TryGetValue(key, out var value) && value is T typedValue)
+        {
+            return typedValue;
+        }
+        return defaultValue;
+    }
+
+    public void SetMetadata(string key, object? value)
+    {
+        Metadata[key] = value;
+    }
 }
 
 public class InitializerOption
@@ -122,26 +187,10 @@ public class HookResult
     public Dictionary<string, object> Output { get; set; } = new();
 }
 
-public class McpServerConfig
-{
-    public int Port { get; set; }
-    public string Transport { get; set; } = "stdio";
-    public Dictionary<string, object> Settings { get; set; } = new();
-}
-
-public class McpServerResult
-{
-    public bool Success { get; set; }
-    public int Port { get; set; }
-    public string Message { get; set; } = string.Empty;
-}
-
-public class McpServerStatus
-{
-    public bool IsRunning { get; set; }
-    public int? Port { get; set; }
-    public DateTime? StartTime { get; set; }
-}
+// MCP models are now provided by the SDK in:
+// - PKS.CLI.Infrastructure.Services.MCP.McpServerConfig
+// - PKS.CLI.Infrastructure.Services.MCP.McpServerResult
+// - PKS.CLI.Infrastructure.Services.MCP.McpServerStatusInfo
 
 // Agent classes are now implemented in the main codebase:
 // - PKS.CLI.Infrastructure.Services.Models.AgentConfiguration

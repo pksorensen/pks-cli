@@ -6,6 +6,9 @@ using PKS.CLI.Tests.Infrastructure.Fixtures.Devcontainer;
 using PKS.CLI.Tests.Infrastructure.Mocks;
 using Xunit;
 
+using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Models;
+
 namespace PKS.CLI.Tests.Services.Devcontainer;
 
 /// <summary>

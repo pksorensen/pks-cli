@@ -38,6 +38,7 @@ public class DevcontainerErrorScenariosTests : TestBase
         {
             ProjectName = "error-test",
             TargetDirectory = testOutputPath,
+            WorkingDirectory = testOutputPath,
             Template = "api",
             Options = new Dictionary<string, object>
             {
@@ -46,10 +47,8 @@ public class DevcontainerErrorScenariosTests : TestBase
             }
         };
 
-        var result = new InitializationResult();
-
         // Act
-        await _initializer.ExecuteAsync(context, result);
+        var result = await _initializer.ExecuteAsync(context);
 
         // Assert
         result.Errors.Should().NotBeEmpty();
@@ -71,14 +70,13 @@ public class DevcontainerErrorScenariosTests : TestBase
         {
             ProjectName = "readonly-test",
             TargetDirectory = readOnlyPath,
+            WorkingDirectory = readOnlyPath,
             Template = "api",
             Options = new Dictionary<string, object> { ["devcontainer"] = true }
         };
 
-        var result = new InitializationResult();
-
         // Act
-        await _initializer.ExecuteAsync(context, result);
+        var result = await _initializer.ExecuteAsync(context);
 
         // Assert
         result.Errors.Should().NotBeEmpty();
@@ -99,6 +97,7 @@ public class DevcontainerErrorScenariosTests : TestBase
         {
             ProjectName = "invalid-features-test",
             TargetDirectory = testOutputPath,
+            WorkingDirectory = testOutputPath,
             Template = "api",
             Options = new Dictionary<string, object>
             {
@@ -107,10 +106,8 @@ public class DevcontainerErrorScenariosTests : TestBase
             }
         };
 
-        var result = new InitializationResult();
-
         // Act
-        await _initializer.ExecuteAsync(context, result);
+        var result = await _initializer.ExecuteAsync(context);
 
         // Assert
         // Should either complete with warnings or fail with specific error messages
@@ -138,6 +135,7 @@ public class DevcontainerErrorScenariosTests : TestBase
         {
             ProjectName = "conflicting-features-test",
             TargetDirectory = testOutputPath,
+            WorkingDirectory = testOutputPath,
             Template = "api",
             Options = new Dictionary<string, object>
             {
@@ -151,10 +149,8 @@ public class DevcontainerErrorScenariosTests : TestBase
             }
         };
 
-        var result = new InitializationResult();
-
         // Act
-        await _initializer.ExecuteAsync(context, result);
+        var result = await _initializer.ExecuteAsync(context);
 
         // Assert
         // System should detect and report feature conflicts
@@ -177,6 +173,7 @@ public class DevcontainerErrorScenariosTests : TestBase
         {
             ProjectName = "invalid-ports-test",
             TargetDirectory = testOutputPath,
+            WorkingDirectory = testOutputPath,
             Template = "api",
             Options = new Dictionary<string, object>
             {
@@ -185,10 +182,8 @@ public class DevcontainerErrorScenariosTests : TestBase
             }
         };
 
-        var result = new InitializationResult();
-
         // Act
-        await _initializer.ExecuteAsync(context, result);
+        var result = await _initializer.ExecuteAsync(context);
 
         // Assert
         // Should either succeed with warnings or fail with specific port errors
@@ -224,6 +219,7 @@ public class DevcontainerErrorScenariosTests : TestBase
         {
             ProjectName = "existing-test",
             TargetDirectory = testOutputPath,
+            WorkingDirectory = testOutputPath,
             Template = "api",
             Options = new Dictionary<string, object> 
             { 
@@ -232,10 +228,8 @@ public class DevcontainerErrorScenariosTests : TestBase
             }
         };
 
-        var result = new InitializationResult();
-
         // Act
-        await _initializer.ExecuteAsync(context, result);
+        var result = await _initializer.ExecuteAsync(context);
 
         // Assert
         result.Errors.Should().Contain(error => 
@@ -305,6 +299,7 @@ public class DevcontainerErrorScenariosTests : TestBase
         {
             ProjectName = "network-test",
             TargetDirectory = testOutputPath,
+            WorkingDirectory = testOutputPath,
             Template = "api",
             Options = new Dictionary<string, object>
             {
@@ -313,10 +308,8 @@ public class DevcontainerErrorScenariosTests : TestBase
             }
         };
 
-        var result = new InitializationResult();
-
         // Act
-        await _initializer.ExecuteAsync(context, result);
+        var result = await _initializer.ExecuteAsync(context);
 
         // Assert
         // Should handle network issues gracefully
@@ -363,6 +356,7 @@ public class DevcontainerErrorScenariosTests : TestBase
         {
             ProjectName = "circular-test",
             TargetDirectory = testOutputPath,
+            WorkingDirectory = testOutputPath,
             Template = "api",
             Options = new Dictionary<string, object>
             {
@@ -371,10 +365,8 @@ public class DevcontainerErrorScenariosTests : TestBase
             }
         };
 
-        var result = new InitializationResult();
-
         // Act
-        await _initializer.ExecuteAsync(context, result);
+        var result = await _initializer.ExecuteAsync(context);
 
         // Assert
         // Should detect circular dependencies and fail gracefully
@@ -397,6 +389,7 @@ public class DevcontainerErrorScenariosTests : TestBase
         {
             ProjectName = "docker-version-test",
             TargetDirectory = testOutputPath,
+            WorkingDirectory = testOutputPath,
             Template = "api",
             Options = new Dictionary<string, object>
             {
@@ -405,10 +398,8 @@ public class DevcontainerErrorScenariosTests : TestBase
             }
         };
 
-        var result = new InitializationResult();
-
         // Act
-        await _initializer.ExecuteAsync(context, result);
+        var result = await _initializer.ExecuteAsync(context);
 
         // Assert
         // Should warn about or reject unsupported Docker configurations
@@ -438,14 +429,13 @@ public class DevcontainerErrorScenariosTests : TestBase
         {
             ProjectName = veryLongProjectName,
             TargetDirectory = testOutputPath,
+            WorkingDirectory = testOutputPath,
             Template = "api",
             Options = new Dictionary<string, object> { ["devcontainer"] = true }
         };
 
-        var result = new InitializationResult();
-
         // Act
-        await _initializer.ExecuteAsync(context, result);
+        var result = await _initializer.ExecuteAsync(context);
 
         // Assert
         // Should either truncate the name, warn, or fail gracefully
@@ -475,14 +465,13 @@ public class DevcontainerErrorScenariosTests : TestBase
         {
             ProjectName = nameWithSpecialChars,
             TargetDirectory = testOutputPath,
+            WorkingDirectory = testOutputPath,
             Template = "api",
             Options = new Dictionary<string, object> { ["devcontainer"] = true }
         };
 
-        var result = new InitializationResult();
-
         // Act
-        await _initializer.ExecuteAsync(context, result);
+        var result = await _initializer.ExecuteAsync(context);
 
         // Assert
         // Should either sanitize the name or provide clear error message
@@ -521,14 +510,14 @@ public class DevcontainerErrorScenariosTests : TestBase
             {
                 ProjectName = $"concurrent-test-{i}",
                 TargetDirectory = testOutputPath, // Same directory for all
+                WorkingDirectory = testOutputPath,
                 Template = "api",
                 Options = new Dictionary<string, object> { ["devcontainer"] = true }
             };
 
             tasks.Add(Task.Run(async () =>
             {
-                var result = new InitializationResult();
-                await _initializer.ExecuteAsync(context, result);
+                var result = await _initializer.ExecuteAsync(context);
                 return result;
             }));
         }

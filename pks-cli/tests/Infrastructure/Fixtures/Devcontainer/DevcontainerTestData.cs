@@ -1,4 +1,5 @@
 using System.Text.Json;
+using PKS.Infrastructure.Services.Models;
 
 namespace PKS.CLI.Tests.Infrastructure.Fixtures.Devcontainer;
 
@@ -433,49 +434,4 @@ CMD [""sleep"", ""infinity""]
             "Name contains invalid characters" 
         };
     }
-}
-
-// Test model classes (these will match the actual models when implemented)
-public class DevcontainerConfiguration
-{
-    public string Name { get; set; } = string.Empty;
-    public string Image { get; set; } = string.Empty;
-    public Dictionary<string, object> Features { get; set; } = new();
-    public Dictionary<string, object> Customizations { get; set; } = new();
-    public int[] ForwardPorts { get; set; } = Array.Empty<int>();
-    public string PostCreateCommand { get; set; } = string.Empty;
-    public string[] Mounts { get; set; } = Array.Empty<string>();
-    public Dictionary<string, string> RemoteEnv { get; set; } = new();
-}
-
-public class DevcontainerFeature
-{
-    public string Id { get; set; } = string.Empty;
-    public string Name { get; set; } = string.Empty;
-    public string Description { get; set; } = string.Empty;
-    public string Version { get; set; } = string.Empty;
-    public string Repository { get; set; } = string.Empty;
-    public string Category { get; set; } = string.Empty;
-    public string[] Tags { get; set; } = Array.Empty<string>();
-    public string Documentation { get; set; } = string.Empty;
-    public Dictionary<string, object> DefaultOptions { get; set; } = new();
-    public Dictionary<string, DevcontainerFeatureOption> AvailableOptions { get; set; } = new();
-}
-
-public class DevcontainerFeatureOption
-{
-    public string Type { get; set; } = string.Empty;
-    public string Description { get; set; } = string.Empty;
-    public object? Default { get; set; }
-    public string[]? Enum { get; set; }
-}
-
-public class VsCodeExtension
-{
-    public string Id { get; set; } = string.Empty;
-    public string Name { get; set; } = string.Empty;
-    public string Publisher { get; set; } = string.Empty;
-    public string Description { get; set; } = string.Empty;
-    public string Category { get; set; } = string.Empty;
-    public string[] Tags { get; set; } = Array.Empty<string>();
 }

@@ -5,6 +5,8 @@ using Moq;
 using PKS.CLI.Tests.Infrastructure;
 using PKS.CLI.Tests.Infrastructure.Fixtures.Devcontainer;
 using PKS.CLI.Tests.Infrastructure.Mocks;
+using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Models;
 using Xunit;
 
 namespace PKS.CLI.Tests.Services.Devcontainer;

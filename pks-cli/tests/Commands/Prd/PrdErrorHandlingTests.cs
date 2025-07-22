@@ -59,7 +59,6 @@ public class PrdErrorHandlingTests : IDisposable
         _console.Output.Should().Contain("Idea description is required");
         _mockPrdService.Verify(s => s.GeneratePrdAsync(
             It.IsAny<PrdGenerationRequest>(), 
-            It.IsAny<string>(), 
             It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -78,7 +77,6 @@ public class PrdErrorHandlingTests : IDisposable
         _console.Output.Should().Contain("Valid types: standard, technical, mobile, web, api, minimal, enterprise");
         _mockPrdService.Verify(s => s.GeneratePrdAsync(
             It.IsAny<PrdGenerationRequest>(), 
-            It.IsAny<string>(), 
             It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -87,7 +85,7 @@ public class PrdErrorHandlingTests : IDisposable
     {
         // Arrange
         _mockPrdService
-            .Setup(s => s.GeneratePrdAsync(It.IsAny<PrdGenerationRequest>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Setup(s => s.GeneratePrdAsync(It.IsAny<PrdGenerationRequest>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Service error"));
 
         var args = new[] { "generate", "Test idea" };
@@ -104,15 +102,15 @@ public class PrdErrorHandlingTests : IDisposable
     public async Task PrdLoadCommand_WithNonExistentFile_ShouldReturnError()
     {
         // Arrange
-        var parseResult = new PrdParsingResult
+        var loadResult = new PrdLoadResult
         {
             Success = false,
-            ErrorMessage = "File not found: nonexistent.md"
+            Message = "File not found: nonexistent.md"
         };
 
         _mockPrdService
             .Setup(s => s.LoadPrdAsync("nonexistent.md", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parseResult);
+            .ReturnsAsync(loadResult);
 
         var args = new[] { "load", "nonexistent.md" };
 
@@ -129,15 +127,15 @@ public class PrdErrorHandlingTests : IDisposable
     public async Task PrdLoadCommand_WithCorruptedFile_ShouldReturnError()
     {
         // Arrange
-        var parseResult = new PrdParsingResult
+        var loadResult = new PrdLoadResult
         {
             Success = false,
-            ErrorMessage = "Invalid PRD format: corrupted markdown structure"
+            Message = "Invalid PRD format: corrupted markdown structure"
         };
 
         _mockPrdService
             .Setup(s => s.LoadPrdAsync("corrupted.md", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parseResult);
+            .ReturnsAsync(loadResult);
 
         var args = new[] { "load", "corrupted.md" };
 
@@ -155,15 +153,17 @@ public class PrdErrorHandlingTests : IDisposable
     {
         // Arrange
         var document = CreateTestPrdDocument();
-        var parseResult = new PrdParsingResult
+        var loadResult = new PrdLoadResult
         {
             Success = true,
-            Document = document
+            ProductName = "Test Project",
+            Template = "standard",
+            Sections = new List<string> { "Overview" }
         };
 
         _mockPrdService
             .Setup(s => s.LoadPrdAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parseResult);
+            .ReturnsAsync(loadResult);
 
         var args = new[] { "requirements", "test.md", "--status", "invalid-status" };
 
@@ -184,15 +184,17 @@ public class PrdErrorHandlingTests : IDisposable
     {
         // Arrange
         var document = CreateTestPrdDocument();
-        var parseResult = new PrdParsingResult
+        var loadResult = new PrdLoadResult
         {
             Success = true,
-            Document = document
+            ProductName = "Test Project",
+            Template = "standard",
+            Sections = new List<string> { "Overview" }
         };
 
         _mockPrdService
             .Setup(s => s.LoadPrdAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parseResult);
+            .ReturnsAsync(loadResult);
 
         var args = new[] { "requirements", "test.md", "--priority", "invalid-priority" };
 
@@ -248,15 +250,15 @@ public class PrdErrorHandlingTests : IDisposable
     public async Task PrdValidateCommand_WithParsingErrors_ShouldReturnError()
     {
         // Arrange
-        var parseResult = new PrdParsingResult
+        var loadResult = new PrdLoadResult
         {
             Success = false,
-            ErrorMessage = "Failed to parse PRD: invalid YAML frontmatter"
+            Message = "Failed to parse PRD: invalid YAML frontmatter"
         };
 
         _mockPrdService
             .Setup(s => s.LoadPrdAsync("invalid.md", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parseResult);
+            .ReturnsAsync(loadResult);
 
         var args = new[] { "validate", "invalid.md" };
 
@@ -267,48 +269,50 @@ public class PrdErrorHandlingTests : IDisposable
         result.Should().Be(1);
         _console.Output.Should().Contain("Failed to load PRD");
         _console.Output.Should().Contain("invalid YAML frontmatter");
-        _mockPrdService.Verify(s => s.ValidatePrdAsync(It.IsAny<PrdDocument>()), Times.Never);
+        _mockPrdService.Verify(s => s.ValidatePrdAsync(It.IsAny<PrdValidationOptions>()), Times.Never);
     }
 
     [Fact]
     public async Task PrdValidateCommand_WithValidationFailures_ShouldReturnError()
     {
         // Arrange
-        var document = CreateTestPrdDocument();
-        var parseResult = new PrdParsingResult
+        var loadResult = new PrdLoadResult
         {
             Success = true,
-            Document = document
+            ProductName = "Test Project",
+            Template = "standard",
+            Sections = new List<string> { "Overview" }
         };
 
         var validationResult = new PrdValidationResult
         {
+            Success = true,
             IsValid = false,
             CompletenessScore = 45.0,
-            Errors = new List<string> 
+            Errors = new List<object> 
             { 
                 "Missing project description",
                 "No acceptance criteria defined",
                 "Stakeholders not specified"
             },
-            Warnings = new List<string> 
+            Warnings = new List<object> 
             { 
                 "Only 2 requirements defined",
                 "No user stories for requirements"
             },
-            Suggestions = new List<string> 
+            Suggestions = new List<PrdSuggestion> 
             { 
-                "Add performance requirements",
-                "Define success metrics"
+                new() { Type = "Performance", Description = "Add performance requirements" },
+                new() { Type = "Metrics", Description = "Define success metrics" }
             }
         };
 
         _mockPrdService
             .Setup(s => s.LoadPrdAsync("incomplete.md", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parseResult);
+            .ReturnsAsync(loadResult);
 
         _mockPrdService
-            .Setup(s => s.ValidatePrdAsync(document))
+            .Setup(s => s.ValidatePrdAsync(It.IsAny<PrdValidationOptions>()))
             .ReturnsAsync(validationResult);
 
         var args = new[] { "validate", "incomplete.md" };
@@ -388,7 +392,7 @@ public class PrdErrorHandlingTests : IDisposable
     {
         // Arrange
         _mockPrdService
-            .Setup(s => s.GeneratePrdAsync(It.IsAny<PrdGenerationRequest>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Setup(s => s.GeneratePrdAsync(It.IsAny<PrdGenerationRequest>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new UnauthorizedAccessException("Access denied to output directory"));
 
         var args = new[] { "generate", "Test idea", "--output", "/readonly/output.md" };
@@ -406,7 +410,7 @@ public class PrdErrorHandlingTests : IDisposable
     {
         // Arrange
         _mockPrdService
-            .Setup(s => s.GeneratePrdAsync(It.IsAny<PrdGenerationRequest>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Setup(s => s.GeneratePrdAsync(It.IsAny<PrdGenerationRequest>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new TimeoutException("Request timed out while generating PRD"));
 
         var args = new[] { "generate", "Complex application with many features" };
@@ -424,7 +428,7 @@ public class PrdErrorHandlingTests : IDisposable
     {
         // Arrange
         _mockPrdService
-            .Setup(s => s.GeneratePrdAsync(It.IsAny<PrdGenerationRequest>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Setup(s => s.GeneratePrdAsync(It.IsAny<PrdGenerationRequest>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new OperationCanceledException("Operation was cancelled"));
 
         var args = new[] { "generate", "Test idea" };
@@ -441,16 +445,17 @@ public class PrdErrorHandlingTests : IDisposable
     public async Task PrdExportCommands_WithInvalidExportFormat_ShouldReturnError()
     {
         // Arrange
-        var document = CreateTestPrdDocument();
-        var parseResult = new PrdParsingResult
+        var loadResult = new PrdLoadResult
         {
             Success = true,
-            Document = document
+            ProductName = "Test Project",
+            Template = "standard",
+            Sections = new List<string> { "Overview" }
         };
 
         _mockPrdService
             .Setup(s => s.LoadPrdAsync("test.md", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parseResult);
+            .ReturnsAsync(loadResult);
 
         var args = new[] { "requirements", "test.md", "--export", "output.invalid" };
 
@@ -486,8 +491,16 @@ public class PrdErrorHandlingTests : IDisposable
         var args = new[] { "generate", veryLongIdea };
 
         _mockPrdService
-            .Setup(s => s.GeneratePrdAsync(It.IsAny<PrdGenerationRequest>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(CreateTestPrdDocument());
+            .Setup(s => s.GeneratePrdAsync(It.IsAny<PrdGenerationRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PrdGenerationResult
+            {
+                Success = true,
+                OutputFile = "test-prd.md",
+                Sections = new List<string> { "Overview" },
+                WordCount = 10000,
+                EstimatedReadTime = "50 minutes",
+                Message = "PRD generated successfully"
+            });
 
         // Act
         var result = await _app.RunAsync(args);
@@ -496,7 +509,6 @@ public class PrdErrorHandlingTests : IDisposable
         result.Should().Be(0);
         _mockPrdService.Verify(s => s.GeneratePrdAsync(
             It.Is<PrdGenerationRequest>(r => r.IdeaDescription == veryLongIdea),
-            It.IsAny<string>(),
             It.IsAny<CancellationToken>()), Times.Once);
     }
 

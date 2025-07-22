@@ -80,18 +80,15 @@ public static class TestDataGenerator
     /// <summary>
     /// Generates test MCP server configuration
     /// </summary>
-    public static PKS.CLI.Tests.Infrastructure.Mocks.McpServerConfig GenerateMcpServerConfig(int port = 0)
+    public static PKS.CLI.Infrastructure.Services.MCP.McpServerConfig GenerateMcpServerConfig(int port = 0)
     {
-        return new PKS.CLI.Tests.Infrastructure.Mocks.McpServerConfig
+        return new PKS.CLI.Infrastructure.Services.MCP.McpServerConfig
         {
             Port = port == 0 ? Random.Next(8000, 9000) : port,
             Transport = "stdio",
-            Settings = new Dictionary<string, object>
-            {
-                ["debug"] = true,
-                ["timeout"] = 30000,
-                ["retries"] = 3
-            }
+            Debug = true,
+            ServerName = "test-server",
+            ServerVersion = "1.0.0"
         };
     }
 

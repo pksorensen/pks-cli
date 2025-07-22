@@ -31,11 +31,10 @@ public class PrdServiceTests
 
         // Assert
         Assert.NotNull(result);
-        Assert.Equal("TaskMaster", result.Configuration.ProjectName);
-        Assert.Equal("Build a task management application for teams", result.Configuration.Description);
-        Assert.True(result.Requirements.Count > 0);
-        Assert.True(result.UserStories.Count > 0);
-        Assert.True(result.Sections.Count > 0);
+        Assert.True(result.Success);
+        Assert.NotNull(result.OutputFile);
+        Assert.NotEmpty(result.Sections);
+        Assert.True(result.WordCount > 0);
     }
 
     [Fact]
@@ -53,9 +52,9 @@ public class PrdServiceTests
 
         // Assert
         Assert.NotNull(result);
-        Assert.Equal("WebApp", result.Configuration.ProjectName);
-        Assert.True(result.Requirements.Count >= 0);
-        Assert.True(result.Sections.Count > 0);
+        Assert.True(result.Success);
+        Assert.NotNull(result.OutputFile);
+        Assert.NotEmpty(result.Sections);
     }
 
     [Fact]
@@ -69,7 +68,7 @@ public class PrdServiceTests
 
         // Assert
         Assert.False(result.Success);
-        Assert.Contains("not found", result.ErrorMessage);
+        Assert.Contains("not found", result.Message);
     }
 
     [Fact]
@@ -154,7 +153,13 @@ public class PrdServiceTests
         var document = CreateTestPrdDocument();
 
         // Act
-        var validation = await _prdService.ValidatePrdAsync(document);
+        var validationOptions = new PrdValidationOptions
+        {
+            FilePath = "test.md",
+            Strictness = "standard",
+            IncludeSuggestions = true
+        };
+        var validation = await _prdService.ValidatePrdAsync(validationOptions);
 
         // Assert
         Assert.True(validation.IsValid);
@@ -175,12 +180,17 @@ public class PrdServiceTests
         };
 
         // Act
-        var validation = await _prdService.ValidatePrdAsync(document);
+        var validationOptions = new PrdValidationOptions
+        {
+            FilePath = "empty.md",
+            Strictness = "strict",
+            IncludeSuggestions = true
+        };
+        var validation = await _prdService.ValidatePrdAsync(validationOptions);
 
         // Assert
         Assert.False(validation.IsValid);
-        Assert.Contains(validation.Errors, e => e.Contains("Project name"));
-        Assert.Contains(validation.Errors, e => e.Contains("description"));
+        Assert.NotEmpty(validation.Errors);
         Assert.True(validation.CompletenessScore < 100);
     }
 

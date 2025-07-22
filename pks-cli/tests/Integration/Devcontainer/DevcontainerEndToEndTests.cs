@@ -46,6 +46,7 @@ public class DevcontainerEndToEndTests : TestBase
         {
             ProjectName = testName,
             TargetDirectory = projectPath,
+            WorkingDirectory = projectPath,
             Template = "api",
             Interactive = false,
             Options = new Dictionary<string, object>
@@ -56,13 +57,11 @@ public class DevcontainerEndToEndTests : TestBase
             }
         };
 
-        var result = new InitializationResult();
-
         // Act
         var shouldRun = await _initializer.ShouldRunAsync(context);
         shouldRun.Should().BeTrue();
 
-        await _initializer.ExecuteAsync(context, result);
+        var result = await _initializer.ExecuteAsync(context);
 
         // Assert - Verify execution was successful
         result.Errors.Should().BeEmpty();
@@ -113,14 +112,13 @@ public class DevcontainerEndToEndTests : TestBase
         {
             ProjectName = testName,
             TargetDirectory = projectPath,
+            WorkingDirectory = projectPath,
             Template = projectTemplate,
             Options = new Dictionary<string, object> { ["devcontainer"] = true }
         };
 
-        var result = new InitializationResult();
-
         // Act
-        await _initializer.ExecuteAsync(context, result);
+        var result = await _initializer.ExecuteAsync(context);
 
         // Assert
         result.Errors.Should().BeEmpty();
@@ -139,6 +137,7 @@ public class DevcontainerEndToEndTests : TestBase
         {
             ProjectName = testName,
             TargetDirectory = projectPath,
+            WorkingDirectory = projectPath,
             Template = "api",
             Options = new Dictionary<string, object>
             {
@@ -147,10 +146,8 @@ public class DevcontainerEndToEndTests : TestBase
             }
         };
 
-        var result = new InitializationResult();
-
         // Act
-        await _initializer.ExecuteAsync(context, result);
+        var result = await _initializer.ExecuteAsync(context);
 
         // Assert
         result.Errors.Should().BeEmpty();
@@ -179,6 +176,7 @@ public class DevcontainerEndToEndTests : TestBase
         {
             ProjectName = testName,
             TargetDirectory = projectPath,
+            WorkingDirectory = projectPath,
             Template = "web",
             Options = new Dictionary<string, object>
             {
@@ -187,10 +185,8 @@ public class DevcontainerEndToEndTests : TestBase
             }
         };
 
-        var result = new InitializationResult();
-
         // Act
-        await _initializer.ExecuteAsync(context, result);
+        var result = await _initializer.ExecuteAsync(context);
 
         // Assert
         result.Errors.Should().BeEmpty();
@@ -216,6 +212,7 @@ public class DevcontainerEndToEndTests : TestBase
         {
             ProjectName = testName,
             TargetDirectory = projectPath,
+            WorkingDirectory = projectPath,
             Template = "api",
             Options = new Dictionary<string, object>
             {
@@ -224,10 +221,8 @@ public class DevcontainerEndToEndTests : TestBase
             }
         };
 
-        var result = new InitializationResult();
-
         // Act
-        await _initializer.ExecuteAsync(context, result);
+        var result = await _initializer.ExecuteAsync(context);
 
         // Assert
         result.Errors.Should().BeEmpty();
@@ -254,6 +249,7 @@ public class DevcontainerEndToEndTests : TestBase
         {
             ProjectName = testName,
             TargetDirectory = projectPath,
+            WorkingDirectory = projectPath,
             Template = "web",
             Options = new Dictionary<string, object>
             {
@@ -263,10 +259,8 @@ public class DevcontainerEndToEndTests : TestBase
             }
         };
 
-        var result = new InitializationResult();
-
         // Act
-        await _initializer.ExecuteAsync(context, result);
+        var result = await _initializer.ExecuteAsync(context);
 
         // Assert
         result.Errors.Should().BeEmpty();
@@ -294,6 +288,7 @@ public class DevcontainerEndToEndTests : TestBase
             {
                 ProjectName = testName,
                 TargetDirectory = projectPath,
+                WorkingDirectory = projectPath,
                 Template = template,
                 Options = new Dictionary<string, object>() // No explicit devcontainer flag
             };
@@ -317,6 +312,7 @@ public class DevcontainerEndToEndTests : TestBase
         {
             ProjectName = testName,
             TargetDirectory = projectPath,
+            WorkingDirectory = projectPath,
             Template = "console",
             Options = new Dictionary<string, object>() // No explicit devcontainer flag
         };
@@ -339,6 +335,7 @@ public class DevcontainerEndToEndTests : TestBase
         {
             ProjectName = testName,
             TargetDirectory = projectPath,
+            WorkingDirectory = projectPath,
             Template = "agent",
             Options = new Dictionary<string, object>
             {
@@ -347,10 +344,8 @@ public class DevcontainerEndToEndTests : TestBase
             }
         };
 
-        var result = new InitializationResult();
-
         // Act
-        await _initializer.ExecuteAsync(context, result);
+        var result = await _initializer.ExecuteAsync(context);
 
         // Assert
         result.Errors.Should().BeEmpty();
@@ -373,6 +368,7 @@ public class DevcontainerEndToEndTests : TestBase
         {
             ProjectName = testName,
             TargetDirectory = projectPath,
+            WorkingDirectory = projectPath,
             Template = "api",
             Options = new Dictionary<string, object>
             {
@@ -381,10 +377,8 @@ public class DevcontainerEndToEndTests : TestBase
             }
         };
 
-        var result = new InitializationResult();
-
         // Act
-        await _initializer.ExecuteAsync(context, result);
+        var result = await _initializer.ExecuteAsync(context);
 
         // Assert
         result.Errors.Should().BeEmpty();
@@ -407,14 +401,13 @@ public class DevcontainerEndToEndTests : TestBase
         {
             ProjectName = testName,
             TargetDirectory = projectPath,
+            WorkingDirectory = projectPath,
             Template = "api",
             Options = new Dictionary<string, object> { ["devcontainer"] = true }
         };
 
-        var result = new InitializationResult();
-
         // Act
-        await _initializer.ExecuteAsync(context, result);
+        var result = await _initializer.ExecuteAsync(context);
 
         // Assert
         result.Errors.Should().BeEmpty();
@@ -439,6 +432,7 @@ public class DevcontainerEndToEndTests : TestBase
         {
             ProjectName = testName,
             TargetDirectory = projectPath,
+            WorkingDirectory = projectPath,
             Template = "api",
             Options = new Dictionary<string, object> { ["devcontainer"] = true }
         };

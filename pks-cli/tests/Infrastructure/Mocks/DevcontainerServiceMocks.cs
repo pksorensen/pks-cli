@@ -1,6 +1,8 @@
 using Moq;
 using Microsoft.Extensions.Logging;
 using PKS.CLI.Tests.Infrastructure.Fixtures.Devcontainer;
+using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Models;
 
 namespace PKS.CLI.Tests.Infrastructure.Mocks;
 
@@ -12,9 +14,9 @@ public static class DevcontainerServiceMocks
     /// <summary>
     /// Creates a mock IDevcontainerService with default behavior
     /// </summary>
-    public static Mock<IDevcontainerService> CreateDevcontainerService()
+    public static Mock<PKS.Infrastructure.Services.IDevcontainerService> CreateDevcontainerService()
     {
-        var mock = new Mock<IDevcontainerService>();
+        var mock = new Mock<PKS.Infrastructure.Services.IDevcontainerService>();
         
         // Setup successful configuration creation
         mock.Setup(x => x.CreateConfigurationAsync(It.IsAny<DevcontainerOptions>()))
@@ -68,9 +70,9 @@ public static class DevcontainerServiceMocks
     /// <summary>
     /// Creates a mock IDevcontainerFeatureRegistry with default behavior
     /// </summary>
-    public static Mock<IDevcontainerFeatureRegistry> CreateFeatureRegistry()
+    public static Mock<PKS.Infrastructure.Services.IDevcontainerFeatureRegistry> CreateFeatureRegistry()
     {
-        var mock = new Mock<IDevcontainerFeatureRegistry>();
+        var mock = new Mock<PKS.Infrastructure.Services.IDevcontainerFeatureRegistry>();
         var features = DevcontainerTestData.GetAvailableFeatures();
 
         // Setup feature discovery
@@ -103,9 +105,9 @@ public static class DevcontainerServiceMocks
     /// <summary>
     /// Creates a mock IDevcontainerTemplateService with default behavior
     /// </summary>
-    public static Mock<IDevcontainerTemplateService> CreateTemplateService()
+    public static Mock<PKS.Infrastructure.Services.IDevcontainerTemplateService> CreateTemplateService()
     {
-        var mock = new Mock<IDevcontainerTemplateService>();
+        var mock = new Mock<PKS.Infrastructure.Services.IDevcontainerTemplateService>();
 
         // Setup template retrieval
         mock.Setup(x => x.GetAvailableTemplatesAsync())
@@ -162,9 +164,9 @@ public static class DevcontainerServiceMocks
     /// <summary>
     /// Creates a mock IDevcontainerFileGenerator with default behavior
     /// </summary>
-    public static Mock<IDevcontainerFileGenerator> CreateFileGenerator()
+    public static Mock<PKS.Infrastructure.Services.IDevcontainerFileGenerator> CreateFileGenerator()
     {
-        var mock = new Mock<IDevcontainerFileGenerator>();
+        var mock = new Mock<PKS.Infrastructure.Services.IDevcontainerFileGenerator>();
 
         // Setup file generation
         mock.Setup(x => x.GenerateDevcontainerJsonAsync(It.IsAny<DevcontainerConfiguration>(), It.IsAny<string>()))
@@ -206,9 +208,9 @@ public static class DevcontainerServiceMocks
     /// <summary>
     /// Creates a mock IVsCodeExtensionService with default behavior
     /// </summary>
-    public static Mock<IVsCodeExtensionService> CreateVsCodeExtensionService()
+    public static Mock<PKS.Infrastructure.Services.IVsCodeExtensionService> CreateVsCodeExtensionService()
     {
-        var mock = new Mock<IVsCodeExtensionService>();
+        var mock = new Mock<PKS.Infrastructure.Services.IVsCodeExtensionService>();
         var extensions = DevcontainerTestData.GetVsCodeExtensions();
 
         // Setup extension discovery
@@ -231,128 +233,4 @@ public static class DevcontainerServiceMocks
 
         return mock;
     }
-}
-
-// Placeholder interfaces for devcontainer services that will be implemented
-public interface IDevcontainerService
-{
-    Task<DevcontainerResult> CreateConfigurationAsync(DevcontainerOptions options);
-    Task<DevcontainerValidationResult> ValidateConfigurationAsync(DevcontainerConfiguration configuration);
-    Task<FeatureResolutionResult> ResolveFeatureDependenciesAsync(List<string> features);
-    Task<DevcontainerConfiguration> MergeConfigurationsAsync(DevcontainerConfiguration baseConfig, DevcontainerConfiguration overlayConfig);
-}
-
-public interface IDevcontainerFeatureRegistry
-{
-    Task<List<DevcontainerFeature>> GetAvailableFeaturesAsync();
-    Task<DevcontainerFeature?> GetFeatureAsync(string id);
-    Task<List<DevcontainerFeature>> SearchFeaturesAsync(string query);
-    Task<List<DevcontainerFeature>> GetFeaturesByCategory(string category);
-    Task<FeatureValidationResult> ValidateFeatureConfiguration(string featureId, object configuration);
-}
-
-public interface IDevcontainerTemplateService
-{
-    Task<List<DevcontainerTemplate>> GetAvailableTemplatesAsync();
-    Task<DevcontainerTemplate?> GetTemplateAsync(string id);
-    Task<DevcontainerConfiguration> ApplyTemplateAsync(string templateId, DevcontainerOptions options);
-}
-
-public interface IDevcontainerFileGenerator
-{
-    Task<FileGenerationResult> GenerateDevcontainerJsonAsync(DevcontainerConfiguration configuration, string outputPath);
-    Task<FileGenerationResult> GenerateDockerfileAsync(DevcontainerConfiguration configuration, string outputPath);
-    Task<FileGenerationResult> GenerateDockerComposeAsync(DevcontainerConfiguration configuration, string outputPath);
-    Task<PathValidationResult> ValidateOutputPathAsync(string path);
-}
-
-public interface IVsCodeExtensionService
-{
-    Task<List<VsCodeExtension>> GetRecommendedExtensionsAsync(string[] categories);
-    Task<List<VsCodeExtension>> SearchExtensionsAsync(string query);
-    Task<ExtensionValidationResult> ValidateExtensionAsync(string extensionId);
-}
-
-// Result classes for testing
-public class DevcontainerResult
-{
-    public bool Success { get; set; }
-    public string Message { get; set; } = string.Empty;
-    public DevcontainerConfiguration? Configuration { get; set; }
-    public List<string> GeneratedFiles { get; set; } = new();
-    public List<string> Errors { get; set; } = new();
-}
-
-public class DevcontainerValidationResult
-{
-    public bool IsValid { get; set; }
-    public List<string> Errors { get; set; } = new();
-    public List<string> Warnings { get; set; } = new();
-}
-
-public class FeatureResolutionResult
-{
-    public bool Success { get; set; }
-    public List<DevcontainerFeature> ResolvedFeatures { get; set; } = new();
-    public List<FeatureConflict> ConflictingFeatures { get; set; } = new();
-    public string ErrorMessage { get; set; } = string.Empty;
-}
-
-public class FeatureConflict
-{
-    public string Feature1 { get; set; } = string.Empty;
-    public string Feature2 { get; set; } = string.Empty;
-    public string Reason { get; set; } = string.Empty;
-}
-
-public class FeatureValidationResult
-{
-    public bool IsValid { get; set; }
-    public List<string> Errors { get; set; } = new();
-}
-
-public class DevcontainerTemplate
-{
-    public string Id { get; set; } = string.Empty;
-    public string Name { get; set; } = string.Empty;
-    public string Description { get; set; } = string.Empty;
-    public string Category { get; set; } = string.Empty;
-    public string BaseImage { get; set; } = string.Empty;
-    public string[] RequiredFeatures { get; set; } = Array.Empty<string>();
-    public string[] OptionalFeatures { get; set; } = Array.Empty<string>();
-}
-
-public class FileGenerationResult
-{
-    public bool Success { get; set; }
-    public string FilePath { get; set; } = string.Empty;
-    public string Content { get; set; } = string.Empty;
-    public string ErrorMessage { get; set; } = string.Empty;
-}
-
-public class PathValidationResult
-{
-    public bool IsValid { get; set; }
-    public bool CanWrite { get; set; }
-    public List<string> Errors { get; set; } = new();
-}
-
-public class ExtensionValidationResult
-{
-    public bool IsValid { get; set; }
-    public bool Exists { get; set; }
-    public bool IsCompatible { get; set; }
-    public string ErrorMessage { get; set; } = string.Empty;
-}
-
-public class DevcontainerOptions
-{
-    public string Name { get; set; } = string.Empty;
-    public string OutputPath { get; set; } = string.Empty;
-    public string? Template { get; set; }
-    public List<string> Features { get; set; } = new();
-    public List<string> Extensions { get; set; } = new();
-    public bool UseDockerCompose { get; set; }
-    public bool Interactive { get; set; }
-    public Dictionary<string, object> CustomSettings { get; set; } = new();
 }

@@ -86,10 +86,18 @@ public class PrdIntegrationTests : IDisposable
     public async Task PrdGenerateCommand_WithValidArgs_ShouldExecuteSuccessfully()
     {
         // Arrange
-        var expectedDocument = CreateTestPrdDocument();
+        var expectedResult = new PrdGenerationResult
+        {
+            Success = true,
+            OutputFile = "test-prd.md",
+            Sections = new List<string> { "Overview", "Requirements", "User Stories" },
+            WordCount = 1500,
+            EstimatedReadTime = "7 minutes",
+            Message = "PRD generated successfully"
+        };
         _mockPrdService
-            .Setup(s => s.GeneratePrdAsync(It.IsAny<PrdGenerationRequest>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(expectedDocument);
+            .Setup(s => s.GeneratePrdAsync(It.IsAny<PrdGenerationRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(expectedResult);
 
         var args = new[] { "generate", "Build a task management app", "--name", "TaskMaster" };
 
@@ -102,7 +110,6 @@ public class PrdIntegrationTests : IDisposable
             It.Is<PrdGenerationRequest>(r => 
                 r.IdeaDescription == "Build a task management app" &&
                 r.ProjectName == "TaskMaster"),
-            It.IsAny<string>(),
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -124,17 +131,25 @@ public class PrdIntegrationTests : IDisposable
     public async Task PrdLoadCommand_WithValidFile_ShouldExecuteSuccessfully()
     {
         // Arrange
-        var document = CreateTestPrdDocument();
-        var parseResult = new PrdParsingResult
+        var loadResult = new PrdLoadResult
         {
             Success = true,
-            Document = document,
-            Warnings = new List<string>()
+            ProductName = "Test Project",
+            Template = "standard",
+            Sections = new List<string> { "Overview", "Requirements" },
+            Message = "PRD loaded successfully",
+            Analysis = new PrdAnalysis
+            {
+                WordCount = 1500,
+                SectionCount = 2,
+                EstimatedReadTime = "7 minutes",
+                Completeness = "85%"
+            }
         };
 
         _mockPrdService
             .Setup(s => s.LoadPrdAsync("test.md", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parseResult);
+            .ReturnsAsync(loadResult);
 
         var args = new[] { "load", "test.md" };
 
@@ -151,15 +166,15 @@ public class PrdIntegrationTests : IDisposable
     public async Task PrdLoadCommand_WithNonExistentFile_ShouldReturnError()
     {
         // Arrange
-        var parseResult = new PrdParsingResult
+        var failedLoadResult = new PrdLoadResult
         {
             Success = false,
-            ErrorMessage = "File not found"
+            Message = "File not found"
         };
 
         _mockPrdService
             .Setup(s => s.LoadPrdAsync("nonexistent.md", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parseResult);
+            .ReturnsAsync(failedLoadResult);
 
         var args = new[] { "load", "nonexistent.md" };
 
@@ -176,10 +191,12 @@ public class PrdIntegrationTests : IDisposable
     {
         // Arrange
         var document = CreateTestPrdDocument();
-        var parseResult = new PrdParsingResult
+        var loadResult = new PrdLoadResult
         {
             Success = true,
-            Document = document
+            ProductName = "Test Project",
+            Template = "standard",
+            Sections = new List<string> { "Overview" }
         };
 
         var filteredRequirements = new List<PrdRequirement>
@@ -195,7 +212,7 @@ public class PrdIntegrationTests : IDisposable
 
         _mockPrdService
             .Setup(s => s.LoadPrdAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parseResult);
+            .ReturnsAsync(loadResult);
 
         _mockPrdService
             .Setup(s => s.GetRequirementsAsync(document, RequirementStatus.Draft, RequirementPriority.High))
@@ -247,28 +264,30 @@ public class PrdIntegrationTests : IDisposable
     public async Task PrdValidateCommand_WithValidPrd_ShouldReturnSuccess()
     {
         // Arrange
-        var document = CreateTestPrdDocument();
-        var parseResult = new PrdParsingResult
+        var loadResult = new PrdLoadResult
         {
             Success = true,
-            Document = document
+            ProductName = "Test Project",
+            Template = "standard",
+            Sections = new List<string> { "Overview" }
         };
 
         var validationResult = new PrdValidationResult
         {
+            Success = true,
             IsValid = true,
             CompletenessScore = 90.0,
-            Errors = new List<string>(),
-            Warnings = new List<string>(),
-            Suggestions = new List<string>()
+            Errors = new List<object>(),
+            Warnings = new List<object>(),
+            Suggestions = new List<PrdSuggestion>()
         };
 
         _mockPrdService
             .Setup(s => s.LoadPrdAsync("test.md", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parseResult);
+            .ReturnsAsync(loadResult);
 
         _mockPrdService
-            .Setup(s => s.ValidatePrdAsync(document))
+            .Setup(s => s.ValidatePrdAsync(It.IsAny<PrdValidationOptions>()))
             .ReturnsAsync(validationResult);
 
         var args = new[] { "validate", "test.md" };
@@ -278,7 +297,7 @@ public class PrdIntegrationTests : IDisposable
 
         // Assert
         result.Should().Be(0);
-        _mockPrdService.Verify(s => s.ValidatePrdAsync(document), Times.Once);
+        _mockPrdService.Verify(s => s.ValidatePrdAsync(It.IsAny<PrdValidationOptions>()), Times.Once);
         _console.Output.Should().Contain("Valid");
         _console.Output.Should().Contain("90.0%");
     }
@@ -287,28 +306,33 @@ public class PrdIntegrationTests : IDisposable
     public async Task PrdValidateCommand_WithInvalidPrd_ShouldReturnError()
     {
         // Arrange
-        var document = CreateTestPrdDocument();
-        var parseResult = new PrdParsingResult
+        var loadResult = new PrdLoadResult
         {
             Success = true,
-            Document = document
+            ProductName = "Test Project",
+            Template = "standard",
+            Sections = new List<string> { "Overview" }
         };
 
         var validationResult = new PrdValidationResult
         {
+            Success = true,
             IsValid = false,
             CompletenessScore = 50.0,
-            Errors = new List<string> { "Missing project description" },
-            Warnings = new List<string> { "Few requirements defined" },
-            Suggestions = new List<string> { "Add more user stories" }
+            Errors = new List<object> { "Missing project description" },
+            Warnings = new List<object> { "Few requirements defined" },
+            Suggestions = new List<PrdSuggestion>
+            {
+                new() { Type = "Improvement", Description = "Add more user stories" }
+            }
         };
 
         _mockPrdService
             .Setup(s => s.LoadPrdAsync("test.md", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parseResult);
+            .ReturnsAsync(loadResult);
 
         _mockPrdService
-            .Setup(s => s.ValidatePrdAsync(document))
+            .Setup(s => s.ValidatePrdAsync(It.IsAny<PrdValidationOptions>()))
             .ReturnsAsync(validationResult);
 
         var args = new[] { "validate", "test.md" };
@@ -408,22 +432,31 @@ public class PrdIntegrationTests : IDisposable
     public async Task PrdCommands_WithVerboseOption_ShouldEnableVerboseOutput()
     {
         // Arrange
-        var document = CreateTestPrdDocument();
+        var generateResult = new PrdGenerationResult
+        {
+            Success = true,
+            OutputFile = "test-prd.md",
+            Sections = new List<string> { "Overview", "Requirements" },
+            WordCount = 1500,
+            EstimatedReadTime = "7 minutes",
+            Message = "PRD generated successfully"
+        };
         _mockPrdService
-            .Setup(s => s.GeneratePrdAsync(It.IsAny<PrdGenerationRequest>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(document);
+            .Setup(s => s.GeneratePrdAsync(It.IsAny<PrdGenerationRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(generateResult);
 
         var validationResult = new PrdValidationResult
         {
+            Success = true,
             IsValid = true,
             CompletenessScore = 95.0,
-            Errors = new List<string>(),
-            Warnings = new List<string>(),
-            Suggestions = new List<string>()
+            Errors = new List<object>(),
+            Warnings = new List<object>(),
+            Suggestions = new List<PrdSuggestion>()
         };
 
         _mockPrdService
-            .Setup(s => s.ValidatePrdAsync(document))
+            .Setup(s => s.ValidatePrdAsync(It.IsAny<PrdValidationOptions>()))
             .ReturnsAsync(validationResult);
 
         var args = new[] { "generate", "Test idea", "--verbose" };
@@ -434,7 +467,7 @@ public class PrdIntegrationTests : IDisposable
         // Assert
         result.Should().Be(0);
         // With verbose flag, validation summary should be shown
-        _mockPrdService.Verify(s => s.ValidatePrdAsync(document), Times.Once);
+        _mockPrdService.Verify(s => s.ValidatePrdAsync(It.IsAny<PrdValidationOptions>()), Times.Once);
     }
 
     private PrdDocument CreateTestPrdDocument()

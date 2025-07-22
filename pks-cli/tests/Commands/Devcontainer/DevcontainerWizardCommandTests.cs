@@ -6,6 +6,7 @@ using PKS.CLI.Tests.Infrastructure.Fixtures.Devcontainer;
 using PKS.CLI.Tests.Infrastructure.Mocks;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
+using PKS.Commands.Devcontainer;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using Spectre.Console.Testing;
@@ -49,9 +50,9 @@ public class DevcontainerWizardCommandTests : TestBase
 
         // Assert
         settings.Should().NotBeNull();
-        settings.GetType().Should().HaveProperty("OutputPath");
-        settings.GetType().Should().HaveProperty("Force");
-        settings.GetType().Should().HaveProperty("SkipValidation");
+        settings.GetType().Should().HaveProperty<string>("OutputPath");
+        settings.GetType().Should().HaveProperty<bool>("Force");
+        settings.GetType().Should().HaveProperty<bool>("SkipTemplates");
     }
 
     [Fact]
@@ -62,9 +63,9 @@ public class DevcontainerWizardCommandTests : TestBase
 
         // Assert
         settings.Should().NotBeNull();
-        settings.GetType().Should().HaveProperty("FromTemplates");
-        settings.GetType().Should().HaveProperty("Sources");
-        settings.GetType().Should().HaveProperty("AddSources");
+        settings.GetType().Should().HaveProperty<bool>("FromTemplates");
+        settings.GetType().Should().HaveProperty<string[]>("Sources");
+        settings.GetType().Should().HaveProperty<string[]>("AddSources");
     }
 
     [Fact]
@@ -282,7 +283,7 @@ public class DevcontainerWizardCommandTests : TestBase
         var settings = new DevcontainerWizardSettings
         {
             OutputPath = CreateTempDirectory(),
-            SkipValidation = false
+            SkipTemplates = false
         };
 
         _mockDevcontainerService.Setup(x => x.ValidateConfigurationAsync(It.IsAny<DevcontainerConfiguration>()))
@@ -611,7 +612,7 @@ public class DevcontainerWizardCommandTests : TestBase
         AssertConsoleOutput("Please enter a valid project name");
     }
 
-    private DevcontainerWizardCommand CreateMockWizardCommand()
+    private PKS.Commands.Devcontainer.DevcontainerWizardCommand CreateMockWizardCommand()
     {
         var command = new PKS.Commands.Devcontainer.DevcontainerWizardCommand(
             _mockDevcontainerService.Object,
@@ -623,7 +624,7 @@ public class DevcontainerWizardCommandTests : TestBase
         return command;
     }
 
-    private DevcontainerWizardCommand CreateMockWizardCommandWithNoNuGetTemplates()
+    private PKS.Commands.Devcontainer.DevcontainerWizardCommand CreateMockWizardCommandWithNoNuGetTemplates()
     {
         var mockNuGetService = CreateMockNuGetServiceWithNoTemplates();
         var command = new PKS.Commands.Devcontainer.DevcontainerWizardCommand(
@@ -636,7 +637,7 @@ public class DevcontainerWizardCommandTests : TestBase
         return command;
     }
 
-    private DevcontainerWizardCommand CreateMockWizardCommandWithNuGetError()
+    private PKS.Commands.Devcontainer.DevcontainerWizardCommand CreateMockWizardCommandWithNuGetError()
     {
         var mockNuGetService = CreateMockNuGetServiceWithError();
         var command = new PKS.Commands.Devcontainer.DevcontainerWizardCommand(
@@ -690,7 +691,7 @@ public class DevcontainerWizardCommandTests : TestBase
         return mock;
     }
 
-    private async Task<int> ExecuteWizardCommandAsync(DevcontainerWizardCommand command, DevcontainerWizardSettings settings)
+    private async Task<int> ExecuteWizardCommandAsync(PKS.Commands.Devcontainer.DevcontainerWizardCommand command, DevcontainerWizardSettings settings)
     {
         var context = new CommandContext(Mock.Of<IRemainingArguments>(), "devcontainer wizard", null);
         return await command.ExecuteAsync(context, settings);
@@ -810,7 +811,7 @@ public class DevcontainerWizardCommandTests : TestBase
         TestConsole.WriteLine("Extensions: None selected");
         TestConsole.WriteLine($"Docker Compose: {(useDockerCompose?.ToLower() == "y" ? "Yes" : "No")}");
 
-        if (!settings.SkipValidation)
+        if (!settings.SkipTemplates)
         {
             TestConsole.WriteLine("Validating configuration...");
             
@@ -943,24 +944,3 @@ public class DevcontainerWizardCommandTests : TestBase
     }
 }
 
-// Mock wizard settings class
-public class DevcontainerWizardSettings
-{
-    public string OutputPath { get; set; } = ".";
-    public bool Force { get; set; }
-    public bool SkipValidation { get; set; }
-    public bool FromTemplates { get; set; }
-    public string[]? Sources { get; set; }
-    public string[]? AddSources { get; set; }
-    public bool Verbose { get; set; }
-}
-
-// Mock wizard command class
-public class DevcontainerWizardCommand
-{
-    public virtual async Task<int> ExecuteAsync(CommandContext context, DevcontainerWizardSettings settings)
-    {
-        await Task.CompletedTask;
-        return 0;
-    }
-}

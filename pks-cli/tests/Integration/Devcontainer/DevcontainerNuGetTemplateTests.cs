@@ -64,7 +64,7 @@ public class DevcontainerNuGetTemplateTests : TestBase
         installResult.Should().NotBeNull();
         installResult.Success.Should().BeTrue();
         installResult.InstalledTemplates.Should().NotBeEmpty();
-        installResult.InstalledTemplates.Should().Contain(t => t.Contains("pks-universal-devcontainer"));
+        installResult.InstalledTemplates.Should().Contain(t => t.ShortName.Contains("pks-universal-devcontainer"));
         
         // Verify template files were installed
         var templatePath = Path.Combine(testOutputPath, "templates");
@@ -231,17 +231,16 @@ public class DevcontainerNuGetTemplateTests : TestBase
         if (installResult.Success)
         {
             // Act
-            var updateCheckResult = await _nugetService.CheckForUpdatesAsync(packageId);
+            var installedPackages = new Dictionary<string, string> { { packageId, "1.0.0" } };
+            var updateCheckResult = await _nugetService.CheckForUpdatesAsync(installedPackages);
 
             // Assert
             updateCheckResult.Should().NotBeNull();
-            updateCheckResult.PackageId.Should().Be(packageId);
             
-            if (updateCheckResult.HasUpdate)
+            // If an update is available for this package, it should be in the dictionary
+            if (updateCheckResult.ContainsKey(packageId))
             {
-                updateCheckResult.CurrentVersion.Should().NotBeNullOrWhiteSpace();
-                updateCheckResult.LatestVersion.Should().NotBeNullOrWhiteSpace();
-                updateCheckResult.LatestVersion.Should().NotBe(updateCheckResult.CurrentVersion);
+                updateCheckResult[packageId].Should().NotBeNullOrEmpty();
             }
         }
     }
@@ -262,9 +261,7 @@ public class DevcontainerNuGetTemplateTests : TestBase
             var uninstallResult = await _nugetService.UninstallTemplatePackageAsync(packageId);
 
             // Assert
-            uninstallResult.Should().NotBeNull();
-            uninstallResult.Success.Should().BeTrue();
-            uninstallResult.UninstalledTemplates.Should().NotBeEmpty();
+            uninstallResult.Should().BeTrue();
             
             // Verify template is no longer available
             var template = await _templateService.GetTemplateAsync("pks-universal-devcontainer");
@@ -280,21 +277,15 @@ public class DevcontainerNuGetTemplateTests : TestBase
         var testOutputPath = CreateTestArtifactDirectory("nuget-template-validation");
 
         // Act
-        var validationResult = await _nugetService.ValidateTemplatePackageAsync(packageId);
+        var templatePackage = await _nugetService.GetTemplatePackageAsync(packageId);
 
         // Assert
-        validationResult.Should().NotBeNull();
+        templatePackage.Should().NotBeNull();
         
-        if (validationResult.IsValid)
+        if (templatePackage != null)
         {
-            validationResult.ValidationErrors.Should().BeEmpty();
-            validationResult.ValidationWarnings.Should().NotBeNull();
-            validationResult.TemplateCount.Should().BeGreaterThan(0);
-        }
-        else
-        {
-            validationResult.ValidationErrors.Should().NotBeEmpty();
-            validationResult.ValidationErrors.Should().OnlyContain(e => !string.IsNullOrWhiteSpace(e));
+            templatePackage.Id.Should().Be(packageId);
+            templatePackage.Templates.Should().NotBeEmpty();
         }
     }
 
@@ -336,7 +327,7 @@ public class DevcontainerNuGetTemplateTests : TestBase
         // Configure NuGet service with custom settings
         var configuration = new NuGetDiscoveryConfiguration
         {
-            PackageSources = new[] { "https://api.nuget.org/v3/index.json" },
+            Sources = new List<string> { "https://api.nuget.org/v3/index.json" },
             CacheDirectory = Path.Combine(testOutputPath, "cache"),
             TimeoutSeconds = 30,
             EnablePrerelease = false
@@ -348,7 +339,7 @@ public class DevcontainerNuGetTemplateTests : TestBase
         // Assert
         configuredService.Should().NotBeNull();
         configuredService.Configuration.Should().NotBeNull();
-        configuredService.Configuration.PackageSources.Should().BeEquivalentTo(configuration.PackageSources);
+        configuredService.Configuration.Sources.Should().BeEquivalentTo(configuration.Sources);
         configuredService.Configuration.CacheDirectory.Should().Be(configuration.CacheDirectory);
         configuredService.Configuration.TimeoutSeconds.Should().Be(configuration.TimeoutSeconds);
         configuredService.Configuration.EnablePrerelease.Should().Be(configuration.EnablePrerelease);

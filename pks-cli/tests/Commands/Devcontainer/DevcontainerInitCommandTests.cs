@@ -4,6 +4,9 @@ using Moq;
 using PKS.CLI.Tests.Infrastructure;
 using PKS.CLI.Tests.Infrastructure.Fixtures.Devcontainer;
 using PKS.CLI.Tests.Infrastructure.Mocks;
+using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Models;
+using PKS.Commands.Devcontainer;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using Spectre.Console.Testing;
@@ -47,14 +50,14 @@ public class DevcontainerInitCommandTests : TestBase
 
         // Assert
         settings.Should().NotBeNull();
-        settings.GetType().Should().HaveProperty("Name");
-        settings.GetType().Should().HaveProperty("Template");
-        settings.GetType().Should().HaveProperty("Features");
-        settings.GetType().Should().HaveProperty("Extensions");
-        settings.GetType().Should().HaveProperty("OutputPath");
-        settings.GetType().Should().HaveProperty("UseDockerCompose");
-        settings.GetType().Should().HaveProperty("Interactive");
-        settings.GetType().Should().HaveProperty("Force");
+        settings.GetType().Should().HaveProperty<string>("Name");
+        settings.GetType().Should().HaveProperty<string>("Template");
+        settings.GetType().Should().HaveProperty<string[]>("Features");
+        settings.GetType().Should().HaveProperty<string[]>("Extensions");
+        settings.GetType().Should().HaveProperty<string>("OutputPath");
+        settings.GetType().Should().HaveProperty<bool>("UseDockerCompose");
+        settings.GetType().Should().HaveProperty<bool>("Interactive");
+        settings.GetType().Should().HaveProperty<bool>("Force");
     }
 
     [Fact]
@@ -83,8 +86,8 @@ public class DevcontainerInitCommandTests : TestBase
         {
             Name = name,
             Template = template,
-            Features = features.ToList(),
-            Extensions = extensions.ToList(),
+            Features = features,
+            Extensions = extensions,
             OutputPath = CreateTempDirectory()
         };
 
@@ -161,7 +164,7 @@ public class DevcontainerInitCommandTests : TestBase
         var settings = new DevcontainerInitSettings
         {
             Name = "test-project",
-            Features = new List<string> { "nonexistent-feature" },
+            Features = new string[] { "nonexistent-feature" },
             OutputPath = CreateTempDirectory()
         };
 
@@ -330,23 +333,18 @@ public class DevcontainerInitCommandTests : TestBase
         AssertConsoleOutput("Devcontainer configuration created successfully");
     }
 
-    private DevcontainerInitCommand CreateMockCommand()
+    private PKS.Commands.Devcontainer.DevcontainerInitCommand CreateMockCommand()
     {
-        // This would return a mock or actual command instance
-        // For now, return a mock that simulates the command behavior
-        var mockCommand = new Mock<DevcontainerInitCommand>();
-        
-        mockCommand.Setup(x => x.ExecuteAsync(It.IsAny<CommandContext>(), It.IsAny<DevcontainerInitSettings>()))
-            .ReturnsAsync((CommandContext context, DevcontainerInitSettings settings) =>
-            {
-                // Simulate command execution logic
-                return SimulateCommandExecution(settings);
-            });
+        // Create actual command instance with mocked dependencies
+        var command = new PKS.Commands.Devcontainer.DevcontainerInitCommand(
+            _mockDevcontainerService.Object,
+            _mockFeatureRegistry.Object,
+            _mockTemplateService.Object);
 
-        return mockCommand.Object;
+        return command;
     }
 
-    private async Task<int> ExecuteCommandAsync(DevcontainerInitCommand command, DevcontainerInitSettings settings)
+    private async Task<int> ExecuteCommandAsync(PKS.Commands.Devcontainer.DevcontainerInitCommand command, DevcontainerInitSettings settings)
     {
         var context = new CommandContext(Mock.Of<IRemainingArguments>(), "devcontainer", null);
         return await command.ExecuteAsync(context, settings);
@@ -411,8 +409,8 @@ public class DevcontainerInitCommandTests : TestBase
         {
             Name = settings.Name,
             Template = settings.Template,
-            Features = settings.Features,
-            Extensions = settings.Extensions,
+            Features = settings.Features?.ToList() ?? new List<string>(),
+            Extensions = settings.Extensions?.ToList() ?? new List<string>(),
             OutputPath = settings.OutputPath,
             UseDockerCompose = settings.UseDockerCompose
         };
@@ -424,27 +422,5 @@ public class DevcontainerInitCommandTests : TestBase
     }
 }
 
-// Mock command settings class (this will match the actual implementation)
-public class DevcontainerInitSettings
-{
-    public string Name { get; set; } = string.Empty;
-    public string? Template { get; set; }
-    public List<string> Features { get; set; } = new();
-    public List<string> Extensions { get; set; } = new();
-    public string OutputPath { get; set; } = ".";
-    public bool UseDockerCompose { get; set; }
-    public bool Interactive { get; set; }
-    public bool Force { get; set; }
-}
 
-// Mock command class (this will be replaced with actual implementation)
-public class DevcontainerInitCommand
-{
-    public virtual async Task<int> ExecuteAsync(CommandContext context, DevcontainerInitSettings settings)
-    {
-        // This will be implemented in the actual command
-        await Task.CompletedTask;
-        return 0;
-    }
-}
 

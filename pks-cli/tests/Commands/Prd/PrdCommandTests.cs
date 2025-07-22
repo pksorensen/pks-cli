@@ -77,8 +77,16 @@ public class PrdCommandTests
         };
 
         _mockPrdService
-            .Setup(s => s.GeneratePrdAsync(It.IsAny<PrdGenerationRequest>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(expectedDocument);
+            .Setup(s => s.GeneratePrdAsync(It.IsAny<PrdGenerationRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PrdGenerationResult
+            {
+                Success = true,
+                OutputFile = "test-prd.md",
+                Sections = new List<string> { "Overview", "Requirements" },
+                WordCount = 1500,
+                EstimatedReadTime = "7 minutes",
+                Message = "PRD generated successfully"
+            });
 
         var command = new PrdGenerateCommand(_mockPrdService.Object);
 
@@ -91,7 +99,6 @@ public class PrdCommandTests
             It.Is<PrdGenerationRequest>(r => 
                 r.IdeaDescription == "Build a task management app" &&
                 r.ProjectName == "TaskMaster"),
-            "test-prd.md",
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -114,7 +121,6 @@ public class PrdCommandTests
         Assert.Equal(1, result);
         _mockPrdService.Verify(s => s.GeneratePrdAsync(
             It.IsAny<PrdGenerationRequest>(), 
-            It.IsAny<string>(), 
             It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -140,28 +146,31 @@ public class PrdCommandTests
             Sections = new List<PrdSection>()
         };
 
-        var parseResult = new PrdParsingResult
+        var loadResult = new PrdLoadResult
         {
             Success = true,
-            Document = document,
-            Warnings = new List<string>()
+            ProductName = "Loaded Project",
+            Template = "standard",
+            Sections = new List<string> { "Overview", "Requirements" },
+            Message = "PRD loaded successfully"
         };
 
         var validationResult = new PrdValidationResult
         {
+            Success = true,
             IsValid = true,
             CompletenessScore = 85.0,
-            Errors = new List<string>(),
-            Warnings = new List<string>(),
-            Suggestions = new List<string>()
+            Errors = new List<object>(),
+            Warnings = new List<object>(),
+            Suggestions = new List<PrdSuggestion>()
         };
 
         _mockPrdService
             .Setup(s => s.LoadPrdAsync("existing-prd.md", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parseResult);
+            .ReturnsAsync(loadResult);
 
         _mockPrdService
-            .Setup(s => s.ValidatePrdAsync(document))
+            .Setup(s => s.ValidatePrdAsync(It.IsAny<PrdValidationOptions>()))
             .ReturnsAsync(validationResult);
 
         var command = new PrdLoadCommand(_mockPrdService.Object);
@@ -172,7 +181,7 @@ public class PrdCommandTests
         // Assert
         Assert.Equal(0, result);
         _mockPrdService.Verify(s => s.LoadPrdAsync("existing-prd.md", It.IsAny<CancellationToken>()), Times.Once);
-        _mockPrdService.Verify(s => s.ValidatePrdAsync(document), Times.Once);
+        _mockPrdService.Verify(s => s.ValidatePrdAsync(It.IsAny<PrdValidationOptions>()), Times.Once);
     }
 
     [Fact]
@@ -184,15 +193,15 @@ public class PrdCommandTests
             FilePath = "non-existent.md"
         };
 
-        var parseResult = new PrdParsingResult
+        var loadResult = new PrdLoadResult
         {
             Success = false,
-            ErrorMessage = "File not found"
+            Message = "File not found"
         };
 
         _mockPrdService
             .Setup(s => s.LoadPrdAsync("non-existent.md", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parseResult);
+            .ReturnsAsync(loadResult);
 
         var command = new PrdLoadCommand(_mockPrdService.Object);
 
@@ -216,10 +225,12 @@ public class PrdCommandTests
         };
 
         var document = CreateTestDocument();
-        var parseResult = new PrdParsingResult
+        var loadResult = new PrdLoadResult
         {
             Success = true,
-            Document = document
+            ProductName = "Test Project",
+            Template = "standard",
+            Sections = new List<string> { "Overview" }
         };
 
         var filteredRequirements = new List<PrdRequirement>
@@ -235,7 +246,7 @@ public class PrdCommandTests
 
         _mockPrdService
             .Setup(s => s.LoadPrdAsync("test-prd.md", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parseResult);
+            .ReturnsAsync(loadResult);
 
         _mockPrdService
             .Setup(s => s.GetRequirementsAsync(document, RequirementStatus.Draft, RequirementPriority.High))
@@ -298,28 +309,33 @@ public class PrdCommandTests
             Strict = true
         };
 
-        var document = CreateTestDocument();
-        var parseResult = new PrdParsingResult
+        var loadResult = new PrdLoadResult
         {
             Success = true,
-            Document = document
+            ProductName = "Test Project",
+            Template = "standard",
+            Sections = new List<string> { "Overview" }
         };
 
         var validationResult = new PrdValidationResult
         {
+            Success = true,
             IsValid = true,
             CompletenessScore = 92.5,
-            Errors = new List<string>(),
-            Warnings = new List<string> { "Consider adding more user stories" },
-            Suggestions = new List<string> { "Add performance requirements" }
+            Errors = new List<object>(),
+            Warnings = new List<object> { "Consider adding more user stories" },
+            Suggestions = new List<PrdSuggestion>
+            {
+                new() { Type = "Performance", Description = "Add performance requirements" }
+            }
         };
 
         _mockPrdService
             .Setup(s => s.LoadPrdAsync("test-prd.md", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(parseResult);
+            .ReturnsAsync(loadResult);
 
         _mockPrdService
-            .Setup(s => s.ValidatePrdAsync(document))
+            .Setup(s => s.ValidatePrdAsync(It.IsAny<PrdValidationOptions>()))
             .ReturnsAsync(validationResult);
 
         var command = new PrdValidateCommand(_mockPrdService.Object);
@@ -330,7 +346,7 @@ public class PrdCommandTests
         // Assert
         Assert.Equal(0, result);
         _mockPrdService.Verify(s => s.LoadPrdAsync("test-prd.md", It.IsAny<CancellationToken>()), Times.Once);
-        _mockPrdService.Verify(s => s.ValidatePrdAsync(document), Times.Once);
+        _mockPrdService.Verify(s => s.ValidatePrdAsync(It.IsAny<PrdValidationOptions>()), Times.Once);
     }
 
     [Fact]

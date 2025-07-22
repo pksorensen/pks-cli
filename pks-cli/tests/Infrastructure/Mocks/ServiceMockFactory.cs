@@ -1,7 +1,10 @@
 using Moq;
 using Microsoft.Extensions.Logging;
 using PKS.CLI.Infrastructure.Services;
-using PKS.CLI.Infrastructure.Services.Models;
+using PKS.CLI.Infrastructure.Services.MCP;
+using PKS.Infrastructure.Services;
+using AgentModels = PKS.CLI.Infrastructure.Services.Models;
+using ProjectModels = PKS.CLI.Infrastructure.Services.Models;
 
 namespace PKS.CLI.Tests.Infrastructure.Mocks;
 
@@ -71,7 +74,7 @@ public static class ServiceMockFactory
             { 
                 Success = true, 
                 Message = "Project initialized successfully",
-                CreatedFiles = new List<string> { "Program.cs", "README.md" }
+                AffectedFiles = new List<string> { "Program.cs", "README.md" }
             });
             
         return mock;
@@ -110,20 +113,60 @@ public static class ServiceMockFactory
     }
 
     /// <summary>
-    /// Creates a mock IMcpServerService (to be implemented)
+    /// Creates a mock IMcpHostingService
     /// </summary>
-    public static Mock<IMcpServerService> CreateMcpServerService()
+    public static Mock<IMcpHostingService> CreateMcpHostingService()
     {
-        var mock = new Mock<IMcpServerService>();
+        var mock = new Mock<IMcpHostingService>();
         
-        mock.Setup(x => x.StartServerAsync(It.IsAny<McpServerConfig>()))
+        mock.Setup(x => x.StartServerAsync(It.IsAny<McpServerConfig>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new McpServerResult { Success = true, Port = 8080 });
             
-        mock.Setup(x => x.StopServerAsync())
+        mock.Setup(x => x.StopServerAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
             
         mock.Setup(x => x.GetServerStatusAsync())
-            .ReturnsAsync(new McpServerStatus { IsRunning = false, Port = null });
+            .ReturnsAsync(new McpServerStatusInfo { Status = McpServerStatus.Stopped, Port = 0 });
+            
+        return mock;
+    }
+
+    /// <summary>
+    /// Creates a mock McpToolService
+    /// </summary>
+    public static Mock<McpToolService> CreateMcpToolService()
+    {
+        var mock = new Mock<McpToolService>(Mock.Of<ILogger<McpToolService>>());
+        
+        mock.Setup(x => x.GetAvailableTools())
+            .Returns(new List<McpServerTool>
+            {
+                new() { Name = "test_tool", Description = "Test tool", Category = "test", Enabled = true }
+            });
+            
+        mock.Setup(x => x.ExecuteToolAsync(It.IsAny<string>(), It.IsAny<object>()))
+            .ReturnsAsync(McpToolExecutionResult.CreateSuccess("Tool executed successfully", null, 100));
+            
+        return mock;
+    }
+
+    /// <summary>
+    /// Creates a mock McpResourceService  
+    /// </summary>
+    public static Mock<McpResourceService> CreateMcpResourceService()
+    {
+        var mock = new Mock<McpResourceService>(Mock.Of<ILogger<McpResourceService>>());
+        
+        mock.Setup(x => x.GetAvailableResources())
+            .Returns(new List<McpServerResource>
+            {
+                new() { 
+                    Name = "test_resource", 
+                    Uri = "pks://test/resource", 
+                    MimeType = "application/json", 
+                    Metadata = new Dictionary<string, object> { ["category"] = "test" } 
+                }
+            });
             
         return mock;
     }
@@ -135,26 +178,26 @@ public static class ServiceMockFactory
     {
         var mock = new Mock<IAgentFrameworkService>();
         
-        mock.Setup(x => x.CreateAgentAsync(It.IsAny<AgentConfiguration>()))
-            .ReturnsAsync(new AgentResult { Success = true, AgentId = "test-agent-123" });
+        mock.Setup(x => x.CreateAgentAsync(It.IsAny<AgentModels.AgentConfiguration>()))
+            .ReturnsAsync(new AgentModels.AgentResult { Success = true, AgentId = "test-agent-123" });
             
         mock.Setup(x => x.ListAgentsAsync())
-            .ReturnsAsync(new List<AgentInfo>());
+            .ReturnsAsync(new List<AgentModels.AgentInfo>());
             
         mock.Setup(x => x.GetAgentStatusAsync(It.IsAny<string>()))
-            .ReturnsAsync(new AgentStatus { Id = "test-agent", Status = "Active" });
+            .ReturnsAsync(new AgentModels.AgentStatus { Id = "test-agent", Status = "Active" });
             
         mock.Setup(x => x.StartAgentAsync(It.IsAny<string>()))
-            .ReturnsAsync(new AgentResult { Success = true, Message = "Agent started" });
+            .ReturnsAsync(new AgentModels.AgentResult { Success = true, Message = "Agent started" });
             
         mock.Setup(x => x.StopAgentAsync(It.IsAny<string>()))
-            .ReturnsAsync(new AgentResult { Success = true, Message = "Agent stopped" });
+            .ReturnsAsync(new AgentModels.AgentResult { Success = true, Message = "Agent stopped" });
             
         mock.Setup(x => x.RemoveAgentAsync(It.IsAny<string>()))
             .ReturnsAsync(true);
             
         mock.Setup(x => x.LoadConfigurationAsync(It.IsAny<string>()))
-            .ReturnsAsync(new AgentConfiguration { Name = "test-agent", Type = "automation" });
+            .ReturnsAsync(new AgentModels.AgentConfiguration { Name = "test-agent", Type = "automation" });
             
         return mock;
     }
@@ -207,9 +250,4 @@ public interface IHooksService
     Task<HookResult> ExecuteHookAsync(string hookName, HookContext context);
 }
 
-public interface IMcpServerService
-{
-    Task<McpServerResult> StartServerAsync(McpServerConfig config);
-    Task<bool> StopServerAsync();
-    Task<McpServerStatus> GetServerStatusAsync();
-}
+// IMcpHostingService is now provided by the SDK

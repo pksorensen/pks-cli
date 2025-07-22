@@ -7,6 +7,9 @@ using PKS.CLI.Tests.Infrastructure.Mocks;
 using System.Text.Json;
 using Xunit;
 
+using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Models;
+
 namespace PKS.CLI.Tests.Integration.Devcontainer;
 
 /// <summary>
@@ -250,7 +253,7 @@ public class DevcontainerIntegrationTests : TestBase
 
         // Setup validation failure
         _mockDevcontainerService.Setup(x => x.ValidateConfigurationAsync(It.IsAny<DevcontainerConfiguration>()))
-            .ReturnsAsync(new DevcontainerValidationResult
+            .ReturnsAsync(new PKS.Infrastructure.Services.Models.DevcontainerValidationResult
             {
                 IsValid = false,
                 Errors = new List<string> { "Name is required", "Invalid image format" },
