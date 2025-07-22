@@ -402,3 +402,8 @@ claude-flow.bat
 claude-flow.ps1
 hive-mind-prompt-*.txt
 .devcontainer/.env
+
+# Documentation build output
+docs/_site/
+docs/obj/
+docs/log/

@@ -1,0 +1,9 @@
+# Advanced
+- name: Configuration
+  href: configuration.md
+- name: Custom Initializers
+  href: custom-initializers.md
+- name: MCP Integration
+  href: mcp-integration.md
+- name: Template Development
+  href: template-development.md

@@ -1,0 +1,60 @@
+- name: Getting Started
+  href: articles/getting-started.md
+- name: Installation
+  href: articles/installation.md
+- name: Command Reference
+  href: articles/commands/
+  items:
+    - name: Overview
+      href: articles/commands/overview.md
+    - name: pks init
+      href: articles/commands/init.md
+    - name: pks agent
+      href: articles/commands/agent.md
+    - name: pks deploy
+      href: articles/commands/deploy.md
+    - name: pks status
+      href: articles/commands/status.md
+    - name: pks ascii
+      href: articles/commands/ascii.md
+    - name: pks mcp
+      href: articles/commands/mcp.md
+- name: Tutorials
+  href: articles/tutorials/
+  items:
+    - name: Your First Project
+      href: articles/tutorials/first-project.md
+    - name: Working with Agents
+      href: articles/tutorials/working-with-agents.md
+    - name: Setting up MCP
+      href: articles/tutorials/mcp-setup.md
+    - name: Deployment Workflows
+      href: articles/tutorials/deployment-workflows.md
+- name: Architecture
+  href: articles/architecture/
+  items:
+    - name: Overview
+      href: articles/architecture/overview.md
+    - name: Command System
+      href: articles/architecture/command-system.md
+    - name: Initializer System
+      href: articles/architecture/initializer-system.md
+    - name: Agent Framework
+      href: articles/architecture/agent-framework.md
+- name: Advanced
+  href: articles/advanced/
+  items:
+    - name: Configuration
+      href: articles/advanced/configuration.md
+    - name: Custom Initializers
+      href: articles/advanced/custom-initializers.md
+    - name: MCP Integration
+      href: articles/advanced/mcp-integration.md
+    - name: Template Development
+      href: articles/advanced/template-development.md
+- name: Contributing
+  href: articles/contributing.md
+- name: Troubleshooting
+  href: articles/troubleshooting.md
+- name: API Reference
+  href: api/

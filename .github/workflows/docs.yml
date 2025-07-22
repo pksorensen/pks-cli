@@ -1,0 +1,80 @@
+name: Build and Deploy Documentation
+
+on:
+  push:
+    branches: [ main ]
+    paths: 
+      - 'docs/**'
+      - 'pks-cli/src/**/*.cs'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    branches: [ main ]
+    paths: 
+      - 'docs/**'
+      - 'pks-cli/src/**/*.cs'
+
+jobs:
+  build-docs:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 8.0.x
+        
+    - name: Install DocFX
+      run: dotnet tool install -g docfx
+      
+    - name: Build Project (for API docs)
+      run: |
+        cd pks-cli/src
+        dotnet restore
+        dotnet build --configuration Release
+        
+    - name: Build Documentation
+      run: |
+        cd docs
+        docfx docfx.json --serve-warnings
+        
+    - name: Upload Documentation Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: documentation
+        path: docs/_site/
+        
+  deploy-docs:
+    needs: build-docs
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    permissions:
+      pages: write
+      id-token: write
+      contents: read
+      
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+      
+    steps:
+    - name: Download Documentation
+      uses: actions/download-artifact@v4
+      with:
+        name: documentation
+        path: _site
+        
+    - name: Setup Pages
+      uses: actions/configure-pages@v4
+      
+    - name: Upload to GitHub Pages
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: _site
+        
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4
