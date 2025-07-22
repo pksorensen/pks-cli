@@ -26,6 +26,11 @@ public class InitializationResult
     public List<string> AffectedFiles { get; init; } = new();
 
     /// <summary>
+    /// List of files that were created (alias for AffectedFiles for backward compatibility)
+    /// </summary>
+    public List<string> CreatedFiles => AffectedFiles;
+
+    /// <summary>
     /// Any warnings that occurred during initialization
     /// </summary>
     public List<string> Warnings { get; init; } = new();
