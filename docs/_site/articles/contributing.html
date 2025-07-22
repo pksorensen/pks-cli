@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<!--[if IE]><![endif]-->
+<html>
+
+  <head>
+    <meta charset="utf-8">
+      <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+      <title>Contributing to PKS CLI | PKS CLI - Professional Kubernetes Simplifier </title>
+      <meta name="viewport" content="width=device-width">
+      <meta name="title" content="Contributing to PKS CLI | PKS CLI - Professional Kubernetes Simplifier ">
+    
+    
+      <link rel="shortcut icon" href="../favicon.ico">
+      <link rel="stylesheet" href="../styles/docfx.vendor.min.css">
+      <link rel="stylesheet" href="../styles/docfx.css">
+      <link rel="stylesheet" href="../styles/main.css">
+      <meta property="docfx:navrel" content="../toc.html">
+      <meta property="docfx:tocrel" content="../toc.html">
+    
+    <meta property="docfx:rel" content="../">
+    <meta property="docfx:newtab" content="true">
+  </head>
+  <body data-spy="scroll" data-target="#affix" data-offset="120">
+    <div id="wrapper">
+      <header>
+
+        <nav id="autocollapse" class="navbar navbar-inverse ng-scope" role="navigation">
+          <div class="container">
+            <div class="navbar-header">
+              <button type="button" class="navbar-toggle" data-toggle="collapse" data-target="#navbar">
+                <span class="sr-only">Toggle navigation</span>
+                <span class="icon-bar"></span>
+                <span class="icon-bar"></span>
+                <span class="icon-bar"></span>
+              </button>
+
+              <a class="navbar-brand" href="../index.html">
+                <img id="logo" class="svg" src="../logo.svg" alt="PKS CLI">
+              </a>
+            </div>
+            <div class="collapse navbar-collapse" id="navbar">
+              <form class="navbar-form navbar-right" role="search" id="search">
+                <div class="form-group">
+                  <input type="text" class="form-control" id="search-query" placeholder="Search" autocomplete="off">
+                </div>
+              </form>
+            </div>
+          </div>
+        </nav>
+
+        <div class="subnav navbar navbar-default">
+          <div class="container hide-when-search" id="breadcrumb">
+            <ul class="breadcrumb">
+              <li></li>
+            </ul>
+          </div>
+        </div>
+      </header>
+      <div class="container body-content">
+
+        <div id="search-results">
+          <div class="search-list">Search Results for <span></span></div>
+          <div class="sr-items">
+            <p><i class="glyphicon glyphicon-refresh index-loading"></i></p>
+          </div>
+          <ul id="pagination" data-first=First data-prev=Previous data-next=Next data-last=Last></ul>
+        </div>
+      </div>
+      <div role="main" class="container body-content hide-when-search">
+        <div class="article row grid">
+          <div class="col-md-10">
+            <article class="content wrap" id="_content" data-uid="">
+<h1 id="contributing-to-pks-cli">Contributing to PKS CLI</h1>
+
+<p>Thank you for your interest in contributing to PKS CLI! This guide will help you get started with contributing to the project.</p>
+<h2 id="getting-started">Getting Started</h2>
+<h3 id="development-setup">Development Setup</h3>
+<ol>
+<li><p><strong>Fork the Repository</strong></p>
+<pre><code class="lang-bash"># Fork on GitHub: https://github.com/pksorensen/pks-cli/fork
+git clone https://github.com/YOUR_USERNAME/pks-cli.git
+cd pks-cli
+</code></pre>
+</li>
+<li><p><strong>Install Prerequisites</strong></p>
+<ul>
+<li>.NET 8.0 SDK</li>
+<li>Git</li>
+<li>Your favorite code editor</li>
+</ul>
+</li>
+<li><p><strong>Build the Project</strong></p>
+<pre><code class="lang-bash">cd pks-cli/src
+dotnet restore
+dotnet build
+</code></pre>
+</li>
+<li><p><strong>Run Tests</strong></p>
+<pre><code class="lang-bash">dotnet test
+</code></pre>
+</li>
+</ol>
+<h3 id="development-workflow">Development Workflow</h3>
+<ol>
+<li><p><strong>Create a Feature Branch</strong></p>
+<pre><code class="lang-bash">git checkout -b feature/your-feature-name
+</code></pre>
+</li>
+<li><p><strong>Make Your Changes</strong></p>
+<ul>
+<li>Follow the coding standards</li>
+<li>Add tests for new functionality</li>
+<li>Update documentation as needed</li>
+</ul>
+</li>
+<li><p><strong>Test Your Changes</strong></p>
+<pre><code class="lang-bash"># Build and test
+dotnet build
+dotnet test
+
+# Test the CLI locally
+dotnet run -- --help
+</code></pre>
+</li>
+<li><p><strong>Submit a Pull Request</strong></p>
+<ul>
+<li>Push your branch to your fork</li>
+<li>Create a PR with a clear description</li>
+<li>Link to any related issues</li>
+</ul>
+</li>
+</ol>
+<h2 id="code-standards">Code Standards</h2>
+<h3 id="coding-style">Coding Style</h3>
+<ul>
+<li>Follow standard .NET conventions</li>
+<li>Use meaningful variable and method names</li>
+<li>Add XML documentation for public APIs</li>
+<li>Keep methods focused and concise</li>
+</ul>
+<h3 id="spectreconsole-usage">Spectre.Console Usage</h3>
+<ul>
+<li>Use Spectre.Console for all terminal output</li>
+<li>Maintain consistent color schemes (cyan for primary)</li>
+<li>Include progress indicators for long operations</li>
+<li>Use tables with rounded borders for data display</li>
+</ul>
+<h3 id="command-pattern">Command Pattern</h3>
+<ul>
+<li>Inherit from <code>Command&lt;T&gt;</code> for new commands</li>
+<li>Create settings classes with proper attributes</li>
+<li>Implement interactive prompts for missing parameters</li>
+<li>Include comprehensive help text</li>
+</ul>
+<h2 id="project-structure">Project Structure</h2>
+<pre><code>pks-cli/
+├── src/
+│   ├── Commands/          # Command implementations
+│   ├── Infrastructure/    # Services and DI setup
+│   ├── Templates/         # Template files
+│   └── Program.cs         # Entry point
+├── tests/                 # Test projects
+├── docs/                  # Documentation
+└── README.md             # Project overview
+</code></pre>
+<h2 id="adding-new-features">Adding New Features</h2>
+<h3 id="creating-a-new-command">Creating a New Command</h3>
+<ol>
+<li><p><strong>Create the Command Class</strong></p>
+<pre><code class="lang-csharp">public class MyCommand : Command&lt;MyCommand.Settings&gt;
+{
+    public class Settings : CommandSettings
+    {
+        [CommandArgument(0, &quot;&lt;NAME&gt;&quot;)]
+        public string? Name { get; init; }
+
+        [CommandOption(&quot;--option&quot;)]
+        public string? Option { get; init; }
+    }
+
+    public override int Execute(CommandContext context, Settings settings)
+    {
+        // Implementation
+        return 0;
+    }
+}
+</code></pre>
+</li>
+<li><p><strong>Register the Command</strong></p>
+<pre><code class="lang-csharp">// In Program.cs
+app.Configure(config =&gt;
+{
+    config.AddCommand&lt;MyCommand&gt;(&quot;my-command&quot;);
+});
+</code></pre>
+</li>
+</ol>
+<h3 id="creating-an-initializer">Creating an Initializer</h3>
+<ol>
+<li><p><strong>Create the Initializer Class</strong></p>
+<pre><code class="lang-csharp">public class MyInitializer : CodeInitializer
+{
+    public override string Id =&gt; &quot;my-initializer&quot;;
+    public override string Name =&gt; &quot;My Initializer&quot;;
+    public override int Order =&gt; 50;
+
+    protected override async Task ExecuteCodeLogicAsync(
+        InitializationContext context, 
+        InitializationResult result)
+    {
+        // Implementation
+    }
+}
+</code></pre>
+</li>
+<li><p><strong>Register the Initializer</strong>
+Initializers are auto-discovered via reflection.</p>
+</li>
+</ol>
+<h2 id="testing">Testing</h2>
+<h3 id="unit-tests">Unit Tests</h3>
+<ul>
+<li>Write unit tests for all public methods</li>
+<li>Use xUnit testing framework</li>
+<li>Mock external dependencies</li>
+<li>Test both success and failure scenarios</li>
+</ul>
+<h3 id="integration-tests">Integration Tests</h3>
+<ul>
+<li>Test command execution end-to-end</li>
+<li>Verify file generation and structure</li>
+<li>Test error scenarios and recovery</li>
+</ul>
+<h3 id="example-test">Example Test</h3>
+<pre><code class="lang-csharp">[Fact]
+public void Should_Create_Project_With_Correct_Structure()
+{
+    // Arrange
+    var tempDir = CreateTempDirectory();
+    var settings = new InitCommand.Settings
+    {
+        ProjectName = &quot;test-project&quot;,
+        Template = &quot;console&quot;
+    };
+    
+    // Act
+    var result = ExecuteCommand(settings);
+    
+    // Assert
+    Assert.Equal(0, result);
+    Assert.True(File.Exists(Path.Join(tempDir, &quot;test-project.csproj&quot;)));
+}
+</code></pre>
+<h2 id="documentation">Documentation</h2>
+<h3 id="api-documentation">API Documentation</h3>
+<ul>
+<li>Use XML documentation comments</li>
+<li>Include parameter descriptions</li>
+<li>Provide usage examples</li>
+<li>Document exceptions</li>
+</ul>
+<h3 id="user-documentation">User Documentation</h3>
+<ul>
+<li>Update relevant documentation pages</li>
+<li>Add examples for new features</li>
+<li>Include troubleshooting information</li>
+<li>Keep language clear and accessible</li>
+</ul>
+<h2 id="pull-request-process">Pull Request Process</h2>
+<h3 id="before-submitting">Before Submitting</h3>
+<ol>
+<li><p><strong>Ensure all tests pass</strong></p>
+<pre><code class="lang-bash">dotnet test
+</code></pre>
+</li>
+<li><p><strong>Run code formatting</strong></p>
+<pre><code class="lang-bash">dotnet format
+</code></pre>
+</li>
+<li><p><strong>Update documentation</strong></p>
+<ul>
+<li>Add/update XML comments</li>
+<li>Update user documentation</li>
+<li>Include examples</li>
+</ul>
+</li>
+<li><p><strong>Test manually</strong></p>
+<pre><code class="lang-bash"># Install and test locally
+dotnet pack
+dotnet tool install -g --add-source ./bin/Debug pks-cli --force
+pks --help
+</code></pre>
+</li>
+</ol>
+<h3 id="pr-description">PR Description</h3>
+<p>Include in your PR description:</p>
+<ul>
+<li><strong>What</strong>: Brief description of changes</li>
+<li><strong>Why</strong>: Reason for the change</li>
+<li><strong>How</strong>: Implementation approach</li>
+<li><strong>Testing</strong>: How you tested the changes</li>
+<li><strong>Breaking Changes</strong>: Any breaking changes (if applicable)</li>
+</ul>
+<h3 id="review-process">Review Process</h3>
+<ol>
+<li><strong>Automated Checks</strong>: All CI checks must pass</li>
+<li><strong>Code Review</strong>: Core maintainers will review</li>
+<li><strong>Testing</strong>: Manual testing by reviewers</li>
+<li><strong>Approval</strong>: At least one approval required</li>
+<li><strong>Merge</strong>: Squash and merge to main branch</li>
+</ol>
+<h2 id="issue-reporting">Issue Reporting</h2>
+<h3 id="bug-reports">Bug Reports</h3>
+<p>When reporting bugs, include:</p>
+<ul>
+<li><strong>Environment</strong>: OS, .NET version, PKS CLI version</li>
+<li><strong>Steps to Reproduce</strong>: Clear, numbered steps</li>
+<li><strong>Expected Behavior</strong>: What should happen</li>
+<li><strong>Actual Behavior</strong>: What actually happens</li>
+<li><strong>Additional Context</strong>: Screenshots, logs, etc.</li>
+</ul>
+<h3 id="feature-requests">Feature Requests</h3>
+<p>For new features, provide:</p>
+<ul>
+<li><strong>Problem Statement</strong>: What problem does this solve?</li>
+<li><strong>Proposed Solution</strong>: How should it work?</li>
+<li><strong>Alternatives</strong>: Other approaches considered</li>
+<li><strong>Examples</strong>: Usage examples and scenarios</li>
+</ul>
+<h2 id="community-guidelines">Community Guidelines</h2>
+<h3 id="code-of-conduct">Code of Conduct</h3>
+<ul>
+<li>Be respectful and inclusive</li>
+<li>Focus on constructive feedback</li>
+<li>Help others learn and grow</li>
+<li>Assume positive intent</li>
+</ul>
+<h3 id="communication">Communication</h3>
+<ul>
+<li><strong>GitHub Issues</strong>: Bug reports and feature requests</li>
+<li><strong>GitHub Discussions</strong>: Questions and general discussion</li>
+<li><strong>Pull Requests</strong>: Code contributions and reviews</li>
+</ul>
+<h2 id="recognition">Recognition</h2>
+<p>Contributors are recognized in:</p>
+<ul>
+<li><strong>CONTRIBUTORS.md</strong>: All contributors listed</li>
+<li><strong>Release Notes</strong>: Major contributions highlighted</li>
+<li><strong>GitHub</strong>: Contributor badge and statistics</li>
+</ul>
+<h2 id="getting-help">Getting Help</h2>
+<p>Need help contributing?</p>
+<ul>
+<li><strong>Documentation</strong>: Start with this guide</li>
+<li><strong>Issues</strong>: Check existing issues for similar questions</li>
+<li><strong>Discussions</strong>: Ask questions in GitHub Discussions</li>
+<li><strong>Code</strong>: Look at existing implementations for patterns</li>
+</ul>
+<h2 id="license">License</h2>
+<p>By contributing to PKS CLI, you agree that your contributions will be licensed under the MIT License.</p>
+<hr>
+<p>Thank you for contributing to PKS CLI! Every contribution, whether code, documentation, or feedback, helps make the project better for everyone. 🙏</p>
+
+</article>
+          </div>
+
+          <div class="hidden-sm col-md-2" role="complementary">
+            <div class="sideaffix">
+              <div class="contribution">
+                <ul class="nav">
+                  <li>
+                    <a href="https://github.com/pksorensen/pks-cli/blob/main/docs/articles/contributing.md/#L1" class="contribution-link">Edit this page</a>
+                  </li>
+                </ul>
+              </div>
+              <nav class="bs-docs-sidebar hidden-print hidden-xs hidden-sm affix" id="affix">
+                <h5>In this article</h5>
+                <div></div>
+              </nav>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <footer>
+        <div class="grad-bottom"></div>
+        <div class="footer">
+          <div class="container">
+            <span class="pull-right">
+              <a href="#top">Back to top</a>
+            </span>
+      Copyright © 2024 Poul Kjeldager Sørensen. Built with DocFX.
+      
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <script type="text/javascript" src="../styles/docfx.vendor.min.js"></script>
+    <script type="text/javascript" src="../styles/docfx.js"></script>
+    <script type="text/javascript" src="../styles/main.js"></script>
+  </body>
+</html>
