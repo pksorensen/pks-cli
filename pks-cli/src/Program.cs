@@ -6,6 +6,7 @@ using PKS.Infrastructure.Initializers.Service;
 using PKS.Infrastructure.Services;
 using PKS.Commands.Hooks;
 using PKS.CLI.Commands.Mcp;
+using PKS.CLI.Commands;
 using PKS.Commands.Agent;
 using PKS.Commands.Prd;
 using PKS.CLI.Infrastructure.Services;
@@ -16,21 +17,70 @@ using System.Text;
 // Set UTF-8 encoding for proper ASCII art display
 Console.OutputEncoding = Encoding.UTF8;
 
-// Display welcome banner with fancy ASCII art
-DisplayWelcomeBanner();
+// Check if we're running MCP with stdio transport - skip banner in that case
+var commandArgs = Environment.GetCommandLineArgs();
+var isMcpStdio = commandArgs.Length > 2 && 
+                 commandArgs.Any(a => a.Equals("mcp", StringComparison.OrdinalIgnoreCase)) &&
+                 (commandArgs.Any(a => a.Equals("--transport", StringComparison.OrdinalIgnoreCase) && 
+                  Array.IndexOf(commandArgs, a) + 1 < commandArgs.Length && 
+                  commandArgs[Array.IndexOf(commandArgs, a) + 1].Equals("stdio", StringComparison.OrdinalIgnoreCase)) ||
+                  !commandArgs.Any(a => a.Equals("--transport", StringComparison.OrdinalIgnoreCase) || a.Equals("-t", StringComparison.OrdinalIgnoreCase)));
+
+// Display welcome banner with fancy ASCII art (unless in MCP stdio mode)
+if (!isMcpStdio)
+{
+    DisplayWelcomeBanner();
+}
 
 // Configure the application
 var services = new ServiceCollection();
 
-// Register logging
-services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Warning));
+// Register logging - suppress console logging for MCP stdio transport
+if (isMcpStdio)
+{
+    // For MCP stdio transport, only log to memory or file to avoid contaminating stdout
+    services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Error));
+}
+else
+{
+    services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Warning));
+}
 
 // Register infrastructure services
 services.AddSingleton<IKubernetesService, KubernetesService>();
 services.AddSingleton<IConfigurationService, ConfigurationService>();
 services.AddSingleton<IDeploymentService, DeploymentService>();
 services.AddSingleton<IHooksService, HooksService>();
-services.AddSingleton<PKS.CLI.Infrastructure.Services.IMcpServerService, PKS.CLI.Infrastructure.Services.McpServerService>();
+// Legacy MCP services removed in Phase 3 - now using SDK-based services only
+
+// New SDK-based MCP hosting services
+services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.McpToolService>();
+services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.McpResourceService>();
+services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.IMcpHostingService, PKS.CLI.Infrastructure.Services.MCP.McpHostingService>();
+
+// MCP configuration
+services.Configure<PKS.CLI.Infrastructure.Services.MCP.McpConfiguration>(config =>
+{
+    config.UseSdkHosting = true; // Enable SDK-based hosting by default
+    config.DefaultTransport = "stdio";
+    config.DefaultPort = 3000;
+    config.EnableDebugLogging = false;
+    config.EnableAutoToolDiscovery = true;
+    config.EnableAutoResourceDiscovery = true;
+});
+
+// Register the new dedicated MCP tool services (replacing legacy hardcoded tools)
+services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.ProjectToolService>();
+services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.AgentToolService>();
+services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.DeploymentToolService>();
+services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.StatusToolService>();
+services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.SwarmToolService>();
+
+// Configure tool service registration after container is built
+services.PostConfigure<PKS.CLI.Infrastructure.Services.MCP.McpConfiguration>(_ =>
+{
+    // This will be handled by the hosting service when it initializes
+});
 services.AddSingleton<IAgentFrameworkService, AgentFrameworkService>();
 services.AddSingleton<IPrdService, PrdService>();
 
@@ -102,7 +152,15 @@ app.Configure(config =>
         .WithDescription("Generate beautiful ASCII art for your projects");
         
     config.AddCommand<PKS.CLI.Commands.Mcp.McpCommand>("mcp")
-        .WithDescription("Model Context Protocol (MCP) server for AI integration");
+        .WithDescription("Run Model Context Protocol (MCP) server for AI integration")
+        .WithExample(new[] { "mcp" })
+        .WithExample(new[] { "mcp", "--transport", "stdio" })
+        .WithExample(new[] { "mcp", "--transport", "http", "--port", "3000" });
+        
+    config.AddCommand<TestSwarmCommand>("test-swarm")
+        .WithDescription("Test swarm MCP tools functionality")
+        .WithExample(new[] { "test-swarm" })
+        .WithExample(new[] { "test-swarm", "--execute" });
         
     // Add devcontainer branch command with subcommands
     config.AddBranch<PKS.Commands.Devcontainer.DevcontainerSettings>("devcontainer", devcontainer =>
