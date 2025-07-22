@@ -15,6 +15,7 @@ I'll help you triage your GitHub notifications, issues, and pull requests effici
 Based on the provided arguments (or lack thereof), I will:
 
 1. **No arguments**: Show a comprehensive overview of all your GitHub activity including:
+
    - Unread notifications (grouped by repository)
    - Open issues assigned to you
    - Open pull requests you authored
@@ -22,6 +23,7 @@ Based on the provided arguments (or lack thereof), I will:
    - Recent mentions
 
 2. **Repository specified** (e.g., "owner/repo"): Focus the triage on a specific repository:
+
    - Repository-specific notifications
    - Repository issues assigned to you
    - Repository PRs you're involved with
@@ -35,6 +37,7 @@ Based on the provided arguments (or lack thereof), I will:
 ## Process
 
 I will:
+
 1. Fetch the relevant GitHub data based on your request
 2. Organize and present the information in a clear, actionable format
 3. Highlight urgent items (e.g., security alerts, failing CI, review requests)
@@ -51,6 +54,7 @@ I will:
 ## Interactive Options
 
 After presenting the triage summary, I'll offer to:
+
 - Dive deeper into specific items
 - Mark groups of notifications as read
 - Help compose responses to issues/PRs

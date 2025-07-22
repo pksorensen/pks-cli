@@ -422,6 +422,3 @@ claude-flow.ps1
 hive-mind-prompt-*.txt
 .devcontainer/.env
 
-# Claude Code specific configurations (user-specific)
-.claude/commands/
-.pks/agents/
