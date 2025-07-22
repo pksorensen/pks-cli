@@ -201,3 +201,178 @@ public enum SectionType
     Appendix,
     Custom
 }
+
+/// <summary>
+/// Configuration for PRD generation operations
+/// </summary>
+public class PrdGenerationOptions
+{
+    public string ProductName { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public string? TargetAudience { get; set; }
+    public string Template { get; set; } = "standard";
+    public bool IncludeTechnicalSpecs { get; set; } = true;
+    public bool IncludeUserStories { get; set; } = true;
+    public bool IncludeAcceptanceCriteria { get; set; } = true;
+    public string? OutputPath { get; set; }
+    public List<string> AdditionalSections { get; set; } = new();
+    public Dictionary<string, object> CustomProperties { get; set; } = new();
+}
+
+/// <summary>
+/// Configuration for PRD update operations
+/// </summary>
+public class PrdUpdateOptions
+{
+    public string FilePath { get; set; } = string.Empty;
+    public string? Section { get; set; }
+    public string? Content { get; set; }
+    public string Mode { get; set; } = "append"; // append, replace, insert
+    public bool CreateBackup { get; set; } = true;
+    public Dictionary<string, object> UpdateMetadata { get; set; } = new();
+}
+
+/// <summary>
+/// Configuration for PRD validation operations
+/// </summary>
+public class PrdValidationOptions
+{
+    public string FilePath { get; set; } = string.Empty;
+    public string Strictness { get; set; } = "standard"; // lenient, standard, strict
+    public bool IncludeSuggestions { get; set; } = true;
+    public List<string> RequiredSections { get; set; } = new();
+    public List<string> SkipValidations { get; set; } = new();
+    public Dictionary<string, object> ValidationRules { get; set; } = new();
+}
+
+/// <summary>
+/// Information about a PRD template
+/// </summary>
+public class PrdTemplateInfo
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string Category { get; set; } = string.Empty;
+    public List<string> RequiredFields { get; set; } = new();
+    public Dictionary<string, object> DefaultValues { get; set; } = new();
+    public string Complexity { get; set; } = "standard";
+    public bool IsDefault { get; set; } = false;
+    public DateTime LastUpdated { get; set; } = DateTime.UtcNow;
+    public List<string> Requirements { get; set; } = new();
+}
+
+/// <summary>
+/// Request to update a PRD document
+/// </summary>
+public class PrdUpdateRequest
+{
+    public string FilePath { get; set; } = string.Empty;
+    public string? Section { get; set; }
+    public string? Content { get; set; }
+    public string UpdateType { get; set; } = "append"; // append, replace, insert
+    public Dictionary<string, object> Metadata { get; set; } = new();
+}
+
+/// <summary>
+/// Result of PRD generation operation
+/// </summary>
+public class PrdGenerationResult
+{
+    public bool Success { get; set; }
+    public string? OutputFile { get; set; }
+    public List<string> Sections { get; set; } = new();
+    public int WordCount { get; set; }
+    public string EstimatedReadTime { get; set; } = string.Empty;
+    public string? Message { get; set; }
+}
+
+/// <summary>
+/// Result of PRD loading operation
+/// </summary>
+public class PrdLoadResult
+{
+    public bool Success { get; set; }
+    public string ProductName { get; set; } = string.Empty;
+    public string Template { get; set; } = string.Empty;
+    public List<string> Sections { get; set; } = new();
+    public string? Message { get; set; }
+    public PrdAnalysis? Analysis { get; set; }
+    public PrdRequirements? Requirements { get; set; }
+}
+
+/// <summary>
+/// Analysis information for a PRD
+/// </summary>
+public class PrdAnalysis
+{
+    public int WordCount { get; set; }
+    public int SectionCount { get; set; }
+    public string EstimatedReadTime { get; set; } = string.Empty;
+    public string Completeness { get; set; } = string.Empty;
+    public string[] MissingElements { get; set; } = Array.Empty<string>();
+    public string[] Recommendations { get; set; } = Array.Empty<string>();
+}
+
+/// <summary>
+/// Requirements extracted from a PRD
+/// </summary>
+public class PrdRequirements
+{
+    public string[] Functional { get; set; } = Array.Empty<string>();
+    public string[] NonFunctional { get; set; } = Array.Empty<string>();
+    public string[] UserStories { get; set; } = Array.Empty<string>();
+    public string[] AcceptanceCriteria { get; set; } = Array.Empty<string>();
+}
+
+/// <summary>
+/// Result of PRD validation operation
+/// </summary>
+public class PrdValidationResult
+{
+    public bool Success { get; set; }
+    public bool IsValid { get; set; }
+    public double OverallScore { get; set; }
+    public double CompletenessScore { get; set; }
+    public double ClarityScore { get; set; }
+    public double ConsistencyScore { get; set; }
+    public double FeasibilityScore { get; set; }
+    public IEnumerable<object>? Errors { get; set; }
+    public IEnumerable<object>? Warnings { get; set; }
+    public IEnumerable<PrdSuggestion>? Suggestions { get; set; }
+    public string? Message { get; set; }
+}
+
+/// <summary>
+/// Suggestion for PRD improvement
+/// </summary>
+public class PrdSuggestion
+{
+    public string Type { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Result of PRD update operation
+/// </summary>
+public class PrdUpdateResult
+{
+    public bool Success { get; set; }
+    public string? BackupFile { get; set; }
+    public List<string>? UpdatedSections { get; set; }
+    public string? AddedContent { get; set; }
+    public string? ChangesSummary { get; set; }
+    public string? Message { get; set; }
+}
+
+/// <summary>
+/// Extended template information with additional properties
+/// </summary>
+public class PrdTemplateInfoExtended : PrdTemplateInfo
+{
+    public string Version { get; set; } = string.Empty;
+    public List<string>? Sections { get; set; }
+    public List<string>? Features { get; set; }
+    public string EstimatedGenerationTime { get; set; } = string.Empty;
+    public string Author { get; set; } = string.Empty;
+}

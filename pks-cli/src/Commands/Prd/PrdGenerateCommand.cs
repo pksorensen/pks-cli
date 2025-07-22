@@ -90,7 +90,7 @@ public class PrdGenerateCommand : Command<PrdGenerateSettings>
             };
 
             // Generate PRD with progress indicator
-            PrdDocument document = null!;
+            PrdGenerationResult generateResult = null!;
             
             await AnsiConsole.Status()
                 .Spinner(Spinner.Known.Star2)
@@ -101,7 +101,8 @@ public class PrdGenerateCommand : Command<PrdGenerateSettings>
                     await Task.Delay(500);
                     
                     ctx.Status("Generating sections and requirements...");
-                    document = await _prdService.GeneratePrdAsync(request, settings.OutputPath);
+                    var generateResult = await _prdService.GeneratePrdAsync(request);
+                    // Note: generateResult contains the generated PRD information
                     
                     ctx.Status("Formatting and saving PRD...");
                     await Task.Delay(300);
@@ -113,9 +114,9 @@ public class PrdGenerateCommand : Command<PrdGenerateSettings>
                 
                 [cyan1]Project:[/] {settings.ProjectName}
                 [cyan1]Output:[/] {settings.OutputPath}
-                [cyan1]Requirements:[/] {document.Requirements.Count}
-                [cyan1]User Stories:[/] {document.UserStories.Count}
-                [cyan1]Sections:[/] {document.Sections.Count}
+                [cyan1]Output File:[/] {generateResult.OutputFile ?? "N/A"}
+                [cyan1]Word Count:[/] {generateResult.WordCount}
+                [cyan1]Sections:[/] {generateResult.Sections?.Count ?? 0}
                 
                 Next steps:
                 • [cyan]pks prd validate[/] - Validate PRD completeness
@@ -133,7 +134,12 @@ public class PrdGenerateCommand : Command<PrdGenerateSettings>
             // Show validation summary if verbose
             if (settings.Verbose)
             {
-                var validation = await _prdService.ValidatePrdAsync(document);
+                var validationOptions = new PrdValidationOptions
+                {
+                    FilePath = settings.OutputPath,
+                    Strictness = "standard"
+                };
+                var validation = await _prdService.ValidatePrdAsync(validationOptions);
                 DisplayValidationSummary(validation);
             }
 
@@ -207,9 +213,9 @@ public class PrdGenerateCommand : Command<PrdGenerateSettings>
 
         table.AddRow("Completeness Score", $"{validation.CompletenessScore:F1}%");
         table.AddRow("Validation Status", validation.IsValid ? "[green]Valid[/]" : "[red]Issues Found[/]");
-        table.AddRow("Errors", validation.Errors.Count.ToString());
-        table.AddRow("Warnings", validation.Warnings.Count.ToString());
-        table.AddRow("Suggestions", validation.Suggestions.Count.ToString());
+        table.AddRow("Errors", validation.Errors?.Count().ToString() ?? "0");
+        table.AddRow("Warnings", validation.Warnings?.Count().ToString() ?? "0");
+        table.AddRow("Suggestions", validation.Suggestions?.Count().ToString() ?? "0");
 
         AnsiConsole.Write(table);
     }

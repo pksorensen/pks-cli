@@ -11,12 +11,10 @@ public interface IPrdService
     /// Generate a PRD document from an idea description
     /// </summary>
     /// <param name="request">PRD generation request with idea description and context</param>
-    /// <param name="outputPath">Optional output path for the generated PRD file</param>
     /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>Generated PRD document</returns>
-    Task<PrdDocument> GeneratePrdAsync(
+    /// <returns>Generated PRD result</returns>
+    Task<PrdGenerationResult> GeneratePrdAsync(
         PrdGenerationRequest request, 
-        string? outputPath = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -24,8 +22,8 @@ public interface IPrdService
     /// </summary>
     /// <param name="filePath">Path to the PRD file</param>
     /// <param name="cancellationToken">Cancellation token</param>
-    /// <returns>Parsing result with PRD document</returns>
-    Task<PrdParsingResult> LoadPrdAsync(
+    /// <returns>Loaded PRD result</returns>
+    Task<PrdLoadResult> LoadPrdAsync(
         string filePath, 
         CancellationToken cancellationToken = default);
 
@@ -98,9 +96,9 @@ public interface IPrdService
     /// <summary>
     /// Validate a PRD document for completeness and consistency
     /// </summary>
-    /// <param name="document">PRD document to validate</param>
+    /// <param name="options">Validation options</param>
     /// <returns>Validation result with any issues found</returns>
-    Task<PrdValidationResult> ValidatePrdAsync(PrdDocument document);
+    Task<PrdValidationResult> ValidatePrdAsync(PrdValidationOptions options);
 
     /// <summary>
     /// Find PRD files in a directory
@@ -127,19 +125,25 @@ public interface IPrdService
         PrdTemplateType templateType = PrdTemplateType.Standard,
         string? outputPath = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets all available PRD templates
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>List of available templates</returns>
+    Task<List<PrdTemplateInfo>> GetAvailableTemplatesAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Updates an existing PRD document
+    /// </summary>
+    /// <param name="options">Update options</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>Update result</returns>
+    Task<PrdUpdateResult> UpdatePrdAsync(
+        PrdUpdateOptions options, 
+        CancellationToken cancellationToken = default);
 }
 
-/// <summary>
-/// PRD validation result
-/// </summary>
-public class PrdValidationResult
-{
-    public bool IsValid { get; set; }
-    public List<string> Errors { get; set; } = new();
-    public List<string> Warnings { get; set; } = new();
-    public List<string> Suggestions { get; set; } = new();
-    public double CompletenessScore { get; set; } // 0-100
-}
 
 /// <summary>
 /// Types of PRD templates available

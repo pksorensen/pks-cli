@@ -34,10 +34,10 @@ public class PrdValidateCommand : Command<PrdValidateSettings>
             var filePath = settings.FilePath ?? Path.Combine(Environment.CurrentDirectory, "docs", "PRD.md");
             
             // Load PRD
-            var result = await _prdService.LoadPrdAsync(filePath);
-            if (!result.Success)
+            var loadResult = await _prdService.LoadPrdAsync(filePath);
+            if (loadResult == null || !loadResult.Success)
             {
-                AnsiConsole.MarkupLine($"[red]Failed to load PRD: {result.ErrorMessage}[/]");
+                AnsiConsole.MarkupLine($"[red]Failed to load PRD from {filePath}: {loadResult?.Message}[/]");
                 return 1;
             }
 
@@ -53,7 +53,12 @@ public class PrdValidateCommand : Command<PrdValidateSettings>
                     await Task.Delay(300);
                     
                     ctx.Status("Checking consistency...");
-                    validation = await _prdService.ValidatePrdAsync(result.Document!);
+                    var validationOptions = new PrdValidationOptions
+                    {
+                        FilePath = filePath,
+                        Strictness = settings.Strict ? "strict" : "standard"
+                    };
+                    validation = await _prdService.ValidatePrdAsync(validationOptions);
                     
                     ctx.Status("Generating report...");
                     await Task.Delay(200);
@@ -88,9 +93,9 @@ public class PrdValidateCommand : Command<PrdValidateSettings>
             {statusIcon} [bold {statusColor}]{statusText}[/]
             
             [cyan1]Completeness Score:[/] {validation.CompletenessScore:F1}%
-            [cyan1]Errors:[/] {validation.Errors.Count}
-            [cyan1]Warnings:[/] {validation.Warnings.Count}
-            [cyan1]Suggestions:[/] {validation.Suggestions.Count}
+            [cyan1]Errors:[/] {validation.Errors?.Count() ?? 0}
+            [cyan1]Warnings:[/] {validation.Warnings?.Count() ?? 0}
+            [cyan1]Suggestions:[/] {validation.Suggestions?.Count() ?? 0}
             """)
             .Border(BoxBorder.Double)
             .BorderStyle(statusColor)
@@ -156,8 +161,8 @@ public class PrdValidateCommand : Command<PrdValidateSettings>
                 Suggestions = validation.Suggestions,
                 Summary = new
                 {
-                    TotalIssues = validation.Errors.Count + validation.Warnings.Count,
-                    CriticalIssues = validation.Errors.Count,
+                    TotalIssues = validation.Errors.Count() + validation.Warnings.Count(),
+                    CriticalIssues = validation.Errors.Count(),
                     RecommendedActions = validation.Errors.Any() ? 
                         "Fix all errors before proceeding" : 
                         validation.Warnings.Any() ? 
