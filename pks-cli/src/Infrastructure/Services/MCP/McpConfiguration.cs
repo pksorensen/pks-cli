@@ -41,6 +41,11 @@ public class McpConfiguration
     public int OperationTimeoutMs { get; set; } = 30000;
 
     /// <summary>
+    /// Request timeout in seconds (for compatibility)
+    /// </summary>
+    public int RequestTimeoutSeconds => OperationTimeoutMs / 1000;
+
+    /// <summary>
     /// Enable tool execution metrics collection
     /// </summary>
     public bool EnableMetrics { get; set; } = true;

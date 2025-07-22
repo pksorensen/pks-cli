@@ -1,5 +1,8 @@
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure;
+using System.ComponentModel;
+using ModelContextProtocol.Server;
+using PKS.CLI.Infrastructure.Services;
 
 namespace PKS.CLI.Infrastructure.Services.MCP.Tools;
 
@@ -7,6 +10,7 @@ namespace PKS.CLI.Infrastructure.Services.MCP.Tools;
 /// MCP tool service for PKS system status and monitoring
 /// This service provides MCP tools for system health monitoring and status checking
 /// </summary>
+[McpServerToolType]
 public class StatusToolService
 {
     private readonly ILogger<StatusToolService> _logger;
@@ -33,10 +37,11 @@ public class StatusToolService
     /// Get comprehensive system status and health information
     /// This tool connects to the real PKS status command functionality
     /// </summary>
-    [McpServerTool("pks_status", "Get system status and health information", "monitoring", true)]
+    [McpServerTool]
+    [Description("Get system status and health information")]
     public async Task<object> GetSystemStatusAsync(
-        [McpToolParameter("Include detailed metrics")] bool detailed = false,
-        [McpToolParameter("Status category filter")] string? category = null)
+        bool detailed = false,
+        string? category = null)
     {
         _logger.LogInformation("MCP Tool: Getting system status, detailed: {Detailed}, category: {Category}", 
             detailed, category);
@@ -109,9 +114,10 @@ public class StatusToolService
     /// <summary>
     /// Get health check results for all system components
     /// </summary>
-    [McpServerTool("pks_health_check", "Perform comprehensive health checks on all system components", "monitoring", true)]
+    [McpServerTool]
+    [Description("Perform comprehensive health checks on all system components")]
     public async Task<object> PerformHealthCheckAsync(
-        [McpToolParameter("Include component details")] bool includeDetails = false)
+        bool includeDetails = false)
     {
         _logger.LogInformation("MCP Tool: Performing health check, includeDetails: {IncludeDetails}", includeDetails);
 
@@ -159,10 +165,11 @@ public class StatusToolService
     /// <summary>
     /// Get real-time system metrics
     /// </summary>
-    [McpServerTool("pks_metrics", "Get real-time system metrics and performance data", "monitoring", true)]
+    [McpServerTool]
+    [Description("Get real-time system metrics and performance data")]
     public async Task<object> GetSystemMetricsAsync(
-        [McpToolParameter("Metric type to retrieve")] string? metricType = null,
-        [McpToolParameter("Include historical data")] bool includeHistory = false)
+        string? metricType = null,
+        bool includeHistory = false)
     {
         _logger.LogInformation("MCP Tool: Getting system metrics, type: {MetricType}, includeHistory: {IncludeHistory}", 
             metricType, includeHistory);

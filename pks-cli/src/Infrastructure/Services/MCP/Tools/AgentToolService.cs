@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Logging;
 using PKS.CLI.Infrastructure.Services;
 using PKS.CLI.Infrastructure.Services.Models;
+using System.ComponentModel;
+using ModelContextProtocol.Server;
 
 namespace PKS.CLI.Infrastructure.Services.MCP.Tools;
 
@@ -8,14 +10,13 @@ namespace PKS.CLI.Infrastructure.Services.MCP.Tools;
 /// MCP tool service for PKS agent management operations
 /// This service provides MCP tools for agent creation, management, and status checking
 /// </summary>
+[McpServerToolType]
 public class AgentToolService
 {
     private readonly ILogger<AgentToolService> _logger;
     private readonly IAgentFrameworkService _agentFrameworkService;
 
-    public AgentToolService(
-        ILogger<AgentToolService> logger,
-        IAgentFrameworkService agentFrameworkService)
+    public AgentToolService(ILogger<AgentToolService> logger, IAgentFrameworkService agentFrameworkService)
     {
         _logger = logger;
         _agentFrameworkService = agentFrameworkService;
@@ -25,11 +26,12 @@ public class AgentToolService
     /// Create a new agent in the PKS agent framework
     /// This tool connects to the real PKS agent command functionality
     /// </summary>
-    [McpServerTool("pks_create_agent", "Create a new agent in the PKS agent framework", "agent-management", true)]
+    [McpServerTool]
+    [Description("Create a new agent in the PKS agent framework")]
     public async Task<object> CreateAgentAsync(
-        [McpToolParameter("Agent name", required: true)] string agentName,
-        [McpToolParameter("Agent type", defaultValue: "automation")] string agentType = "automation",
-        [McpToolParameter("Agent configuration as JSON")] string? config = null)
+        [Description("The name of the agent to create")] string agentName,
+        [Description("The type of agent (automation, monitoring, deployment, custom)")] string agentType = "automation",
+        [Description("Optional JSON configuration for the agent")] string? config = null)
     {
         _logger.LogInformation("MCP Tool: Creating agent '{AgentName}' of type '{AgentType}'", agentName, agentType);
 
@@ -110,10 +112,11 @@ public class AgentToolService
     /// Get agent status and information
     /// This tool connects to the real PKS agent status functionality
     /// </summary>
-    [McpServerTool("pks_get_agent_status", "Check availability and status of development agents", "agent-management", true)]
+    [McpServerTool]
+    [Description("Check availability and status of development agents")]
     public async Task<object> GetAgentStatusAsync(
-        [McpToolParameter("Agent ID to check status for")] string? agentId = null,
-        [McpToolParameter("Include detailed agent information")] bool detailed = false)
+        [Description("Optional agent ID to get specific agent status")] string? agentId = null,
+        [Description("Whether to return detailed information about agents")] bool detailed = false)
     {
         _logger.LogInformation("MCP Tool: Getting agent status for ID '{AgentId}', detailed: {Detailed}", agentId, detailed);
 
@@ -209,9 +212,10 @@ public class AgentToolService
     /// <summary>
     /// Start an agent
     /// </summary>
-    [McpServerTool("pks_start_agent", "Start a specific agent", "agent-management", true)]
+    [McpServerTool]
+    [Description("Start a specific agent")]
     public async Task<object> StartAgentAsync(
-        [McpToolParameter("Agent ID to start", required: true)] string agentId)
+        [Description("The unique identifier of the agent to start")] string agentId)
     {
         _logger.LogInformation("MCP Tool: Starting agent '{AgentId}'", agentId);
 
@@ -253,9 +257,10 @@ public class AgentToolService
     /// <summary>
     /// Stop an agent
     /// </summary>
-    [McpServerTool("pks_stop_agent", "Stop a specific agent", "agent-management", true)]
+    [McpServerTool]
+    [Description("Stop a specific agent")]
     public async Task<object> StopAgentAsync(
-        [McpToolParameter("Agent ID to stop", required: true)] string agentId)
+        [Description("The unique identifier of the agent to stop")] string agentId)
     {
         _logger.LogInformation("MCP Tool: Stopping agent '{AgentId}'", agentId);
 
@@ -297,9 +302,10 @@ public class AgentToolService
     /// <summary>
     /// Remove an agent
     /// </summary>
-    [McpServerTool("pks_remove_agent", "Remove a specific agent", "agent-management", true)]
+    [McpServerTool]
+    [Description("Remove a specific agent")]
     public async Task<object> RemoveAgentAsync(
-        [McpToolParameter("Agent ID to remove", required: true)] string agentId)
+        [Description("The unique identifier of the agent to remove")] string agentId)
     {
         _logger.LogInformation("MCP Tool: Removing agent '{AgentId}'", agentId);
 

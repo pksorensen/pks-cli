@@ -325,3 +325,130 @@ public class McpResource
     /// </summary>
     public Dictionary<string, object> Metadata { get; set; } = new();
 }
+
+/// <summary>
+/// MCP server tool definition (compatibility with SDK)
+/// </summary>
+public class McpServerTool
+{
+    /// <summary>
+    /// Tool name (unique identifier)
+    /// </summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Tool description
+    /// </summary>
+    public string Description { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Tool category
+    /// </summary>
+    public string Category { get; set; } = "General";
+
+    /// <summary>
+    /// Whether the tool is enabled
+    /// </summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// Tool input schema (JSON Schema)
+    /// </summary>
+    public object? InputSchema { get; set; }
+
+    /// <summary>
+    /// Tool metadata
+    /// </summary>
+    public Dictionary<string, object> Metadata { get; set; } = new();
+}
+
+/// <summary>
+/// MCP server resource definition (compatibility with SDK)
+/// </summary>
+public class McpServerResource
+{
+    /// <summary>
+    /// Resource display name
+    /// </summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Resource URI (unique identifier)
+    /// </summary>
+    public string Uri { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Resource description
+    /// </summary>
+    public string Description { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Resource MIME type
+    /// </summary>
+    public string MimeType { get; set; } = "text/plain";
+
+    /// <summary>
+    /// Resource metadata
+    /// </summary>
+    public Dictionary<string, object> Metadata { get; set; } = new();
+}
+
+/// <summary>
+/// Result of MCP tool execution (compatibility with SDK)
+/// </summary>
+public class McpToolExecutionResult
+{
+    /// <summary>
+    /// Whether the tool execution was successful
+    /// </summary>
+    public bool Success { get; set; }
+
+    /// <summary>
+    /// Result message
+    /// </summary>
+    public string Message { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Tool output data
+    /// </summary>
+    public object? Data { get; set; }
+
+    /// <summary>
+    /// Execution duration in milliseconds
+    /// </summary>
+    public long DurationMs { get; set; }
+
+    /// <summary>
+    /// Error details (if any)
+    /// </summary>
+    public string? Error { get; set; }
+
+    /// <summary>
+    /// Create a successful result
+    /// </summary>
+    public static McpToolExecutionResult CreateSuccess(string message, object? data = null, long durationMs = 0)
+    {
+        return new McpToolExecutionResult
+        {
+            Success = true,
+            Message = message,
+            Data = data,
+            DurationMs = durationMs
+        };
+    }
+
+    /// <summary>
+    /// Create a failure result
+    /// </summary>
+    public static McpToolExecutionResult CreateFailure(string message, string? error = null, long durationMs = 0)
+    {
+        return new McpToolExecutionResult
+        {
+            Success = false,
+            Message = message,
+            Error = error,
+            DurationMs = durationMs
+        };
+    }
+}
+

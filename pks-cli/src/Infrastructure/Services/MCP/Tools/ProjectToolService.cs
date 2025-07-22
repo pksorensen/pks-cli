@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure.Initializers.Service;
+using System.ComponentModel;
+using ModelContextProtocol.Server;
 
 namespace PKS.CLI.Infrastructure.Services.MCP.Tools;
 
@@ -7,33 +9,29 @@ namespace PKS.CLI.Infrastructure.Services.MCP.Tools;
 /// MCP tool service for PKS project management operations
 /// This service provides MCP tools for project initialization and related operations
 /// </summary>
+[McpServerToolType]
 public class ProjectToolService
 {
-    private readonly ILogger<ProjectToolService> _logger;
-    private readonly IInitializationService _initializationService;
-
-    public ProjectToolService(
-        ILogger<ProjectToolService> logger, 
-        IInitializationService initializationService)
-    {
-        _logger = logger;
-        _initializationService = initializationService;
-    }
+    // This class contains static methods that will be discovered by WithToolsFromAssembly()
+    // Dependencies will be injected as method parameters
 
     /// <summary>
     /// Initialize a new PKS project with templates and AI features
     /// This tool connects to the real PKS init command functionality
     /// </summary>
-    [McpServerTool("pks_init_project", "Initialize new projects with templates and AI features", "project-management", true)]
-    public async Task<object> InitializeProjectAsync(
-        [McpToolParameter("Project name", required: true)] string projectName,
-        [McpToolParameter("Project template type", defaultValue: "console")] string template = "console",
-        [McpToolParameter("Project description")] string? description = null,
-        [McpToolParameter("Enable agentic features")] bool agentic = false,
-        [McpToolParameter("Enable MCP integration")] bool mcp = false,
-        [McpToolParameter("Force overwrite existing project")] bool force = false)
+    [McpServerTool]
+    [Description("Initialize new projects with templates and AI features")]
+    public static async Task<object> InitializeProjectAsync(
+        ILogger<ProjectToolService> logger,
+        IInitializationService initializationService,
+        string projectName,
+        string template = "console",
+        string? description = null,
+        bool agentic = false,
+        bool mcp = false,
+        bool force = false)
     {
-        _logger.LogInformation("MCP Tool: Initializing project '{ProjectName}' with template '{Template}'", 
+        logger.LogInformation("MCP Tool: Initializing project '{ProjectName}' with template '{Template}'", 
             projectName, template);
 
         try
@@ -52,7 +50,7 @@ public class ProjectToolService
             var targetDirectory = Path.Combine(Environment.CurrentDirectory, projectName);
 
             // Validate target directory first
-            var validation = await _initializationService.ValidateTargetDirectoryAsync(targetDirectory, force);
+            var validation = await initializationService.ValidateTargetDirectoryAsync(targetDirectory, force);
             if (!validation.IsValid)
             {
                 return new
@@ -66,7 +64,7 @@ public class ProjectToolService
             }
 
             // Create initialization context
-            var initContext = _initializationService.CreateContext(
+            var initContext = initializationService.CreateContext(
                 projectName, 
                 template, 
                 targetDirectory, 
@@ -74,7 +72,7 @@ public class ProjectToolService
                 options);
 
             // Run initialization
-            var summary = await _initializationService.InitializeProjectAsync(initContext);
+            var summary = await initializationService.InitializeProjectAsync(initContext);
 
             // Return comprehensive result
             if (summary.Success)
@@ -116,7 +114,7 @@ public class ProjectToolService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to initialize project '{ProjectName}'", projectName);
+            logger.LogError(ex, "Failed to initialize project '{ProjectName}'", projectName);
             return new
             {
                 success = false,
@@ -132,13 +130,15 @@ public class ProjectToolService
     /// Create a task for the PKS task management system
     /// This replaces the legacy pks_create_task functionality
     /// </summary>
-    [McpServerTool("pks_create_task", "Create and queue a new task for an agent", "task-management", true)]
-    public async Task<object> CreateTaskAsync(
-        [McpToolParameter("Task description", required: true)] string taskDescription,
-        [McpToolParameter("Agent type", defaultValue: "deployment")] string agentType = "deployment",
-        [McpToolParameter("Task priority", defaultValue: "medium")] string priority = "medium")
+    [McpServerTool]
+    [Description("Create and queue a new task for an agent")]
+    public static async Task<object> CreateTaskAsync(
+        ILogger<ProjectToolService> logger,
+        string taskDescription,
+        string agentType = "deployment",
+        string priority = "medium")
     {
-        _logger.LogInformation("MCP Tool: Creating task '{TaskDescription}' for agent type '{AgentType}' with priority '{Priority}'", 
+        logger.LogInformation("MCP Tool: Creating task '{TaskDescription}' for agent type '{AgentType}' with priority '{Priority}'", 
             taskDescription, agentType, priority);
 
         // Simulate task creation since we don't have a full task management system yet
@@ -171,11 +171,13 @@ public class ProjectToolService
     /// <summary>
     /// Get project information and status
     /// </summary>
-    [McpServerTool("pks_project_status", "Get current project information and status", "project-management", true)]
-    public async Task<object> GetProjectStatusAsync(
-        [McpToolParameter("Include detailed project analysis")] bool detailed = false)
+    [McpServerTool]
+    [Description("Get current project information and status")]
+    public static async Task<object> GetProjectStatusAsync(
+        ILogger<ProjectToolService> logger,
+        bool detailed = false)
     {
-        _logger.LogInformation("MCP Tool: Getting project status, detailed: {Detailed}", detailed);
+        logger.LogInformation("MCP Tool: Getting project status, detailed: {Detailed}", detailed);
 
         await Task.Delay(200);
 
@@ -228,7 +230,7 @@ public class ProjectToolService
         return status;
     }
 
-    private long GetDirectorySize(string directory)
+    private static long GetDirectorySize(string directory)
     {
         try
         {

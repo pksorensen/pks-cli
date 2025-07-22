@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure;
+using System.ComponentModel;
+using ModelContextProtocol.Server;
 
 namespace PKS.CLI.Infrastructure.Services.MCP.Tools;
 
@@ -7,6 +9,7 @@ namespace PKS.CLI.Infrastructure.Services.MCP.Tools;
 /// MCP tool service for PKS deployment operations
 /// This service provides MCP tools for deployment management and orchestration
 /// </summary>
+[McpServerToolType]
 public class DeploymentToolService
 {
     private readonly ILogger<DeploymentToolService> _logger;
@@ -30,13 +33,14 @@ public class DeploymentToolService
     /// Deploy applications with intelligent orchestration
     /// This tool connects to the real PKS deploy command functionality
     /// </summary>
-    [McpServerTool("pks_deploy", "Deploy applications with intelligent orchestration", "deployment", true)]
+    [McpServerTool]
+    [Description("Deploy applications with intelligent orchestration")]
     public async Task<object> DeployApplicationAsync(
-        [McpToolParameter("Deployment environment", required: true)] string environment,
-        [McpToolParameter("Application image")] string? image = null,
-        [McpToolParameter("Number of replicas", defaultValue: "1")] int replicas = 1,
-        [McpToolParameter("Deployment strategy", defaultValue: "RollingUpdate")] string strategy = "RollingUpdate",
-        [McpToolParameter("Configuration file path")] string? configPath = null)
+        string environment,
+        string? image = null,
+        int replicas = 1,
+        string strategy = "RollingUpdate",
+        string? configPath = null)
     {
         _logger.LogInformation("MCP Tool: Deploying to environment '{Environment}' with {Replicas} replicas", 
             environment, replicas);
@@ -104,10 +108,11 @@ public class DeploymentToolService
     /// <summary>
     /// Get deployment status and information
     /// </summary>
-    [McpServerTool("pks_deployment_status", "Get deployment status and health information", "deployment", true)]
+    [McpServerTool]
+    [Description("Get deployment status and health information")]
     public async Task<object> GetDeploymentStatusAsync(
-        [McpToolParameter("Environment to check")] string? environment = null,
-        [McpToolParameter("Include detailed metrics")] bool detailed = false)
+        string? environment = null,
+        bool detailed = false)
     {
         _logger.LogInformation("MCP Tool: Getting deployment status for environment '{Environment}', detailed: {Detailed}", 
             environment, detailed);
@@ -212,11 +217,12 @@ public class DeploymentToolService
     /// <summary>
     /// Scale a deployment
     /// </summary>
-    [McpServerTool("pks_scale_deployment", "Scale a deployment to specified number of replicas", "deployment", true)]
+    [McpServerTool]
+    [Description("Scale a deployment to specified number of replicas")]
     public async Task<object> ScaleDeploymentAsync(
-        [McpToolParameter("Deployment name", required: true)] string deploymentName,
-        [McpToolParameter("Number of replicas", required: true)] int replicas,
-        [McpToolParameter("Kubernetes namespace", defaultValue: "default")] string namespaceName = "default")
+        string deploymentName,
+        int replicas,
+        string namespaceName = "default")
     {
         _logger.LogInformation("MCP Tool: Scaling deployment '{DeploymentName}' to {Replicas} replicas in namespace '{Namespace}'", 
             deploymentName, replicas, namespaceName);
@@ -273,10 +279,11 @@ public class DeploymentToolService
     /// <summary>
     /// Rollback a deployment
     /// </summary>
-    [McpServerTool("pks_rollback_deployment", "Rollback a deployment to a previous revision", "deployment", true)]
+    [McpServerTool]
+    [Description("Rollback a deployment to a previous revision")]
     public async Task<object> RollbackDeploymentAsync(
-        [McpToolParameter("Environment to rollback", required: true)] string environment,
-        [McpToolParameter("Revision to rollback to")] string? revision = null)
+        string environment,
+        string? revision = null)
     {
         _logger.LogInformation("MCP Tool: Rolling back deployment in environment '{Environment}' to revision '{Revision}'", 
             environment, revision);

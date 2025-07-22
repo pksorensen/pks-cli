@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
+using System.ComponentModel;
+using ModelContextProtocol.Server;
 
 namespace PKS.CLI.Infrastructure.Services.MCP.Tools;
 
@@ -7,6 +9,7 @@ namespace PKS.CLI.Infrastructure.Services.MCP.Tools;
 /// MCP tool service for PKS swarm management operations
 /// This service provides MCP tools for swarm initialization, agent spawning, task orchestration, and monitoring
 /// </summary>
+[McpServerToolType]
 public class SwarmToolService
 {
     private readonly ILogger<SwarmToolService> _logger;
@@ -25,12 +28,13 @@ public class SwarmToolService
     /// Initialize a new swarm with specified configuration
     /// Enhanced implementation with real swarm state management
     /// </summary>
-    [McpServerTool("mcp__pks__swarm_init", "Initialize a new swarm with specified configuration", "swarm-management", true)]
+    [McpServerTool]
+    [Description("Initialize a new swarm with specified configuration")]
     public async Task<object> InitializeSwarmAsync(
-        [McpToolParameter("Swarm name", required: true)] string swarmName,
-        [McpToolParameter("Maximum number of agents", defaultValue: "10")] int maxAgents = 10,
-        [McpToolParameter("Coordination strategy", defaultValue: "centralized")] string coordinationStrategy = "centralized",
-        [McpToolParameter("Memory limit in MB", defaultValue: "2048")] int memoryLimitMb = 2048)
+        string swarmName,
+        int maxAgents = 10,
+        string coordinationStrategy = "centralized",
+        int memoryLimitMb = 2048)
     {
         _logger.LogInformation("MCP Tool: Initializing swarm '{SwarmName}' with strategy '{Strategy}'", 
             swarmName, coordinationStrategy);
@@ -140,13 +144,14 @@ public class SwarmToolService
     /// Spawn a new agent within the swarm
     /// Enhanced implementation with real agent state management
     /// </summary>
-    [McpServerTool("mcp__pks__agent_spawn", "Spawn a new agent within the swarm", "agent-management", true)]
+    [McpServerTool]
+    [Description("Spawn a new agent within the swarm")]
     public async Task<object> SpawnAgentAsync(
-        [McpToolParameter("Agent type", required: true)] string agentType,
-        [McpToolParameter("Swarm ID", required: true)] string swarmId,
-        [McpToolParameter("Agent name")] string? agentName = null,
-        [McpToolParameter("Agent capabilities")] string[]? capabilities = null,
-        [McpToolParameter("Agent priority", defaultValue: "normal")] string priority = "normal")
+        string agentType,
+        string swarmId,
+        string? agentName = null,
+        string[]? capabilities = null,
+        string priority = "normal")
     {
         _logger.LogInformation("MCP Tool: Spawning agent of type '{AgentType}' in swarm '{SwarmId}'", 
             agentType, swarmId);
@@ -267,14 +272,15 @@ public class SwarmToolService
     /// Orchestrate task distribution across swarm agents
     /// Enhanced implementation with intelligent task assignment
     /// </summary>
-    [McpServerTool("mcp__pks__task_orchestrate", "Orchestrate task distribution across swarm agents", "task-orchestration", true)]
+    [McpServerTool]
+    [Description("Orchestrate task distribution across swarm agents")]
     public async Task<object> OrchestateTaskAsync(
-        [McpToolParameter("Task definition", required: true)] string taskDefinition,
-        [McpToolParameter("Swarm ID", required: true)] string swarmId,
-        [McpToolParameter("Task priority", defaultValue: "normal")] string taskPriority = "normal",
-        [McpToolParameter("Enable parallelization", defaultValue: "true")] bool parallelization = true,
-        [McpToolParameter("Maximum execution time in minutes", defaultValue: "60")] int maxExecutionTimeMinutes = 60,
-        [McpToolParameter("Required capabilities")] string[]? requiredCapabilities = null)
+        string taskDefinition,
+        string swarmId,
+        string taskPriority = "normal",
+        bool parallelization = true,
+        int maxExecutionTimeMinutes = 60,
+        string[]? requiredCapabilities = null)
     {
         _logger.LogInformation("MCP Tool: Orchestrating task '{TaskDefinition}' in swarm '{SwarmId}'", 
             taskDefinition, swarmId);
@@ -412,11 +418,12 @@ public class SwarmToolService
     /// Report current memory usage across the swarm
     /// Enhanced implementation with real memory tracking
     /// </summary>
-    [McpServerTool("mcp__pks__memory_usage", "Report current memory usage across the swarm", "monitoring", true)]
+    [McpServerTool]
+    [Description("Report current memory usage across the swarm")]
     public async Task<object> GetMemoryUsageAsync(
-        [McpToolParameter("Swarm ID", required: true)] string swarmId,
-        [McpToolParameter("Include agent details", defaultValue: "false")] bool includeAgentDetails = false,
-        [McpToolParameter("Report format", defaultValue: "summary")] string format = "summary")
+        string swarmId,
+        bool includeAgentDetails = false,
+        string format = "summary")
     {
         _logger.LogInformation("MCP Tool: Getting memory usage for swarm '{SwarmId}', format: {Format}", 
             swarmId, format);
@@ -524,13 +531,14 @@ public class SwarmToolService
     /// Monitor overall swarm status and health
     /// Enhanced implementation with comprehensive monitoring
     /// </summary>
-    [McpServerTool("mcp__pks__swarm_monitor", "Monitor overall swarm status and health", "monitoring", true)]
+    [McpServerTool]
+    [Description("Monitor overall swarm status and health")]
     public async Task<object> MonitorSwarmAsync(
-        [McpToolParameter("Swarm ID", required: true)] string swarmId,
-        [McpToolParameter("Include metrics", defaultValue: "true")] bool includeMetrics = true,
-        [McpToolParameter("Include agent status", defaultValue: "true")] bool includeAgentStatus = true,
-        [McpToolParameter("Include task queue", defaultValue: "true")] bool includeTaskQueue = true,
-        [McpToolParameter("Refresh interval in seconds", defaultValue: "30")] int refreshIntervalSeconds = 30)
+        string swarmId,
+        bool includeMetrics = true,
+        bool includeAgentStatus = true,
+        bool includeTaskQueue = true,
+        int refreshIntervalSeconds = 30)
     {
         _logger.LogInformation("MCP Tool: Monitoring swarm '{SwarmId}' with refresh interval {Interval}s", 
             swarmId, refreshIntervalSeconds);

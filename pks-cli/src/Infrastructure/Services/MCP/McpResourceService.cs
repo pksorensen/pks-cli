@@ -79,9 +79,9 @@ public class McpResourceService
     /// Get all available MCP resources
     /// </summary>
     /// <returns>Collection of available resources</returns>
-    public IEnumerable<McpResource> GetAvailableResources()
+    public IEnumerable<McpServerResource> GetAvailableResources()
     {
-        return _resources.Values.Select(rd => new McpResource
+        return _resources.Values.Select(rd => new McpServerResource
         {
             Uri = rd.Uri,
             Name = rd.Name,
@@ -91,7 +91,8 @@ public class McpResourceService
             {
                 ["lastModified"] = DateTime.UtcNow,
                 ["size"] = 0, // Will be calculated when content is generated
-                ["provider"] = rd.Service.GetType().Name
+                ["provider"] = rd.Service.GetType().Name,
+                ["category"] = "pks"
             }
         });
     }
