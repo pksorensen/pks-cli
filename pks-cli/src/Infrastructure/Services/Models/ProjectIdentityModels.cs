@@ -58,16 +58,7 @@ public class AgentInfo
     public Dictionary<string, string> Configuration { get; set; } = new();
 }
 
-/// <summary>
-/// Hooks configuration for a project
-/// </summary>
-public class HooksConfiguration
-{
-    public bool Enabled { get; set; }
-    public string[] EnabledHooks { get; set; } = Array.Empty<string>();
-    public Dictionary<string, string> HookSettings { get; set; } = new();
-    public DateTime ConfiguredAt { get; set; }
-}
+// HooksConfiguration is defined in HookModels.cs to avoid duplicates
 
 /// <summary>
 /// MCP Server configuration for a project

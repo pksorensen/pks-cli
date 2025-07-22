@@ -55,4 +55,13 @@ public interface IDevcontainerTemplateService
     /// <param name="options">Options to validate against</param>
     /// <returns>Validation result</returns>
     Task<DevcontainerValidationResult> ValidateTemplateCompatibilityAsync(string templateId, DevcontainerOptions options);
+
+    /// <summary>
+    /// Extracts a template to the specified location
+    /// </summary>
+    /// <param name="templateId">Template ID</param>
+    /// <param name="options">Configuration options</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>Template extraction result</returns>
+    Task<NuGetTemplateExtractionResult> ExtractTemplateAsync(string templateId, DevcontainerOptions options, CancellationToken cancellationToken = default);
 }

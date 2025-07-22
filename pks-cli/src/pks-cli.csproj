@@ -29,6 +29,9 @@
     <PackageReference Include="NuGet.Configuration" Version="6.8.0" />
     <PackageReference Include="NuGet.Common" Version="6.8.0" />
     <PackageReference Include="System.IO.Compression" Version="4.3.0" />
+    <!-- Model Context Protocol SDK -->
+    <PackageReference Include="ModelContextProtocol" Version="0.3.0-preview.3" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="0.3.0-preview.3" />
   </ItemGroup>
 
   <ItemGroup>

@@ -487,5 +487,96 @@ public class GitHubService : IGitHubService
         return "none";
     }
 
+    public async Task<bool> RepositoryExistsAsync(string owner, string repo)
+    {
+        var repository = await GetRepositoryAsync(owner, repo);
+        return repository != null;
+    }
+
+    public async Task<GitHubRepositoryInfo> GetRepositoryInfoAsync(string owner, string repositoryName)
+    {
+        var repository = await GetRepositoryAsync(owner, repositoryName);
+        if (repository != null)
+        {
+            return new GitHubRepositoryInfo
+            {
+                Id = repository.Id,
+                Name = repository.Name,
+                FullName = repository.FullName,
+                Description = repository.Description,
+                CloneUrl = repository.CloneUrl,
+                HtmlUrl = repository.HtmlUrl,
+                IsPrivate = repository.IsPrivate,
+                Owner = repository.Owner,
+                CreatedAt = repository.CreatedAt,
+                UpdatedAt = DateTime.UtcNow,
+                StarCount = 0,
+                ForkCount = 0,
+                Language = "C#",
+                Topics = new List<string>()
+            };
+        }
+        throw new InvalidOperationException($"Repository {owner}/{repositoryName} not found");
+    }
+
+    public async Task<GitHubRepositoryActivity> GetRepositoryActivityAsync(string owner, string repositoryName, int days = 30)
+    {
+        await Task.Delay(500); // Simulate API call
+        return new GitHubRepositoryActivity
+        {
+            CommitCount = Random.Shared.Next(1, 50),
+            PullRequestCount = Random.Shared.Next(0, 10),
+            IssueCount = Random.Shared.Next(0, 5),
+            RecentCommits = new List<GitHubCommit> 
+            { 
+                new() { Sha = "abc123", HtmlUrl = "https://github.com/example/repo/commit/abc123", Commit = new GitHubCommitDetail { Message = "Initial commit", Author = new GitHubCommitAuthor { Name = "Developer", Date = DateTime.UtcNow.AddDays(-3) } } },
+                new() { Sha = "def456", HtmlUrl = "https://github.com/example/repo/commit/def456", Commit = new GitHubCommitDetail { Message = "Add features", Author = new GitHubCommitAuthor { Name = "Developer", Date = DateTime.UtcNow.AddDays(-2) } } },
+                new() { Sha = "ghi789", HtmlUrl = "https://github.com/example/repo/commit/ghi789", Commit = new GitHubCommitDetail { Message = "Fix bugs", Author = new GitHubCommitAuthor { Name = "Developer", Date = DateTime.UtcNow.AddDays(-1) } } }
+            },
+            ActiveBranches = new List<string> { "main", "develop", "feature/new-feature" },
+            LastActivity = DateTime.UtcNow.AddDays(-Random.Shared.Next(1, days))
+        };
+    }
+
+    public async Task<List<GitHubWorkflowTemplate>> GetAvailableWorkflowTemplatesAsync()
+    {
+        await Task.Delay(300); // Simulate API call
+        return new List<GitHubWorkflowTemplate>
+        {
+            new() { Name = "dotnet", Description = ".NET Core CI/CD", Language = "C#", Content = "# .NET workflow template" },
+            new() { Name = "node", Description = "Node.js CI/CD", Language = "JavaScript", Content = "# Node.js workflow template" },
+            new() { Name = "docker", Description = "Docker CI/CD", Language = "Docker", Content = "# Docker workflow template" }
+        };
+    }
+
+    public async Task<GitHubWorkflowSetupResult> SetupWorkflowAsync(string owner, string repositoryName, string workflowTemplate, WorkflowConfiguration configuration)
+    {
+        await Task.Delay(1000); // Simulate workflow setup
+        return new GitHubWorkflowSetupResult
+        {
+            Success = true,
+            WorkflowName = configuration.Name,
+            FilePath = $".github/workflows/{configuration.Name}.yml",
+            Message = $"Workflow '{configuration.Name}' created successfully"
+        };
+    }
+
+    public async Task<List<GitHubRelease>> GetReleasesAsync(string owner, string repositoryName, bool includePreReleases = false)
+    {
+        await Task.Delay(400); // Simulate API call
+        var releases = new List<GitHubRelease>
+        {
+            new() { Id = 1, Name = "v1.0.0", TagName = "v1.0.0", Body = "Initial release", PublishedAt = DateTime.UtcNow.AddDays(-30) },
+            new() { Id = 2, Name = "v1.1.0", TagName = "v1.1.0", Body = "Feature updates", PublishedAt = DateTime.UtcNow.AddDays(-15) }
+        };
+
+        if (includePreReleases)
+        {
+            releases.Add(new GitHubRelease { Id = 3, Name = "v1.2.0-beta", TagName = "v1.2.0-beta", Body = "Beta release", IsPreRelease = true, PublishedAt = DateTime.UtcNow.AddDays(-5) });
+        }
+
+        return releases;
+    }
+
     #endregion
 }

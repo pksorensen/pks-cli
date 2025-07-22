@@ -69,12 +69,20 @@ services.Configure<PKS.CLI.Infrastructure.Services.MCP.McpConfiguration>(config 
     config.EnableAutoResourceDiscovery = true;
 });
 
-// Register the new dedicated MCP tool services (replacing legacy hardcoded tools)
+// Register MCP tool services for SDK-based hosting
+// These services contain the actual tool implementations marked with [McpServerTool] attributes
 services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.ProjectToolService>();
 services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.AgentToolService>();
 services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.DeploymentToolService>();
 services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.StatusToolService>();
 services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.SwarmToolService>();
+services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.UtilityToolService>();
+services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.DevcontainerToolService>();
+services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.HooksToolService>();
+services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.PrdToolService>();
+services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.McpManagementToolService>();
+services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.GitHubToolService>();
+services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.TemplateToolService>();
 
 // Configure tool service registration after container is built
 services.PostConfigure<PKS.CLI.Infrastructure.Services.MCP.McpConfiguration>(_ =>

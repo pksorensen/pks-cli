@@ -8,6 +8,10 @@ namespace PKS.Infrastructure.Services;
 public interface INuGetTemplateDiscoveryService
 {
     /// <summary>
+    /// Current configuration settings
+    /// </summary>
+    NuGetDiscoveryConfiguration Configuration { get; }
+    /// <summary>
     /// Discovers templates from NuGet packages with the specified tag
     /// </summary>
     /// <param name="tag">Tag to search for (default: "pks-devcontainers")</param>
@@ -74,4 +78,89 @@ public interface INuGetTemplateDiscoveryService
     Task<NuGetSourceValidationResult> ValidateSourcesAsync(
         IEnumerable<string> sources,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets detailed information about a template package including all templates it contains
+    /// </summary>
+    /// <param name="packageId">NuGet package ID</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>Template package information or null if not found</returns>
+    Task<NuGetTemplatePackage?> GetTemplatePackageAsync(string packageId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Configures the NuGet template discovery service
+    /// </summary>
+    /// <param name="configuration">Configuration settings</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>Configured service instance</returns>
+    Task<INuGetTemplateDiscoveryService> ConfigureAsync(NuGetDiscoveryConfiguration configuration, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Installs a template package to the specified output path
+    /// </summary>
+    /// <param name="packageId">NuGet package ID</param>
+    /// <param name="outputPath">Path to install the template</param>
+    /// <param name="version">Package version (optional)</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>Installation result</returns>
+    Task<NuGetTemplateExtractionResult> InstallTemplatePackageAsync(string packageId, string outputPath, string? version = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets available versions for a template package
+    /// </summary>
+    /// <param name="packageId">NuGet package ID</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>List of available versions</returns>
+    Task<List<string>> GetAvailableVersionsAsync(string packageId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets the latest version for a template package
+    /// </summary>
+    /// <param name="packageId">NuGet package ID</param>
+    /// <param name="includePrerelease">Include prerelease versions</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>Latest version or null if not found</returns>
+    Task<string?> GetLatestVersionAsync(string packageId, bool includePrerelease = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Checks for updates to installed template packages
+    /// </summary>
+    /// <param name="installedPackages">List of installed packages with their versions</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>Dictionary of package IDs with available updates</returns>
+    Task<Dictionary<string, string>> CheckForUpdatesAsync(
+        Dictionary<string, string> installedPackages, 
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Uninstalls a template package
+    /// </summary>
+    /// <param name="packageId">NuGet package ID</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>True if successful, false otherwise</returns>
+    Task<bool> UninstallTemplatePackageAsync(string packageId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets installed templates
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>List of installed templates</returns>
+    Task<List<NuGetDevcontainerTemplate>> GetInstalledTemplatesAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Installs a template
+    /// </summary>
+    /// <param name="packageId">Package ID to install</param>
+    /// <param name="version">Version to install</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>Installation result</returns>
+    Task<NuGetTemplateExtractionResult> InstallTemplateAsync(string packageId, string? version = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Uninstalls a template
+    /// </summary>
+    /// <param name="packageId">Package ID to uninstall</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>True if successful</returns>
+    Task<bool> UninstallTemplateAsync(string packageId, CancellationToken cancellationToken = default);
 }

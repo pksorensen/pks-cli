@@ -222,7 +222,7 @@ public class GitHubIntegrationInitializer : CodeInitializer
 - **GitHub**: {(string.IsNullOrEmpty(projectIdentity.GitHubRepository) ? "Not configured" : $"Connected to {projectIdentity.GitHubRepository}")}
 - **MCP Server**: {(string.IsNullOrEmpty(projectIdentity.McpServerId) ? "Not configured" : $"Server ID: {projectIdentity.McpServerId}")}
 - **Agents**: {projectIdentity.Agents.Count} registered
-- **Hooks**: {(projectIdentity.HooksConfiguration?.Enabled == true ? "Enabled" : "Not configured")}
+- **Hooks**: {(projectIdentity.HooksConfiguration != null ? "Configured" : "Not configured")}
 
 ## PKS CLI Information
 This project was created using PKS CLI version 1.0.0.

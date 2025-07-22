@@ -17,11 +17,37 @@ public class DevcontainerConfiguration
     [JsonPropertyName("features")]
     public Dictionary<string, object> Features { get; set; } = new();
 
+    /// <summary>
+    /// Base image for the devcontainer (alias for Image property)
+    /// </summary>
+    [JsonIgnore]
+    public string BaseImage 
+    {
+        get => Image;
+        set => Image = value;
+    }
+
+    /// <summary>
+    /// List of VS Code extensions to install
+    /// </summary>
+    [JsonIgnore]
+    public List<string> Extensions { get; set; } = new();
+
     [JsonPropertyName("customizations")]
     public Dictionary<string, object> Customizations { get; set; } = new();
 
     [JsonPropertyName("forwardPorts")]
     public int[] ForwardPorts { get; set; } = Array.Empty<int>();
+
+    /// <summary>
+    /// Forward ports as List for easier manipulation (alias for ForwardPorts array)
+    /// </summary>
+    [JsonIgnore]
+    public List<int> ForwardPortsList 
+    {
+        get => ForwardPorts?.ToList() ?? new List<int>();
+        set => ForwardPorts = value?.ToArray() ?? Array.Empty<int>();
+    }
 
     [JsonPropertyName("postCreateCommand")]
     public string PostCreateCommand { get; set; } = string.Empty;
@@ -34,6 +60,9 @@ public class DevcontainerConfiguration
 
     [JsonPropertyName("workspaceFolder")]
     public string? WorkspaceFolder { get; set; }
+
+    [JsonPropertyName("workspaceMount")]
+    public string? WorkspaceMount { get; set; }
 
     [JsonPropertyName("runArgs")]
     public string[]? RunArgs { get; set; }
@@ -52,6 +81,11 @@ public class DevcontainerConfiguration
 
     [JsonPropertyName("runServices")]
     public string[]? RunServices { get; set; }
+
+    [JsonPropertyName("volumes")]
+    public string[]? Volumes { get; set; }
+
+    public Dictionary<string, object> CustomSettings { get; set; } = new();
 }
 
 /// <summary>
@@ -62,6 +96,8 @@ public class DevcontainerBuildConfig
     [JsonPropertyName("dockerfile")]
     public string? Dockerfile { get; set; }
 
+    public string? DockerfilePath { get; set; }
+
     [JsonPropertyName("context")]
     public string? Context { get; set; }
 
@@ -70,6 +106,13 @@ public class DevcontainerBuildConfig
 
     [JsonPropertyName("target")]
     public string? Target { get; set; }
+}
+
+/// <summary>
+/// Alias for DevcontainerBuildConfig
+/// </summary>
+public class DevcontainerBuild : DevcontainerBuildConfig
+{
 }
 
 /// <summary>
@@ -85,12 +128,15 @@ public class DevcontainerFeature
     public string Category { get; set; } = string.Empty;
     public string[] Tags { get; set; } = Array.Empty<string>();
     public string Documentation { get; set; } = string.Empty;
+    public string DocumentationUrl => Documentation; // Alias for compatibility
     public Dictionary<string, object> DefaultOptions { get; set; } = new();
     public Dictionary<string, DevcontainerFeatureOption> AvailableOptions { get; set; } = new();
+    public Dictionary<string, DevcontainerFeatureOption> Options => AvailableOptions; // Alias for compatibility
     public string[] Dependencies { get; set; } = Array.Empty<string>();
     public string[] ConflictsWith { get; set; } = Array.Empty<string>();
     public bool IsDeprecated { get; set; }
     public string? DeprecationMessage { get; set; }
+    public string Maintainer { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -183,6 +229,7 @@ public class DevcontainerResult
     public List<string> Errors { get; set; } = new();
     public List<string> Warnings { get; set; } = new();
     public TimeSpan Duration { get; set; }
+    public bool DockerfileCreated { get; set; }
 }
 
 /// <summary>
@@ -240,10 +287,12 @@ public class FileGenerationResult
 {
     public bool Success { get; set; }
     public string FilePath { get; set; } = string.Empty;
+    public string GeneratedFilePath { get; set; } = string.Empty;
     public string Content { get; set; } = string.Empty;
     public string ErrorMessage { get; set; } = string.Empty;
     public long FileSize { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public List<string> ValidationErrors { get; set; } = new();
 }
 
 /// <summary>
@@ -313,4 +362,20 @@ public enum FeatureInstallMode
     Latest,
     Specific,
     None
+}
+
+/// <summary>
+/// Runtime information for a running devcontainer
+/// </summary>
+public class DevcontainerRuntimeInfo
+{
+    public string ContainerId { get; set; } = string.Empty;
+    public string ContainerName { get; set; } = string.Empty;
+    public DateTime StartedAt { get; set; }
+    public TimeSpan Uptime { get; set; }
+    public string MemoryUsage { get; set; } = string.Empty;
+    public string CpuUsage { get; set; } = string.Empty;
+    public Dictionary<string, string> NetworkPorts { get; set; } = new();
+    public string Status { get; set; } = string.Empty;
+    public Dictionary<string, object> Metadata { get; set; } = new();
 }

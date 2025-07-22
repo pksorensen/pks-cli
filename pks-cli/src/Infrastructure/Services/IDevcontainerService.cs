@@ -57,4 +57,56 @@ public interface IDevcontainerService
     /// <param name="outputPath">Target output path</param>
     /// <returns>Path validation result</returns>
     Task<PathValidationResult> ValidateOutputPathAsync(string outputPath);
+
+    // Additional methods for MCP tool service compatibility
+    /// <summary>
+    /// Initialize a new devcontainer configuration
+    /// </summary>
+    /// <param name="config">Devcontainer configuration</param>
+    /// <returns>Initialization result</returns>
+    Task<DevcontainerResult> InitializeAsync(DevcontainerConfiguration config);
+
+    /// <summary>
+    /// Check if current directory has a devcontainer configuration
+    /// </summary>
+    /// <returns>True if devcontainer exists</returns>
+    Task<bool> HasDevcontainerAsync();
+
+    /// <summary>
+    /// Add features to existing devcontainer
+    /// </summary>
+    /// <param name="features">Features to add</param>
+    /// <returns>Operation result</returns>
+    Task<DevcontainerResult> AddFeaturesAsync(List<string> features);
+
+    /// <summary>
+    /// Check if devcontainer is currently running
+    /// </summary>
+    /// <returns>True if running</returns>
+    Task<bool> IsRunningAsync();
+
+    /// <summary>
+    /// Get runtime information for running devcontainer
+    /// </summary>
+    /// <returns>Runtime information</returns>
+    Task<DevcontainerRuntimeInfo> GetRuntimeInfoAsync();
+
+    /// <summary>
+    /// Rebuild the devcontainer
+    /// </summary>
+    /// <param name="force">Force rebuild</param>
+    /// <returns>Rebuild result</returns>
+    Task<DevcontainerResult> RebuildAsync(bool force = false);
+
+    /// <summary>
+    /// Clear devcontainer cache
+    /// </summary>
+    /// <returns>Task</returns>
+    Task ClearCacheAsync();
+
+    /// <summary>
+    /// Get current devcontainer configuration
+    /// </summary>
+    /// <returns>Current configuration</returns>
+    Task<DevcontainerConfiguration> GetConfigurationAsync();
 }

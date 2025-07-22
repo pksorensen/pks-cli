@@ -77,4 +77,54 @@ public interface IGitHubService
     /// <param name="repositoryUrl">Repository URL to check</param>
     /// <returns>Access level and permissions information</returns>
     Task<GitHubAccessLevel> CheckRepositoryAccessAsync(string repositoryUrl);
+
+    /// <summary>
+    /// Checks if a repository exists
+    /// </summary>
+    /// <param name="owner">Repository owner</param>
+    /// <param name="repositoryName">Repository name</param>
+    /// <returns>True if repository exists</returns>
+    Task<bool> RepositoryExistsAsync(string owner, string repositoryName);
+
+    /// <summary>
+    /// Gets comprehensive repository information
+    /// </summary>
+    /// <param name="owner">Repository owner</param>
+    /// <param name="repositoryName">Repository name</param>
+    /// <returns>Repository information including metadata</returns>
+    Task<GitHubRepositoryInfo> GetRepositoryInfoAsync(string owner, string repositoryName);
+
+    /// <summary>
+    /// Gets repository activity information
+    /// </summary>
+    /// <param name="owner">Repository owner</param>
+    /// <param name="repositoryName">Repository name</param>
+    /// <param name="days">Number of days to look back for activity</param>
+    /// <returns>Repository activity data</returns>
+    Task<GitHubRepositoryActivity> GetRepositoryActivityAsync(string owner, string repositoryName, int days = 30);
+
+    /// <summary>
+    /// Gets available workflow templates
+    /// </summary>
+    /// <returns>List of available workflow templates</returns>
+    Task<List<GitHubWorkflowTemplate>> GetAvailableWorkflowTemplatesAsync();
+
+    /// <summary>
+    /// Sets up a workflow in the repository
+    /// </summary>
+    /// <param name="owner">Repository owner</param>
+    /// <param name="repositoryName">Repository name</param>
+    /// <param name="workflowTemplate">Workflow template to setup</param>
+    /// <param name="configuration">Workflow configuration</param>
+    /// <returns>Workflow setup result</returns>
+    Task<GitHubWorkflowSetupResult> SetupWorkflowAsync(string owner, string repositoryName, string workflowTemplate, WorkflowConfiguration configuration);
+
+    /// <summary>
+    /// Gets repository releases
+    /// </summary>
+    /// <param name="owner">Repository owner</param>
+    /// <param name="repositoryName">Repository name</param>
+    /// <param name="includePreReleases">Include pre-release versions</param>
+    /// <returns>List of releases</returns>
+    Task<List<GitHubRelease>> GetReleasesAsync(string owner, string repositoryName, bool includePreReleases = false);
 }
