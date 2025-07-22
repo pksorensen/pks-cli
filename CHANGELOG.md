@@ -17,9 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Updated GitHub Actions workflows to support semantic versioning
 
+### Fixed
+- ASCII command color validation - added robust validation for user input colors to prevent markup exceptions
+- Deploy command spinner visibility - improved spinner display during deployment operations and coordination with progress bars  
+- Agent command navigation flow - enhanced menu handling, error messaging, and user guidance
+- Status command header truncation - made headers and layouts responsive to terminal width to prevent truncation in narrow terminals
+
 ### Documentation
 - Added CONTRIBUTING.md with commit convention guidelines
 - Created comprehensive semantic release documentation
+- Updated command documentation with latest bug fixes and improvements
 
 ---
 
