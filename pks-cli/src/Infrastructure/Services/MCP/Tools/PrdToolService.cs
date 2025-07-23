@@ -40,7 +40,7 @@ public class PrdToolService
         bool includeUserStories = true,
         bool includeAcceptanceCriteria = true)
     {
-        _logger.LogInformation("MCP Tool: Generating PRD for product '{ProductName}' with template '{Template}'", 
+        _logger.LogInformation("MCP Tool: Generating PRD for product '{ProductName}' with template '{Template}'",
             productName, template);
 
         try
@@ -286,7 +286,7 @@ public class PrdToolService
         string strictness = "standard",
         bool includeSuggestions = true)
     {
-        _logger.LogInformation("MCP Tool: Validating PRD at '{FilePath}' with strictness '{Strictness}'", 
+        _logger.LogInformation("MCP Tool: Validating PRD at '{FilePath}' with strictness '{Strictness}'",
             filePath, strictness);
 
         try
@@ -401,7 +401,7 @@ public class PrdToolService
         bool detailed = false,
         string? category = null)
     {
-        _logger.LogInformation("MCP Tool: Getting PRD templates, detailed: {Detailed}, category: {Category}", 
+        _logger.LogInformation("MCP Tool: Getting PRD templates, detailed: {Detailed}, category: {Category}",
             detailed, category);
 
         try
@@ -493,7 +493,7 @@ public class PrdToolService
         string mode = "append",
         bool createBackup = true)
     {
-        _logger.LogInformation("MCP Tool: Updating PRD at '{FilePath}', section: {Section}, mode: {Mode}", 
+        _logger.LogInformation("MCP Tool: Updating PRD at '{FilePath}', section: {Section}, mode: {Mode}",
             filePath, section, mode);
 
         try

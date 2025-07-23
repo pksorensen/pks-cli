@@ -23,7 +23,7 @@ public class McpToolService
     {
         await Task.Delay(10); // Simulate async operation
         _logger.LogInformation("Getting registered MCP tools");
-        
+
         return new object[]
         {
             new { name = "pks_project_init", description = "Initialize new project" },
@@ -42,7 +42,7 @@ public class McpToolService
     {
         await Task.Delay(10); // Simulate async operation
         _logger.LogInformation("Getting MCP tool statistics");
-        
+
         return new
         {
             totalTools = 12,
@@ -71,7 +71,7 @@ public class McpToolService
     public List<McpServerTool> GetAvailableTools()
     {
         _logger.LogInformation("Getting available MCP tools");
-        
+
         return new List<McpServerTool>
         {
             new() { Name = "pks_swarm_init", Description = "Initialize swarm", Category = "swarm", Enabled = true },
@@ -97,7 +97,7 @@ public class McpToolService
     {
         await Task.Delay(50); // Simulate tool execution
         _logger.LogInformation("Executing MCP tool: {ToolName}", toolName);
-        
+
         return McpToolExecutionResult.CreateSuccess(
             message: $"Tool {toolName} executed successfully",
             data: new { toolName, parameters, executedAt = DateTime.UtcNow },

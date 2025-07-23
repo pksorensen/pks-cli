@@ -26,39 +26,39 @@ public class PrdIntegrationTests : IDisposable
         _services = new ServiceCollection();
         _console = new TestConsole();
         _mockPrdService = new Mock<IPrdService>();
-        
+
         // Setup services
         _services.AddSingleton(_mockPrdService.Object);
         _services.AddSingleton<ITypeRegistrar>(new TypeRegistrar(_services));
-        
+
         // Create command app with full configuration
         _app = new CommandApp(new TypeRegistrar(_services));
         _app.Configure(config =>
         {
             config.SetApplicationName("pks");
             config.SetApplicationVersion("1.0.0");
-            
+
             // Configure individual PRD commands
             config.AddCommand<PrdGenerateCommand>("generate")
                   .WithDescription("Generate a comprehensive PRD from an idea description")
                   .WithExample(new[] { "generate", "Build a task management app" });
-            
+
             config.AddCommand<PrdLoadCommand>("load")
                   .WithDescription("Load and parse an existing PRD file")
                   .WithExample(new[] { "load", "docs/PRD.md" });
-            
+
             config.AddCommand<PrdRequirementsCommand>("requirements")
                   .WithDescription("List and filter requirements from a PRD document")
                   .WithExample(new[] { "requirements", "--status", "draft" });
-            
+
             config.AddCommand<PrdStatusCommand>("status")
                   .WithDescription("Display PRD status, progress, and statistics")
                   .WithExample(new[] { "status", "--watch" });
-            
+
             config.AddCommand<PrdValidateCommand>("validate")
                   .WithDescription("Validate PRD for completeness, consistency, and quality")
                   .WithExample(new[] { "validate", "--strict" });
-            
+
             config.AddCommand<PrdTemplateCommand>("template")
                   .WithDescription("Generate PRD templates for different project types")
                   .WithExample(new[] { "template", "MyProject", "--type", "web" });
@@ -71,13 +71,13 @@ public class PrdIntegrationTests : IDisposable
         // This test verifies that all PRD commands are properly configured
         // Since we're not using branch commands, we'll test individual command availability
         var commands = new[] { "generate", "load", "requirements", "status", "validate", "template" };
-        
+
         foreach (var command in commands)
         {
             // The commands should be registered without throwing exceptions
             // This is verified during configuration in the constructor
         }
-        
+
         // If we reach here, all commands were configured successfully
         _app.Should().NotBeNull();
     }
@@ -107,7 +107,7 @@ public class PrdIntegrationTests : IDisposable
         // Assert
         result.Should().Be(0);
         _mockPrdService.Verify(s => s.GeneratePrdAsync(
-            It.Is<PrdGenerationRequest>(r => 
+            It.Is<PrdGenerationRequest>(r =>
                 r.IdeaDescription == "Build a task management app" &&
                 r.ProjectName == "TaskMaster"),
             It.IsAny<CancellationToken>()), Times.Once);

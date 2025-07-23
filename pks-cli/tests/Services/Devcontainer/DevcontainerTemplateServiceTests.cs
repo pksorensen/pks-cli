@@ -131,7 +131,7 @@ public class DevcontainerTemplateServiceTests : TestBase
 
         // Assert
         result.Should().NotBeNull();
-        
+
         if (expectedCategory != "test")
         {
             result.Should().Contain(t => t.Category == expectedCategory);
@@ -192,7 +192,7 @@ public class DevcontainerTemplateServiceTests : TestBase
     [InlineData("")]
     [InlineData("   ")]
     [InlineData(null)]
-    public async Task GetTemplateAsync_WithInvalidId_ShouldReturnNull(string invalidId)
+    public async Task GetTemplateAsync_WithInvalidId_ShouldReturnNull(string? invalidId)
     {
         // Arrange
         var mockService = DevcontainerServiceMocks.CreateTemplateService();
@@ -219,7 +219,7 @@ public class DevcontainerTemplateServiceTests : TestBase
         var service = mockService.Object;
 
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentNullException>(() => 
+        await Assert.ThrowsAsync<ArgumentNullException>(() =>
             service.ApplyTemplateAsync("dotnet-basic", null!));
     }
 
@@ -243,7 +243,7 @@ public class DevcontainerTemplateServiceTests : TestBase
         // Arrange
         var service = _mockTemplateService.Object;
         var templateId = "dotnet-basic";
-        
+
         var options1 = new DevcontainerOptions { Name = "project1" };
         var options2 = new DevcontainerOptions { Name = "project2" };
 

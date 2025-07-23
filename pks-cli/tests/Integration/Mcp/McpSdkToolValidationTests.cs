@@ -31,7 +31,7 @@ public class McpSdkToolValidationTests : TestBase
     {
         base.ConfigureServices(services);
         services.AddSingleton<McpToolService>();
-        
+
         // Register all tool services for testing
         services.AddSingleton<ProjectToolService>();
         services.AddSingleton<AgentToolService>();
@@ -45,7 +45,7 @@ public class McpSdkToolValidationTests : TestBase
     {
         // Arrange & Act
         var toolServiceTypes = GetToolServiceTypes();
-        
+
         // Assert
         toolServiceTypes.Should().NotBeEmpty("Should discover tool service types");
         toolServiceTypes.Should().HaveCountGreaterThan(3, "Should discover multiple tool services");
@@ -53,7 +53,7 @@ public class McpSdkToolValidationTests : TestBase
         foreach (var serviceType in toolServiceTypes)
         {
             _output.WriteLine($"Discovered tool service: {serviceType.Name}");
-            
+
             // Verify service can be resolved from DI container
             var service = ServiceProvider.GetService(serviceType);
             service.Should().NotBeNull($"Tool service {serviceType.Name} should be resolvable from DI container");
@@ -79,7 +79,7 @@ public class McpSdkToolValidationTests : TestBase
                 _output.WriteLine($"Validating tool method: {serviceType.Name}.{method.Name}");
 
                 // Validate return type
-                method.ReturnType.Should().Be(typeof(Task<object>), 
+                method.ReturnType.Should().Be(typeof(Task<object>),
                     $"Tool method {method.Name} must return Task<object>");
 
                 // Validate method is public
@@ -115,17 +115,17 @@ public class McpSdkToolValidationTests : TestBase
             tool.Name.Should().BeEquivalentTo(tool.Name.ToLowerInvariant(), $"Tool {tool.Name} should be lowercase");
 
             // Validate categories are consistent
-            var validCategories = new[] 
-            { 
-                "project-management", 
-                "deployment", 
-                "agent-management", 
+            var validCategories = new[]
+            {
+                "project-management",
+                "deployment",
+                "agent-management",
                 "task-management",
                 "monitoring",
                 "utility"
             };
-            
-            validCategories.Should().Contain(tool.Category, 
+
+            validCategories.Should().Contain(tool.Category,
                 $"Tool {tool.Name} category '{tool.Category}' should be from valid categories");
 
             // Validate descriptions are meaningful
@@ -183,7 +183,7 @@ public class McpSdkToolValidationTests : TestBase
             // Test invalid arguments - should handle gracefully
             var invalidResult = await _mcpToolService.ExecuteToolAsync(testCase.ToolName, testCase.InvalidArgs);
             invalidResult.Should().NotBeNull($"Tool {testCase.ToolName} should handle invalid arguments gracefully");
-            
+
             if (!invalidResult.Success)
             {
                 invalidResult.Error.Should().NotBeNullOrEmpty($"Failed execution should provide error details");
@@ -212,7 +212,7 @@ public class McpSdkToolValidationTests : TestBase
 
             // Assert
             result.Should().NotBeNull($"Tool {testCase.Tool} should handle missing parameters");
-            
+
             if (!result.Success)
             {
                 result.Error.Should().Contain(testCase.RequiredParam,
@@ -251,7 +251,7 @@ public class McpSdkToolValidationTests : TestBase
             {
                 var dependency = ServiceProvider.GetService(param.ParameterType);
                 dependency.Should().NotBeNull($"Dependency {param.ParameterType.Name} should be resolvable for {serviceType.Name}");
-                
+
                 _output.WriteLine($"  Dependency resolved: {param.ParameterType.Name}");
             }
         }
@@ -276,13 +276,13 @@ public class McpSdkToolValidationTests : TestBase
             {
                 var result = await _mcpToolService.ExecuteToolAsync(tool.Name, args);
                 results.Add(result);
-                
+
                 // Small delay to ensure different timestamps
                 await Task.Delay(100);
             }
 
             // Assert - Results should be consistent in structure
-            results.Should().AllSatisfy(result => 
+            results.Should().AllSatisfy(result =>
             {
                 result.Should().NotBeNull($"Tool {tool.Name} should always return a result");
                 result.DurationMs.Should().BeGreaterThan(0, $"Tool {tool.Name} should report execution time");
@@ -313,9 +313,9 @@ public class McpSdkToolValidationTests : TestBase
         // Assert
         result.Should().NotBeNull($"Tool {toolName} should return result");
         result.DurationMs.Should().BeGreaterThan(0, $"Tool {toolName} should report execution duration");
-        
+
         var totalDuration = (endTime - startTime).TotalMilliseconds;
-        result.DurationMs.Should().BeLessOrEqualTo((long)(totalDuration + 100), 
+        result.DurationMs.Should().BeLessOrEqualTo((long)(totalDuration + 100),
             $"Reported duration should be reasonable for {toolName}");
 
         _output.WriteLine($"Tool {toolName} execution metrics: {result.DurationMs}ms");
@@ -328,8 +328,8 @@ public class McpSdkToolValidationTests : TestBase
     {
         return Assembly.GetAssembly(typeof(ProjectToolService))!
             .GetTypes()
-            .Where(t => t.Name.EndsWith("ToolService") && 
-                       t.IsClass && 
+            .Where(t => t.Name.EndsWith("ToolService") &&
+                       t.IsClass &&
                        !t.IsAbstract &&
                        t.Namespace?.Contains("Tools") == true);
     }
@@ -357,18 +357,18 @@ public class McpSdkToolValidationTests : TestBase
         foreach (var param in parameters)
         {
             // Validate parameter types are supported by MCP
-            var supportedTypes = new[] 
-            { 
-                typeof(string), 
-                typeof(bool), 
-                typeof(int), 
+            var supportedTypes = new[]
+            {
+                typeof(string),
+                typeof(bool),
+                typeof(int),
                 typeof(double),
                 typeof(string[]),
                 typeof(int?),
                 typeof(bool?)
             };
 
-            supportedTypes.Should().Contain(param.ParameterType, 
+            supportedTypes.Should().Contain(param.ParameterType,
                 $"Parameter {param.Name} in {method.Name} has unsupported type {param.ParameterType}");
         }
     }

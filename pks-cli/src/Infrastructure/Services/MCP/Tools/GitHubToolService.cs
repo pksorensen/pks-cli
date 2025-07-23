@@ -41,7 +41,7 @@ public class GitHubToolService
         string? gitignoreTemplate = null,
         string? license = null)
     {
-        _logger.LogInformation("MCP Tool: Creating GitHub repository '{RepositoryName}', private: {IsPrivate}", 
+        _logger.LogInformation("MCP Tool: Creating GitHub repository '{RepositoryName}', private: {IsPrivate}",
             repositoryName, isPrivate);
 
         try
@@ -84,8 +84,8 @@ public class GitHubToolService
 
             // Create repository
             var repository = await _githubService.CreateRepositoryAsync(
-                repositoryName, 
-                description ?? $"Repository created by PKS CLI", 
+                repositoryName,
+                description ?? $"Repository created by PKS CLI",
                 isPrivate);
 
             if (repository != null)
@@ -150,7 +150,7 @@ public class GitHubToolService
         string[]? assignees = null,
         int? milestone = null)
     {
-        _logger.LogInformation("MCP Tool: Creating GitHub issue '{Title}' in repository '{RepositoryName}'", 
+        _logger.LogInformation("MCP Tool: Creating GitHub issue '{Title}' in repository '{RepositoryName}'",
             title, repositoryName);
 
         try
@@ -257,7 +257,7 @@ public class GitHubToolService
         bool includeActivity = true,
         bool includeStats = true)
     {
-        _logger.LogInformation("MCP Tool: Getting GitHub repository info for '{RepositoryName}', includeActivity: {IncludeActivity}, includeStats: {IncludeStats}", 
+        _logger.LogInformation("MCP Tool: Getting GitHub repository info for '{RepositoryName}', includeActivity: {IncludeActivity}, includeStats: {IncludeStats}",
             repositoryName, includeActivity, includeStats);
 
         try
@@ -404,7 +404,7 @@ public class GitHubToolService
         string targetBranch = "main",
         bool includeDeployment = false)
     {
-        _logger.LogInformation("MCP Tool: Setting up GitHub workflow '{WorkflowTemplate}' for repository '{RepositoryName}'", 
+        _logger.LogInformation("MCP Tool: Setting up GitHub workflow '{WorkflowTemplate}' for repository '{RepositoryName}'",
             workflowTemplate, repositoryName);
 
         try
@@ -511,7 +511,7 @@ public class GitHubToolService
         bool includePreReleases = false,
         bool includeDrafts = false)
     {
-        _logger.LogInformation("MCP Tool: Listing GitHub releases for repository '{RepositoryName}', count: {Count}", 
+        _logger.LogInformation("MCP Tool: Listing GitHub releases for repository '{RepositoryName}', count: {Count}",
             repositoryName, count);
 
         try

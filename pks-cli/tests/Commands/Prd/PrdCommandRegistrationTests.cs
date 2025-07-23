@@ -26,10 +26,10 @@ public class PrdCommandRegistrationTests : IDisposable
         _services = new ServiceCollection();
         _console = new TestConsole();
         _mockPrdService = new Mock<IPrdService>();
-        
+
         // Setup services
         _services.AddSingleton(_mockPrdService.Object);
-        
+
         // Register PRD commands as transient services
         _services.AddTransient<PrdGenerateCommand>();
         _services.AddTransient<PrdLoadCommand>();
@@ -37,9 +37,9 @@ public class PrdCommandRegistrationTests : IDisposable
         _services.AddTransient<PrdStatusCommand>();
         _services.AddTransient<PrdValidateCommand>();
         _services.AddTransient<PrdTemplateCommand>();
-        
+
         _services.AddSingleton<ITypeRegistrar>(new TypeRegistrar(_services));
-        
+
         // Create command app
         _app = new CommandApp(new TypeRegistrar(_services));
     }
@@ -166,12 +166,12 @@ public class PrdCommandRegistrationTests : IDisposable
     {
         // Verify that settings classes have the necessary attributes for command line parsing
         var properties = settingsType.GetProperties();
-        
+
         // Should have at least one property with CommandArgument or CommandOption attribute
-        var hasCommandAttributes = properties.Any(p => 
+        var hasCommandAttributes = properties.Any(p =>
             p.GetCustomAttributes(typeof(CommandArgumentAttribute), false).Any() ||
             p.GetCustomAttributes(typeof(CommandOptionAttribute), false).Any());
-        
+
         hasCommandAttributes.Should().BeTrue($"{settingsType.Name} should have command attributes");
     }
 

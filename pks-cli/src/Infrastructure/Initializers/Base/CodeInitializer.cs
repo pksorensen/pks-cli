@@ -13,18 +13,18 @@ public abstract class CodeInitializer : BaseInitializer
     protected override async Task<InitializationResult> ExecuteInternalAsync(InitializationContext context)
     {
         var result = InitializationResult.CreateSuccess($"Executed {Name} logic");
-        
+
         try
         {
             // Pre-execution hook
             await PreExecuteAsync(context, result);
-            
+
             // Main execution logic
             await ExecuteCodeLogicAsync(context, result);
-            
+
             // Post-execution hook
             await PostExecuteAsync(context, result);
-            
+
             return result;
         }
         catch (Exception ex)
@@ -82,7 +82,7 @@ public abstract class CodeInitializer : BaseInitializer
     {
         var assembly = GetType().Assembly;
         var resourceStream = assembly.GetManifestResourceStream(resourceName);
-        
+
         if (resourceStream == null)
         {
             result.Warnings.Add($"Embedded resource not found: {resourceName}");
@@ -92,7 +92,7 @@ public abstract class CodeInitializer : BaseInitializer
         using var reader = new StreamReader(resourceStream);
         var content = await reader.ReadToEndAsync();
         var processedContent = ReplacePlaceholders(content, context);
-        
+
         await CreateFileAsync(targetPath, processedContent, context, result);
     }
 
@@ -108,22 +108,22 @@ public abstract class CodeInitializer : BaseInitializer
         process.StartInfo.RedirectStandardOutput = true;
         process.StartInfo.RedirectStandardError = true;
         process.StartInfo.CreateNoWindow = true;
-        
+
         if (!string.IsNullOrEmpty(workingDirectory))
         {
             process.StartInfo.WorkingDirectory = workingDirectory;
         }
 
         process.Start();
-        
+
         var outputTask = process.StandardOutput.ReadToEndAsync();
         var errorTask = process.StandardError.ReadToEndAsync();
-        
+
         await process.WaitForExitAsync();
-        
+
         var output = await outputTask;
         var error = await errorTask;
-        
+
         return (process.ExitCode == 0, output, error);
     }
 
@@ -137,7 +137,7 @@ public abstract class CodeInitializer : BaseInitializer
             using var httpClient = new HttpClient();
             var content = await httpClient.GetStringAsync(url);
             var processedContent = ReplacePlaceholders(content, context);
-            
+
             await CreateFileAsync(targetPath, processedContent, context, result);
             return true;
         }
@@ -161,7 +161,7 @@ public abstract class CodeInitializer : BaseInitializer
 
         var content = await File.ReadAllTextAsync(filePath);
         var modifiedContent = modifier(content);
-        
+
         if (content != modifiedContent)
         {
             await File.WriteAllTextAsync(filePath, modifiedContent);
@@ -175,7 +175,7 @@ public abstract class CodeInitializer : BaseInitializer
     protected async Task AppendToFileAsync(string filePath, string content, InitializationContext context, InitializationResult result)
     {
         var processedContent = ReplacePlaceholders(content, context);
-        
+
         var directory = Path.GetDirectoryName(filePath);
         if (!string.IsNullOrEmpty(directory))
         {

@@ -61,7 +61,7 @@ public class InitializationService : IInitializationService
             summary.Success = false;
             summary.ErrorMessage = ex.Message;
             summary.EndTime = DateTime.Now;
-            
+
             AnsiConsole.WriteException(ex);
             return summary;
         }
@@ -70,7 +70,7 @@ public class InitializationService : IInitializationService
     public async Task<IEnumerable<TemplateInfo>> GetAvailableTemplatesAsync()
     {
         var templates = new List<TemplateInfo>();
-        
+
         // Get templates from template directory
         var templateBasePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Templates");
         if (Directory.Exists(templateBasePath))
@@ -79,7 +79,7 @@ public class InitializationService : IInitializationService
             {
                 var templateName = Path.GetFileName(templateDir);
                 var infoFile = Path.Combine(templateDir, "template.json");
-                
+
                 var template = new TemplateInfo
                 {
                     Name = templateName,
@@ -168,7 +168,7 @@ public class InitializationService : IInitializationService
     private void DisplaySummary(InitializationSummary summary)
     {
         AnsiConsole.WriteLine();
-        
+
         var panel = new Panel(CreateSummaryContent(summary))
             .Border(BoxBorder.Double)
             .BorderStyle(summary.Success ? "green" : "red")

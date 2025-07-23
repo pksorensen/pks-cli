@@ -91,10 +91,10 @@ public class DevcontainerFeatureRegistryTests : TestBase
         // Assert
         result.Should().NotBeNull();
         result.Should().HaveCount(expectedCount);
-        
+
         if (expectedCount > 0)
         {
-            result.Should().Contain(f => 
+            result.Should().Contain(f =>
                 f.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                 f.Description.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                 f.Tags.Any(t => t.Contains(query, StringComparison.OrdinalIgnoreCase)));
@@ -118,7 +118,7 @@ public class DevcontainerFeatureRegistryTests : TestBase
         // Assert
         result.Should().NotBeNull();
         result.Should().HaveCount(expectedCount);
-        
+
         if (expectedCount > 0)
         {
             result.Should().OnlyContain(f => f.Category == category);
@@ -285,12 +285,12 @@ public class DevcontainerFeatureRegistryTests : TestBase
     [InlineData("")]
     [InlineData("   ")]
     [InlineData(null)]
-    public async Task GetFeatureAsync_WithInvalidId_ShouldReturnNull(string invalidId)
+    public async Task GetFeatureAsync_WithInvalidId_ShouldReturnNull(string? invalidId)
     {
         // Arrange
         var mockRegistry = DevcontainerServiceMocks.CreateFeatureRegistry();
         mockRegistry.Setup(x => x.GetFeatureAsync(It.IsAny<string>()))
-            .ReturnsAsync((string id) => string.IsNullOrWhiteSpace(id) ? null : 
+            .ReturnsAsync((string id) => string.IsNullOrWhiteSpace(id) ? null :
                 DevcontainerTestData.GetAvailableFeatures().FirstOrDefault(f => f.Id == id));
 
         var registry = mockRegistry.Object;

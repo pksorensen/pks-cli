@@ -26,16 +26,16 @@ public class PrdErrorHandlingTests : IDisposable
         _services = new ServiceCollection();
         _console = new TestConsole();
         _mockPrdService = new Mock<IPrdService>();
-        
+
         // Setup services
         _services.AddSingleton(_mockPrdService.Object);
-        
+
         // Create command app
         _app = new CommandApp(new TypeRegistrar(_services));
         _app.Configure(config =>
         {
             config.SetApplicationName("pks");
-            
+
             config.AddCommand<PrdGenerateCommand>("generate");
             config.AddCommand<PrdLoadCommand>("load");
             config.AddCommand<PrdRequirementsCommand>("requirements");
@@ -58,7 +58,7 @@ public class PrdErrorHandlingTests : IDisposable
         result.Should().Be(1);
         _console.Output.Should().Contain("Idea description is required");
         _mockPrdService.Verify(s => s.GeneratePrdAsync(
-            It.IsAny<PrdGenerationRequest>(), 
+            It.IsAny<PrdGenerationRequest>(),
             It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -76,7 +76,7 @@ public class PrdErrorHandlingTests : IDisposable
         _console.Output.Should().Contain("Invalid template type");
         _console.Output.Should().Contain("Valid types: standard, technical, mobile, web, api, minimal, enterprise");
         _mockPrdService.Verify(s => s.GeneratePrdAsync(
-            It.IsAny<PrdGenerationRequest>(), 
+            It.IsAny<PrdGenerationRequest>(),
             It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -174,8 +174,8 @@ public class PrdErrorHandlingTests : IDisposable
         result.Should().Be(1);
         _console.Output.Should().Contain("Invalid status: invalid-status");
         _mockPrdService.Verify(s => s.GetRequirementsAsync(
-            It.IsAny<PrdDocument>(), 
-            It.IsAny<RequirementStatus?>(), 
+            It.IsAny<PrdDocument>(),
+            It.IsAny<RequirementStatus?>(),
             It.IsAny<RequirementPriority?>()), Times.Never);
     }
 
@@ -289,19 +289,19 @@ public class PrdErrorHandlingTests : IDisposable
             Success = true,
             IsValid = false,
             CompletenessScore = 45.0,
-            Errors = new List<object> 
-            { 
+            Errors = new List<object>
+            {
                 "Missing project description",
                 "No acceptance criteria defined",
                 "Stakeholders not specified"
             },
-            Warnings = new List<object> 
-            { 
+            Warnings = new List<object>
+            {
                 "Only 2 requirements defined",
                 "No user stories for requirements"
             },
-            Suggestions = new List<PrdSuggestion> 
-            { 
+            Suggestions = new List<PrdSuggestion>
+            {
                 new() { Type = "Performance", Description = "Add performance requirements" },
                 new() { Type = "Metrics", Description = "Define success metrics" }
             }
@@ -341,9 +341,9 @@ public class PrdErrorHandlingTests : IDisposable
         result.Should().Be(1);
         _console.Output.Should().Contain("Project name is required");
         _mockPrdService.Verify(s => s.GenerateTemplateAsync(
-            It.IsAny<string>(), 
-            It.IsAny<PrdTemplateType>(), 
-            It.IsAny<string>(), 
+            It.IsAny<string>(),
+            It.IsAny<PrdTemplateType>(),
+            It.IsAny<string>(),
             It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -382,7 +382,7 @@ public class PrdErrorHandlingTests : IDisposable
 
             // Assert
             result.Should().NotBe(0, $"Command should fail: {string.Join(" ", testCase.Args)}");
-            _console.Output.Should().Contain(testCase.ExpectedError, 
+            _console.Output.Should().Contain(testCase.ExpectedError,
                 $"Error message should contain '{testCase.ExpectedError}' for command: {string.Join(" ", testCase.Args)}");
         }
     }

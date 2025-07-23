@@ -93,7 +93,7 @@ public class DevcontainerToolService
                 ForwardPortsList = forwardPorts?.ToList() ?? new List<int>(),
                 PostCreateCommand = postCreateCommand
             };
-            
+
             // Set features (convert from string[] to Dictionary for JSON serialization)
             if (features != null)
             {
@@ -110,7 +110,7 @@ public class DevcontainerToolService
             {
                 // Get additional information about the created configuration
                 var configDetails = await _devcontainerService.GetConfigurationAsync();
-                
+
                 return new
                 {
                     success = true,
@@ -162,7 +162,7 @@ public class DevcontainerToolService
         string? category = null,
         bool detailed = false)
     {
-        _logger.LogInformation("MCP Tool: Listing devcontainer features, category: '{Category}', detailed: {Detailed}", 
+        _logger.LogInformation("MCP Tool: Listing devcontainer features, category: '{Category}', detailed: {Detailed}",
             category, detailed);
 
         try
@@ -243,7 +243,7 @@ public class DevcontainerToolService
         string[] features,
         bool rebuild = false)
     {
-        _logger.LogInformation("MCP Tool: Adding features {Features} to devcontainer, rebuild: {Rebuild}", 
+        _logger.LogInformation("MCP Tool: Adding features {Features} to devcontainer, rebuild: {Rebuild}",
             string.Join(", ", features), rebuild);
 
         try
@@ -263,7 +263,7 @@ public class DevcontainerToolService
             // Validate features
             var availableFeatures = await _featureRegistry.GetAvailableFeaturesAsync();
             var invalidFeatures = features.Where(f => !availableFeatures.Any(af => af.Id == f)).ToArray();
-            
+
             if (invalidFeatures.Length > 0)
             {
                 return new
@@ -306,7 +306,7 @@ public class DevcontainerToolService
                         updatedAt = result.updatedAt,
                         rebuildStatus = rebuildResult.Success ? "completed" : "failed",
                         rebuildMessage = rebuildResult.Message,
-                        message = rebuildResult.Success 
+                        message = rebuildResult.Success
                             ? "Features added and container rebuilt successfully"
                             : "Features added but container rebuild failed"
                     };
@@ -351,7 +351,7 @@ public class DevcontainerToolService
         try
         {
             var hasDevcontainer = await _devcontainerService.HasDevcontainerAsync();
-            
+
             if (!hasDevcontainer)
             {
                 return new
@@ -383,7 +383,7 @@ public class DevcontainerToolService
                 configurationFile = ".devcontainer/devcontainer.json",
                 lastModified = File.GetLastWriteTime(".devcontainer/devcontainer.json"),
                 isRunning,
-                message = isRunning 
+                message = isRunning
                     ? "Devcontainer is configured and running"
                     : "Devcontainer is configured but not running"
             };
@@ -437,7 +437,7 @@ public class DevcontainerToolService
         bool force = false,
         bool clearCache = false)
     {
-        _logger.LogInformation("MCP Tool: Rebuilding devcontainer, force: {Force}, clearCache: {ClearCache}", 
+        _logger.LogInformation("MCP Tool: Rebuilding devcontainer, force: {Force}, clearCache: {ClearCache}",
             force, clearCache);
 
         try
@@ -465,7 +465,7 @@ public class DevcontainerToolService
             if (rebuildResult.Success)
             {
                 var runtimeInfo = await _devcontainerService.GetRuntimeInfoAsync();
-                
+
                 return new
                 {
                     success = true,

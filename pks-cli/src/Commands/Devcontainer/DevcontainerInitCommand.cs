@@ -48,7 +48,7 @@ public class DevcontainerInitCommand : DevcontainerCommand<DevcontainerInitSetti
 
             // Validate and resolve paths
             var outputPath = ValidateAndResolvePath(settings.OutputPath);
-            
+
             // Check if devcontainer already exists
             var existingConfigPath = Path.Combine(outputPath, ".devcontainer", "devcontainer.json");
             if (File.Exists(existingConfigPath) && !settings.Force)
@@ -72,7 +72,7 @@ public class DevcontainerInitCommand : DevcontainerCommand<DevcontainerInitSetti
 
             // Build devcontainer options
             var options = await BuildDevcontainerOptionsAsync(settings, outputPath);
-            
+
             // Validate feature dependencies
             if (options.Features.Any())
             {
@@ -81,7 +81,7 @@ public class DevcontainerInitCommand : DevcontainerCommand<DevcontainerInitSetti
                 {
                     DisplayError("Feature dependency resolution failed:");
                     DisplayError($"  • {resolutionResult.ErrorMessage}");
-                    
+
                     if (resolutionResult.ConflictingFeatures.Any())
                     {
                         DisplayError("Feature conflicts detected:");
@@ -92,10 +92,10 @@ public class DevcontainerInitCommand : DevcontainerCommand<DevcontainerInitSetti
                     }
                     return 1;
                 }
-                
+
                 // Update features with resolved dependencies
                 options.Features = resolutionResult.ResolvedFeatures.Select(f => f.Id).ToList();
-                
+
                 if (resolutionResult.MissingDependencies.Any())
                 {
                     DisplayWarning("Missing dependencies detected and will be added:");
@@ -123,7 +123,7 @@ public class DevcontainerInitCommand : DevcontainerCommand<DevcontainerInitSetti
             if (result.Success)
             {
                 DisplaySuccess("Devcontainer configuration created successfully");
-                
+
                 if (result.Configuration != null)
                 {
                     DisplayConfigurationSummary(
@@ -153,7 +153,7 @@ public class DevcontainerInitCommand : DevcontainerCommand<DevcontainerInitSetti
             else
             {
                 DisplayError($"Failed to create devcontainer configuration: {result.Message}");
-                
+
                 if (result.Errors.Any())
                 {
                     foreach (var error in result.Errors)
@@ -308,14 +308,14 @@ public class DevcontainerInitCommand : DevcontainerCommand<DevcontainerInitSetti
         {
             return extensionList.Select(e => e.ToString() ?? string.Empty).Where(s => !string.IsNullOrEmpty(s));
         }
-        
+
         return Enumerable.Empty<string>();
     }
 
     private void DisplayNextSteps(string outputPath)
     {
         AnsiConsole.WriteLine();
-        
+
         var nextSteps = new Panel(
             new Rows(
                 new Text("1. Open the project in VS Code"),

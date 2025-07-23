@@ -37,12 +37,12 @@ public class DevcontainerNuGetTemplateTests : TestBase
 
         // Assert
         discoveredTemplates.Should().NotBeEmpty();
-        
+
         if (pksTemplate != null)
         {
             pksTemplate.Id.Should().Be(packageId);
             pksTemplate.Templates.Should().Contain(t => t.ShortName == templateId);
-            
+
             var template = pksTemplate.Templates.First(t => t.ShortName == templateId);
             template.Name.Should().NotBeNullOrEmpty();
             template.Description.Should().NotBeNullOrEmpty();
@@ -65,7 +65,7 @@ public class DevcontainerNuGetTemplateTests : TestBase
         installResult.Success.Should().BeTrue();
         installResult.InstalledTemplates.Should().NotBeEmpty();
         installResult.InstalledTemplates.Should().Contain(t => t.ShortName.Contains("pks-universal-devcontainer"));
-        
+
         // Verify template files were installed
         var templatePath = Path.Combine(testOutputPath, "templates");
         if (Directory.Exists(templatePath))
@@ -102,7 +102,7 @@ public class DevcontainerNuGetTemplateTests : TestBase
         // Assert
         template.Should().NotBeNull();
         template!.Id.Should().Be(templateId);
-        
+
         extractionResult.Success.Should().BeTrue();
         extractionResult.ExtractedFiles.Should().NotBeEmpty();
         extractionResult.ExtractedFiles.Should().Contain(f => f.EndsWith("devcontainer.json"));
@@ -123,7 +123,7 @@ public class DevcontainerNuGetTemplateTests : TestBase
         {
             availableVersions.Should().NotBeEmpty();
             availableVersions.Should().OnlyContain(v => !string.IsNullOrWhiteSpace(v));
-            
+
             if (latestVersion != null)
             {
                 latestVersion.Should().NotBeNullOrWhiteSpace();
@@ -171,11 +171,11 @@ public class DevcontainerNuGetTemplateTests : TestBase
         foreach (var searchTerm in searchTerms)
         {
             var searchResults = await _nugetService.SearchTemplatesAsync(searchTerm);
-            
+
             if (searchResults.Any())
             {
                 searchResults.Should().NotBeEmpty();
-                searchResults.Should().OnlyContain(r => 
+                searchResults.Should().OnlyContain(r =>
                     r.Id.ToLower().Contains(searchTerm.ToLower()) ||
                     r.Description.ToLower().Contains(searchTerm.ToLower()) ||
                     r.Tags.Any(t => t.ToLower().Contains(searchTerm.ToLower())));
@@ -208,7 +208,7 @@ public class DevcontainerNuGetTemplateTests : TestBase
 
         // Assert
         extractionResult.Success.Should().BeTrue();
-        
+
         var devcontainerJsonPath = extractionResult.ExtractedFiles.First(f => f.EndsWith("devcontainer.json"));
         var devcontainerContent = await File.ReadAllTextAsync(devcontainerJsonPath);
         var config = JsonSerializer.Deserialize<DevcontainerConfiguration>(devcontainerContent);
@@ -227,7 +227,7 @@ public class DevcontainerNuGetTemplateTests : TestBase
 
         // Install current version
         var installResult = await _nugetService.InstallTemplatePackageAsync(packageId, testOutputPath);
-        
+
         if (installResult.Success)
         {
             // Act
@@ -236,7 +236,7 @@ public class DevcontainerNuGetTemplateTests : TestBase
 
             // Assert
             updateCheckResult.Should().NotBeNull();
-            
+
             // If an update is available for this package, it should be in the dictionary
             if (updateCheckResult.ContainsKey(packageId))
             {
@@ -254,7 +254,7 @@ public class DevcontainerNuGetTemplateTests : TestBase
 
         // Install template first
         var installResult = await _nugetService.InstallTemplatePackageAsync(packageId, testOutputPath);
-        
+
         if (installResult.Success)
         {
             // Act
@@ -262,7 +262,7 @@ public class DevcontainerNuGetTemplateTests : TestBase
 
             // Assert
             uninstallResult.Should().BeTrue();
-            
+
             // Verify template is no longer available
             var template = await _templateService.GetTemplateAsync("pks-universal-devcontainer");
             template.Should().BeNull();
@@ -281,7 +281,7 @@ public class DevcontainerNuGetTemplateTests : TestBase
 
         // Assert
         templatePackage.Should().NotBeNull();
-        
+
         if (templatePackage != null)
         {
             templatePackage.Id.Should().Be(packageId);
@@ -310,7 +310,7 @@ public class DevcontainerNuGetTemplateTests : TestBase
         {
             result1.Id.Should().Be(result2.Id);
             result1.Version.Should().Be(result2.Version);
-            
+
             // Second call should generally be faster (cached)
             // Note: This might not always be true due to system variations, so we just check they're both reasonable
             duration1.Should().BeLessThan(TimeSpan.FromSeconds(30));
@@ -323,7 +323,7 @@ public class DevcontainerNuGetTemplateTests : TestBase
     {
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory("nuget-template-configuration");
-        
+
         // Configure NuGet service with custom settings
         var configuration = new NuGetDiscoveryConfiguration
         {
@@ -358,7 +358,7 @@ public class DevcontainerNuGetTemplateTests : TestBase
         // Assert
         result.Should().BeNull();
         searchResults.Should().BeEmpty();
-        
+
         // Service should handle errors gracefully without throwing exceptions
         var installResult = await _nugetService.InstallTemplatePackageAsync(invalidPackageId, CreateTestArtifactDirectory("error-handling"));
         installResult.Success.Should().BeFalse();
@@ -382,14 +382,14 @@ public class DevcontainerNuGetTemplateTests : TestBase
 
         // Assert
         results.Should().HaveCount(5);
-        
+
         // All results should be consistent
         var nonNullResults = results.Where(r => r != null).ToList();
         if (nonNullResults.Any())
         {
             var firstResult = nonNullResults.First();
-            nonNullResults.Should().OnlyContain(r => 
-                r!.Id == firstResult!.Id && 
+            nonNullResults.Should().OnlyContain(r =>
+                r!.Id == firstResult!.Id &&
                 r.Version == firstResult.Version);
         }
     }
@@ -400,12 +400,12 @@ public class DevcontainerNuGetTemplateTests : TestBase
     private string CreateTestArtifactDirectory(string testName)
     {
         var testArtifactsPath = Path.Combine(Path.GetTempPath(), "test-artifacts", "nuget-templates", testName);
-        
+
         if (Directory.Exists(testArtifactsPath))
         {
             Directory.Delete(testArtifactsPath, true);
         }
-        
+
         Directory.CreateDirectory(testArtifactsPath);
         return testArtifactsPath;
     }

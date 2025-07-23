@@ -30,7 +30,7 @@ public class HookEventCommandsTests : TestBase
         return pascalCase switch
         {
             "PreToolUse" => "pre-tool-use",
-            "PostToolUse" => "post-tool-use", 
+            "PostToolUse" => "post-tool-use",
             "UserPromptSubmit" => "user-prompt-submit",
             "Stop" => "stop",
             _ => pascalCase.ToLower()
@@ -44,7 +44,7 @@ public class HookEventCommandsTests : TestBase
         var command = new PreToolUseCommand();
         var settings = new HooksSettings();
         var context = CreateMockCommandContext("pre-tool-use");
-        
+
         var originalDirectory = Directory.GetCurrentDirectory();
         Directory.SetCurrentDirectory(_testDirectory);
         AnsiConsole.Console = _testConsole;
@@ -56,7 +56,7 @@ public class HookEventCommandsTests : TestBase
 
             // Assert
             result.Should().Be(0, "PreToolUse command should return success exit code");
-            
+
             var output = _testConsole.Output;
             output.Should().Contain("PKS Hooks: PreToolUse Event Triggered");
             output.Should().Contain("✓ PreToolUse hook completed successfully");
@@ -77,7 +77,7 @@ public class HookEventCommandsTests : TestBase
         var command = new PostToolUseCommand();
         var settings = new HooksSettings();
         var context = CreateMockCommandContext("post-tool-use");
-        
+
         var originalDirectory = Directory.GetCurrentDirectory();
         Directory.SetCurrentDirectory(_testDirectory);
         AnsiConsole.Console = _testConsole;
@@ -89,7 +89,7 @@ public class HookEventCommandsTests : TestBase
 
             // Assert
             result.Should().Be(0, "PostToolUse command should return success exit code");
-            
+
             var output = _testConsole.Output;
             output.Should().Contain("PKS Hooks: PostToolUse Event Triggered");
             output.Should().Contain("✓ PostToolUse hook completed successfully");
@@ -110,7 +110,7 @@ public class HookEventCommandsTests : TestBase
         var command = new UserPromptSubmitCommand();
         var settings = new HooksSettings();
         var context = CreateMockCommandContext("user-prompt-submit");
-        
+
         var originalDirectory = Directory.GetCurrentDirectory();
         Directory.SetCurrentDirectory(_testDirectory);
         AnsiConsole.Console = _testConsole;
@@ -122,7 +122,7 @@ public class HookEventCommandsTests : TestBase
 
             // Assert
             result.Should().Be(0, "UserPromptSubmit command should return success exit code");
-            
+
             var output = _testConsole.Output;
             output.Should().Contain("PKS Hooks: UserPromptSubmit Event Triggered");
             output.Should().Contain("✓ UserPromptSubmit hook completed successfully");
@@ -143,7 +143,7 @@ public class HookEventCommandsTests : TestBase
         var command = new StopCommand();
         var settings = new HooksSettings();
         var context = CreateMockCommandContext("stop");
-        
+
         var originalDirectory = Directory.GetCurrentDirectory();
         Directory.SetCurrentDirectory(_testDirectory);
         AnsiConsole.Console = _testConsole;
@@ -155,7 +155,7 @@ public class HookEventCommandsTests : TestBase
 
             // Assert
             result.Should().Be(0, "Stop command should return success exit code");
-            
+
             var output = _testConsole.Output;
             output.Should().Contain("PKS Hooks: Stop Event Triggered");
             output.Should().Contain("✓ Stop hook completed successfully");
@@ -180,7 +180,7 @@ public class HookEventCommandsTests : TestBase
         var command = (AsyncCommand<HooksSettings>)Activator.CreateInstance(commandType)!;
         var settings = new HooksSettings();
         var context = CreateMockCommandContext(ToKebabCase(expectedEventType));
-        
+
         AnsiConsole.Console = _testConsole;
 
         // Act
@@ -200,7 +200,7 @@ public class HookEventCommandsTests : TestBase
         var command = new PreToolUseCommand();
         var settings = new HooksSettings();
         var context = CreateMockCommandContext("pre-tool-use");
-        
+
         // Set test environment variable
         Environment.SetEnvironmentVariable("PKS_TEST_VAR", "test_value");
         AnsiConsole.Console = _testConsole;
@@ -230,7 +230,7 @@ public class HookEventCommandsTests : TestBase
         var command = new PreToolUseCommand();
         var settings = new HooksSettings();
         var context = CreateMockCommandContext("pre-tool-use");
-        
+
         AnsiConsole.Console = _testConsole;
 
         // Act
@@ -251,7 +251,7 @@ public class HookEventCommandsTests : TestBase
         var command = new PreToolUseCommand();
         var settings = new HooksSettings();
         var context = CreateMockCommandContext("pre-tool-use");
-        
+
         var originalDirectory = Directory.GetCurrentDirectory();
         Directory.SetCurrentDirectory(_testDirectory);
         AnsiConsole.Console = _testConsole;
@@ -280,7 +280,7 @@ public class HookEventCommandsTests : TestBase
         var command = new PreToolUseCommand();
         var settings = new HooksSettings();
         var context = CreateMockCommandContext("pre-tool-use");
-        
+
         AnsiConsole.Console = _testConsole;
 
         // Act
@@ -299,12 +299,12 @@ public class HookEventCommandsTests : TestBase
     {
         // This test verifies error handling for stdin reading
         // The actual commands handle exceptions gracefully
-        
+
         // Arrange
         var command = new PreToolUseCommand();
         var settings = new HooksSettings();
         var context = CreateMockCommandContext("pre-tool-use");
-        
+
         AnsiConsole.Console = _testConsole;
 
         // Act
@@ -352,7 +352,7 @@ public class HookEventCommandsTests : TestBase
     {
         // This test ensures all hook commands have proper documentation
         // which is important for maintainability and Claude Code integration
-        
+
         var commandTypes = new[]
         {
             typeof(PreToolUseCommand),
@@ -377,13 +377,13 @@ public class HookEventCommandsTests : TestBase
     public void HookEventCommands_ShouldFollowNamingConvention(string eventType, string expectedCommandName)
     {
         // Assert - Verify the mapping between event types and command names
-        eventType.Should().MatchRegex(@"^[A-Z][a-zA-Z]*$", 
+        eventType.Should().MatchRegex(@"^[A-Z][a-zA-Z]*$",
             "Event types should be PascalCase");
-        
-        expectedCommandName.Should().MatchRegex(@"^[a-z]+-?[a-z]*-?[a-z]*$", 
+
+        expectedCommandName.Should().MatchRegex(@"^[a-z]+-?[a-z]*-?[a-z]*$",
             "Command names should be kebab-case");
-        
-        expectedCommandName.Should().NotContain("_", 
+
+        expectedCommandName.Should().NotContain("_",
             "Command names should not contain underscores");
     }
 

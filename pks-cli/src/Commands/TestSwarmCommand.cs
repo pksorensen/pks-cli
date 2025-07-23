@@ -54,7 +54,7 @@ public class TestSwarmCommand : AsyncCommand<TestSwarmSettings>
             if (settings.ExecuteTest)
             {
                 AnsiConsole.MarkupLine("[yellow]2. Testing swarm_init tool execution...[/]");
-                
+
                 var arguments = new Dictionary<string, object>
                 {
                     { "swarm_name", "test-swarm" },
@@ -70,7 +70,7 @@ public class TestSwarmCommand : AsyncCommand<TestSwarmSettings>
                 {
                     AnsiConsole.MarkupLine($"[green]✓[/] Tool executed successfully");
                     AnsiConsole.MarkupLine($"[dim]Message:[/] {result.Message}");
-                    
+
                     // Additional result data can be shown here when needed
                 }
                 else

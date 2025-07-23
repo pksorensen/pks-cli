@@ -13,7 +13,7 @@ namespace PKS.CLI.Infrastructure.Services.MCP.Tools;
 public class SwarmToolService
 {
     private readonly ILogger<SwarmToolService> _logger;
-    
+
     // In-memory storage for swarm state (in production, this would use persistent storage)
     private static readonly ConcurrentDictionary<string, SwarmState> _swarms = new();
     private static readonly ConcurrentDictionary<string, AgentState> _agents = new();
@@ -36,7 +36,7 @@ public class SwarmToolService
         string coordinationStrategy = "centralized",
         int memoryLimitMb = 2048)
     {
-        _logger.LogInformation("MCP Tool: Initializing swarm '{SwarmName}' with strategy '{Strategy}'", 
+        _logger.LogInformation("MCP Tool: Initializing swarm '{SwarmName}' with strategy '{Strategy}'",
             swarmName, coordinationStrategy);
 
         try
@@ -153,7 +153,7 @@ public class SwarmToolService
         string[]? capabilities = null,
         string priority = "normal")
     {
-        _logger.LogInformation("MCP Tool: Spawning agent of type '{AgentType}' in swarm '{SwarmId}'", 
+        _logger.LogInformation("MCP Tool: Spawning agent of type '{AgentType}' in swarm '{SwarmId}'",
             agentType, swarmId);
 
         try
@@ -199,7 +199,7 @@ public class SwarmToolService
             // Create agent
             var agentId = $"agent_{Guid.NewGuid():N}";
             var memoryUsage = CalculateAgentMemoryUsage(agentType);
-            
+
             var agentState = new AgentState
             {
                 Id = agentId,
@@ -282,7 +282,7 @@ public class SwarmToolService
         int maxExecutionTimeMinutes = 60,
         string[]? requiredCapabilities = null)
     {
-        _logger.LogInformation("MCP Tool: Orchestrating task '{TaskDefinition}' in swarm '{SwarmId}'", 
+        _logger.LogInformation("MCP Tool: Orchestrating task '{TaskDefinition}' in swarm '{SwarmId}'",
             taskDefinition, swarmId);
 
         try
@@ -311,10 +311,10 @@ public class SwarmToolService
 
             // Find suitable agents
             var availableAgents = _agents.Values
-                .Where(a => a.SwarmId == swarmState.Id && 
-                           a.Status == "active" && 
+                .Where(a => a.SwarmId == swarmState.Id &&
+                           a.Status == "active" &&
                            a.CurrentTaskId == null &&
-                           (requiredCapabilities == null || 
+                           (requiredCapabilities == null ||
                             requiredCapabilities.All(rc => a.Capabilities.Contains(rc))))
                 .ToList();
 
@@ -332,7 +332,7 @@ public class SwarmToolService
             var taskId = $"task_{Guid.NewGuid():N}";
             var estimatedDuration = CalculateTaskDuration(taskDefinition, taskPriority, parallelization);
             var assignedAgentCount = Math.Min(
-                parallelization ? Math.Max(1, availableAgents.Count / 2) : 1, 
+                parallelization ? Math.Max(1, availableAgents.Count / 2) : 1,
                 availableAgents.Count);
 
             var selectedAgents = SelectOptimalAgents(availableAgents, assignedAgentCount, requiredCapabilities);
@@ -425,7 +425,7 @@ public class SwarmToolService
         bool includeAgentDetails = false,
         string format = "summary")
     {
-        _logger.LogInformation("MCP Tool: Getting memory usage for swarm '{SwarmId}', format: {Format}", 
+        _logger.LogInformation("MCP Tool: Getting memory usage for swarm '{SwarmId}', format: {Format}",
             swarmId, format);
 
         try
@@ -450,7 +450,7 @@ public class SwarmToolService
             // Calculate memory metrics
             var totalUsedMemory = swarmAgents.Sum(a => a.MemoryUsageMb);
             var availableMemory = swarmState.MemoryLimitMb - totalUsedMemory;
-            var utilizationPercent = swarmState.MemoryLimitMb > 0 
+            var utilizationPercent = swarmState.MemoryLimitMb > 0
                 ? Math.Round((double)totalUsedMemory / swarmState.MemoryLimitMb * 100, 1)
                 : 0;
 
@@ -540,7 +540,7 @@ public class SwarmToolService
         bool includeTaskQueue = true,
         int refreshIntervalSeconds = 30)
     {
-        _logger.LogInformation("MCP Tool: Monitoring swarm '{SwarmId}' with refresh interval {Interval}s", 
+        _logger.LogInformation("MCP Tool: Monitoring swarm '{SwarmId}' with refresh interval {Interval}s",
             swarmId, refreshIntervalSeconds);
 
         try
@@ -611,7 +611,7 @@ public class SwarmToolService
             {
                 result["metrics"] = new
                 {
-                    memoryUsagePercent = swarmState.MemoryLimitMb > 0 
+                    memoryUsagePercent = swarmState.MemoryLimitMb > 0
                         ? Math.Round((double)swarmState.TotalMemoryUsedMb / swarmState.MemoryLimitMb * 100, 1)
                         : 0,
                     avgTaskExecutionTime = CalculateAverageTaskExecutionTime(swarmTasks),
@@ -717,7 +717,7 @@ public class SwarmToolService
     private TimeSpan CalculateTaskDuration(string taskDefinition, string priority, bool parallelization)
     {
         var baseDuration = TimeSpan.FromMinutes(new Random().Next(5, 30));
-        
+
         var priorityMultiplier = priority.ToLower() switch
         {
             "high" => 0.7,
@@ -727,7 +727,7 @@ public class SwarmToolService
         };
 
         var parallelizationMultiplier = parallelization ? 0.6 : 1.0;
-        
+
         return TimeSpan.FromMilliseconds(baseDuration.TotalMilliseconds * priorityMultiplier * parallelizationMultiplier);
     }
 
@@ -778,7 +778,7 @@ public class SwarmToolService
     private double CalculateMemoryFragmentation(List<AgentState> agents)
     {
         if (agents.Count == 0) return 0;
-        
+
         var memoryUsages = agents.Select(a => a.MemoryUsageMb).ToArray();
         var avg = memoryUsages.Average();
         var variance = memoryUsages.Select(mu => Math.Pow(mu - avg, 2)).Average();
@@ -790,7 +790,7 @@ public class SwarmToolService
         var agentHealth = agents.Count > 0 ? agents.Count(a => a.Status == "active") / (double)agents.Count * 100 : 100;
         var memoryHealth = swarm.MemoryLimitMb > 0 ? (1 - swarm.TotalMemoryUsedMb / (double)swarm.MemoryLimitMb) * 100 : 100;
         var taskHealth = tasks.Count > 0 ? tasks.Count(t => t.Status != "failed") / (double)tasks.Count * 100 : 100;
-        
+
         return Math.Round((agentHealth + Math.Min(memoryHealth, 100) + taskHealth) / 3, 1);
     }
 
@@ -798,17 +798,17 @@ public class SwarmToolService
     {
         var completedTasks = tasks.Where(t => t.CompletedAt.HasValue && t.StartedAt.HasValue).ToList();
         if (completedTasks.Count == 0) return 0;
-        
+
         return Math.Round(completedTasks.Average(t => (t.CompletedAt!.Value - t.StartedAt!.Value).TotalMinutes), 2);
     }
 
     private double CalculateTaskSuccessRate(List<TaskState> tasks)
     {
         if (tasks.Count == 0) return 100;
-        
+
         var completedTasks = tasks.Count(t => t.Status == "completed" || t.Status == "failed");
         if (completedTasks == 0) return 100;
-        
+
         return Math.Round(tasks.Count(t => t.Status == "completed") / (double)completedTasks * 100, 1);
     }
 
@@ -826,9 +826,9 @@ public class SwarmToolService
 
     private double CalculateSwarmThroughput(List<TaskState> tasks)
     {
-        var recentTasks = tasks.Where(t => t.CompletedAt.HasValue && 
+        var recentTasks = tasks.Where(t => t.CompletedAt.HasValue &&
             t.CompletedAt.Value > DateTime.UtcNow.AddHours(-1)).ToList();
-        
+
         return Math.Round(recentTasks.Count / 60.0, 2); // tasks per minute
     }
 
@@ -836,15 +836,15 @@ public class SwarmToolService
     {
         var startedTasks = tasks.Where(t => t.StartedAt.HasValue).ToList();
         if (startedTasks.Count == 0) return 0;
-        
+
         return Math.Round(startedTasks.Average(t => (t.StartedAt!.Value - t.CreatedAt).TotalMinutes), 2);
     }
 
     private double CalculateQueueProcessingRate(List<TaskState> tasks)
     {
-        var recentlyStartedTasks = tasks.Where(t => t.StartedAt.HasValue && 
+        var recentlyStartedTasks = tasks.Where(t => t.StartedAt.HasValue &&
             t.StartedAt.Value > DateTime.UtcNow.AddHours(-1)).ToList();
-        
+
         return Math.Round(recentlyStartedTasks.Count / 60.0, 2); // tasks per minute
     }
 

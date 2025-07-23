@@ -38,7 +38,7 @@ public class HooksToolService
         bool enableCommitValidation = true,
         bool enablePrePushChecks = true)
     {
-        _logger.LogInformation("MCP Tool: Installing Git hooks, types: {HookTypes}, force: {Force}, template: {Template}", 
+        _logger.LogInformation("MCP Tool: Installing Git hooks, types: {HookTypes}, force: {Force}, template: {Template}",
             hookTypes != null ? string.Join(", ", hookTypes) : "all", force, template);
 
         try
@@ -88,7 +88,7 @@ public class HooksToolService
             if (result.Success)
             {
                 var installedHooks = result.InstalledHooks ?? hooksToInstall;
-                
+
                 return new
                 {
                     success = true,
@@ -144,15 +144,15 @@ public class HooksToolService
         bool detailed = false,
         bool installedOnly = false)
     {
-        _logger.LogInformation("MCP Tool: Listing Git hooks, detailed: {Detailed}, installedOnly: {InstalledOnly}", 
+        _logger.LogInformation("MCP Tool: Listing Git hooks, detailed: {Detailed}, installedOnly: {InstalledOnly}",
             detailed, installedOnly);
 
         try
         {
             var availableHooks = await _hooksService.GetAvailableHooksAsync();
             var installedHooks = await _hooksService.GetInstalledHooksAsync();
-            
-            var hooks = installedOnly 
+
+            var hooks = installedOnly
                 ? availableHooks.Where(h => installedHooks.Any(ih => ih.Name == h.Name))
                 : availableHooks;
 
@@ -238,7 +238,7 @@ public class HooksToolService
         string? template = null,
         bool updateAll = false)
     {
-        _logger.LogInformation("MCP Tool: Updating Git hooks, types: {HookTypes}, updateAll: {UpdateAll}, template: {Template}", 
+        _logger.LogInformation("MCP Tool: Updating Git hooks, types: {HookTypes}, updateAll: {UpdateAll}, template: {Template}",
             hookTypes != null ? string.Join(", ", hookTypes) : "none", updateAll, template);
 
         try
@@ -254,7 +254,7 @@ public class HooksToolService
             }
 
             var installedHooks = await _hooksService.GetInstalledHooksAsync();
-            
+
             if (installedHooks.Count() == 0)
             {
                 return new
@@ -311,7 +311,7 @@ public class HooksToolService
             if (result.Success)
             {
                 var updatedHooks = result.UpdatedHooks ?? hooksToUpdate;
-                
+
                 return new
                 {
                     success = true,
@@ -362,7 +362,7 @@ public class HooksToolService
         bool removeAll = false,
         bool keepBackup = true)
     {
-        _logger.LogInformation("MCP Tool: Uninstalling Git hooks, types: {HookTypes}, removeAll: {RemoveAll}, keepBackup: {KeepBackup}", 
+        _logger.LogInformation("MCP Tool: Uninstalling Git hooks, types: {HookTypes}, removeAll: {RemoveAll}, keepBackup: {KeepBackup}",
             hookTypes != null ? string.Join(", ", hookTypes) : "none", removeAll, keepBackup);
 
         try
@@ -378,7 +378,7 @@ public class HooksToolService
             }
 
             var installedHooks = await _hooksService.GetInstalledHooksAsync();
-            
+
             if (installedHooks.Count() == 0)
             {
                 return new
@@ -436,7 +436,7 @@ public class HooksToolService
             {
                 var uninstalledHooks = result.UninstalledHooks ?? hooksToUninstall;
                 var remainingCount = installedHooks.Count() - uninstalledHooks.Count;
-                
+
                 return new
                 {
                     success = true,
@@ -488,13 +488,13 @@ public class HooksToolService
         bool testAll = false,
         bool dryRun = true)
     {
-        _logger.LogInformation("MCP Tool: Testing Git hooks, types: {HookTypes}, testAll: {TestAll}, dryRun: {DryRun}", 
+        _logger.LogInformation("MCP Tool: Testing Git hooks, types: {HookTypes}, testAll: {TestAll}, dryRun: {DryRun}",
             hookTypes != null ? string.Join(", ", hookTypes) : "none", testAll, dryRun);
 
         try
         {
             var installedHooks = await _hooksService.GetInstalledHooksAsync();
-            
+
             if (installedHooks.Count() == 0)
             {
                 return new
@@ -563,7 +563,7 @@ public class HooksToolService
                     exitCode = r.ExitCode
                 }).ToArray(),
                 testedAt = DateTime.UtcNow,
-                message = allPassed 
+                message = allPassed
                     ? $"All {passedCount} hooks passed testing"
                     : $"{passedCount} hooks passed, {failedCount} hooks failed"
             };

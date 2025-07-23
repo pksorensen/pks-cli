@@ -102,17 +102,17 @@ public class InitCommand : Command<InitCommand.Settings>
 
         // Create initialization context
         var initContext = _initializationService.CreateContext(
-            settings.ProjectName, 
-            settings.Template, 
-            targetDirectory, 
-            settings.Force, 
+            settings.ProjectName,
+            settings.Template,
+            targetDirectory,
+            settings.Force,
             options);
 
         try
         {
             // Run initialization with status display
             InitializationSummary summary = null!;
-            
+
             await AnsiConsole.Status()
                 .Spinner(Spinner.Known.Star2)
                 .SpinnerStyle(Style.Parse("green bold"))
@@ -120,13 +120,13 @@ public class InitCommand : Command<InitCommand.Settings>
                 {
                     ctx.Status($"Setting up {settings.Template} template...");
                     await Task.Delay(200);
-                    
+
                     ctx.Status("Creating project structure...");
                     await Task.Delay(300);
-                    
+
                     ctx.Status("Running initializers...");
                     summary = await _initializationService.InitializeProjectAsync(initContext);
-                    
+
                     ctx.Status("Finalizing project setup...");
                     await Task.Delay(200);
                 });
@@ -136,7 +136,7 @@ public class InitCommand : Command<InitCommand.Settings>
             {
                 var agenticInfo = settings.EnableAgentic ? "\n• [cyan]Agentic features:[/] [green]Enabled[/]" : "";
                 var devcontainerInfo = settings.EnableDevcontainer ? "\n• [cyan]Devcontainer:[/] [green]Configured[/]" : "";
-                
+
                 var panel = new Panel($"""
                 🎉 [bold green]Project '{settings.ProjectName}' initialized successfully![/]
                 
@@ -157,25 +157,25 @@ public class InitCommand : Command<InitCommand.Settings>
                 .Header(" [bold cyan]🚀 PKS Project Ready[/] ");
 
                 AnsiConsole.Write(panel);
-                
+
                 // Show warnings if any
                 if (summary.WarningsCount > 0)
                 {
                     AnsiConsole.MarkupLine($"\n[yellow]⚠️ {summary.WarningsCount} warning(s) occurred during initialization[/]");
                 }
-                
+
                 return 0;
             }
             else
             {
                 AnsiConsole.MarkupLine($"[red]❌ Initialization failed: {summary.ErrorMessage}[/]");
-                
+
                 // Show detailed error information if available
                 if (summary.ErrorsCount > 0)
                 {
                     AnsiConsole.MarkupLine($"[red]{summary.ErrorsCount} error(s) encountered[/]");
                 }
-                
+
                 return 1;
             }
         }

@@ -27,7 +27,7 @@ public class NuGetDevcontainerTemplate
     public bool IsPrerelease { get; set; }
     public string[] Dependencies { get; set; } = Array.Empty<string>();
     public Dictionary<string, string> Metadata { get; set; } = new();
-    
+
     /// <summary>
     /// Converts to the standard DevcontainerTemplate format
     /// </summary>
@@ -67,16 +67,16 @@ public class NuGetDevcontainerTemplate
     private string[] GetRequiredFeaturesFromMetadata()
     {
         var features = Metadata.GetValueOrDefault("requiredFeatures", string.Empty);
-        return string.IsNullOrEmpty(features) 
-            ? Array.Empty<string>() 
+        return string.IsNullOrEmpty(features)
+            ? Array.Empty<string>()
             : features.Split(',', StringSplitOptions.RemoveEmptyEntries);
     }
 
     private string[] GetOptionalFeaturesFromMetadata()
     {
         var features = Metadata.GetValueOrDefault("optionalFeatures", string.Empty);
-        return string.IsNullOrEmpty(features) 
-            ? Array.Empty<string>() 
+        return string.IsNullOrEmpty(features)
+            ? Array.Empty<string>()
             : features.Split(',', StringSplitOptions.RemoveEmptyEntries);
     }
 
@@ -84,7 +84,7 @@ public class NuGetDevcontainerTemplate
     {
         // Parse customizations from metadata or return default VS Code setup
         var customizations = new Dictionary<string, object>();
-        
+
         var extensions = Metadata.GetValueOrDefault("vscodeExtensions", string.Empty);
         if (!string.IsNullOrEmpty(extensions))
         {
@@ -100,8 +100,8 @@ public class NuGetDevcontainerTemplate
     private string[] GetPortsFromMetadata()
     {
         var ports = Metadata.GetValueOrDefault("defaultPorts", string.Empty);
-        return string.IsNullOrEmpty(ports) 
-            ? Array.Empty<string>() 
+        return string.IsNullOrEmpty(ports)
+            ? Array.Empty<string>()
             : ports.Split(',', StringSplitOptions.RemoveEmptyEntries);
     }
 

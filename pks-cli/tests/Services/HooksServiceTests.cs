@@ -121,7 +121,7 @@ public class HooksServiceTests : TestBase
         {
             var claudeDir = Path.Combine(_testDirectory, ".claude");
             var settingsPath = Path.Combine(claudeDir, "settings.json");
-            
+
             Directory.CreateDirectory(claudeDir);
             await File.WriteAllTextAsync(settingsPath, @"{
                 ""hooks"": {
@@ -163,7 +163,7 @@ public class HooksServiceTests : TestBase
         // Arrange
         var originalDirectory = Directory.GetCurrentDirectory();
         var invalidPath = "/invalid/path/that/does/not/exist";
-        
+
         // This test simulates error handling when directory creation fails
         var mockService = new Mock<HooksService>(_mockLogger.Object);
 
@@ -358,9 +358,9 @@ public class HooksServiceTests : TestBase
     public void HookCommands_ShouldFollowCorrectNamingConvention(string hookCommand)
     {
         // Assert - Verify naming convention is correct for Claude Code integration
-        hookCommand.Should().MatchRegex(@"^[a-z]+-[a-z]+-?[a-z]*$", 
+        hookCommand.Should().MatchRegex(@"^[a-z]+-[a-z]+-?[a-z]*$",
             "Hook commands should use kebab-case naming convention");
-        
+
         // Verify it doesn't contain underscores or camelCase
         hookCommand.Should().NotContain("_");
         hookCommand.Should().NotMatchRegex(@"[A-Z]");
@@ -376,7 +376,7 @@ public class HooksServiceTests : TestBase
         foreach (var hookType in expectedHookTypes)
         {
             // Verify camelCase format for JSON configuration
-            hookType.Should().MatchRegex(@"^[a-z][a-zA-Z]*$", 
+            hookType.Should().MatchRegex(@"^[a-z][a-zA-Z]*$",
                 "Hook types in JSON should be camelCase");
         }
     }
@@ -385,7 +385,7 @@ public class HooksServiceTests : TestBase
     {
         settings.RootElement.TryGetProperty("hooks", out var hooksElement).Should().BeTrue();
         hooksElement.TryGetProperty(hookType, out var hookTypeElement).Should().BeTrue();
-        
+
         var hookArray = hookTypeElement.EnumerateArray().ToList();
         hookArray.Should().HaveCountGreaterThan(0);
 
@@ -400,7 +400,7 @@ public class HooksServiceTests : TestBase
                         commandElement.GetString() == expectedCommand)
                     {
                         hasExpectedCommand = true;
-                        
+
                         // Verify hook structure
                         innerHook.TryGetProperty("type", out var typeElement).Should().BeTrue();
                         typeElement.GetString().Should().Be("command");

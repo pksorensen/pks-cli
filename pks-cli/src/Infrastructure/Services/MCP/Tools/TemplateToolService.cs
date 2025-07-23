@@ -36,7 +36,7 @@ public class TemplateToolService
         bool includePreRelease = false,
         int maxResults = 20)
     {
-        _logger.LogInformation("MCP Tool: Searching templates, query: '{SearchQuery}', category: '{Category}', language: '{Language}', maxResults: {MaxResults}", 
+        _logger.LogInformation("MCP Tool: Searching templates, query: '{SearchQuery}', category: '{Category}', language: '{Language}', maxResults: {MaxResults}",
             searchQuery, category, language, maxResults);
 
         try
@@ -51,7 +51,7 @@ public class TemplateToolService
             if (searchResults != null && searchResults.Any())
             {
                 var templates = searchResults.ToArray();
-                
+
                 return new
                 {
                     success = true,
@@ -129,7 +129,7 @@ public class TemplateToolService
         bool includeInstructions = true,
         bool includeOptions = true)
     {
-        _logger.LogInformation("MCP Tool: Getting template info for '{TemplateId}', includeInstructions: {IncludeInstructions}, includeOptions: {IncludeOptions}", 
+        _logger.LogInformation("MCP Tool: Getting template info for '{TemplateId}', includeInstructions: {IncludeInstructions}, includeOptions: {IncludeOptions}",
             templateId, includeInstructions, includeOptions);
 
         try
@@ -155,13 +155,13 @@ public class TemplateToolService
                     message = $"Could not find template with ID: {templateId}"
                 };
             }
-            
+
             var result = await _templateDiscoveryService.GetTemplateDetailsAsync(templateId, latestVersion);
 
             if (result != null)
             {
                 var template = result;
-                
+
                 var baseInfo = new
                 {
                     success = true,
@@ -189,7 +189,7 @@ public class TemplateToolService
                 };
 
                 var responseData = new Dictionary<string, object>();
-                
+
                 // Copy base properties
                 foreach (var prop in baseInfo.GetType().GetProperties())
                 {
@@ -280,7 +280,7 @@ public class TemplateToolService
         string? version = null,
         bool force = false)
     {
-        _logger.LogInformation("MCP Tool: Installing template '{TemplateId}', version: '{Version}', force: {Force}", 
+        _logger.LogInformation("MCP Tool: Installing template '{TemplateId}', version: '{Version}', force: {Force}",
             templateId, version, force);
 
         try
@@ -297,7 +297,7 @@ public class TemplateToolService
 
             // Check if template is already installed
             var installedTemplates = await _templateDiscoveryService.GetInstalledTemplatesAsync();
-            var existingTemplate = installedTemplates.FirstOrDefault(t => 
+            var existingTemplate = installedTemplates.FirstOrDefault(t =>
                 t.Id.Equals(templateId, StringComparison.OrdinalIgnoreCase) ||
                 t.Title.Equals(templateId, StringComparison.OrdinalIgnoreCase));
 
@@ -376,7 +376,7 @@ public class TemplateToolService
         bool includeDetails = false,
         string? language = null)
     {
-        _logger.LogInformation("MCP Tool: Listing installed templates, includeDetails: {IncludeDetails}, language: '{Language}'", 
+        _logger.LogInformation("MCP Tool: Listing installed templates, includeDetails: {IncludeDetails}, language: '{Language}'",
             includeDetails, language);
 
         try
@@ -386,7 +386,7 @@ public class TemplateToolService
             // Filter by language if specified
             if (!string.IsNullOrWhiteSpace(language))
             {
-                installedTemplates = installedTemplates.Where(t => 
+                installedTemplates = installedTemplates.Where(t =>
                     t.Languages.Any(l => l.Contains(language, StringComparison.OrdinalIgnoreCase))).ToList();
             }
 
@@ -484,7 +484,7 @@ public class TemplateToolService
 
             // Check if template is installed
             var installedTemplates = await _templateDiscoveryService.GetInstalledTemplatesAsync();
-            var templateToUninstall = installedTemplates.FirstOrDefault(t => 
+            var templateToUninstall = installedTemplates.FirstOrDefault(t =>
                 t.Id.Equals(templateId, StringComparison.OrdinalIgnoreCase) ||
                 t.Title.Equals(templateId, StringComparison.OrdinalIgnoreCase) ||
                 t.ShortNames?.Any(sn => sn.Equals(templateId, StringComparison.OrdinalIgnoreCase)) == true);

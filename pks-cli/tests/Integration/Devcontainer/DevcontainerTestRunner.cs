@@ -28,7 +28,7 @@ public class DevcontainerTestRunner : TestBase
         var testSuiteName = "comprehensive-devcontainer-suite";
         var testRunId = Guid.NewGuid().ToString("N")[..8];
         var overallStartTime = DateTime.UtcNow;
-        
+
         _output.WriteLine($"Starting comprehensive devcontainer test suite - Run ID: {testRunId}");
         _output.WriteLine($"Test artifacts will be stored in: {DevcontainerTestArtifactManager.CreateTestDirectory(testSuiteName, testRunId)}");
 
@@ -92,7 +92,7 @@ public class DevcontainerTestRunner : TestBase
 
             // Assert overall success
             testResults.OverallSuccess.Should().BeTrue("All devcontainer test suites should pass");
-            
+
             _output.WriteLine($"🎉 Test suite completed successfully in {testResults.TotalDuration.TotalSeconds:F1} seconds");
         }
         catch (Exception ex)
@@ -103,7 +103,7 @@ public class DevcontainerTestRunner : TestBase
             testResults.GeneralErrors.Add($"Test suite failed with exception: {ex.Message}");
 
             await DevcontainerTestArtifactManager.SaveTestResultAsync(testSuiteName, testRunId, testResults);
-            
+
             _output.WriteLine($"❌ Test suite failed: {ex.Message}");
             throw;
         }
@@ -384,12 +384,12 @@ public class DevcontainerTestRunner : TestBase
         try
         {
             var projectPath = await DevcontainerTestArtifactManager.CreateTestProjectAsync($"{projectName}-{testRunId}", template);
-            
+
             // Simulate devcontainer initialization
             await Task.Delay(100); // Simulate work
-            
+
             var validation = await DevcontainerTestArtifactManager.ValidateDevcontainerAsync(projectPath);
-            
+
             return new SingleTestResult
             {
                 TestName = $"e2e-{projectName}-{template}",
@@ -414,10 +414,10 @@ public class DevcontainerTestRunner : TestBase
         try
         {
             var testPath = DevcontainerTestArtifactManager.CreateTestDirectory("template-extraction", $"{template}-{testRunId}");
-            
+
             // Simulate template extraction
             await Task.Delay(50);
-            
+
             return new SingleTestResult
             {
                 TestName = $"extraction-{template}",
@@ -442,10 +442,10 @@ public class DevcontainerTestRunner : TestBase
         try
         {
             var testPath = DevcontainerTestArtifactManager.CreateTestDirectory("universal-comparison", testRunId);
-            
+
             // Simulate universal template comparison
             await Task.Delay(200);
-            
+
             return new SingleTestResult
             {
                 TestName = "universal-template-comparison",
@@ -470,10 +470,10 @@ public class DevcontainerTestRunner : TestBase
         try
         {
             var testPath = DevcontainerTestArtifactManager.CreateTestDirectory("error-scenarios", $"{scenario}-{testRunId}");
-            
+
             // Simulate error scenario testing
             await Task.Delay(100);
-            
+
             // Error scenarios should handle errors gracefully
             var success = scenario switch
             {
@@ -483,7 +483,7 @@ public class DevcontainerTestRunner : TestBase
                 "malformed-config" => true,     // Should handle gracefully
                 _ => false
             };
-            
+
             return new SingleTestResult
             {
                 TestName = $"error-{scenario}",
@@ -508,10 +508,10 @@ public class DevcontainerTestRunner : TestBase
         try
         {
             var testPath = DevcontainerTestArtifactManager.CreateTestDirectory("nuget-integration", $"{test}-{testRunId}");
-            
+
             // Simulate NuGet integration testing
             await Task.Delay(150);
-            
+
             return new SingleTestResult
             {
                 TestName = $"nuget-{test}",
@@ -540,10 +540,10 @@ public class DevcontainerTestRunner : TestBase
         try
         {
             var projectPath = await DevcontainerTestArtifactManager.CreateTestProjectAsync(projectName, template);
-            
+
             // Simulate initialization work
             await Task.Delay(100);
-            
+
             success = true;
             details = $"Initialization of {template} project completed";
         }
@@ -574,10 +574,10 @@ public class DevcontainerTestRunner : TestBase
         try
         {
             var testPath = DevcontainerTestArtifactManager.CreateTempTestDirectory($"perf-extraction-{template}");
-            
+
             // Simulate template extraction
             await Task.Delay(50);
-            
+
             success = true;
             details = $"Template {template} extraction completed";
         }
@@ -622,10 +622,10 @@ public class DevcontainerTestRunner : TestBase
             try
             {
                 var projectPath = await DevcontainerTestArtifactManager.CreateTestProjectAsync($"stress-batch{batchId}-op{i}", "api");
-                
+
                 // Simulate work with some variability
                 await Task.Delay(Random.Shared.Next(50, 200));
-                
+
                 success = true;
             }
             catch

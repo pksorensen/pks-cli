@@ -17,7 +17,7 @@ public class PrdService : IPrdService
     };
 
     public async Task<PrdGenerationResult> GeneratePrdAsync(
-        PrdGenerationRequest request, 
+        PrdGenerationRequest request,
         CancellationToken cancellationToken = default)
     {
         // Simulate AI-powered PRD generation
@@ -39,10 +39,10 @@ public class PrdService : IPrdService
 
         // Generate sections based on AI analysis
         document.Sections = await GenerateSectionsFromIdeaAsync(request, cancellationToken);
-        
+
         // Generate requirements from the idea
         document.Requirements = await GenerateRequirementsFromIdeaAsync(request, cancellationToken);
-        
+
         // Generate user stories
         document.UserStories = await GenerateUserStoriesFromIdeaAsync(request, cancellationToken);
 
@@ -58,7 +58,7 @@ public class PrdService : IPrdService
     }
 
     public async Task<PrdLoadResult> LoadPrdAsync(
-        string filePath, 
+        string filePath,
         CancellationToken cancellationToken = default)
     {
         try
@@ -73,7 +73,7 @@ public class PrdService : IPrdService
             }
 
             var content = await File.ReadAllTextAsync(filePath, cancellationToken);
-            
+
             // Try to parse as JSON first (structured PRD)
             if (TryParseJsonPrd(content, out var jsonDocument))
             {
@@ -125,8 +125,8 @@ public class PrdService : IPrdService
     }
 
     public async Task<bool> SavePrdAsync(
-        PrdDocument document, 
-        string filePath, 
+        PrdDocument document,
+        string filePath,
         CancellationToken cancellationToken = default)
     {
         try
@@ -138,7 +138,7 @@ public class PrdService : IPrdService
             }
 
             var extension = Path.GetExtension(filePath).ToLowerInvariant();
-            
+
             if (extension == ".json")
             {
                 var json = JsonSerializer.Serialize(document, JsonOptions);
@@ -160,7 +160,7 @@ public class PrdService : IPrdService
     }
 
     public async Task<PrdStatus> GetPrdStatusAsync(
-        string filePath, 
+        string filePath,
         CancellationToken cancellationToken = default)
     {
         var status = new PrdStatus
@@ -187,7 +187,7 @@ public class PrdService : IPrdService
                 var functionalCount = parseResult.Requirements.Functional?.Length ?? 0;
                 var nonFunctionalCount = parseResult.Requirements.NonFunctional?.Length ?? 0;
                 status.TotalRequirements = functionalCount + nonFunctionalCount;
-                
+
                 // For now, we can't determine status without parsing the actual content
                 status.CompletedRequirements = 0;
                 status.InProgressRequirements = 0;
@@ -293,10 +293,10 @@ public class PrdService : IPrdService
 
         // Simulate document parsing for validation
         var document = new PrdDocument(); // In real implementation, parse from loadResult
-        
+
         var errors = new List<string>();
         var warnings = new List<string>();
-        
+
         // Check basic configuration
         if (string.IsNullOrEmpty(document.Configuration.ProjectName))
         {
@@ -341,7 +341,7 @@ public class PrdService : IPrdService
         };
 
         var completenessScore = scoreFactors.Sum();
-        
+
         var result = new PrdValidationResult
         {
             Success = true,
@@ -402,7 +402,7 @@ public class PrdService : IPrdService
         await Task.Delay(200, cancellationToken); // Simulate template generation
 
         var template = await GetTemplateContentAsync(templateType, cancellationToken);
-        
+
         // Replace placeholders
         template = template.Replace("{{ProjectName}}", projectName);
         template = template.Replace("{{DateTime}}", DateTime.Now.ToString("yyyy-MM-dd"));
@@ -426,7 +426,7 @@ public class PrdService : IPrdService
 
     // Private helper methods
     private async Task<List<PrdSection>> GenerateSectionsFromIdeaAsync(
-        PrdGenerationRequest request, 
+        PrdGenerationRequest request,
         CancellationToken cancellationToken)
     {
         await Task.Delay(300, cancellationToken);
@@ -469,7 +469,7 @@ public class PrdService : IPrdService
     }
 
     private async Task<List<PrdRequirement>> GenerateRequirementsFromIdeaAsync(
-        PrdGenerationRequest request, 
+        PrdGenerationRequest request,
         CancellationToken cancellationToken)
     {
         await Task.Delay(400, cancellationToken);
@@ -539,7 +539,7 @@ public class PrdService : IPrdService
     }
 
     private async Task<List<UserStory>> GenerateUserStoriesFromIdeaAsync(
-        PrdGenerationRequest request, 
+        PrdGenerationRequest request,
         CancellationToken cancellationToken)
     {
         await Task.Delay(300, cancellationToken);
@@ -604,8 +604,8 @@ public class PrdService : IPrdService
     }
 
     private async Task<PrdDocument?> ParseMarkdownPrdAsync(
-        string content, 
-        string filePath, 
+        string content,
+        string filePath,
         CancellationToken cancellationToken)
     {
         await Task.Delay(100, cancellationToken);
@@ -613,11 +613,11 @@ public class PrdService : IPrdService
         try
         {
             var document = new PrdDocument();
-            
+
             // Extract project name from filename or first heading
             var fileName = Path.GetFileNameWithoutExtension(filePath);
-            document.Configuration.ProjectName = fileName.StartsWith("PRD", StringComparison.OrdinalIgnoreCase) 
-                ? fileName.Substring(3).Trim('-', '_', ' ') 
+            document.Configuration.ProjectName = fileName.StartsWith("PRD", StringComparison.OrdinalIgnoreCase)
+                ? fileName.Substring(3).Trim('-', '_', ' ')
                 : fileName;
 
             // Parse sections from markdown headers
@@ -737,13 +737,13 @@ public class PrdService : IPrdService
     }
 
     private async Task<string> GenerateMarkdownFromDocumentAsync(
-        PrdDocument document, 
+        PrdDocument document,
         CancellationToken cancellationToken)
     {
         await Task.Delay(100, cancellationToken);
 
         var sb = new StringBuilder();
-        
+
         // Header
         sb.AppendLine($"# {document.Configuration.ProjectName} - Product Requirements Document");
         sb.AppendLine();
@@ -776,7 +776,7 @@ public class PrdService : IPrdService
         {
             sb.AppendLine("## Requirements");
             sb.AppendLine();
-            
+
             foreach (var req in document.Requirements)
             {
                 sb.AppendLine($"### {req.Id}: {req.Title}");
@@ -786,7 +786,7 @@ public class PrdService : IPrdService
                 sb.AppendLine($"**Status:** {req.Status}");
                 sb.AppendLine();
                 sb.AppendLine(req.Description);
-                
+
                 if (req.AcceptanceCriteria.Any())
                 {
                     sb.AppendLine();
@@ -805,7 +805,7 @@ public class PrdService : IPrdService
         {
             sb.AppendLine("## User Stories");
             sb.AppendLine();
-            
+
             foreach (var story in document.UserStories)
             {
                 sb.AppendLine($"### {story.Id}: {story.Title}");
@@ -814,7 +814,7 @@ public class PrdService : IPrdService
                 sb.AppendLine();
                 sb.AppendLine($"**Priority:** {story.Priority}");
                 sb.AppendLine($"**Estimated Points:** {story.EstimatedPoints}");
-                
+
                 if (story.AcceptanceCriteria.Any())
                 {
                     sb.AppendLine();
@@ -832,7 +832,7 @@ public class PrdService : IPrdService
     }
 
     private async Task<string> GetTemplateContentAsync(
-        PrdTemplateType templateType, 
+        PrdTemplateType templateType,
         CancellationToken cancellationToken)
     {
         await Task.Delay(10, cancellationToken);
@@ -1566,7 +1566,7 @@ public class PrdService : IPrdService
     private SectionType DetermineSectionType(string title)
     {
         var lower = title.ToLower();
-        
+
         return lower switch
         {
             var t when t.Contains("overview") || t.Contains("summary") => SectionType.Overview,
@@ -1586,7 +1586,7 @@ public class PrdService : IPrdService
     }
 
     // Interface methods required by IPrdService
-    
+
     public async Task<List<PrdTemplateInfo>> GetAvailableTemplatesAsync(CancellationToken cancellationToken = default)
     {
         await Task.Delay(300, cancellationToken);
@@ -1601,7 +1601,7 @@ public class PrdService : IPrdService
     public async Task<PrdUpdateResult> UpdatePrdAsync(PrdUpdateOptions options, CancellationToken cancellationToken = default)
     {
         await Task.Delay(400, cancellationToken);
-        
+
         // Load document from file
         var loadResult = await LoadPrdAsync(options.FilePath, cancellationToken);
         if (!loadResult.Success)
@@ -1612,16 +1612,16 @@ public class PrdService : IPrdService
                 Message = loadResult.Message
             };
         }
-        
+
         // Simulate document update
         var updatedSections = new List<string>();
         if (!string.IsNullOrEmpty(options.Section))
         {
             updatedSections.Add(options.Section);
         }
-        
+
         // In real implementation, would parse and update the actual document
-        
+
         return new PrdUpdateResult
         {
             Success = true,

@@ -28,10 +28,10 @@ public abstract class BaseHookCommand : AsyncCommand<HooksSettings>
         {
             // Process the hook event
             var decision = await ProcessHookEventAsync(context, settings);
-            
+
             // Output the result
             await OutputResultAsync(decision, settings);
-            
+
             return 0; // Success
         }
         catch (Exception ex)
@@ -39,12 +39,12 @@ public abstract class BaseHookCommand : AsyncCommand<HooksSettings>
             if (settings.Json)
             {
                 // For JSON mode, output error as JSON and exit with error code
-                var errorDecision = new HookDecision 
-                { 
-                    Continue = false, 
-                    StopReason = $"Hook execution failed: {ex.Message}" 
+                var errorDecision = new HookDecision
+                {
+                    Continue = false,
+                    StopReason = $"Hook execution failed: {ex.Message}"
                 };
-                
+
                 var json = JsonSerializer.Serialize(errorDecision, JsonOptions);
                 Console.WriteLine(json);
             }
@@ -52,16 +52,16 @@ public abstract class BaseHookCommand : AsyncCommand<HooksSettings>
             {
                 AnsiConsole.MarkupLine($"[red]Error: {ex.Message}[/]");
             }
-            
+
             return 1; // Error
         }
     }
-    
+
     /// <summary>
     /// Process the specific hook event - to be implemented by derived classes
     /// </summary>
     protected abstract Task<HookDecision> ProcessHookEventAsync(CommandContext context, HooksSettings settings);
-    
+
     /// <summary>
     /// Output the hook result in appropriate format
     /// </summary>
@@ -83,7 +83,7 @@ public abstract class BaseHookCommand : AsyncCommand<HooksSettings>
             await DisplayUserFriendlyOutputAsync(decision);
         }
     }
-    
+
     /// <summary>
     /// Determines whether JSON should be output for this decision
     /// </summary>
@@ -95,16 +95,16 @@ public abstract class BaseHookCommand : AsyncCommand<HooksSettings>
                decision.SuppressOutput == true ||
                !string.IsNullOrEmpty(decision.StopReason);
     }
-    
+
     /// <summary>
     /// Display user-friendly output for non-JSON mode
     /// </summary>
     protected virtual async Task DisplayUserFriendlyOutputAsync(HookDecision decision)
     {
         var hookName = GetType().Name.Replace("Command", "");
-        
+
         AnsiConsole.MarkupLine($"[cyan]PKS Hooks: {hookName} Event Processed[/]");
-        
+
         if (!string.IsNullOrEmpty(decision.Decision))
         {
             var color = decision.Decision switch
@@ -113,15 +113,15 @@ public abstract class BaseHookCommand : AsyncCommand<HooksSettings>
                 "block" => "red",
                 _ => "yellow"
             };
-            
+
             AnsiConsole.MarkupLine($"[{color}]Decision: {decision.Decision}[/]");
-            
+
             if (!string.IsNullOrEmpty(decision.Message))
             {
                 AnsiConsole.MarkupLine($"[dim]Message: {decision.Message}[/]");
             }
         }
-        
+
         if (decision.Continue == false)
         {
             AnsiConsole.MarkupLine($"[red]Continue: false[/]");
@@ -130,12 +130,12 @@ public abstract class BaseHookCommand : AsyncCommand<HooksSettings>
                 AnsiConsole.MarkupLine($"[dim]Reason: {decision.StopReason}[/]");
             }
         }
-        
+
         AnsiConsole.MarkupLine($"[green]✓ {hookName} hook completed successfully[/]");
-        
+
         await Task.CompletedTask;
     }
-    
+
     /// <summary>
     /// Read input from stdin if available (for hook context)
     /// </summary>
@@ -152,7 +152,7 @@ public abstract class BaseHookCommand : AsyncCommand<HooksSettings>
         {
             // Ignore stdin read errors in hook context
         }
-        
+
         return null;
     }
 }

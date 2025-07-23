@@ -32,7 +32,7 @@ public class PrdValidateCommand : Command<PrdValidateSettings>
         {
             // Set default file path if not provided
             var filePath = settings.FilePath ?? Path.Combine(Environment.CurrentDirectory, "docs", "PRD.md");
-            
+
             // Load PRD
             var loadResult = await _prdService.LoadPrdAsync(filePath);
             if (loadResult == null || !loadResult.Success)
@@ -43,7 +43,7 @@ public class PrdValidateCommand : Command<PrdValidateSettings>
 
             // Validate PRD
             PrdValidationResult validation = null!;
-            
+
             await AnsiConsole.Status()
                 .Spinner(Spinner.Known.Star2)
                 .SpinnerStyle(Style.Parse("green bold"))
@@ -51,7 +51,7 @@ public class PrdValidateCommand : Command<PrdValidateSettings>
                 {
                     ctx.Status("Analyzing completeness...");
                     await Task.Delay(300);
-                    
+
                     ctx.Status("Checking consistency...");
                     var validationOptions = new PrdValidationOptions
                     {
@@ -59,7 +59,7 @@ public class PrdValidateCommand : Command<PrdValidateSettings>
                         Strictness = settings.Strict ? "strict" : "standard"
                     };
                     validation = await _prdService.ValidatePrdAsync(validationOptions);
-                    
+
                     ctx.Status("Generating report...");
                     await Task.Delay(200);
                 });
@@ -137,10 +137,10 @@ public class PrdValidateCommand : Command<PrdValidateSettings>
         // Show completion progress
         AnsiConsole.WriteLine();
         var progressValue = (int)validation.CompletenessScore;
-        
+
         AnsiConsole.Write(new Rule($"[green]Completeness: {validation.CompletenessScore:F1}%[/]")
             .RuleStyle("green"));
-        
+
         // Alternative progress visualization using markup
         var progressBar = new string('█', progressValue / 5);
         var remainingBar = new string('░', 20 - (progressValue / 5));
@@ -163,16 +163,16 @@ public class PrdValidateCommand : Command<PrdValidateSettings>
                 {
                     TotalIssues = validation.Errors.Count() + validation.Warnings.Count(),
                     CriticalIssues = validation.Errors.Count(),
-                    RecommendedActions = validation.Errors.Any() ? 
-                        "Fix all errors before proceeding" : 
-                        validation.Warnings.Any() ? 
-                            "Address warnings for better quality" : 
+                    RecommendedActions = validation.Errors.Any() ?
+                        "Fix all errors before proceeding" :
+                        validation.Warnings.Any() ?
+                            "Address warnings for better quality" :
                             "PRD is in good shape"
                 }
             };
 
-            var json = JsonSerializer.Serialize(report, new JsonSerializerOptions 
-            { 
+            var json = JsonSerializer.Serialize(report, new JsonSerializerOptions
+            {
                 WriteIndented = true,
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase
             });

@@ -65,7 +65,7 @@ public class DevcontainerErrorScenariosTests : TestBase
     {
         // Arrange
         var readOnlyPath = "/root/readonly"; // Path that typically doesn't have write permissions
-        
+
         var context = new InitializationContext
         {
             ProjectName = "readonly-test",
@@ -80,9 +80,9 @@ public class DevcontainerErrorScenariosTests : TestBase
 
         // Assert
         result.Errors.Should().NotBeEmpty();
-        result.Errors.Should().Contain(error => 
-            error.Contains("write") || 
-            error.Contains("permission") || 
+        result.Errors.Should().Contain(error =>
+            error.Contains("write") ||
+            error.Contains("permission") ||
             error.Contains("access") ||
             error.Contains("readonly"));
     }
@@ -92,7 +92,7 @@ public class DevcontainerErrorScenariosTests : TestBase
     {
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory("error-invalid-features");
-        
+
         var context = new InitializationContext
         {
             ProjectName = "invalid-features-test",
@@ -113,8 +113,8 @@ public class DevcontainerErrorScenariosTests : TestBase
         // Should either complete with warnings or fail with specific error messages
         if (result.Errors.Any())
         {
-            result.Errors.Should().Contain(error => 
-                error.Contains("invalid-feature-1") || 
+            result.Errors.Should().Contain(error =>
+                error.Contains("invalid-feature-1") ||
                 error.Contains("another-invalid-feature") ||
                 error.Contains("feature") && error.Contains("not found"));
         }
@@ -130,7 +130,7 @@ public class DevcontainerErrorScenariosTests : TestBase
     {
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory("error-conflicting-features");
-        
+
         var context = new InitializationContext
         {
             ProjectName = "conflicting-features-test",
@@ -140,10 +140,10 @@ public class DevcontainerErrorScenariosTests : TestBase
             Options = new Dictionary<string, object>
             {
                 ["devcontainer"] = true,
-                ["devcontainer-features"] = new[] 
-                { 
-                    "conflicting-feature-a", 
-                    "conflicting-feature-b", 
+                ["devcontainer-features"] = new[]
+                {
+                    "conflicting-feature-a",
+                    "conflicting-feature-b",
                     "mutually-exclusive-feature"
                 }
             }
@@ -156,8 +156,8 @@ public class DevcontainerErrorScenariosTests : TestBase
         // System should detect and report feature conflicts
         if (result.Errors.Any())
         {
-            result.Errors.Should().Contain(error => 
-                error.Contains("conflict") || 
+            result.Errors.Should().Contain(error =>
+                error.Contains("conflict") ||
                 error.Contains("incompatible") ||
                 error.Contains("mutually exclusive"));
         }
@@ -168,7 +168,7 @@ public class DevcontainerErrorScenariosTests : TestBase
     {
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory("error-invalid-ports");
-        
+
         var context = new InitializationContext
         {
             ProjectName = "invalid-ports-test",
@@ -189,15 +189,15 @@ public class DevcontainerErrorScenariosTests : TestBase
         // Should either succeed with warnings or fail with specific port errors
         if (result.Errors.Any())
         {
-            result.Errors.Should().Contain(error => 
+            result.Errors.Should().Contain(error =>
                 error.Contains("port") && (
-                    error.Contains("invalid") || 
+                    error.Contains("invalid") ||
                     error.Contains("range") ||
                     error.Contains("number")));
         }
         else
         {
-            result.Warnings.Should().Contain(warning => 
+            result.Warnings.Should().Contain(warning =>
                 warning.Contains("port") && warning.Contains("invalid"));
         }
     }
@@ -208,11 +208,11 @@ public class DevcontainerErrorScenariosTests : TestBase
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory("error-existing-devcontainer");
         var devcontainerPath = Path.Combine(testOutputPath, ".devcontainer");
-        
+
         // Create existing devcontainer
         Directory.CreateDirectory(devcontainerPath);
         await File.WriteAllTextAsync(
-            Path.Combine(devcontainerPath, "devcontainer.json"), 
+            Path.Combine(devcontainerPath, "devcontainer.json"),
             """{"name": "Existing Container"}""");
 
         var context = new InitializationContext
@@ -221,8 +221,8 @@ public class DevcontainerErrorScenariosTests : TestBase
             TargetDirectory = testOutputPath,
             WorkingDirectory = testOutputPath,
             Template = "api",
-            Options = new Dictionary<string, object> 
-            { 
+            Options = new Dictionary<string, object>
+            {
                 ["devcontainer"] = true,
                 ["force"] = false // Explicitly don't force overwrite
             }
@@ -232,8 +232,8 @@ public class DevcontainerErrorScenariosTests : TestBase
         var result = await _initializer.ExecuteAsync(context);
 
         // Assert
-        result.Errors.Should().Contain(error => 
-            error.Contains("exists") || 
+        result.Errors.Should().Contain(error =>
+            error.Contains("exists") ||
             error.Contains("already") ||
             error.Contains("overwrite"));
 
@@ -247,7 +247,7 @@ public class DevcontainerErrorScenariosTests : TestBase
     {
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory("error-corrupted-template");
-        
+
         // This tests the service's resilience to corrupted template data
         var options = new DevcontainerOptions
         {
@@ -258,7 +258,7 @@ public class DevcontainerErrorScenariosTests : TestBase
 
         // Act & Assert
         var extractionResult = await _templateService.ExtractTemplateAsync("corrupted-template-that-doesnt-exist", options);
-        
+
         extractionResult.Success.Should().BeFalse();
         extractionResult.ErrorMessage.Should().NotBeNullOrEmpty();
         extractionResult.ExtractedFiles.Should().BeEmpty();
@@ -269,10 +269,10 @@ public class DevcontainerErrorScenariosTests : TestBase
     {
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory("error-disk-space");
-        
+
         // Simulate disk space issues by trying to write to a very long path
         var impossiblyLongPath = Path.Combine(testOutputPath, new string('a', 300), "subdir", new string('b', 300));
-        
+
         var options = new DevcontainerOptions
         {
             Name = "disk-space-test",
@@ -293,7 +293,7 @@ public class DevcontainerErrorScenariosTests : TestBase
     {
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory("error-network-unavailable");
-        
+
         // This simulates scenarios where templates need to be downloaded but network is unavailable
         var context = new InitializationContext
         {
@@ -315,8 +315,8 @@ public class DevcontainerErrorScenariosTests : TestBase
         // Should handle network issues gracefully
         if (result.Errors.Any())
         {
-            result.Errors.Should().Contain(error => 
-                error.Contains("network") || 
+            result.Errors.Should().Contain(error =>
+                error.Contains("network") ||
                 error.Contains("download") ||
                 error.Contains("connection") ||
                 error.Contains("remote-template-requiring-network"));
@@ -328,7 +328,7 @@ public class DevcontainerErrorScenariosTests : TestBase
     {
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory("error-malformed-json");
-        
+
         // Create a malformed devcontainer configuration
         var malformedConfig = new DevcontainerConfiguration
         {
@@ -351,7 +351,7 @@ public class DevcontainerErrorScenariosTests : TestBase
     {
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory("error-circular-dependency");
-        
+
         var context = new InitializationContext
         {
             ProjectName = "circular-test",
@@ -372,8 +372,8 @@ public class DevcontainerErrorScenariosTests : TestBase
         // Should detect circular dependencies and fail gracefully
         if (result.Errors.Any())
         {
-            result.Errors.Should().Contain(error => 
-                error.Contains("circular") || 
+            result.Errors.Should().Contain(error =>
+                error.Contains("circular") ||
                 error.Contains("dependency") ||
                 error.Contains("recursive"));
         }
@@ -384,7 +384,7 @@ public class DevcontainerErrorScenariosTests : TestBase
     {
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory("error-unsupported-docker");
-        
+
         var context = new InitializationContext
         {
             ProjectName = "docker-version-test",
@@ -405,15 +405,15 @@ public class DevcontainerErrorScenariosTests : TestBase
         // Should warn about or reject unsupported Docker configurations
         if (result.Errors.Any())
         {
-            result.Errors.Should().Contain(error => 
-                error.Contains("unsupported") || 
+            result.Errors.Should().Contain(error =>
+                error.Contains("unsupported") ||
                 error.Contains("version") ||
                 error.Contains("image"));
         }
         else if (result.Warnings.Any())
         {
-            result.Warnings.Should().Contain(warning => 
-                warning.Contains("unsupported") || 
+            result.Warnings.Should().Contain(warning =>
+                warning.Contains("unsupported") ||
                 warning.Contains("version"));
         }
     }
@@ -424,7 +424,7 @@ public class DevcontainerErrorScenariosTests : TestBase
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory("error-long-project-name");
         var veryLongProjectName = new string('a', 200); // Extremely long project name
-        
+
         var context = new InitializationContext
         {
             ProjectName = veryLongProjectName,
@@ -441,15 +441,15 @@ public class DevcontainerErrorScenariosTests : TestBase
         // Should either truncate the name, warn, or fail gracefully
         if (result.Errors.Any())
         {
-            result.Errors.Should().Contain(error => 
+            result.Errors.Should().Contain(error =>
                 error.Contains("name") && (
-                    error.Contains("long") || 
+                    error.Contains("long") ||
                     error.Contains("length") ||
                     error.Contains("invalid")));
         }
         else if (result.Warnings.Any())
         {
-            result.Warnings.Should().Contain(warning => 
+            result.Warnings.Should().Contain(warning =>
                 warning.Contains("name") && warning.Contains("truncated"));
         }
     }
@@ -460,7 +460,7 @@ public class DevcontainerErrorScenariosTests : TestBase
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory("error-special-characters");
         var nameWithSpecialChars = "my-project@#$%^&*()+=[]{}|\\:;\"'<>?,./~`";
-        
+
         var context = new InitializationContext
         {
             ProjectName = nameWithSpecialChars,
@@ -477,8 +477,8 @@ public class DevcontainerErrorScenariosTests : TestBase
         // Should either sanitize the name or provide clear error message
         if (result.Errors.Any())
         {
-            result.Errors.Should().Contain(error => 
-                error.Contains("character") || 
+            result.Errors.Should().Contain(error =>
+                error.Contains("character") ||
                 error.Contains("invalid") ||
                 error.Contains("name"));
         }
@@ -489,7 +489,7 @@ public class DevcontainerErrorScenariosTests : TestBase
             {
                 var devcontainerJsonPath = result.AffectedFiles.First(f => f.EndsWith("devcontainer.json"));
                 var content = await File.ReadAllTextAsync(devcontainerJsonPath);
-                
+
                 // Content should not contain the raw special characters
                 content.Should().NotContain("@#$%^&*()");
             }
@@ -528,13 +528,13 @@ public class DevcontainerErrorScenariosTests : TestBase
         // Assert
         // At least one should succeed, others may fail due to conflicts
         results.Should().Contain(r => r.Errors.Count == 0, "At least one concurrent operation should succeed");
-        
+
         // Any failures should be due to concurrent access, not crashes
         var failedResults = results.Where(r => r.Errors.Count > 0);
         foreach (var failedResult in failedResults)
         {
-            failedResult.Errors.Should().Contain(error => 
-                error.Contains("exists") || 
+            failedResult.Errors.Should().Contain(error =>
+                error.Contains("exists") ||
                 error.Contains("conflict") ||
                 error.Contains("access") ||
                 error.Contains("in use"));
@@ -547,12 +547,12 @@ public class DevcontainerErrorScenariosTests : TestBase
     private string CreateTestArtifactDirectory(string testName)
     {
         var testArtifactsPath = Path.Combine(Path.GetTempPath(), "test-artifacts", "error-scenarios", testName);
-        
+
         if (Directory.Exists(testArtifactsPath))
         {
             Directory.Delete(testArtifactsPath, true);
         }
-        
+
         Directory.CreateDirectory(testArtifactsPath);
         return testArtifactsPath;
     }

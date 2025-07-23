@@ -17,7 +17,7 @@ public static class DevcontainerServiceMocks
     public static Mock<PKS.Infrastructure.Services.IDevcontainerService> CreateDevcontainerService()
     {
         var mock = new Mock<PKS.Infrastructure.Services.IDevcontainerService>();
-        
+
         // Setup successful configuration creation
         mock.Setup(x => x.CreateConfigurationAsync(It.IsAny<DevcontainerOptions>()))
             .ReturnsAsync((DevcontainerOptions options) => new DevcontainerResult
@@ -52,7 +52,7 @@ public static class DevcontainerServiceMocks
 
         // Setup configuration merging
         mock.Setup(x => x.MergeConfigurationsAsync(It.IsAny<DevcontainerConfiguration>(), It.IsAny<DevcontainerConfiguration>()))
-            .ReturnsAsync((DevcontainerConfiguration base_, DevcontainerConfiguration overlay) => 
+            .ReturnsAsync((DevcontainerConfiguration base_, DevcontainerConfiguration overlay) =>
             {
                 var merged = new DevcontainerConfiguration
                 {
@@ -83,7 +83,7 @@ public static class DevcontainerServiceMocks
             .ReturnsAsync((string id) => features.FirstOrDefault(f => f.Id == id));
 
         mock.Setup(x => x.SearchFeaturesAsync(It.IsAny<string>()))
-            .ReturnsAsync((string query) => features.Where(f => 
+            .ReturnsAsync((string query) => features.Where(f =>
                 f.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                 f.Description.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                 f.Tags.Any(t => t.Contains(query, StringComparison.OrdinalIgnoreCase))).ToList());
@@ -215,11 +215,11 @@ public static class DevcontainerServiceMocks
 
         // Setup extension discovery
         mock.Setup(x => x.GetRecommendedExtensionsAsync(It.IsAny<string[]>()))
-            .ReturnsAsync((string[] categories) => extensions.Where(e => 
+            .ReturnsAsync((string[] categories) => extensions.Where(e =>
                 categories.Contains(e.Category)).ToList());
 
         mock.Setup(x => x.SearchExtensionsAsync(It.IsAny<string>()))
-            .ReturnsAsync((string query) => extensions.Where(e => 
+            .ReturnsAsync((string query) => extensions.Where(e =>
                 e.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                 e.Description.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList());
 

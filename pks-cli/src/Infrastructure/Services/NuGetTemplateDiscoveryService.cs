@@ -49,7 +49,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
         var templates = new List<NuGetDevcontainerTemplate>();
 
         _logger.LogInformation("Discovering NuGet templates with tag '{Tag}' from {SourceCount} sources", tag, sourcesToUse.Length);
-        
+
         foreach (var source in sourcesToUse)
         {
             _logger.LogDebug("Processing source: {Source}", source);
@@ -62,12 +62,12 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
                 _logger.LogDebug("Starting template discovery from source: {Source}", source);
                 var sourceTemplates = await DiscoverTemplatesFromSourceAsync(source, tag, cancellationToken);
                 templates.AddRange(sourceTemplates);
-                
+
                 _logger.LogDebug("Found {Count} templates from source {Source}", sourceTemplates.Count, source);
-                
+
                 foreach (var template in sourceTemplates)
                 {
-                    _logger.LogDebug("Template: {PackageId} v{Version} - Tags: {Tags}", 
+                    _logger.LogDebug("Template: {PackageId} v{Version} - Tags: {Tags}",
                         template.PackageId, template.Version, string.Join(", ", template.Tags));
                 }
             }
@@ -103,16 +103,16 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
             _logger.LogInformation("Extracting template {PackageId} v{Version} to {ExtractPath}", packageId, version, extractPath);
 
             var sourcesToUse = sources?.ToArray() ?? DefaultSources;
-            
+
             foreach (var source in sourcesToUse)
             {
                 try
                 {
                     var sourceRepository = Repository.Factory.GetCoreV3(source);
                     var downloadResource = await sourceRepository.GetResourceAsync<DownloadResource>(cancellationToken);
-                    
+
                     var packageIdentity = new NuGet.Packaging.Core.PackageIdentity(packageId, NuGet.Versioning.NuGetVersion.Parse(version));
-                    
+
                     using var downloadResult = await downloadResource.GetDownloadResourceResultAsync(
                         packageIdentity,
                         new PackageDownloadContext(_cacheContext),
@@ -169,7 +169,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
             {
                 var sourceRepository = Repository.Factory.GetCoreV3(source);
                 var metadataResource = await sourceRepository.GetResourceAsync<PackageMetadataResource>(cancellationToken);
-                
+
                 var identity = new NuGet.Packaging.Core.PackageIdentity(packageId, NuGet.Versioning.NuGetVersion.Parse(version));
                 var metadata = await metadataResource.GetMetadataAsync(identity, _cacheContext, NullLogger.Instance, cancellationToken);
 
@@ -203,7 +203,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
             {
                 var sourceRepository = Repository.Factory.GetCoreV3(source);
                 var searchResource = await sourceRepository.GetResourceAsync<PackageSearchResource>(cancellationToken);
-                
+
                 var searchFilter = new SearchFilter(includePrerelease: false)
                 {
                     SupportedFrameworks = Array.Empty<string>(),
@@ -211,7 +211,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
                 };
 
                 var combinedQuery = string.IsNullOrEmpty(query) ? $"tags:{tag}" : $"{query} tags:{tag}";
-                
+
                 var packages = await searchResource.SearchAsync(
                     combinedQuery,
                     searchFilter,
@@ -233,7 +233,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
                         IsPrerelease = package.Identity.Version.IsPrerelease,
                         RelevanceScore = CalculateRelevanceScore(package, query)
                     };
-                    
+
                     searchResults.Add(searchResult);
                 }
             }
@@ -266,7 +266,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
                     // Try to create a repository and get a resource
                     var sourceRepository = Repository.Factory.GetCoreV3(source);
                     var serviceIndex = await sourceRepository.GetResourceAsync<ServiceIndexResourceV3>(cancellationToken);
-                    
+
                     if (serviceIndex != null)
                     {
                         result.ValidSources.Add(source);
@@ -287,7 +287,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
             }
 
             result.IsValid = result.ValidSources.Any() && !result.Errors.Any();
-            
+
             if (result.InvalidSources.Any())
             {
                 result.Warnings.Add($"{result.InvalidSources.Count} sources could not be validated");
@@ -314,20 +314,20 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
         CancellationToken cancellationToken)
     {
         var templates = new List<NuGetDevcontainerTemplate>();
-        
+
         // Check if this is a local folder source
         if (IsLocalFolderSource(source))
         {
             _logger.LogDebug("Detected local folder source: {Source}. Using direct file search.", source);
             return await DiscoverTemplatesFromLocalFolderAsync(source, tag, cancellationToken);
         }
-        
+
         _logger.LogDebug("Creating repository for source: {Source}", source);
         var sourceRepository = Repository.Factory.GetCoreV3(source);
-        
+
         _logger.LogDebug("Getting PackageSearchResource for source: {Source}", source);
         var searchResource = await sourceRepository.GetResourceAsync<PackageSearchResource>(cancellationToken);
-        
+
         var searchFilter = new SearchFilter(includePrerelease: false)
         {
             SupportedFrameworks = Array.Empty<string>(),
@@ -336,7 +336,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
 
         var searchQuery = $"tags:{tag}";
         _logger.LogDebug("Searching with query: '{SearchQuery}' in source: {Source}", searchQuery, source);
-        
+
         var packages = await searchResource.SearchAsync(
             searchQuery,
             searchFilter,
@@ -344,8 +344,8 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
             take: 100, // Reasonable limit for templates
             NullLogger.Instance,
             cancellationToken);
-            
-        _logger.LogDebug("Search returned {PackageCount} packages from source: {Source}", 
+
+        _logger.LogDebug("Search returned {PackageCount} packages from source: {Source}",
             packages?.Count() ?? 0, source);
 
         foreach (var package in packages)
@@ -380,7 +380,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
     {
         // Extract devcontainer-specific metadata from package properties
         // This would typically come from the package's .nuspec file
-        
+
         // For now, we'll use some heuristics based on package properties
         if (package.DependencySets != null)
         {
@@ -399,16 +399,16 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
         Directory.CreateDirectory(extractPath);
 
         using var archive = new ZipArchive(packageStream, ZipArchiveMode.Read);
-        
+
         foreach (var entry in archive.Entries)
         {
             // Skip package metadata files, focus on content
             if (entry.FullName.StartsWith("content/") || entry.FullName.StartsWith("contentFiles/"))
             {
-                var relativePath = entry.FullName.StartsWith("content/") 
+                var relativePath = entry.FullName.StartsWith("content/")
                     ? entry.FullName.Substring("content/".Length)
                     : entry.FullName.Substring("contentFiles/".Length);
-                
+
                 // Skip template engine metadata that shouldn't be in user projects
                 if (relativePath.StartsWith(".template.config/", StringComparison.OrdinalIgnoreCase) ||
                     relativePath.Contains("template.json", StringComparison.OrdinalIgnoreCase) ||
@@ -416,10 +416,10 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
                 {
                     continue;
                 }
-                
+
                 var fullPath = Path.Combine(extractPath, relativePath);
                 var directory = Path.GetDirectoryName(fullPath);
-                
+
                 if (!string.IsNullOrEmpty(directory))
                 {
                     Directory.CreateDirectory(directory);
@@ -431,14 +431,14 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
                     result.ExtractedFiles.Add(fullPath);
                 }
             }
-            
+
             // Look for template manifest
             if (entry.Name.Equals("pks-template.json", StringComparison.OrdinalIgnoreCase))
             {
                 using var stream = entry.Open();
                 using var reader = new StreamReader(stream);
                 var manifestJson = await reader.ReadToEndAsync();
-                
+
                 try
                 {
                     result.Manifest = JsonSerializer.Deserialize<NuGetTemplateManifest>(manifestJson, new JsonSerializerOptions
@@ -523,11 +523,11 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
         CancellationToken cancellationToken)
     {
         var templates = new List<NuGetDevcontainerTemplate>();
-        
+
         try
         {
             _logger.LogDebug("Searching for .nupkg files in folder: {FolderPath}", folderPath);
-            
+
             if (!Directory.Exists(folderPath))
             {
                 _logger.LogWarning("Local folder source does not exist: {FolderPath}", folderPath);
@@ -545,7 +545,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
                     if (template != null)
                     {
                         templates.Add(template);
-                        _logger.LogDebug("Extracted template from {PackageFile}: {PackageId} v{Version}", 
+                        _logger.LogDebug("Extracted template from {PackageFile}: {PackageId} v{Version}",
                             Path.GetFileName(nupkgFile), template.PackageId, template.Version);
                     }
                 }
@@ -569,7 +569,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
         {
             using var fileStream = File.OpenRead(nupkgFile);
             using var archive = new ZipArchive(fileStream, ZipArchiveMode.Read);
-            
+
             // Find the .nuspec file
             var nuspecEntry = archive.Entries.FirstOrDefault(e => e.Name.EndsWith(".nuspec", StringComparison.OrdinalIgnoreCase));
             if (nuspecEntry == null)
@@ -610,7 +610,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
             }
 
             var tags = tagsValue.Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries);
-            
+
             _logger.LogDebug("Package {PackageId} v{Version} has tags: {Tags}", packageId, version, string.Join(", ", tags));
 
             // Check if the package has the required tag
@@ -637,7 +637,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
                 IsPrerelease = version.Contains("-", StringComparison.OrdinalIgnoreCase)
             };
 
-            _logger.LogDebug("Successfully extracted template: {PackageId} v{Version} with matching tag '{Tag}'", 
+            _logger.LogDebug("Successfully extracted template: {PackageId} v{Version} with matching tag '{Tag}'",
                 packageId, version, tag);
 
             return template;
@@ -658,12 +658,12 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
     public async Task<NuGetTemplatePackage?> GetTemplatePackageAsync(string packageId, CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("Getting template package information for {PackageId}", packageId);
-        
+
         try
         {
             // For now, return a basic stub implementation
             await Task.Delay(100, cancellationToken);
-            
+
             return new NuGetTemplatePackage
             {
                 Id = packageId,
@@ -699,16 +699,16 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
     public async Task<INuGetTemplateDiscoveryService> ConfigureAsync(NuGetDiscoveryConfiguration configuration, CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("Configuring NuGet template discovery service");
-        
+
         try
         {
             // Update the current configuration
             _configuration = configuration;
             await Task.Delay(10, cancellationToken);
-            
-            _logger.LogDebug("Configuration applied - Sources: {SourceCount}, Tag: {Tag}, MaxResults: {MaxResults}", 
+
+            _logger.LogDebug("Configuration applied - Sources: {SourceCount}, Tag: {Tag}, MaxResults: {MaxResults}",
                 configuration.Sources.Count, configuration.Tag, configuration.MaxResults);
-            
+
             return this;
         }
         catch (Exception ex)
@@ -770,9 +770,9 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
             {
                 var sourceRepository = Repository.Factory.GetCoreV3(source);
                 var findPackageByIdResource = await sourceRepository.GetResourceAsync<FindPackageByIdResource>(cancellationToken);
-                
+
                 var allVersions = await findPackageByIdResource.GetAllVersionsAsync(packageId, _cacheContext, NullLogger.Instance, cancellationToken);
-                
+
                 foreach (var version in allVersions)
                 {
                     var versionString = version.ToString();
@@ -781,7 +781,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
                         versions.Add(versionString);
                     }
                 }
-                
+
                 if (versions.Any())
                 {
                     break; // Found versions, no need to check other sources
@@ -795,7 +795,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
 
         versions.Sort((v1, v2) => new Version(v1).CompareTo(new Version(v2)));
         _logger.LogDebug("Found {VersionCount} versions for package {PackageId}", versions.Count, packageId);
-        
+
         return versions;
     }
 
@@ -816,15 +816,15 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
             {
                 var sourceRepository = Repository.Factory.GetCoreV3(source);
                 var findPackageByIdResource = await sourceRepository.GetResourceAsync<FindPackageByIdResource>(cancellationToken);
-                
+
                 var allVersions = await findPackageByIdResource.GetAllVersionsAsync(packageId, _cacheContext, NullLogger.Instance, cancellationToken);
-                
-                var filteredVersions = includePrerelease 
-                    ? allVersions 
+
+                var filteredVersions = includePrerelease
+                    ? allVersions
                     : allVersions.Where(v => !v.IsPrerelease);
-                
+
                 var latestVersion = filteredVersions.OrderByDescending(v => v).FirstOrDefault();
-                
+
                 if (latestVersion != null)
                 {
                     var versionString = latestVersion.ToString();
@@ -849,7 +849,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Dictionary of package IDs with available updates</returns>
     public async Task<Dictionary<string, string>> CheckForUpdatesAsync(
-        Dictionary<string, string> installedPackages, 
+        Dictionary<string, string> installedPackages,
         CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("Checking for updates for {PackageCount} installed packages", installedPackages.Count);
@@ -861,14 +861,14 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
             try
             {
                 var latestVersion = await GetLatestVersionAsync(packageId, includePrerelease: false, cancellationToken);
-                
-                if (!string.IsNullOrEmpty(latestVersion) && 
-                    Version.TryParse(currentVersion, out var current) && 
-                    Version.TryParse(latestVersion, out var latest) && 
+
+                if (!string.IsNullOrEmpty(latestVersion) &&
+                    Version.TryParse(currentVersion, out var current) &&
+                    Version.TryParse(latestVersion, out var latest) &&
                     latest > current)
                 {
                     updates[packageId] = latestVersion;
-                    _logger.LogDebug("Update available for {PackageId}: {CurrentVersion} -> {LatestVersion}", 
+                    _logger.LogDebug("Update available for {PackageId}: {CurrentVersion} -> {LatestVersion}",
                         packageId, currentVersion, latestVersion);
                 }
             }
@@ -896,7 +896,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
         {
             // For now, this is a simulation of the uninstall process
             await Task.Delay(500, cancellationToken);
-            
+
             _logger.LogDebug("Template package {PackageId} uninstalled successfully", packageId);
             return true;
         }
@@ -920,9 +920,9 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
         {
             // For now, this is a simulation - would integrate with actual template discovery
             await Task.Delay(100, cancellationToken);
-            
+
             var installedTemplates = new List<NuGetDevcontainerTemplate>();
-            
+
             // Return empty list for now - real implementation would scan installed templates
             _logger.LogDebug("Found {Count} installed templates", installedTemplates.Count);
             return installedTemplates;
@@ -949,7 +949,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
         {
             // For now, this is a simulation - would integrate with actual template installation
             await Task.Delay(1000, cancellationToken);
-            
+
             return new NuGetTemplateExtractionResult
             {
                 Success = true,
@@ -986,7 +986,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
         {
             // For now, this is a simulation - would integrate with actual template removal
             await Task.Delay(500, cancellationToken);
-            
+
             _logger.LogDebug("Template {PackageId} uninstalled successfully", packageId);
             return true;
         }

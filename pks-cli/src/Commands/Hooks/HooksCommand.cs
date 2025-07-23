@@ -24,7 +24,7 @@ public class HooksCommand : AsyncCommand<HooksSettings>
         {
             // Check the command name to determine action
             var commandName = context.Name?.ToLower();
-            
+
             return commandName switch
             {
                 "init" => await InitHooksAsync(settings),
@@ -46,11 +46,11 @@ public class HooksCommand : AsyncCommand<HooksSettings>
         try
         {
             var success = await _hooksService.InitializeClaudeCodeHooksAsync(settings.Force, settings.Scope);
-            
+
             if (success)
             {
                 AnsiConsole.MarkupLine("[green]✓ Claude Code hooks configuration created[/]");
-                
+
                 var configPath = GetConfigurationPath(settings.Scope);
                 var panel = new Panel(
                     "[yellow]Claude Code hooks have been configured![/]\n\n" +
@@ -67,7 +67,7 @@ public class HooksCommand : AsyncCommand<HooksSettings>
                 );
                 panel.Header = new PanelHeader("[cyan]Setup Complete[/]");
                 panel.Border = BoxBorder.Rounded;
-                
+
                 AnsiConsole.Write(panel);
                 return 0;
             }
@@ -87,7 +87,7 @@ public class HooksCommand : AsyncCommand<HooksSettings>
     private Task<int> ListHooksAsync()
     {
         AnsiConsole.MarkupLine("[cyan]Available Claude Code Hook Events[/]");
-        
+
         var table = new Table();
         table.AddColumn("Command");
         table.AddColumn("Event Type");
@@ -98,37 +98,37 @@ public class HooksCommand : AsyncCommand<HooksSettings>
             "PreToolUse",
             "Called before Claude Code executes a tool"
         );
-        
+
         table.AddRow(
             "[green]pks hooks post-tool-use[/]",
-            "PostToolUse", 
+            "PostToolUse",
             "Called after Claude Code executes a tool"
         );
-        
+
         table.AddRow(
             "[green]pks hooks user-prompt-submit[/]",
             "UserPromptSubmit",
             "Called before Claude Code processes user prompts"
         );
-        
+
         table.AddRow(
             "[green]pks hooks notification[/]",
             "Notification",
             "Called for general notifications from Claude Code"
         );
-        
+
         table.AddRow(
             "[green]pks hooks stop[/]",
             "Stop",
             "Called when Claude Code agent stops responding"
         );
-        
+
         table.AddRow(
             "[green]pks hooks subagent-stop[/]",
             "SubagentStop",
             "Called when a Claude Code subagent stops"
         );
-        
+
         table.AddRow(
             "[green]pks hooks pre-compact[/]",
             "PreCompact",
@@ -136,7 +136,7 @@ public class HooksCommand : AsyncCommand<HooksSettings>
         );
 
         AnsiConsole.Write(table);
-        
+
         AnsiConsole.MarkupLine("\n[dim]Use 'pks hooks init' to configure Claude Code integration[/]");
         return Task.FromResult(0);
     }
@@ -159,13 +159,13 @@ public class HooksCommand : AsyncCommand<HooksSettings>
         AnsiConsole.MarkupLine("  pks hooks stop                          - Handle Stop event");
         AnsiConsole.MarkupLine("  pks hooks subagent-stop                 - Handle SubagentStop event");
         AnsiConsole.MarkupLine("  pks hooks pre-compact                   - Handle PreCompact event");
-        
+
         AnsiConsole.MarkupLine("");
         AnsiConsole.MarkupLine("[dim]Note: Hook names now use PascalCase format (PreToolUse, PostToolUse, etc.) as expected by Claude Code.[/]");
         AnsiConsole.MarkupLine("[dim]Legacy camelCase hooks are automatically migrated to PascalCase during initialization.[/]");
         return Task.FromResult(0);
     }
-    
+
     private static string GetConfigurationPath(SettingsScope scope)
     {
         return scope switch
@@ -187,12 +187,12 @@ public class HooksSettings : CommandSettings
     [Description("Force overwrite existing hooks configuration")]
     [DefaultValue(false)]
     public bool Force { get; set; } = false;
-    
+
     [CommandOption("-s|--scope")]
     [Description("Settings scope: user (global), project (current directory), or local (.claude folder)")]
     [DefaultValue(SettingsScope.Project)]
     public SettingsScope Scope { get; set; } = SettingsScope.Project;
-    
+
     [CommandOption("-j|--json")]
     [Description("Output result in JSON format (suppresses banner and UI output)")]
     [DefaultValue(false)]
@@ -208,12 +208,12 @@ public enum SettingsScope
     /// Global user settings (~/.claude/settings.json)
     /// </summary>
     User,
-    
+
     /// <summary>
     /// Project-specific settings (current directory/.claude/settings.json)
     /// </summary>
     Project,
-    
+
     /// <summary>
     /// Local directory settings (./.claude/settings.json)
     /// </summary>

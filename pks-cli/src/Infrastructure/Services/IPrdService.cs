@@ -14,7 +14,7 @@ public interface IPrdService
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Generated PRD result</returns>
     Task<PrdGenerationResult> GeneratePrdAsync(
-        PrdGenerationRequest request, 
+        PrdGenerationRequest request,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -24,7 +24,7 @@ public interface IPrdService
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Loaded PRD result</returns>
     Task<PrdLoadResult> LoadPrdAsync(
-        string filePath, 
+        string filePath,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -35,8 +35,8 @@ public interface IPrdService
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>True if saved successfully</returns>
     Task<bool> SavePrdAsync(
-        PrdDocument document, 
-        string filePath, 
+        PrdDocument document,
+        string filePath,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -46,7 +46,7 @@ public interface IPrdService
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>PRD status information</returns>
     Task<PrdStatus> GetPrdStatusAsync(
-        string filePath, 
+        string filePath,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -140,7 +140,7 @@ public interface IPrdService
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Update result</returns>
     Task<PrdUpdateResult> UpdatePrdAsync(
-        PrdUpdateOptions options, 
+        PrdUpdateOptions options,
         CancellationToken cancellationToken = default);
 }
 

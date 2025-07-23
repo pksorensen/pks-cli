@@ -33,7 +33,7 @@ public class DevcontainerTemplateExtractionTests : TestBase
 
         // Act
         var template = await _templateService.GetTemplateAsync(templateName);
-        
+
         // Assert
         template.Should().NotBeNull();
         template!.Id.Should().Be(templateName);
@@ -48,7 +48,7 @@ public class DevcontainerTemplateExtractionTests : TestBase
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory("template-extraction-files");
         var templateName = "pks-universal-devcontainer";
-        
+
         var options = new DevcontainerOptions
         {
             Name = "test-extraction",
@@ -81,7 +81,7 @@ public class DevcontainerTemplateExtractionTests : TestBase
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory("template-extraction-placeholders");
         var projectName = "MyTestProject";
-        
+
         var options = new DevcontainerOptions
         {
             Name = projectName,
@@ -97,7 +97,7 @@ public class DevcontainerTemplateExtractionTests : TestBase
 
         var devcontainerJsonPath = result.ExtractedFiles.First(f => f.EndsWith("devcontainer.json"));
         var devcontainerContent = await File.ReadAllTextAsync(devcontainerJsonPath);
-        
+
         // Verify placeholders were replaced
         devcontainerContent.Should().Contain(projectName);
         devcontainerContent.Should().NotContain("${projectName}");
@@ -112,7 +112,7 @@ public class DevcontainerTemplateExtractionTests : TestBase
     {
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory($"template-extraction-{templateName}");
-        
+
         var options = new DevcontainerOptions
         {
             Name = $"test-{templateName}",
@@ -132,7 +132,7 @@ public class DevcontainerTemplateExtractionTests : TestBase
         // Verify devcontainer.json was created and is valid JSON
         var devcontainerJsonPath = extractionResult.ExtractedFiles.FirstOrDefault(f => f.EndsWith("devcontainer.json"));
         devcontainerJsonPath.Should().NotBeNull();
-        
+
         var jsonContent = await File.ReadAllTextAsync(devcontainerJsonPath!);
         var config = JsonSerializer.Deserialize<DevcontainerConfiguration>(jsonContent);
         config.Should().NotBeNull();
@@ -176,7 +176,7 @@ public class DevcontainerTemplateExtractionTests : TestBase
         // Verify the generated JSON is valid and contains expected content
         var generatedContent = await File.ReadAllTextAsync(result.GeneratedFilePath);
         var parsedConfig = JsonSerializer.Deserialize<DevcontainerConfiguration>(generatedContent);
-        
+
         parsedConfig.Should().NotBeNull();
         parsedConfig!.Name.Should().Be(configuration.Name);
         parsedConfig.Image.Should().Be(configuration.Image);
@@ -314,7 +314,7 @@ public class DevcontainerTemplateExtractionTests : TestBase
     {
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory("template-extraction-features");
-        
+
         var options = new DevcontainerOptions
         {
             Name = "feature-test",
@@ -434,12 +434,12 @@ public class DevcontainerTemplateExtractionTests : TestBase
     private string CreateTestArtifactDirectory(string testName)
     {
         var testArtifactsPath = Path.Combine(Path.GetTempPath(), "test-artifacts", "template-extraction", testName);
-        
+
         if (Directory.Exists(testArtifactsPath))
         {
             Directory.Delete(testArtifactsPath, true);
         }
-        
+
         Directory.CreateDirectory(testArtifactsPath);
         return testArtifactsPath;
     }

@@ -21,7 +21,7 @@ public class DevcontainerConfiguration
     /// Base image for the devcontainer (alias for Image property)
     /// </summary>
     [JsonIgnore]
-    public string BaseImage 
+    public string BaseImage
     {
         get => Image;
         set => Image = value;
@@ -43,7 +43,7 @@ public class DevcontainerConfiguration
     /// Forward ports as List for easier manipulation (alias for ForwardPorts array)
     /// </summary>
     [JsonIgnore]
-    public List<int> ForwardPortsList 
+    public List<int> ForwardPortsList
     {
         get => ForwardPorts?.ToList() ?? new List<int>();
         set => ForwardPorts = value?.ToArray() ?? Array.Empty<int>();

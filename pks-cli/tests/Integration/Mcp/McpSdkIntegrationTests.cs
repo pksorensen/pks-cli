@@ -59,7 +59,7 @@ public class McpSdkIntegrationTests : TestBase
 
         // Assert - Verify all expected tool services are discovered
         toolsList.Should().NotBeEmpty("Tool discovery should find registered tools");
-        
+
         // Log discovered tools for verification
         foreach (var tool in toolsList)
         {
@@ -84,22 +84,22 @@ public class McpSdkIntegrationTests : TestBase
 
         // Assert
         toolMethods.Should().NotBeEmpty("ProjectToolService should have tool methods");
-        
+
         foreach (var method in toolMethods)
         {
             _output.WriteLine($"Tool method: {method.Name}");
-            
+
             // Verify the method has proper signatures for MCP tools
-            method.ReturnType.Should().Be(typeof(Task<object>), 
+            method.ReturnType.Should().Be(typeof(Task<object>),
                 $"Tool method {method.Name} should return Task<object>");
-            
+
             // Verify parameters have proper attributes (when attributes are properly implemented)
             var parameters = method.GetParameters();
             parameters.Should().NotBeEmpty($"Tool method {method.Name} should have parameters");
         }
     }
 
-    [Fact] 
+    [Fact]
     public async Task McpSdk_ShouldStartServerWithToolDiscovery()
     {
         // Arrange
@@ -204,13 +204,13 @@ public class McpSdkIntegrationTests : TestBase
 
             // Assert
             result.Should().NotBeNull("Project initialization should return result");
-            
+
             var resultDict = result as dynamic;
             if (resultDict != null)
             {
                 // Note: Dynamic assertion is limited, but we verify the structure exists
                 _output.WriteLine($"Project initialization result: {result}");
-                
+
                 // Verify project directory was created (if initialization was successful)
                 // This depends on the actual implementation being working
             }
@@ -249,7 +249,7 @@ public class McpSdkIntegrationTests : TestBase
 
         // Assert
         result.Should().NotBeNull("Tool execution should always return a result");
-        
+
         // The result should indicate failure for invalid inputs
         if (!result.Success)
         {
@@ -278,7 +278,7 @@ public class McpSdkIntegrationTests : TestBase
 
         // Assert - Should handle type mismatches gracefully
         result.Should().NotBeNull("Tool execution should handle type mismatches");
-        
+
         if (!result.Success)
         {
             result.Error.Should().Contain("type");
@@ -303,10 +303,10 @@ public class McpSdkIntegrationTests : TestBase
             tool.Name.Should().NotBeNullOrEmpty($"Tool {tool.Name} should have a name");
             tool.Description.Should().NotBeNullOrEmpty($"Tool {tool.Name} should have a description");
             tool.Category.Should().NotBeNullOrEmpty($"Tool {tool.Name} should have a category");
-            
+
             // Validate tool naming convention
             tool.Name.Should().StartWith("pks_", $"Tool {tool.Name} should follow PKS naming convention");
-            
+
             _output.WriteLine($"Tool metadata validated: {tool.Name} in {tool.Category}");
         }
 
@@ -408,7 +408,7 @@ public class McpSdkIntegrationTests : TestBase
     private static IEnumerable<MethodInfo> GetToolMethods(Type serviceType)
     {
         return serviceType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
-            .Where(m => m.ReturnType == typeof(Task<object>) && 
+            .Where(m => m.ReturnType == typeof(Task<object>) &&
                        m.Name.EndsWith("Async") &&
                        m.GetParameters().Length > 0);
     }

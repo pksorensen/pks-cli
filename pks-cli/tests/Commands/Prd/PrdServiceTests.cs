@@ -86,7 +86,7 @@ public class PrdServiceTests
             // Assert
             Assert.True(result);
             Assert.True(File.Exists(tempPath));
-            
+
             var content = await File.ReadAllTextAsync(tempPath);
             Assert.Contains("Test Project", content);
         }
@@ -201,7 +201,7 @@ public class PrdServiceTests
         var tempDir = Path.GetTempPath();
         var prdFile1 = Path.Combine(tempDir, "PRD.md");
         var prdFile2 = Path.Combine(tempDir, "requirements.md");
-        
+
         try
         {
             Directory.CreateDirectory(tempDir);
@@ -239,7 +239,7 @@ public class PrdServiceTests
             // Assert
             Assert.Equal(tempPath, result);
             Assert.True(File.Exists(tempPath));
-            
+
             var content = await File.ReadAllTextAsync(tempPath);
             Assert.Contains(projectName, content);
         }

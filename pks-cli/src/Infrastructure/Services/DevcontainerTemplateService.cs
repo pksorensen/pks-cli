@@ -23,7 +23,7 @@ public class DevcontainerTemplateService : IDevcontainerTemplateService
     public async Task<List<DevcontainerTemplate>> GetAvailableTemplatesAsync()
     {
         await EnsureTemplatesLoadedAsync();
-        
+
         lock (_lock)
         {
             return new List<DevcontainerTemplate>(_templates);
@@ -33,7 +33,7 @@ public class DevcontainerTemplateService : IDevcontainerTemplateService
     public async Task<DevcontainerTemplate?> GetTemplateAsync(string id)
     {
         await EnsureTemplatesLoadedAsync();
-        
+
         lock (_lock)
         {
             return _templates.FirstOrDefault(t => t.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
@@ -73,7 +73,7 @@ public class DevcontainerTemplateService : IDevcontainerTemplateService
                 .Select(p => int.TryParse(p, out var port) ? port : 0)
                 .Where(p => p > 0)
                 .ToArray();
-            
+
             if (ports.Any())
             {
                 config.ForwardPorts = ports;
@@ -105,7 +105,7 @@ public class DevcontainerTemplateService : IDevcontainerTemplateService
     public async Task<List<DevcontainerTemplate>> GetTemplatesByCategoryAsync(string category)
     {
         await EnsureTemplatesLoadedAsync();
-        
+
         lock (_lock)
         {
             return _templates.Where(t => t.Category.Equals(category, StringComparison.OrdinalIgnoreCase)).ToList();
@@ -115,7 +115,7 @@ public class DevcontainerTemplateService : IDevcontainerTemplateService
     public async Task<List<DevcontainerTemplate>> SearchTemplatesAsync(string query)
     {
         await EnsureTemplatesLoadedAsync();
-        
+
         if (string.IsNullOrEmpty(query))
         {
             return await GetAvailableTemplatesAsync();
@@ -136,7 +136,7 @@ public class DevcontainerTemplateService : IDevcontainerTemplateService
     public async Task<List<string>> GetAvailableCategoriesAsync()
     {
         await EnsureTemplatesLoadedAsync();
-        
+
         lock (_lock)
         {
             return _templates.Select(t => t.Category).Distinct().OrderBy(c => c).ToList();
@@ -146,7 +146,7 @@ public class DevcontainerTemplateService : IDevcontainerTemplateService
     public async Task<DevcontainerValidationResult> ValidateTemplateCompatibilityAsync(string templateId, DevcontainerOptions options)
     {
         var result = new DevcontainerValidationResult();
-        
+
         try
         {
             var template = await GetTemplateAsync(templateId);
@@ -185,7 +185,7 @@ public class DevcontainerTemplateService : IDevcontainerTemplateService
     private async Task EnsureTemplatesLoadedAsync()
     {
         bool needsRefresh;
-        
+
         lock (_lock)
         {
             needsRefresh = !_templates.Any() || DateTime.UtcNow - _lastRefresh > _cacheTimeout;
@@ -202,13 +202,13 @@ public class DevcontainerTemplateService : IDevcontainerTemplateService
         try
         {
             var templates = await LoadBuiltInTemplatesAsync();
-            
+
             lock (_lock)
             {
                 _templates = templates;
                 _lastRefresh = DateTime.UtcNow;
             }
-            
+
             _logger.LogInformation("Initialized with {Count} built-in templates", templates.Count);
         }
         catch (Exception ex)
@@ -222,15 +222,15 @@ public class DevcontainerTemplateService : IDevcontainerTemplateService
         try
         {
             _logger.LogInformation("Refreshing devcontainer templates");
-            
+
             var newTemplates = await LoadBuiltInTemplatesAsync();
-            
+
             lock (_lock)
             {
                 _templates = newTemplates;
                 _lastRefresh = DateTime.UtcNow;
             }
-            
+
             _logger.LogInformation("Successfully refreshed {Count} templates", newTemplates.Count);
         }
         catch (Exception ex)
@@ -242,7 +242,7 @@ public class DevcontainerTemplateService : IDevcontainerTemplateService
     private static async Task<List<DevcontainerTemplate>> LoadBuiltInTemplatesAsync()
     {
         await Task.Delay(50); // Simulate async operation
-        
+
         return new List<DevcontainerTemplate>
         {
             new()
@@ -445,12 +445,12 @@ public class DevcontainerTemplateService : IDevcontainerTemplateService
     public async Task<NuGetTemplateExtractionResult> ExtractTemplateAsync(string templateId, DevcontainerOptions options, CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("Extracting template {TemplateId}", templateId);
-        
+
         try
         {
             // For now, return a basic stub implementation
             await Task.Delay(100, cancellationToken);
-            
+
             return new NuGetTemplateExtractionResult
             {
                 Success = true,

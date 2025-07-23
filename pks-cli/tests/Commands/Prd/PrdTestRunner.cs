@@ -97,11 +97,11 @@ public class PrdTestRunner
     {
         // This test ensures the test project can reference all necessary types
         // If this test passes, it means all dependencies are correctly configured
-        
+
         // Test that we can create instances (this will fail if dependencies are missing)
         var branch = new PrdBranchCommand();
         var settings = new PrdBranchMainSettings();
-        
+
         branch.Should().NotBeNull();
         settings.Should().NotBeNull();
     }

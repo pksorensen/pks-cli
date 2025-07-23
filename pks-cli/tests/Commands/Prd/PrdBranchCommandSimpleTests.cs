@@ -49,7 +49,7 @@ public class PrdBranchCommandSimpleTests : IDisposable
         // Assert
         settings.Should().NotBeNull();
         settings.Should().BeAssignableTo<CommandSettings>();
-        
+
         // Verify default values
         settings.ShowVersion.Should().BeFalse();
         settings.ListCommands.Should().BeFalse();
@@ -60,10 +60,10 @@ public class PrdBranchCommandSimpleTests : IDisposable
     {
         // Arrange
         var command = new PrdBranchCommand();
-        
+
         // Act
         var helpContent = command.GetHelpContent();
-        
+
         // Assert
         helpContent.Should().NotBeNullOrEmpty();
         helpContent.Should().Contain("PKS PRD Management");
@@ -149,7 +149,7 @@ public class PrdBranchCommandSimpleTests : IDisposable
         // Verify all PRD commands inherit from Command<T> where T is their settings type
         commandType.Should().NotBeNull();
         commandType.IsClass.Should().BeTrue();
-        
+
         // Check that the command type inherits from a Command<> type
         var baseType = commandType.BaseType;
         while (baseType != null && !baseType.IsGenericType)
@@ -221,9 +221,9 @@ public class PrdBranchCommandSimpleTests : IDisposable
         {
             var constructorWithService = commandType.GetConstructors()
                 .FirstOrDefault(c => c.GetParameters().Any(p => p.ParameterType == typeof(IPrdService)));
-            
+
             constructorWithService.Should().NotBeNull($"{commandType.Name} should have a constructor that accepts IPrdService");
-            
+
             // Verify the constructor can be called with a mock service
             var mockService = _mockPrdService.Object;
             var instance = Activator.CreateInstance(commandType, mockService);
@@ -247,7 +247,7 @@ public class PrdBranchCommand : Command<PrdBranchMainSettings>
     public override int Execute(CommandContext context, PrdBranchMainSettings? settings)
     {
         if (settings == null) throw new ArgumentNullException(nameof(settings));
-        
+
         if (settings.ShowVersion)
         {
             // In implementation: Display version

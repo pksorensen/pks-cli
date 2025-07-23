@@ -33,12 +33,12 @@ public class DevcontainerServiceTests : TestBase
     protected override void ConfigureServices(IServiceCollection services)
     {
         base.ConfigureServices(services);
-        
+
         services.AddSingleton(_mockFeatureRegistry.Object);
         services.AddSingleton(_mockTemplateService.Object);
         services.AddSingleton(_mockFileGenerator.Object);
         services.AddSingleton(_mockExtensionService.Object);
-        
+
         // Register the actual service when implemented
         // services.AddSingleton<IDevcontainerService, DevcontainerService>();
     }
@@ -98,7 +98,7 @@ public class DevcontainerServiceTests : TestBase
     [Theory]
     [MemberData(nameof(GetValidationTestCases))]
     public async Task ValidateConfigurationAsync_WithVariousConfigurations_ShouldReturnExpectedResults(
-        DevcontainerConfiguration configuration, bool expectedValid, string expectedError)
+        DevcontainerConfiguration configuration, bool expectedValid)
     {
         // Arrange
         var service = DevcontainerServiceMocks.CreateDevcontainerService().Object;
@@ -109,7 +109,7 @@ public class DevcontainerServiceTests : TestBase
         // Assert
         result.Should().NotBeNull();
         result.IsValid.Should().Be(expectedValid);
-        
+
         if (!expectedValid)
         {
             result.Errors.Should().NotBeEmpty();

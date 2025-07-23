@@ -30,9 +30,9 @@ public class HooksCommandTests : TestBase
         // Act
         using var output = new StringWriter();
         Console.SetOut(output);
-        
+
         var result = await command.ExecuteAsync(context, settings);
-        
+
         // Assert
         result.Should().Be(0);
         output.ToString().Should().BeEmpty(); // No output for proceed decision
@@ -66,9 +66,9 @@ public class HooksCommandTests : TestBase
         // Act
         using var output = new StringWriter();
         Console.SetOut(output);
-        
+
         var result = await command.ExecuteAsync(context, settings);
-        
+
         // Assert
         result.Should().Be(0);
         output.ToString().Should().BeEmpty(); // No output for proceed decision
@@ -85,9 +85,9 @@ public class HooksCommandTests : TestBase
         // Act
         using var output = new StringWriter();
         Console.SetOut(output);
-        
+
         var result = await command.ExecuteAsync(context, settings);
-        
+
         // Assert
         result.Should().Be(0);
         output.ToString().Should().BeEmpty(); // No output for proceed decision
@@ -104,9 +104,9 @@ public class HooksCommandTests : TestBase
         // Act
         using var output = new StringWriter();
         Console.SetOut(output);
-        
+
         var result = await command.ExecuteAsync(context, settings);
-        
+
         // Assert
         result.Should().Be(0);
         output.ToString().Should().BeEmpty(); // No output for proceed decision
@@ -181,7 +181,7 @@ public class HooksCommandTests : TestBase
             Mock.Of<CommandSettings>(),
             commandName,
             Mock.Of<IRemainingArguments>());
-        
+
         return context.Object;
     }
 }

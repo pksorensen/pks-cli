@@ -26,42 +26,42 @@ public class PrdHelpSystemTests : IDisposable
         _services = new ServiceCollection();
         _console = new TestConsole();
         _mockPrdService = new Mock<IPrdService>();
-        
+
         // Setup services
         _services.AddSingleton(_mockPrdService.Object);
-        
+
         // Create command app with full configuration
         _app = new CommandApp(new TypeRegistrar(_services));
         _app.Configure(config =>
         {
             config.SetApplicationName("pks");
             config.SetApplicationVersion("1.0.0");
-            
+
             config.AddCommand<PrdGenerateCommand>("generate")
                    .WithDescription("Generate a comprehensive PRD from an idea description")
                    .WithExample(new[] { "generate", "Build a task management app" })
                    .WithExample(new[] { "generate", "E-commerce platform", "--template", "web" });
-                
+
             config.AddCommand<PrdLoadCommand>("load")
                    .WithDescription("Load and parse an existing PRD file")
                    .WithExample(new[] { "load", "docs/PRD.md" })
                    .WithExample(new[] { "load", "project.md", "--validate" });
-                
+
             config.AddCommand<PrdRequirementsCommand>("requirements")
                    .WithDescription("List and filter requirements from a PRD document")
                    .WithExample(new[] { "requirements", "--status", "draft" })
                    .WithExample(new[] { "requirements", "docs/PRD.md", "--priority", "high" });
-                
+
             config.AddCommand<PrdStatusCommand>("status")
                    .WithDescription("Display PRD status, progress, and statistics")
                    .WithExample(new[] { "status", "--watch" })
                    .WithExample(new[] { "status", "--check-all" });
-                
+
             config.AddCommand<PrdValidateCommand>("validate")
                    .WithDescription("Validate PRD for completeness, consistency, and quality")
                    .WithExample(new[] { "validate", "--strict" })
                    .WithExample(new[] { "validate", "docs/PRD.md", "--report", "validation.json" });
-                
+
             config.AddCommand<PrdTemplateCommand>("template")
                    .WithDescription("Generate PRD templates for different project types")
                    .WithExample(new[] { "template", "MyProject", "--type", "web" })
@@ -206,7 +206,7 @@ public class PrdHelpSystemTests : IDisposable
     {
         // Arrange
         var command = new PrdBranchCommand();
-        
+
         // Act
         var helpContent = command.GetHelpContent();
 

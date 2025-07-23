@@ -43,7 +43,7 @@ public class StatusToolService
         bool detailed = false,
         string? category = null)
     {
-        _logger.LogInformation("MCP Tool: Getting system status, detailed: {Detailed}, category: {Category}", 
+        _logger.LogInformation("MCP Tool: Getting system status, detailed: {Detailed}, category: {Category}",
             detailed, category);
 
         try
@@ -136,7 +136,7 @@ public class StatusToolService
                 healthyComponents = healthyCount,
                 totalComponents = totalCount,
                 timestamp = DateTime.UtcNow,
-                checks = includeDetails 
+                checks = includeDetails
                     ? healthChecks.Cast<object>().ToArray()
                     : healthChecks.Select(hc => new
                     {
@@ -171,7 +171,7 @@ public class StatusToolService
         string? metricType = null,
         bool includeHistory = false)
     {
-        _logger.LogInformation("MCP Tool: Getting system metrics, type: {MetricType}, includeHistory: {IncludeHistory}", 
+        _logger.LogInformation("MCP Tool: Getting system metrics, type: {MetricType}, includeHistory: {IncludeHistory}",
             metricType, includeHistory);
 
         try
@@ -319,7 +319,7 @@ public class StatusToolService
     private async Task<object> GetResourceUsageAsync()
     {
         await Task.Delay(50);
-        
+
         var random = new Random();
         return new
         {
@@ -347,7 +347,7 @@ public class StatusToolService
     private async Task<object> GetNetworkInformationAsync()
     {
         await Task.Delay(50);
-        
+
         return new
         {
             hostname = Environment.MachineName,
@@ -366,7 +366,7 @@ public class StatusToolService
         // This would filter the status object by category
         // For now, return the full status with a category note
         await Task.Delay(10);
-        
+
         return new
         {
             success = true,
@@ -456,7 +456,7 @@ public class StatusToolService
     private async Task<Dictionary<string, object>> CollectSystemMetricsAsync()
     {
         await Task.Delay(100);
-        
+
         var random = new Random();
         return new Dictionary<string, object>
         {
@@ -481,7 +481,7 @@ public class StatusToolService
     private async Task<object> GetHistoricalMetricsAsync(string? metricType)
     {
         await Task.Delay(200); // Simulate historical data retrieval
-        
+
         var random = new Random();
         var timePoints = Enumerable.Range(0, 12)
             .Select(i => DateTime.UtcNow.AddHours(-i))

@@ -51,7 +51,7 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
     protected static string PromptText(string message, string? defaultValue = null)
     {
         var prompt = new TextPrompt<string>(message);
-        
+
         if (!string.IsNullOrEmpty(defaultValue))
         {
             prompt.DefaultValue(defaultValue);
@@ -163,16 +163,16 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
             .Title("[cyan]Available Features[/]")
             .Border(TableBorder.Rounded)
             .AddColumn("ID")
-            .AddColumn("Name") 
+            .AddColumn("Name")
             .AddColumn("Description")
             .AddColumn("Category");
 
         foreach (var (id, name, description, category) in features)
         {
-            var truncatedDescription = description.Length > 50 
+            var truncatedDescription = description.Length > 50
                 ? description[..47] + "..."
                 : description;
-                
+
             table.AddRow(
                 $"[yellow]{id}[/]",
                 $"[white]{name}[/]",
@@ -196,10 +196,10 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
 
         foreach (var (id, name, publisher, description) in extensions)
         {
-            var truncatedDescription = description.Length > 40 
+            var truncatedDescription = description.Length > 40
                 ? description[..37] + "..."
                 : description;
-                
+
             table.AddRow(
                 $"[yellow]{id}[/]",
                 $"[white]{name}[/]",
@@ -221,11 +221,11 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
 
         table.AddRow("[yellow]Name[/]", $"[white]{name}[/]");
         table.AddRow("[yellow]Base Image[/]", $"[dim]{image ?? "N/A"}[/]");
-        
+
         var featuresList = features.ToList();
         if (featuresList.Any())
         {
-            var featuresText = featuresList.Count <= 3 
+            var featuresText = featuresList.Count <= 3
                 ? string.Join(", ", featuresList)
                 : $"{string.Join(", ", featuresList.Take(3))} and {featuresList.Count - 3} more";
             table.AddRow("[yellow]Features[/]", $"[green]{featuresText}[/]");
@@ -234,11 +234,11 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
         {
             table.AddRow("[yellow]Features[/]", "[dim]None[/]");
         }
-        
+
         var extensionsList = extensions.ToList();
         if (extensionsList.Any())
         {
-            var extensionsText = extensionsList.Count <= 3 
+            var extensionsText = extensionsList.Count <= 3
                 ? string.Join(", ", extensionsList)
                 : $"{string.Join(", ", extensionsList.Take(3))} and {extensionsList.Count - 3} more";
             table.AddRow("[yellow]Extensions[/]", $"[blue]{extensionsText}[/]");
@@ -247,7 +247,7 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
         {
             table.AddRow("[yellow]Extensions[/]", "[dim]None[/]");
         }
-        
+
         var portsList = ports.ToList();
         if (portsList.Any())
         {
@@ -269,13 +269,13 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
         }
 
         // Convert relative paths to absolute
-        var resolvedPath = Path.IsPathFullyQualified(path) 
-            ? path 
+        var resolvedPath = Path.IsPathFullyQualified(path)
+            ? path
             : Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), path));
 
         // Ensure the directory exists
         var directory = Directory.Exists(resolvedPath) ? resolvedPath : Path.GetDirectoryName(resolvedPath);
-        
+
         if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
         {
             if (PromptConfirmation($"Directory '{directory}' does not exist. Create it?"))

@@ -8,18 +8,18 @@ namespace PKS.CLI.Tests.Integration.Devcontainer;
 /// </summary>
 public static class DevcontainerTestArtifactManager
 {
-    private static readonly string BaseTestArtifactsPath = 
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), 
+    private static readonly string BaseTestArtifactsPath =
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                      "test-artifacts", "pks-cli", "devcontainer");
 
     // Safety patterns to prevent creation of artifacts in source directories
-    private static readonly string[] ForbiddenPaths = 
+    private static readonly string[] ForbiddenPaths =
     {
         "src", "/src", "\\src", "pks-cli/src", "pks-cli\\src",
         "workspace", "/workspace", "\\workspace"
     };
 
-    private static readonly string[] ForbiddenNames = 
+    private static readonly string[] ForbiddenNames =
     {
         "src", "source", "code", "workspace", "pks-cli"
     };
@@ -30,7 +30,7 @@ public static class DevcontainerTestArtifactManager
     private static void ValidateTestPath(string path)
     {
         var normalizedPath = Path.GetFullPath(path).Replace('\\', '/').ToLowerInvariant();
-        
+
         // Check against forbidden path patterns
         foreach (var forbiddenPath in ForbiddenPaths)
         {
@@ -42,7 +42,7 @@ public static class DevcontainerTestArtifactManager
                     "Test artifacts must not be created in source directories.");
             }
         }
-        
+
         // Check if any part of the path contains forbidden names
         var pathParts = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
         foreach (var part in pathParts)
@@ -54,10 +54,10 @@ public static class DevcontainerTestArtifactManager
                     "Test artifacts must not be created in source directories.");
             }
         }
-        
+
         // Ensure the path is under a recognized test artifacts location
-        if (!normalizedPath.Contains("test-artifacts") && 
-            !normalizedPath.Contains("temp") && 
+        if (!normalizedPath.Contains("test-artifacts") &&
+            !normalizedPath.Contains("temp") &&
             !normalizedPath.Contains("tmp"))
         {
             throw new InvalidOperationException(
@@ -72,20 +72,20 @@ public static class DevcontainerTestArtifactManager
     public static string CreateTestDirectory(string testSuiteName, string testName)
     {
         var testPath = Path.Combine(BaseTestArtifactsPath, testSuiteName, testName, DateTime.UtcNow.ToString("yyyy-MM-dd_HH-mm-ss"));
-        
+
         // Validate that this is a safe test path
         ValidateTestPath(testPath);
-        
+
         if (Directory.Exists(testPath))
         {
             Directory.Delete(testPath, true);
         }
-        
+
         Directory.CreateDirectory(testPath);
-        
+
         // Register for cleanup
         RegisterForCleanup(testPath);
-        
+
         return testPath;
     }
 
@@ -95,15 +95,15 @@ public static class DevcontainerTestArtifactManager
     public static string CreateTempTestDirectory(string prefix = "temp")
     {
         var tempPath = Path.Combine(BaseTestArtifactsPath, "temp", $"{prefix}-{Guid.NewGuid():N}");
-        
+
         // Validate that this is a safe test path
         ValidateTestPath(tempPath);
-        
+
         Directory.CreateDirectory(tempPath);
-        
+
         // Register for immediate cleanup after test
         RegisterForImmediateCleanup(tempPath);
-        
+
         return tempPath;
     }
 
@@ -115,10 +115,10 @@ public static class DevcontainerTestArtifactManager
         var testDir = CreateTestDirectory(testSuiteName, testName);
         var fileName = customName ?? Path.GetFileName(sourceFilePath);
         var destinationPath = Path.Combine(testDir, fileName);
-        
+
         // Use synchronous File.Copy since File.CopyAsync doesn't exist
         await Task.Run(() => File.Copy(sourceFilePath, destinationPath, overwrite: true));
-        
+
         return destinationPath;
     }
 
@@ -129,13 +129,13 @@ public static class DevcontainerTestArtifactManager
     {
         var testDir = CreateTestDirectory(testSuiteName, testName);
         var resultPath = Path.Combine(testDir, "test-result.json");
-        
-        var options = new JsonSerializerOptions 
-        { 
+
+        var options = new JsonSerializerOptions
+        {
             WriteIndented = true,
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         };
-        
+
         var json = JsonSerializer.Serialize(testResult, options);
         await File.WriteAllTextAsync(resultPath, json);
     }
@@ -153,19 +153,19 @@ public static class DevcontainerTestArtifactManager
                 "Test projects should not use names that could conflict with source directories.",
                 nameof(projectName));
         }
-        
+
         var projectPath = CreateTestDirectory("test-projects", projectName);
-        
+
         // Create basic project structure
         var csprojContent = GenerateCsprojContent(projectName, template);
         await File.WriteAllTextAsync(Path.Combine(projectPath, $"{projectName}.csproj"), csprojContent);
-        
+
         var programContent = GenerateProgramContent(template);
         await File.WriteAllTextAsync(Path.Combine(projectPath, "Program.cs"), programContent);
-        
+
         // Create additional files based on template
         await CreateTemplateSpecificFilesAsync(projectPath, template);
-        
+
         return projectPath;
     }
 
@@ -176,20 +176,20 @@ public static class DevcontainerTestArtifactManager
     {
         var result = new DevcontainerValidationResult();
         var devcontainerPath = Path.Combine(projectPath, ".devcontainer");
-        
+
         // Check directory exists
         result.DevcontainerDirectoryExists = Directory.Exists(devcontainerPath);
-        
+
         if (!result.DevcontainerDirectoryExists)
         {
             result.Errors.Add("Devcontainer directory does not exist");
             return result;
         }
-        
+
         // Check devcontainer.json exists and is valid
         var devcontainerJsonPath = Path.Combine(devcontainerPath, "devcontainer.json");
         result.DevcontainerJsonExists = File.Exists(devcontainerJsonPath);
-        
+
         if (result.DevcontainerJsonExists)
         {
             try
@@ -197,7 +197,7 @@ public static class DevcontainerTestArtifactManager
                 var jsonContent = await File.ReadAllTextAsync(devcontainerJsonPath);
                 var config = JsonSerializer.Deserialize<Dictionary<string, object>>(jsonContent);
                 result.DevcontainerJsonValid = config != null;
-                
+
                 if (config != null)
                 {
                     result.HasName = config.ContainsKey("name");
@@ -215,21 +215,21 @@ public static class DevcontainerTestArtifactManager
         {
             result.Errors.Add("devcontainer.json does not exist");
         }
-        
+
         // Check for Dockerfile
         var dockerfilePath = Path.Combine(devcontainerPath, "Dockerfile");
         result.DockerfileExists = File.Exists(dockerfilePath);
-        
+
         // Check for additional files
         result.AdditionalFiles = Directory.GetFiles(devcontainerPath, "*", SearchOption.AllDirectories)
             .Select(f => Path.GetRelativePath(devcontainerPath, f))
             .ToList();
-        
-        result.IsValid = result.DevcontainerDirectoryExists && 
-                        result.DevcontainerJsonExists && 
+
+        result.IsValid = result.DevcontainerDirectoryExists &&
+                        result.DevcontainerJsonExists &&
                         result.DevcontainerJsonValid &&
                         result.HasName;
-        
+
         return result;
     }
 
@@ -239,59 +239,59 @@ public static class DevcontainerTestArtifactManager
     public static async Task<DevcontainerComparisonResult> CompareDevcontainersAsync(string path1, string path2)
     {
         var result = new DevcontainerComparisonResult();
-        
+
         var config1Path = Path.Combine(path1, "devcontainer.json");
         var config2Path = Path.Combine(path2, "devcontainer.json");
-        
+
         if (!File.Exists(config1Path) || !File.Exists(config2Path))
         {
             result.Differences.Add("One or both devcontainer.json files do not exist");
             return result;
         }
-        
+
         var content1 = await File.ReadAllTextAsync(config1Path);
         var content2 = await File.ReadAllTextAsync(config2Path);
-        
+
         var config1 = JsonSerializer.Deserialize<Dictionary<string, object>>(content1);
         var config2 = JsonSerializer.Deserialize<Dictionary<string, object>>(content2);
-        
+
         if (config1 == null || config2 == null)
         {
             result.Differences.Add("Failed to parse one or both configurations");
             return result;
         }
-        
+
         // Compare keys
         var keys1 = config1.Keys.ToHashSet();
         var keys2 = config2.Keys.ToHashSet();
-        
+
         var missingIn2 = keys1.Except(keys2);
         var missingIn1 = keys2.Except(keys1);
-        
+
         foreach (var key in missingIn2)
             result.Differences.Add($"Key '{key}' exists in first config but not in second");
-        
+
         foreach (var key in missingIn1)
             result.Differences.Add($"Key '{key}' exists in second config but not in first");
-        
+
         // Compare common keys (excluding name which is expected to be different)
         var commonKeys = keys1.Intersect(keys2).Where(k => k != "name");
-        
+
         foreach (var key in commonKeys)
         {
             var value1Json = JsonSerializer.Serialize(config1[key]);
             var value2Json = JsonSerializer.Serialize(config2[key]);
-            
+
             if (value1Json != value2Json)
             {
                 result.Differences.Add($"Key '{key}' has different values");
             }
         }
-        
+
         result.AreIdentical = result.Differences.Count == 0;
         result.StructurallyEquivalent = result.Differences.Count <= 1 && // Allow name difference
                                       result.Differences.All(d => d.Contains("name"));
-        
+
         return result;
     }
 
@@ -302,11 +302,11 @@ public static class DevcontainerTestArtifactManager
     {
         if (!Directory.Exists(BaseTestArtifactsPath))
             return;
-        
+
         var cutoffDate = DateTime.UtcNow.AddDays(-olderThanDays);
-        
+
         var directories = Directory.GetDirectories(BaseTestArtifactsPath, "*", SearchOption.AllDirectories);
-        
+
         foreach (var dir in directories)
         {
             try
@@ -330,33 +330,33 @@ public static class DevcontainerTestArtifactManager
     public static TestArtifactSummary GetArtifactSummary()
     {
         var summary = new TestArtifactSummary();
-        
+
         if (!Directory.Exists(BaseTestArtifactsPath))
         {
             return summary;
         }
-        
+
         var allDirectories = Directory.GetDirectories(BaseTestArtifactsPath, "*", SearchOption.AllDirectories);
         var allFiles = Directory.GetFiles(BaseTestArtifactsPath, "*", SearchOption.AllDirectories);
-        
+
         summary.TotalDirectories = allDirectories.Length;
         summary.TotalFiles = allFiles.Length;
         summary.TotalSizeBytes = allFiles.Sum(f => new FileInfo(f).Length);
-        
+
         summary.TestSuites = Directory.GetDirectories(BaseTestArtifactsPath)
             .Select(d => Path.GetFileName(d))
             .ToList();
-        
+
         summary.OldestArtifact = allDirectories
             .Select(d => new DirectoryInfo(d).CreationTimeUtc)
             .DefaultIfEmpty(DateTime.UtcNow)
             .Min();
-        
+
         summary.NewestArtifact = allDirectories
             .Select(d => new DirectoryInfo(d).CreationTimeUtc)
             .DefaultIfEmpty(DateTime.UtcNow)
             .Max();
-        
+
         return summary;
     }
 
@@ -476,11 +476,11 @@ public static class DevcontainerTestArtifactManager
                     }
                     """;
                 await File.WriteAllTextAsync(Path.Combine(projectPath, "appsettings.json"), appSettings);
-                
+
                 // Create Properties/launchSettings.json
                 var propertiesDir = Path.Combine(projectPath, "Properties");
                 Directory.CreateDirectory(propertiesDir);
-                
+
                 var launchSettings = """
                     {
                       "profiles": {
@@ -541,21 +541,21 @@ public class TestArtifactSummary
     public List<string> TestSuites { get; set; } = new();
     public DateTime OldestArtifact { get; set; }
     public DateTime NewestArtifact { get; set; }
-    
+
     public string TotalSizeFormatted => FormatBytes(TotalSizeBytes);
-    
+
     private static string FormatBytes(long bytes)
     {
         string[] suffixes = { "B", "KB", "MB", "GB" };
         int suffixIndex = 0;
         double size = bytes;
-        
+
         while (size >= 1024 && suffixIndex < suffixes.Length - 1)
         {
             size /= 1024;
             suffixIndex++;
         }
-        
+
         return $"{size:F1} {suffixes[suffixIndex]}";
     }
 }

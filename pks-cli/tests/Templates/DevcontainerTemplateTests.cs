@@ -11,7 +11,7 @@ namespace PksCli.Tests.Templates
     {
         private readonly string _testRootPath;
         private readonly string _templatePath;
-        
+
         public DevcontainerTemplateTests()
         {
             _testRootPath = Path.Combine(Path.GetTempPath(), $"pks-cli-test-{Guid.NewGuid():N}");
@@ -73,12 +73,12 @@ namespace PksCli.Tests.Templates
             // Arrange
             CreateTemplateStructure();
             var contentDevcontainerPath = Path.Combine(_templatePath, "content", ".devcontainer");
-            var expectedFiles = new[] 
-            { 
-                "Dockerfile", 
-                "devcontainer.json", 
-                "docker-compose.yml", 
-                "init-firewall.sh" 
+            var expectedFiles = new[]
+            {
+                "Dockerfile",
+                "devcontainer.json",
+                "docker-compose.yml",
+                "init-firewall.sh"
             };
 
             // Act
@@ -133,11 +133,11 @@ namespace PksCli.Tests.Templates
             CreateTemplateStructure();
             var contentDevcontainerPath = Path.Combine(_templatePath, "content", ".devcontainer");
             CopyDevcontainerFiles(contentDevcontainerPath);
-            
+
             // Update devcontainer.json to include placeholders
             var devcontainerJsonPath = Path.Combine(contentDevcontainerPath, "devcontainer.json");
             var devcontainerContent = File.ReadAllText(devcontainerJsonPath);
-            devcontainerContent = devcontainerContent.Replace("\"name\": \"PKS CLI Development Container\"", 
+            devcontainerContent = devcontainerContent.Replace("\"name\": \"PKS CLI Development Container\"",
                 "\"name\": \"${projectName} Development Container\"");
             File.WriteAllText(devcontainerJsonPath, devcontainerContent);
 
@@ -151,7 +151,7 @@ namespace PksCli.Tests.Templates
         {
             Directory.CreateDirectory(Path.Combine(_templatePath, ".template.config"));
             Directory.CreateDirectory(Path.Combine(_templatePath, "content", ".devcontainer"));
-            
+
             // Create template.json
             var templateJson = @"{
   ""$schema"": ""http://json.schemastore.org/template"",
@@ -226,6 +226,7 @@ namespace PksCli.Tests.Templates
             File.WriteAllText(nuspecPath, nuspecContent);
         }
 
+        [Fact]
         public void Dispose()
         {
             if (Directory.Exists(_testRootPath))

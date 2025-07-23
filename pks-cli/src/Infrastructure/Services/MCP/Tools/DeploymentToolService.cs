@@ -42,18 +42,18 @@ public class DeploymentToolService
         string strategy = "RollingUpdate",
         string? configPath = null)
     {
-        _logger.LogInformation("MCP Tool: Deploying to environment '{Environment}' with {Replicas} replicas", 
+        _logger.LogInformation("MCP Tool: Deploying to environment '{Environment}' with {Replicas} replicas",
             environment, replicas);
 
         try
         {
             // Get configuration
             var config = await GetDeploymentConfigurationAsync(environment, configPath);
-            
+
             // Perform deployment
             var deploymentSuccess = await _deploymentService.DeployAsync(
-                environment, 
-                image ?? $"pks-app:latest", 
+                environment,
+                image ?? $"pks-app:latest",
                 replicas);
 
             if (!deploymentSuccess)
@@ -69,10 +69,10 @@ public class DeploymentToolService
 
             // Get deployment information
             var deploymentInfo = await _deploymentService.GetDeploymentInfoAsync(environment);
-            
+
             // Get service status
             var deployments = await _kubernetesService.GetDeploymentsAsync();
-            
+
             return new
             {
                 success = true,
@@ -114,7 +114,7 @@ public class DeploymentToolService
         string? environment = null,
         bool detailed = false)
     {
-        _logger.LogInformation("MCP Tool: Getting deployment status for environment '{Environment}', detailed: {Detailed}", 
+        _logger.LogInformation("MCP Tool: Getting deployment status for environment '{Environment}', detailed: {Detailed}",
             environment, detailed);
 
         try
@@ -129,7 +129,7 @@ public class DeploymentToolService
                 {
                     var deploymentInfo = await _deploymentService.GetDeploymentInfoAsync("production"); // Default to production
                     var status = await _kubernetesService.GetDeploymentStatusAsync(deployment);
-                    
+
                     var deploymentStatus = new
                     {
                         name = deployment,
@@ -171,7 +171,7 @@ public class DeploymentToolService
                 // Get status for specific environment
                 var deploymentInfo = await _deploymentService.GetDeploymentInfoAsync(environment);
                 var matchingDeployments = deployments.Where(d => d.Contains(environment, StringComparison.OrdinalIgnoreCase)).ToArray();
-                
+
                 var environmentStatus = new
                 {
                     success = true,
@@ -224,18 +224,18 @@ public class DeploymentToolService
         int replicas,
         string namespaceName = "default")
     {
-        _logger.LogInformation("MCP Tool: Scaling deployment '{DeploymentName}' to {Replicas} replicas in namespace '{Namespace}'", 
+        _logger.LogInformation("MCP Tool: Scaling deployment '{DeploymentName}' to {Replicas} replicas in namespace '{Namespace}'",
             deploymentName, replicas, namespaceName);
 
         try
         {
             var success = await _kubernetesService.ScaleDeploymentAsync(deploymentName, replicas, namespaceName);
-            
+
             if (success)
             {
                 // Get updated status
                 var status = await _kubernetesService.GetDeploymentStatusAsync(deploymentName, namespaceName);
-                
+
                 return new
                 {
                     success = true,
@@ -262,7 +262,7 @@ public class DeploymentToolService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to scale deployment '{DeploymentName}' to {Replicas} replicas", 
+            _logger.LogError(ex, "Failed to scale deployment '{DeploymentName}' to {Replicas} replicas",
                 deploymentName, replicas);
             return new
             {
@@ -285,17 +285,17 @@ public class DeploymentToolService
         string environment,
         string? revision = null)
     {
-        _logger.LogInformation("MCP Tool: Rolling back deployment in environment '{Environment}' to revision '{Revision}'", 
+        _logger.LogInformation("MCP Tool: Rolling back deployment in environment '{Environment}' to revision '{Revision}'",
             environment, revision);
 
         try
         {
             var success = await _deploymentService.RollbackAsync(environment, revision);
-            
+
             if (success)
             {
                 var deploymentInfo = await _deploymentService.GetDeploymentInfoAsync(environment);
-                
+
                 return new
                 {
                     success = true,
@@ -335,7 +335,7 @@ public class DeploymentToolService
     private async Task<Dictionary<string, object?>> GetDeploymentConfigurationAsync(string environment, string? configPath)
     {
         var config = new Dictionary<string, object?>();
-        
+
         try
         {
             // Get standard configuration values
@@ -344,7 +344,7 @@ public class DeploymentToolService
             config["registry.url"] = await _configurationService.GetAsync("registry.url");
             config["deploy.replicas"] = await _configurationService.GetAsync("deploy.replicas");
             config["monitoring.enabled"] = await _configurationService.GetAsync("monitoring.enabled");
-            
+
             // Add environment-specific settings
             config["environment"] = environment;
             config["configPath"] = configPath;
@@ -361,7 +361,7 @@ public class DeploymentToolService
     {
         // Simulate detailed metrics collection
         await Task.Delay(100);
-        
+
         var random = new Random();
         return new
         {

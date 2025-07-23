@@ -46,7 +46,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
         try
         {
             DisplayBanner("Interactive Wizard");
-            
+
             if (settings.Debug)
             {
                 DisplayInfo("DEBUG: Debug mode enabled - will show detailed diagnostic information");
@@ -80,7 +80,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
                 var overwrite = PromptConfirmation(
                     $"A devcontainer configuration already exists at {existingConfigPath}. Do you want to overwrite it?",
                     false);
-                
+
                 if (!overwrite)
                 {
                     DisplayInfo("Operation cancelled by user");
@@ -260,7 +260,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
                 {
                     var sources = GetNuGetSources(settings);
                     DisplayNuGetSourcesInfo(sources, settings);
-                    
+
                     if (settings.Debug)
                     {
                         DisplayInfo($"DEBUG: Starting template discovery with {sources.Count()} sources");
@@ -269,21 +269,21 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
                             DisplayInfo($"DEBUG: Source: {source}");
                         }
                     }
-                    
+
                     // Try multiple tags for better compatibility
                     var discoveredTemplates = new List<NuGetDevcontainerTemplate>();
-                    
+
                     if (settings.Debug)
                     {
                         DisplayInfo("DEBUG: Trying 'pks-devcontainers' tag first");
                     }
-                    
+
                     // First try the specific pks-devcontainers tag
                     var pksTemplates = await _nugetTemplateService.DiscoverTemplatesAsync(
                         tag: "pks-devcontainers",
                         sources: sources);
                     discoveredTemplates.AddRange(pksTemplates);
-                    
+
                     if (settings.Debug)
                     {
                         DisplayInfo($"DEBUG: Found {pksTemplates.Count} templates with 'pks-devcontainers' tag");
@@ -292,7 +292,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
                             DisplayInfo($"DEBUG: - {template.PackageId} v{template.Version}");
                         }
                     }
-                    
+
                     // Also try the general pks-cli tag for backward compatibility
                     if (!discoveredTemplates.Any())
                     {
@@ -300,11 +300,11 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
                         {
                             DisplayInfo("DEBUG: No templates found with 'pks-devcontainers', trying 'pks-cli' tag");
                         }
-                        
+
                         var pksCliTemplates = await _nugetTemplateService.DiscoverTemplatesAsync(
                             tag: "pks-cli",
                             sources: sources);
-                            
+
                         if (settings.Debug)
                         {
                             DisplayInfo($"DEBUG: Found {pksCliTemplates.Count} templates with 'pks-cli' tag");
@@ -313,13 +313,13 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
                                 DisplayInfo($"DEBUG: - {template.PackageId} v{template.Version} (Tags: {string.Join(", ", template.Tags)})");
                             }
                         }
-                        
+
                         // Filter for devcontainer-related templates
-                        var devcontainerTemplates = pksCliTemplates.Where(t => 
+                        var devcontainerTemplates = pksCliTemplates.Where(t =>
                             t.Tags.Any(tag => tag.Contains("devcontainer", StringComparison.OrdinalIgnoreCase)) ||
                             t.Title.Contains("devcontainer", StringComparison.OrdinalIgnoreCase) ||
                             t.Description.Contains("devcontainer", StringComparison.OrdinalIgnoreCase)).ToList();
-                            
+
                         if (settings.Debug)
                         {
                             DisplayInfo($"DEBUG: Filtered to {devcontainerTemplates.Count} devcontainer-related templates");
@@ -328,7 +328,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
                                 DisplayInfo($"DEBUG: Filtered - {template.PackageId} v{template.Version}");
                             }
                         }
-                        
+
                         discoveredTemplates.AddRange(devcontainerTemplates);
                     }
 
@@ -399,7 +399,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
         // Show templates in selected category
         var categoryTemplates = groupedTemplates.First(g => g.Key == selectedCategory).ToList();
         var templateChoices = categoryTemplates.Select(t => $"{t.Name} - {t.Description}").ToArray();
-        
+
         if (settings.Verbose)
         {
             var templateTable = new Table()
@@ -429,7 +429,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
         options.SelectedTemplate = selectedTemplate;
         options.BaseImage = selectedTemplate.BaseImage;
         options.TemplateVersion = selectedTemplate.Version;
-        
+
         // Store NuGet sources used for template discovery
         if (settings.FromTemplates && settings.Sources?.Any() == true)
         {
@@ -437,7 +437,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
         }
 
         DisplaySuccess($"Selected template: {selectedTemplate.Name}");
-        
+
         if (selectedTemplate.RequiredFeatures.Any())
         {
             DisplayInfo($"This template includes {selectedTemplate.RequiredFeatures.Length} required features");
@@ -484,7 +484,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
             }
 
             DisplayInfo($"Found {allFeatures.Count} optional features for template '{options.SelectedTemplate.Name}'");
-            
+
             // Show template-specific optional features
             var templateFeatures = allFeatures.Where(f => !f.IsDeprecated).ToList();
             var selectedFeatures = PromptMultiSelection(
@@ -505,7 +505,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
             {
                 DisplaySuccess($"Added {selectedFeatures.Count} optional features");
             }
-            
+
             return;
         }
 
@@ -523,7 +523,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
 
         // Filter out deprecated features unless explicitly requested
         var availableFeatures = allAvailableFeatures.Where(f => !f.IsDeprecated).ToList();
-        
+
         DisplayInfo($"Found {availableFeatures.Count} available features");
 
         if (settings.QuickSetup)
@@ -604,7 +604,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
         if (options.Features.Any())
         {
             DisplaySuccess($"Selected {options.Features.Count} features");
-            
+
             // Resolve dependencies
             var resolution = await _devcontainerService.ResolveFeatureDependenciesAsync(options.Features);
             if (resolution.Success)
@@ -614,7 +614,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
                     var addDependencies = PromptConfirmation(
                         $"Some features have dependencies that will be automatically added. Continue?",
                         true);
-                    
+
                     if (addDependencies)
                     {
                         options.Features = resolution.ResolvedFeatures.Select(f => f.Id).ToList();
@@ -650,7 +650,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
         if (recommendedExtensions.Any())
         {
             DisplayInfo($"Found {recommendedExtensions.Count} recommended extensions based on your selected features");
-            
+
             if (settings.Verbose)
             {
                 DisplayExtensionTable(recommendedExtensions.Select(e => (e.Id, e.Name, e.Publisher, e.Description)));
@@ -751,7 +751,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
             {
                 var envName = PromptText("Environment variable name:");
                 var envValue = PromptText("Environment variable value:");
-                
+
                 if (!string.IsNullOrWhiteSpace(envName))
                 {
                     options.EnvironmentVariables[envName.Trim()] = envValue ?? string.Empty;
@@ -808,7 +808,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
 
         // Create a mock configuration for preview
         var mockResult = await _devcontainerService.CreateConfigurationAsync(options);
-        
+
         var expectedFiles = new[]
         {
             Path.Combine(options.OutputPath, ".devcontainer", "devcontainer.json"),
@@ -832,7 +832,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
         {
             return extensionList.Select(e => e.ToString() ?? string.Empty).Where(s => !string.IsNullOrEmpty(s));
         }
-        
+
         return Enumerable.Empty<string>();
     }
 
@@ -904,16 +904,16 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
 
         // Enhanced template selection with search and auto-completion for NuGet templates
         AnsiConsole.MarkupLine("[cyan]Template Search (type to filter, TAB for suggestions):[/]");
-        
+
         var query = string.Empty;
         var filteredTemplates = templates;
 
         while (true)
         {
             AnsiConsole.Write($"Template: {query}");
-            
+
             var key = Console.ReadKey(true);
-            
+
             if (key.Key == ConsoleKey.Enter && filteredTemplates.Any())
             {
                 AnsiConsole.WriteLine();
@@ -966,9 +966,9 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
         {
             var sources = GetNuGetSources(settings);
             return await _nugetTemplateService.SearchTemplatesAsync(
-                query, 
-                tag: "pks-devcontainers", 
-                sources: sources, 
+                query,
+                tag: "pks-devcontainers",
+                sources: sources,
                 maxResults: 10);
         }
         catch (Exception ex)
@@ -1058,8 +1058,8 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
             if (string.IsNullOrEmpty(providedValue))
             {
                 // Prompt for the environment variable value
-                var isSecret = envName.ToLowerInvariant().Contains("token") || 
-                              envName.ToLowerInvariant().Contains("secret") || 
+                var isSecret = envName.ToLowerInvariant().Contains("token") ||
+                              envName.ToLowerInvariant().Contains("secret") ||
                               envName.ToLowerInvariant().Contains("key") ||
                               envName.ToLowerInvariant().Contains("password");
 
@@ -1091,7 +1091,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
         if (options.EnvironmentVariables.Any())
         {
             DisplaySuccess($"Configured {options.EnvironmentVariables.Count} environment variables");
-            
+
             if (settings.Verbose)
             {
                 var envTable = new Table()
@@ -1102,8 +1102,8 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
 
                 foreach (var envVar in options.EnvironmentVariables)
                 {
-                    var displayValue = envVar.Key.ToLowerInvariant().Contains("token") || 
-                                     envVar.Key.ToLowerInvariant().Contains("secret") || 
+                    var displayValue = envVar.Key.ToLowerInvariant().Contains("token") ||
+                                     envVar.Key.ToLowerInvariant().Contains("secret") ||
                                      envVar.Key.ToLowerInvariant().Contains("key") ||
                                      envVar.Key.ToLowerInvariant().Contains("password")
                         ? "***********" // Hide sensitive values
@@ -1127,11 +1127,11 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
         AnsiConsole.Write($"{prompt} ");
         var password = string.Empty;
         ConsoleKeyInfo keyInfo;
-        
+
         do
         {
             keyInfo = Console.ReadKey(true);
-            
+
             if (keyInfo.Key == ConsoleKey.Backspace && password.Length > 0)
             {
                 password = password.Substring(0, password.Length - 1);
@@ -1143,7 +1143,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
                 Console.Write("*");
             }
         } while (keyInfo.Key != ConsoleKey.Enter);
-        
+
         Console.WriteLine();
         return password;
     }

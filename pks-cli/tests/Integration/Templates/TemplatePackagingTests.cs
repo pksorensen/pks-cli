@@ -27,7 +27,7 @@ namespace PKS.CLI.Tests.Integration.Templates
             _solutionPath = GetSolutionPath();
             _testPackageOutputPath = Path.Combine(Path.GetTempPath(), "pks-cli-test-packages", Guid.NewGuid().ToString());
             _testTemplateInstallPath = Path.Combine(Path.GetTempPath(), "pks-cli-test-templates", Guid.NewGuid().ToString());
-            
+
             // Ensure output directories exist
             Directory.CreateDirectory(_testPackageOutputPath);
             Directory.CreateDirectory(_testTemplateInstallPath);
@@ -41,13 +41,13 @@ namespace PKS.CLI.Tests.Integration.Templates
             _output.WriteLine($"Output directory: {_testPackageOutputPath}");
 
             // Act
-            var result = await RunDotNetCommandAsync("pack", 
+            var result = await RunDotNetCommandAsync("pack",
                 $"--configuration Release --output \"{_testPackageOutputPath}\" --verbosity normal",
                 _solutionPath);
 
             // Assert
             Assert.True(result.Success, $"dotnet pack failed:\n{result.Output}\n{result.Error}");
-            
+
             // Verify main CLI package is created
             var cliPackage = Directory.GetFiles(_testPackageOutputPath, "pks-cli.*.nupkg").FirstOrDefault();
             Assert.NotNull(cliPackage);
@@ -56,7 +56,7 @@ namespace PKS.CLI.Tests.Integration.Templates
             // Verify template packages are created
             var templatePackages = Directory.GetFiles(_testPackageOutputPath, "PKS.Templates.*.nupkg");
             Assert.NotEmpty(templatePackages);
-            
+
             foreach (var package in templatePackages)
             {
                 _output.WriteLine($"Template Package created: {Path.GetFileName(package)}");
@@ -72,18 +72,18 @@ namespace PKS.CLI.Tests.Integration.Templates
 
             // Get all template packages
             var templatePackages = Directory.GetFiles(_testPackageOutputPath, "PKS.Templates.*.nupkg");
-            
+
             foreach (var packagePath in templatePackages)
             {
                 var packageName = Path.GetFileNameWithoutExtension(packagePath);
                 _output.WriteLine($"Testing template package: {packageName}");
 
                 // Test template installation
-                var installResult = await RunDotNetCommandAsync("new", 
-                    $"install \"{packagePath}\"", 
+                var installResult = await RunDotNetCommandAsync("new",
+                    $"install \"{packagePath}\"",
                     _testTemplateInstallPath);
 
-                Assert.True(installResult.Success, 
+                Assert.True(installResult.Success,
                     $"Failed to install template package {packageName}:\n{installResult.Output}\n{installResult.Error}");
 
                 _installedTemplates.Add(packageName);
@@ -107,7 +107,7 @@ namespace PKS.CLI.Tests.Integration.Templates
             // Verify our templates appear in the list
             foreach (var templateName in _installedTemplates)
             {
-                Assert.Contains("pks", listResult.Output.ToLower(), 
+                Assert.Contains("pks", listResult.Output.ToLower(),
                     StringComparison.OrdinalIgnoreCase);
             }
         }
@@ -123,8 +123,8 @@ namespace PKS.CLI.Tests.Integration.Templates
             Directory.CreateDirectory(testProjectPath);
 
             // Use the template to create a project
-            var createResult = await RunDotNetCommandAsync("new", 
-                "pks-devcontainer -n TestDevContainer", 
+            var createResult = await RunDotNetCommandAsync("new",
+                "pks-devcontainer -n TestDevContainer",
                 testProjectPath);
 
             if (!createResult.Success)
@@ -132,12 +132,12 @@ namespace PKS.CLI.Tests.Integration.Templates
                 _output.WriteLine($"Template creation failed (this might be expected if template short names are different):");
                 _output.WriteLine($"Output: {createResult.Output}");
                 _output.WriteLine($"Error: {createResult.Error}");
-                
+
                 // Try to find the correct template short name
                 var listResult = await RunDotNetCommandAsync("new", "list", _testTemplateInstallPath);
                 _output.WriteLine("Available templates:");
                 _output.WriteLine(listResult.Output);
-                
+
                 // This test will be skipped if we can't find the right template name
                 return;
             }
@@ -164,7 +164,7 @@ namespace PKS.CLI.Tests.Integration.Templates
             await SolutionLevel_DotNetPack_ShouldCreateAllPackages();
 
             var templatePackages = Directory.GetFiles(_testPackageOutputPath, "PKS.Templates.*.nupkg");
-            
+
             foreach (var packagePath in templatePackages)
             {
                 // Extract and validate package contents
@@ -204,8 +204,8 @@ namespace PKS.CLI.Tests.Integration.Templates
         public async Task ContinuousIntegration_PackBuild_ShouldWork()
         {
             // Test the kind of command that would be used in CI
-            var ciResult = await RunDotNetCommandAsync("pack", 
-                "--configuration Release --no-restore --verbosity minimal", 
+            var ciResult = await RunDotNetCommandAsync("pack",
+                "--configuration Release --no-restore --verbosity minimal",
                 _solutionPath);
 
             Assert.True(ciResult.Success, $"CI-style pack command failed:\n{ciResult.Output}\n{ciResult.Error}");
@@ -254,7 +254,7 @@ namespace PKS.CLI.Tests.Integration.Templates
         private string GetSolutionPath()
         {
             var currentPath = Directory.GetCurrentDirectory();
-            
+
             // Look for solution file starting from current directory and going up
             while (currentPath != null)
             {
@@ -263,7 +263,7 @@ namespace PKS.CLI.Tests.Integration.Templates
                 {
                     return currentPath;
                 }
-                
+
                 var parent = Directory.GetParent(currentPath);
                 currentPath = parent?.FullName;
             }

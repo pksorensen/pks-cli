@@ -11,14 +11,14 @@ public class NotificationCommand : AsyncCommand<HooksSettings>
     public override async Task<int> ExecuteAsync(CommandContext context, HooksSettings settings)
     {
         AnsiConsole.MarkupLine("[cyan]PKS Hooks: Notification Event Triggered[/]");
-        
+
         // Print all environment variables
         AnsiConsole.MarkupLine("\n[yellow]Environment Variables:[/]");
         foreach (var env in Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>().OrderBy(e => e.Key))
         {
             AnsiConsole.MarkupLine($"  [dim]{env.Key}[/] = [green]{env.Value}[/]");
         }
-        
+
         // Print command line arguments
         AnsiConsole.MarkupLine("\n[yellow]Command Line Arguments:[/]");
         var args = Environment.GetCommandLineArgs();
@@ -26,7 +26,7 @@ public class NotificationCommand : AsyncCommand<HooksSettings>
         {
             AnsiConsole.MarkupLine($"  [dim]args[{i}][/] = [green]{args[i]}[/]");
         }
-        
+
         // Read stdin if available
         AnsiConsole.MarkupLine("\n[yellow]STDIN Input:[/]");
         try
@@ -45,10 +45,10 @@ public class NotificationCommand : AsyncCommand<HooksSettings>
         {
             AnsiConsole.MarkupLine($"  [red]Error reading stdin: {ex.Message}[/]");
         }
-        
+
         // Print working directory
         AnsiConsole.MarkupLine($"\n[yellow]Working Directory:[/] [green]{Directory.GetCurrentDirectory()}[/]");
-        
+
         // Success exit code
         AnsiConsole.MarkupLine("\n[green]✓ Notification hook completed successfully[/]");
         return 0;

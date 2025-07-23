@@ -55,7 +55,7 @@ public class DockerInDockerFeature : BaseDevcontainerFeature
     public override async Task<bool> IsCompatibleWithImageAsync(string baseImage)
     {
         await Task.CompletedTask;
-        
+
         // Docker in Docker requires full Linux containers with systemd support
         var incompatibleImages = new[] { "alpine", "scratch", "distroless" };
         return !incompatibleImages.Any(img => baseImage.Contains(img, StringComparison.OrdinalIgnoreCase));
@@ -64,7 +64,7 @@ public class DockerInDockerFeature : BaseDevcontainerFeature
     public override async Task<List<string>> GetRecommendedExtensionsAsync()
     {
         await Task.CompletedTask;
-        
+
         return new List<string>
         {
             "ms-vscode.vscode-docker"
@@ -74,7 +74,7 @@ public class DockerInDockerFeature : BaseDevcontainerFeature
     public override async Task<Dictionary<string, string>> GetEnvironmentVariablesAsync()
     {
         await Task.CompletedTask;
-        
+
         return new Dictionary<string, string>
         {
             ["DOCKER_BUILDKIT"] = "1"
@@ -84,7 +84,7 @@ public class DockerInDockerFeature : BaseDevcontainerFeature
     public override async Task<List<string>> GetPostCreateCommandsAsync()
     {
         await Task.CompletedTask;
-        
+
         return new List<string>
         {
             "docker --version",
@@ -95,11 +95,11 @@ public class DockerInDockerFeature : BaseDevcontainerFeature
     public override async Task<FeatureValidationResult> ValidateConfigurationAsync(object configuration)
     {
         var result = await base.ValidateConfigurationAsync(configuration);
-        
+
         var configDict = ConvertToStringObjectDictionary(configuration);
-        
+
         // Additional validation for Docker-specific options
-        if (configDict.TryGetValue("dockerDashComposeVersion", out var composeVersionObj) && 
+        if (configDict.TryGetValue("dockerDashComposeVersion", out var composeVersionObj) &&
             composeVersionObj is string composeVersion)
         {
             if (composeVersion != "v1" && composeVersion != "v2")
@@ -109,7 +109,7 @@ public class DockerInDockerFeature : BaseDevcontainerFeature
             }
         }
 
-        if (configDict.TryGetValue("dockerDefaultAddressPool", out var poolObj) && 
+        if (configDict.TryGetValue("dockerDefaultAddressPool", out var poolObj) &&
             poolObj is string pool && !string.IsNullOrEmpty(pool))
         {
             // Basic validation for CIDR format

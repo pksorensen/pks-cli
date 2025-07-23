@@ -172,42 +172,42 @@ public class HookDecision
     /// Hook decision: "block", "approve", or null for proceed
     /// </summary>
     public string? Decision { get; set; }
-    
+
     /// <summary>
     /// Optional message explaining the decision (required for "block")
     /// </summary>
     public string? Message { get; set; }
-    
+
     /// <summary>
     /// Whether Claude should continue processing (default: true)
     /// </summary>
     public bool? Continue { get; set; }
-    
+
     /// <summary>
     /// Reason for stopping when Continue is false
     /// </summary>
     public string? StopReason { get; set; }
-    
+
     /// <summary>
     /// Whether to suppress stdout output (default: false)
     /// </summary>
     public bool? SuppressOutput { get; set; }
-    
+
     /// <summary>
     /// Creates a decision to block with a reason
     /// </summary>
     public static HookDecision Block(string message) => new() { Decision = "block", Message = message };
-    
+
     /// <summary>
     /// Creates a decision to approve/bypass permissions
     /// </summary>
     public static HookDecision Approve() => new() { Decision = "approve" };
-    
+
     /// <summary>
     /// Creates a decision to proceed (no explicit decision)
     /// </summary>
     public static HookDecision Proceed() => new();
-    
+
     /// <summary>
     /// Creates a decision to stop processing
     /// </summary>

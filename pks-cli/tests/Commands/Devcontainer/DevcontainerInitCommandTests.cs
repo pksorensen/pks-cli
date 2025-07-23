@@ -33,11 +33,11 @@ public class DevcontainerInitCommandTests : TestBase
     protected override void ConfigureServices(IServiceCollection services)
     {
         base.ConfigureServices(services);
-        
+
         services.AddSingleton(_mockDevcontainerService.Object);
         services.AddSingleton(_mockFeatureRegistry.Object);
         services.AddSingleton(_mockTemplateService.Object);
-        
+
         // Register the actual command when implemented
         // services.AddSingleton<DevcontainerInitCommand>();
     }
@@ -98,13 +98,13 @@ public class DevcontainerInitCommandTests : TestBase
 
         // Assert
         result.Should().Be(0); // Success exit code
-        
+
         _mockDevcontainerService.Verify(x => x.CreateConfigurationAsync(It.Is<DevcontainerOptions>(
-            opts => opts.Name == name && 
+            opts => opts.Name == name &&
                    opts.Template == template &&
                    opts.Features.SequenceEqual(features) &&
                    opts.Extensions.SequenceEqual(extensions))), Times.Once);
-        
+
         AssertConsoleOutput("Devcontainer configuration created successfully");
     }
 
@@ -119,7 +119,7 @@ public class DevcontainerInitCommandTests : TestBase
         };
 
         var command = CreateMockCommand();
-        
+
         // Setup interactive prompts
         TestConsole.Input.PushTextWithEnter("my-project");
         TestConsole.Input.PushTextWithEnter("dotnet-basic");
@@ -253,10 +253,10 @@ public class DevcontainerInitCommandTests : TestBase
 
         // Assert
         result.Should().Be(0);
-        
+
         _mockDevcontainerService.Verify(x => x.CreateConfigurationAsync(It.Is<DevcontainerOptions>(
             opts => opts.UseDockerCompose == true)), Times.Once);
-        
+
         AssertConsoleOutput("Docker Compose configuration generated");
     }
 
@@ -264,7 +264,7 @@ public class DevcontainerInitCommandTests : TestBase
     [InlineData("")]
     [InlineData("   ")]
     [InlineData(null)]
-    public async Task Execute_WithInvalidName_ShouldReturnError(string invalidName)
+    public async Task Execute_WithInvalidName_ShouldReturnError(string? invalidName)
     {
         // Arrange
         var settings = new DevcontainerInitSettings

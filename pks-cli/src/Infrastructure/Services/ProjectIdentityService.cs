@@ -48,7 +48,7 @@ public class ProjectIdentityService : IProjectIdentityService
     public async Task<ProjectIdentity?> GetProjectIdentityByPathAsync(string projectPath)
     {
         var fullPath = Path.GetFullPath(projectPath);
-        
+
         // First try to load from local .pks folder
         var localIdentity = await LoadProjectConfigurationAsync(projectPath);
         if (localIdentity != null)
@@ -67,13 +67,13 @@ public class ProjectIdentityService : IProjectIdentityService
         {
             projectIdentity.LastModified = DateTime.UtcNow;
             await SaveProjectIdentityAsync(projectIdentity);
-            
+
             // Update local configuration if project path exists
             if (Directory.Exists(projectIdentity.ProjectPath))
             {
                 await PersistProjectConfigurationAsync(projectIdentity.ProjectPath, projectIdentity);
             }
-            
+
             return true;
         }
         catch
@@ -168,15 +168,15 @@ public class ProjectIdentityService : IProjectIdentityService
         {
             var projects = await GetProjectsFromConfigurationAsync();
             var project = projects.FirstOrDefault(p => p.ProjectId == projectId);
-            
+
             if (project != null)
             {
                 var updatedProjects = projects.Where(p => p.ProjectId != projectId).ToList();
                 await SaveProjectsToConfigurationAsync(updatedProjects);
-                
+
                 // Clean up project-specific configuration
                 await CleanupProjectConfigurationAsync(projectId);
-                
+
                 // Remove local .pks folder if it exists
                 if (Directory.Exists(project.ProjectPath))
                 {
@@ -187,7 +187,7 @@ public class ProjectIdentityService : IProjectIdentityService
                     }
                 }
             }
-            
+
             return true;
         }
         catch
@@ -204,8 +204,8 @@ public class ProjectIdentityService : IProjectIdentityService
             Directory.CreateDirectory(pksPath);
 
             var configPath = Path.Combine(pksPath, "project.json");
-            var json = JsonSerializer.Serialize(projectIdentity, new JsonSerializerOptions 
-            { 
+            var json = JsonSerializer.Serialize(projectIdentity, new JsonSerializerOptions
+            {
                 WriteIndented = true,
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase
             });
@@ -257,7 +257,7 @@ public class ProjectIdentityService : IProjectIdentityService
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var sanitizedName = string.Concat(projectName.Where(c => char.IsLetterOrDigit(c) || c == '-' || c == '_'))
             .ToLowerInvariant();
-        
+
         if (sanitizedName.Length > 20)
         {
             sanitizedName = sanitizedName[..20];
@@ -342,11 +342,11 @@ public class ProjectIdentityService : IProjectIdentityService
     public async Task<ProjectIdentity> ImportProjectAsync(ProjectExport projectExport, string targetPath)
     {
         var identity = projectExport.ProjectIdentity;
-        
+
         // Update paths and regenerate ID if needed
         identity.ProjectPath = Path.GetFullPath(targetPath);
         identity.LastModified = DateTime.UtcNow;
-        
+
         // Ensure unique project ID
         var existingProject = await GetProjectIdentityAsync(identity.ProjectId);
         if (existingProject != null)
@@ -400,7 +400,7 @@ public class ProjectIdentityService : IProjectIdentityService
     {
         var projects = await GetProjectsFromConfigurationAsync();
         var existingIndex = projects.FindIndex(p => p.ProjectId == identity.ProjectId);
-        
+
         if (existingIndex >= 0)
         {
             projects[existingIndex] = identity;

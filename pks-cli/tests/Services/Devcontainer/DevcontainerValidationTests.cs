@@ -44,13 +44,13 @@ public class DevcontainerValidationTests : TestBase
             .ReturnsAsync((DevcontainerConfiguration config) =>
             {
                 var errors = new List<string>();
-                
+
                 if (string.IsNullOrEmpty(config.Name))
                     errors.Add("Name is required");
-                
+
                 if (string.IsNullOrEmpty(config.Image))
                     errors.Add("Image is required");
-                
+
                 if (!string.IsNullOrEmpty(config.Name) && config.Name.Contains("invalid-chars"))
                     errors.Add("Name contains invalid characters");
 
@@ -69,7 +69,7 @@ public class DevcontainerValidationTests : TestBase
         // Assert
         result.Should().NotBeNull();
         result.IsValid.Should().Be(expectedValid);
-        
+
         if (!expectedValid && !string.IsNullOrEmpty(expectedError))
         {
             result.Errors.Should().Contain(e => e.Contains(expectedError));
@@ -87,7 +87,7 @@ public class DevcontainerValidationTests : TestBase
         var service = mockService.Object;
 
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentNullException>(() => 
+        await Assert.ThrowsAsync<ArgumentNullException>(() =>
             service.ValidateConfigurationAsync(null!));
     }
 
@@ -106,8 +106,8 @@ public class DevcontainerValidationTests : TestBase
             .ReturnsAsync(new DevcontainerValidationResult
             {
                 IsValid = false,
-                Errors = new List<string> 
-                { 
+                Errors = new List<string>
+                {
                     "Image name contains invalid characters",
                     "Image name must follow Docker naming conventions"
                 }
@@ -242,8 +242,8 @@ public class DevcontainerValidationTests : TestBase
             .ReturnsAsync(new FeatureValidationResult
             {
                 IsValid = false,
-                Errors = new List<string> 
-                { 
+                Errors = new List<string>
+                {
                     "Version 'invalid-version' is not supported",
                     "Supported versions are: 6.0, 7.0, 8.0, latest"
                 }
@@ -391,7 +391,7 @@ public class DevcontainerValidationTests : TestBase
             .ReturnsAsync((DevcontainerConfiguration config) =>
             {
                 var errors = new List<string>();
-                
+
                 if (string.IsNullOrWhiteSpace(config.Name))
                 {
                     errors.Add("Project name is required");
@@ -485,7 +485,7 @@ public class DevcontainerValidationTests : TestBase
         var configuration = DevcontainerTestData.GetBasicConfiguration();
 
         // Act & Assert
-        await Assert.ThrowsAsync<JsonException>(() => 
+        await Assert.ThrowsAsync<JsonException>(() =>
             service.ValidateConfigurationAsync(configuration));
     }
 

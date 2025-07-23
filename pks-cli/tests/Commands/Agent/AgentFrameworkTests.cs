@@ -37,9 +37,9 @@ public class AgentFrameworkTests : TestBase
     {
         // Arrange
         var agentConfig = TestDataGenerator.GenerateAgentConfiguration("test-agent", "automation");
-        var expectedResult = new AgentResult 
-        { 
-            Success = true, 
+        var expectedResult = new AgentResult
+        {
+            Success = true,
             AgentId = "agent-123",
             Message = "Agent created successfully"
         };
@@ -47,8 +47,8 @@ public class AgentFrameworkTests : TestBase
         _mockAgentService.Setup(x => x.CreateAgentAsync(It.IsAny<AgentConfiguration>()))
             .ReturnsAsync(expectedResult);
 
-        var settings = new AgentSettings 
-        { 
+        var settings = new AgentSettings
+        {
             Action = AgentAction.Create,
             Name = "test-agent",
             Type = "automation",
@@ -88,7 +88,7 @@ public class AgentFrameworkTests : TestBase
         // Assert
         result.Should().Be(0);
         AssertConsoleOutput("Available Agents");
-        agents.ForEach(agent => 
+        agents.ForEach(agent =>
         {
             AssertConsoleOutput(agent.Name);
             AssertConsoleOutput(agent.Type);
@@ -102,9 +102,9 @@ public class AgentFrameworkTests : TestBase
     {
         // Arrange
         var agentId = "agent-123";
-        var expectedStatus = new AgentStatus 
-        { 
-            Id = agentId, 
+        var expectedStatus = new AgentStatus
+        {
+            Id = agentId,
             Status = "Active",
             LastActivity = DateTime.UtcNow.AddMinutes(-5)
         };
@@ -112,8 +112,8 @@ public class AgentFrameworkTests : TestBase
         _mockAgentService.Setup(x => x.GetAgentStatusAsync(agentId))
             .ReturnsAsync(expectedStatus);
 
-        var settings = new AgentSettings 
-        { 
+        var settings = new AgentSettings
+        {
             Action = AgentAction.Status,
             AgentId = agentId
         };
@@ -137,8 +137,8 @@ public class AgentFrameworkTests : TestBase
         _mockAgentService.Setup(x => x.RemoveAgentAsync(agentId))
             .ReturnsAsync(true);
 
-        var settings = new AgentSettings 
-        { 
+        var settings = new AgentSettings
+        {
             Action = AgentAction.Remove,
             AgentId = agentId
         };
@@ -160,8 +160,8 @@ public class AgentFrameworkTests : TestBase
         _mockAgentService.Setup(x => x.StartAgentAsync(agentId))
             .ReturnsAsync(new AgentResult { Success = true, Message = "Agent started" });
 
-        var settings = new AgentSettings 
-        { 
+        var settings = new AgentSettings
+        {
             Action = AgentAction.Start,
             AgentId = agentId
         };
@@ -183,8 +183,8 @@ public class AgentFrameworkTests : TestBase
         _mockAgentService.Setup(x => x.StopAgentAsync(agentId))
             .ReturnsAsync(new AgentResult { Success = true, Message = "Agent stopped" });
 
-        var settings = new AgentSettings 
-        { 
+        var settings = new AgentSettings
+        {
             Action = AgentAction.Stop,
             AgentId = agentId
         };
@@ -202,17 +202,17 @@ public class AgentFrameworkTests : TestBase
     public async Task Create_ShouldReturnError_WhenAgentCreationFails()
     {
         // Arrange
-        var failedResult = new AgentResult 
-        { 
-            Success = false, 
+        var failedResult = new AgentResult
+        {
+            Success = false,
             Message = "Failed to create agent: Invalid configuration"
         };
 
         _mockAgentService.Setup(x => x.CreateAgentAsync(It.IsAny<AgentConfiguration>()))
             .ReturnsAsync(failedResult);
 
-        var settings = new AgentSettings 
-        { 
+        var settings = new AgentSettings
+        {
             Action = AgentAction.Create,
             Name = "invalid-agent"
         };
@@ -234,8 +234,8 @@ public class AgentFrameworkTests : TestBase
         _mockAgentService.Setup(x => x.GetAgentStatusAsync(agentId))
             .ThrowsAsync(new AgentNotFoundException($"Agent '{agentId}' not found"));
 
-        var settings = new AgentSettings 
-        { 
+        var settings = new AgentSettings
+        {
             Action = AgentAction.Status,
             AgentId = agentId
         };
@@ -258,8 +258,8 @@ public class AgentFrameworkTests : TestBase
         _mockAgentService.Setup(x => x.CreateAgentAsync(It.IsAny<AgentConfiguration>()))
             .ReturnsAsync(expectedResult);
 
-        var settings = new AgentSettings 
-        { 
+        var settings = new AgentSettings
+        {
             Action = AgentAction.Create,
             ConfigFile = configFilePath
         };

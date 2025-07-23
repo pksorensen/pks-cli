@@ -32,7 +32,7 @@ public class PrdRequirementsCommand : Command<PrdRequirementsSettings>
         {
             // Set default file path if not provided
             var filePath = settings.FilePath ?? Path.Combine(Environment.CurrentDirectory, "docs", "PRD.md");
-            
+
             // Load PRD
             var loadResult = await _prdService.LoadPrdAsync(filePath);
             if (loadResult == null || !loadResult.Success)
@@ -79,7 +79,7 @@ public class PrdRequirementsCommand : Command<PrdRequirementsSettings>
 
             if (!string.IsNullOrEmpty(settings.Assignee))
             {
-                requirements = requirements.Where(r => 
+                requirements = requirements.Where(r =>
                     r.Assignee.Contains(settings.Assignee, StringComparison.OrdinalIgnoreCase)).ToList();
             }
 
@@ -194,11 +194,11 @@ public class PrdRequirementsCommand : Command<PrdRequirementsSettings>
         try
         {
             var extension = Path.GetExtension(exportPath).ToLowerInvariant();
-            
+
             if (extension == ".json")
             {
-                var json = JsonSerializer.Serialize(requirements, new JsonSerializerOptions 
-                { 
+                var json = JsonSerializer.Serialize(requirements, new JsonSerializerOptions
+                {
                     WriteIndented = true,
                     PropertyNamingPolicy = JsonNamingPolicy.CamelCase
                 });

@@ -40,7 +40,7 @@ public class HooksErrorHandlingTests : TestBase
         // Arrange
         var settings = new HooksSettings();
         var context = CreateMockCommandContext("init");
-        
+
         _mockHooksService.Setup(x => x.InitializeClaudeCodeHooksAsync(It.IsAny<bool>(), It.IsAny<SettingsScope>()))
                         .ThrowsAsync(new InvalidOperationException("Service error"));
 
@@ -52,7 +52,7 @@ public class HooksErrorHandlingTests : TestBase
         // Assert
         result.Should().Be(1, "Should return error exit code on exception");
         _testConsole.Output.Should().Contain("Error: Service error");
-        
+
         // Verify service was called
         _mockHooksService.Verify(x => x.InitializeClaudeCodeHooksAsync(It.IsAny<bool>(), It.IsAny<SettingsScope>()), Times.Once);
     }
@@ -63,7 +63,7 @@ public class HooksErrorHandlingTests : TestBase
         // Arrange
         var settings = new HooksSettings();
         var context = CreateMockCommandContext("init");
-        
+
         _mockHooksService.Setup(x => x.InitializeClaudeCodeHooksAsync(It.IsAny<bool>(), It.IsAny<SettingsScope>()))
                         .ReturnsAsync(false);
 
@@ -97,7 +97,7 @@ public class HooksErrorHandlingTests : TestBase
         // Arrange
         var settings = new HooksSettings();
         var context = CreateMockCommandContext(commandName);
-        
+
         AnsiConsole.Console = _testConsole;
 
         // Act
@@ -116,10 +116,10 @@ public class HooksErrorHandlingTests : TestBase
         var command = new PreToolUseCommand();
         var settings = new HooksSettings();
         var context = CreateMockCommandContext("pre-tool-use");
-        
+
         // Mock environment to potentially cause issues
         var originalDirectory = Directory.GetCurrentDirectory();
-        
+
         try
         {
             // Change to a directory that might cause issues
@@ -151,13 +151,13 @@ public class HooksErrorHandlingTests : TestBase
         };
 
         var originalDirectory = Directory.GetCurrentDirectory();
-        
+
         try
         {
             // Create a test directory with restricted permissions (on Unix systems)
             var restrictedDir = Path.Combine(_testDirectory, "restricted");
             Directory.CreateDirectory(restrictedDir);
-            
+
             // Change to restricted directory
             Directory.SetCurrentDirectory(restrictedDir);
             AnsiConsole.Console = _testConsole;
@@ -192,7 +192,7 @@ public class HooksErrorHandlingTests : TestBase
         {
             var claudeDir = Path.Combine(_testDirectory, ".claude");
             var settingsPath = Path.Combine(claudeDir, "settings.json");
-            
+
             Directory.CreateDirectory(claudeDir);
             // Write invalid JSON
             await File.WriteAllTextAsync(settingsPath, "{ invalid json content");
@@ -227,17 +227,17 @@ public class HooksErrorHandlingTests : TestBase
         {
             var claudeDir = Path.Combine(_testDirectory, ".claude");
             var settingsPath = Path.Combine(claudeDir, "settings.json");
-            
+
             Directory.CreateDirectory(claudeDir);
             await File.WriteAllTextAsync(settingsPath, "{}");
-            
+
             // Make file read-only
             var fileInfo = new FileInfo(settingsPath);
             fileInfo.IsReadOnly = true;
 
             // Act & Assert
             var result = await service.InitializeClaudeCodeHooksAsync(false, SettingsScope.Project);
-            
+
             // The service should handle the error gracefully
             // Result may be false, but should not crash
             result.Should().BeFalse("Should fail gracefully when file is read-only");
@@ -255,7 +255,7 @@ public class HooksErrorHandlingTests : TestBase
                 }
             }
             catch { /* Ignore cleanup errors */ }
-            
+
             Directory.SetCurrentDirectory(originalDirectory);
         }
     }
@@ -265,10 +265,10 @@ public class HooksErrorHandlingTests : TestBase
     {
         // Arrange
         var service = new HooksService(_mockLogger.Object);
-        
+
         // Act - Try to initialize with an invalid UNC path
         var result = await service.InitializeClaudeCodeHooksAsync(false, SettingsScope.User);
-        
+
         // Assert
         // Should either succeed (if user home is accessible) or fail gracefully
         // The key is that it shouldn't crash
@@ -284,7 +284,7 @@ public class HooksErrorHandlingTests : TestBase
         var command = new PreToolUseCommand();
         var settings = new HooksSettings();
         var context = CreateMockCommandContext("pre-tool-use");
-        
+
         AnsiConsole.Console = _testConsole;
 
         // Act - Execute command (stdin reading is internally handled)
@@ -308,7 +308,7 @@ public class HooksErrorHandlingTests : TestBase
         // Assert
         settings.Force.Should().BeFalse("Default force should be false");
         settings.Scope.Should().Be(SettingsScope.Project, "Default scope should be Project");
-        
+
         // Verify enum is valid
         Enum.IsDefined(typeof(SettingsScope), settings.Scope).Should().BeTrue("Default scope should be a valid enum value");
     }
@@ -348,14 +348,14 @@ public class HooksErrorHandlingTests : TestBase
 
         // Act - Force an error by using invalid path
         var originalDirectory = Directory.GetCurrentDirectory();
-        
+
         try
         {
             // This should cause an error
             Directory.SetCurrentDirectory(_testDirectory);
             var claudeDir = Path.Combine(_testDirectory, ".claude");
             Directory.CreateDirectory(claudeDir);
-            
+
             // Create an invalid settings file to cause JSON parsing error
             var settingsPath = Path.Combine(claudeDir, "settings.json");
             await File.WriteAllTextAsync(settingsPath, "invalid json");
@@ -364,7 +364,7 @@ public class HooksErrorHandlingTests : TestBase
 
             // Assert
             result.Should().BeFalse("Service should return false on error");
-            
+
             // Verify error was logged (this depends on implementation details)
             // The service should handle the JSON exception internally
         }

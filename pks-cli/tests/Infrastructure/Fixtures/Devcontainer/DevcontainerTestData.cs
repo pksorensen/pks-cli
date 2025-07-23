@@ -411,27 +411,27 @@ CMD [""sleep"", ""infinity""]
     public static IEnumerable<object[]> GetValidationTestCases()
     {
         yield return new object[] { GetBasicConfiguration(), true, "" };
-        yield return new object[] 
-        { 
-            new DevcontainerConfiguration { Name = "", Image = "test" }, 
-            false, 
-            "Name is required" 
+        yield return new object[]
+        {
+            new DevcontainerConfiguration { Name = "", Image = "test" },
+            false,
+            "Name is required"
         };
-        yield return new object[] 
-        { 
-            new DevcontainerConfiguration { Name = "test", Image = "" }, 
-            false, 
-            "Image is required" 
+        yield return new object[]
+        {
+            new DevcontainerConfiguration { Name = "test", Image = "" },
+            false,
+            "Image is required"
         };
-        yield return new object[] 
-        { 
-            new DevcontainerConfiguration 
-            { 
-                Name = "test-with-invalid-chars!@#", 
-                Image = "test" 
-            }, 
-            false, 
-            "Name contains invalid characters" 
+        yield return new object[]
+        {
+            new DevcontainerConfiguration
+            {
+                Name = "test-with-invalid-chars!@#",
+                Image = "test"
+            },
+            false,
+            "Name contains invalid characters"
         };
     }
 }

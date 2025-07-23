@@ -22,11 +22,11 @@ public abstract class TestBase : IDisposable
     {
         // Setup test console for Spectre.Console testing
         TestConsole = new TestConsole();
-        
+
         // Setup logging capture
         LogOutput = new StringBuilder();
         MockLogger = new Mock<ILogger>();
-        
+
         // Setup mock logger to capture log messages
         MockLogger.Setup(x => x.Log(
             It.IsAny<LogLevel>(),

@@ -48,7 +48,7 @@ public class ClaudeCodeIntegrationTests : TestBase
             // Validate JSON structure matches Claude Code specification
             var json = await File.ReadAllTextAsync(settingsPath);
             var settings = JsonDocument.Parse(json);
-            
+
             ValidateClaudeCodeSettingsStructure(settings);
             await ValidateAllHookCommandsExecute();
         }
@@ -134,9 +134,9 @@ public class ClaudeCodeIntegrationTests : TestBase
         {
             var claudeDir = Path.Combine(_testProjectDirectory, ".claude");
             var settingsPath = Path.Combine(claudeDir, "settings.json");
-            
+
             Directory.CreateDirectory(claudeDir);
-            
+
             // Create existing settings with non-PKS hooks
             var existingSettings = new
             {
@@ -159,7 +159,7 @@ public class ClaudeCodeIntegrationTests : TestBase
                     }
                 }
             };
-            
+
             var existingJson = JsonSerializer.Serialize(existingSettings, new JsonSerializerOptions { WriteIndented = true });
             await File.WriteAllTextAsync(settingsPath, existingJson);
 
@@ -226,14 +226,14 @@ public class ClaudeCodeIntegrationTests : TestBase
         foreach (var (hookType, command) in expectedCommands)
         {
             // Verify hook type follows camelCase (JSON property)
-            hookType.Should().MatchRegex(@"^[a-z][a-zA-Z]*$", 
+            hookType.Should().MatchRegex(@"^[a-z][a-zA-Z]*$",
                 $"Hook type '{hookType}' should be camelCase for JSON compatibility");
 
             // Verify command follows kebab-case (CLI command)
             command.Should().StartWith("pks hooks ", "All PKS hook commands should start with 'pks hooks '");
-            
+
             var hookCommand = command.Substring("pks hooks ".Length);
-            hookCommand.Should().MatchRegex(@"^[a-z]+(-[a-z]+)*$", 
+            hookCommand.Should().MatchRegex(@"^[a-z]+(-[a-z]+)*$",
                 $"Hook command '{hookCommand}' should use kebab-case");
         }
     }
@@ -253,7 +253,7 @@ public class ClaudeCodeIntegrationTests : TestBase
             // Assert
             var settingsPath = Path.Combine(_testProjectDirectory, ".claude", "settings.json");
             var json = await File.ReadAllTextAsync(settingsPath);
-            
+
             // Verify JSON is valid and parseable
             var settings = JsonDocument.Parse(json);
             settings.Should().NotBeNull("Generated JSON should be valid");
@@ -304,12 +304,12 @@ public class ClaudeCodeIntegrationTests : TestBase
         var hooks = hookArray.EnumerateArray().ToList();
         hooks.Should().HaveCountGreaterThan(0, $"Hook type '{hookType}' should have configurations");
 
-        var pksHook = hooks.FirstOrDefault(h => 
+        var pksHook = hooks.FirstOrDefault(h =>
         {
             if (h.TryGetProperty("hooks", out var innerHooks))
             {
-                return innerHooks.EnumerateArray().Any(ih => 
-                    ih.TryGetProperty("command", out var cmd) && 
+                return innerHooks.EnumerateArray().Any(ih =>
+                    ih.TryGetProperty("command", out var cmd) &&
                     cmd.GetString() == expectedCommand);
             }
             return false;

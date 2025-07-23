@@ -65,7 +65,7 @@ public class DevcontainerService : IDevcontainerService
 
             // Start with base configuration
             DevcontainerConfiguration config;
-            
+
             if (options.SelectedTemplate != null)
             {
                 // Apply NuGet/external template
@@ -139,19 +139,19 @@ public class DevcontainerService : IDevcontainerService
 
             // Generate or extract files
             List<string> generatedFiles;
-            
+
             if (options.SelectedTemplate != null)
             {
                 // Extract NuGet template files
-                _logger.LogDebug("Extracting NuGet template files for {TemplateId} v{Version}", 
+                _logger.LogDebug("Extracting NuGet template files for {TemplateId} v{Version}",
                     options.SelectedTemplate.Id, options.TemplateVersion ?? "1.0.0");
-                    
+
                 var extractionResult = await _nugetTemplateService.ExtractTemplateAsync(
                     options.SelectedTemplate.Id,
                     options.TemplateVersion ?? "1.0.0",
                     options.OutputPath,
                     options.NuGetSources.Any() ? options.NuGetSources : null);
-                    
+
                 if (!extractionResult.Success)
                 {
                     result.Success = false;
@@ -159,7 +159,7 @@ public class DevcontainerService : IDevcontainerService
                     result.Message = "Template extraction failed";
                     return result;
                 }
-                
+
                 generatedFiles = extractionResult.ExtractedFiles;
                 _logger.LogDebug("Successfully extracted {Count} files from NuGet template", generatedFiles.Count);
             }
@@ -176,7 +176,7 @@ public class DevcontainerService : IDevcontainerService
                     result.Message = "File generation failed";
                     return result;
                 }
-                
+
                 generatedFiles = generationResults.Select(r => r.FilePath).ToList();
             }
 
@@ -186,7 +186,7 @@ public class DevcontainerService : IDevcontainerService
             result.Message = "Devcontainer configuration created successfully";
             result.Duration = DateTime.UtcNow - startTime;
 
-            _logger.LogInformation("Successfully created devcontainer configuration in {Duration}ms", 
+            _logger.LogInformation("Successfully created devcontainer configuration in {Duration}ms",
                 result.Duration.TotalMilliseconds);
 
             return result;
@@ -285,8 +285,8 @@ public class DevcontainerService : IDevcontainerService
             }
 
             // Determine severity
-            result.Severity = errors.Any() ? ValidationSeverity.Error : 
-                             warnings.Any() ? ValidationSeverity.Warning : 
+            result.Severity = errors.Any() ? ValidationSeverity.Error :
+                             warnings.Any() ? ValidationSeverity.Warning :
                              ValidationSeverity.None;
 
             result.IsValid = !errors.Any();
@@ -456,7 +456,7 @@ public class DevcontainerService : IDevcontainerService
             // Merge arrays (combine unique values)
             merged.ForwardPorts = baseConfig.ForwardPorts.Union(overlayConfig.ForwardPorts).Distinct().ToArray();
             merged.Mounts = baseConfig.Mounts.Union(overlayConfig.Mounts).Distinct().ToArray();
-            
+
             if (baseConfig.RunArgs != null || overlayConfig.RunArgs != null)
             {
                 merged.RunArgs = (baseConfig.RunArgs ?? Array.Empty<string>())
@@ -583,7 +583,7 @@ public class DevcontainerService : IDevcontainerService
             result.ResolvedPath = fullPath;
 
             var directory = Directory.Exists(fullPath) ? fullPath : Path.GetDirectoryName(fullPath);
-            
+
             if (string.IsNullOrEmpty(directory))
             {
                 result.IsValid = false;
@@ -779,7 +779,7 @@ public class DevcontainerService : IDevcontainerService
     private async Task<DevcontainerConfiguration> CreateUpdatedConfigurationAsync(DevcontainerConfiguration existing, DevcontainerOptions updates)
     {
         var updated = JsonSerializer.Deserialize<DevcontainerConfiguration>(JsonSerializer.Serialize(existing));
-        
+
         if (updated == null)
         {
             throw new InvalidOperationException("Failed to clone existing configuration");
@@ -862,9 +862,9 @@ public class DevcontainerService : IDevcontainerService
     private static bool IsValidImageName(string imageName)
     {
         // Basic image name validation
-        return !string.IsNullOrEmpty(imageName) && 
-               !imageName.Contains(' ') && 
-               !imageName.StartsWith('-') && 
+        return !string.IsNullOrEmpty(imageName) &&
+               !imageName.Contains(' ') &&
+               !imageName.StartsWith('-') &&
                !imageName.EndsWith('-');
     }
 
@@ -872,7 +872,7 @@ public class DevcontainerService : IDevcontainerService
     public async Task<DevcontainerResult> InitializeAsync(DevcontainerConfiguration config)
     {
         _logger.LogInformation("Initializing devcontainer with name: {Name}", config.Name);
-        
+
         var options = new DevcontainerOptions
         {
             Name = config.Name,
@@ -897,12 +897,12 @@ public class DevcontainerService : IDevcontainerService
     public async Task<DevcontainerResult> AddFeaturesAsync(List<string> features)
     {
         _logger.LogInformation("Adding features: {Features}", string.Join(", ", features));
-        
+
         var result = new DevcontainerResult { Success = true };
-        
+
         // Simulate adding features
         await Task.Delay(100);
-        
+
         try
         {
             var configPath = Path.Combine(Environment.CurrentDirectory, ".devcontainer", "devcontainer.json");
@@ -929,7 +929,7 @@ public class DevcontainerService : IDevcontainerService
     public async Task<bool> IsRunningAsync()
     {
         await Task.Delay(10); // Simulate async operation
-        
+
         // In a real implementation, you would check Docker containers
         // For now, simulate that 30% of the time a devcontainer is running
         return DateTime.Now.Millisecond % 10 < 3;
@@ -938,7 +938,7 @@ public class DevcontainerService : IDevcontainerService
     public async Task<DevcontainerRuntimeInfo> GetRuntimeInfoAsync()
     {
         await Task.Delay(50); // Simulate async operation
-        
+
         return new DevcontainerRuntimeInfo
         {
             ContainerId = $"dc-{Guid.NewGuid().ToString()[..8]}",
@@ -959,9 +959,9 @@ public class DevcontainerService : IDevcontainerService
     public async Task<DevcontainerResult> RebuildAsync(bool force = false)
     {
         _logger.LogInformation("Rebuilding devcontainer, force: {Force}", force);
-        
+
         await Task.Delay(1000); // Simulate rebuild operation
-        
+
         return new DevcontainerResult
         {
             Success = true,
@@ -979,9 +979,9 @@ public class DevcontainerService : IDevcontainerService
     public async Task<DevcontainerConfiguration> GetConfigurationAsync()
     {
         await Task.Delay(50); // Simulate async operation
-        
+
         var configPath = Path.Combine(Environment.CurrentDirectory, ".devcontainer", "devcontainer.json");
-        
+
         if (File.Exists(configPath))
         {
             try
@@ -996,7 +996,7 @@ public class DevcontainerService : IDevcontainerService
                 return CreateDefaultConfiguration();
             }
         }
-        
+
         return CreateDefaultConfiguration();
     }
 
@@ -1015,13 +1015,13 @@ public class DevcontainerService : IDevcontainerService
     private List<string> GetExtensionsFromConfig(DevcontainerConfiguration config)
     {
         var extensions = new List<string>();
-        
+
         if (config.Customizations.TryGetValue("vscode", out var vsCodeCustomization))
         {
             // In a real implementation, you would properly parse the JSON structure
             // For now, return an empty list
         }
-        
+
         return extensions;
     }
 }

@@ -23,7 +23,7 @@ public class HooksValidationTests : TestBase
         var expectedHookTypes = new Dictionary<string, string>
         {
             ["PreToolUse"] = "pks hooks pre-tool-use",
-            ["PostToolUse"] = "pks hooks post-tool-use", 
+            ["PostToolUse"] = "pks hooks post-tool-use",
             ["UserPromptSubmit"] = "pks hooks user-prompt-submit",
             ["Notification"] = "pks hooks notification",
             ["Stop"] = "pks hooks stop",
@@ -37,13 +37,13 @@ public class HooksValidationTests : TestBase
         foreach (var (jsonProperty, cliCommand) in expectedHookTypes)
         {
             // Validate JSON property naming (PascalCase)
-            jsonProperty.Should().MatchRegex(@"^[A-Z][a-zA-Z]*$", 
+            jsonProperty.Should().MatchRegex(@"^[A-Z][a-zA-Z]*$",
                 $"JSON property '{jsonProperty}' should use PascalCase");
-                
+
             // Validate CLI command naming (kebab-case)
             cliCommand.Should().StartWith("pks hooks ");
             var hookPart = cliCommand.Substring("pks hooks ".Length);
-            hookPart.Should().MatchRegex(@"^[a-z]+(-[a-z]+)*$", 
+            hookPart.Should().MatchRegex(@"^[a-z]+(-[a-z]+)*$",
                 $"CLI command '{hookPart}' should use kebab-case");
         }
     }
@@ -64,20 +64,20 @@ public class HooksValidationTests : TestBase
 
         // Assert
         commandType.Should().NotBeNull($"Command class '{className}' should exist");
-        commandType!.Namespace.Should().Be("PKS.Commands.Hooks", 
+        commandType!.Namespace.Should().Be("PKS.Commands.Hooks",
             "All hook commands should be in PKS.Commands.Hooks namespace");
-        
+
         // Verify inheritance
         commandType.Should().BeAssignableTo<AsyncCommand<HooksSettings>>(
             "All hook event commands should inherit from AsyncCommand<HooksSettings>");
-        
+
         // Verify naming convention mapping
         var commandNameFromClass = className.Replace("Command", "")
             .Replace("PreToolUse", "pre-tool-use")
             .Replace("PostToolUse", "post-tool-use")
             .Replace("UserPromptSubmit", "user-prompt-submit")
             .Replace("Stop", "stop");
-            
+
         expectedCommandName.Should().Be(commandNameFromClass.ToLowerInvariant(),
             "Command name should match class name pattern");
     }
@@ -90,9 +90,9 @@ public class HooksValidationTests : TestBase
         {
             ["EventTrigger"] = new[] { @"PKS Hooks: \w+ Event Triggered" },
             ["SuccessMessage"] = new[] { @"✓ \w+ hook completed successfully" },
-            ["SectionHeaders"] = new[] { 
+            ["SectionHeaders"] = new[] {
                 "Environment Variables:",
-                "Command Line Arguments:", 
+                "Command Line Arguments:",
                 "STDIN Input:",
                 "Working Directory:"
             }
@@ -145,7 +145,7 @@ public class HooksValidationTests : TestBase
                 {
                     new
                     {
-                        matcher = "Bash", 
+                        matcher = "Bash",
                         hooks = new[]
                         {
                             new
@@ -197,7 +197,7 @@ public class HooksValidationTests : TestBase
         // Validate preToolUse and postToolUse have matcher
         ValidateToolSpecificHook(hooksElement, "preToolUse", "pks hooks pre-tool-use", shouldHaveMatcher: true);
         ValidateToolSpecificHook(hooksElement, "postToolUse", "pks hooks post-tool-use", shouldHaveMatcher: true);
-        
+
         // Validate userPromptSubmit and stop do not have matcher  
         ValidateGlobalHook(hooksElement, "userPromptSubmit", "pks hooks user-prompt-submit");
         ValidateGlobalHook(hooksElement, "stop", "pks hooks stop");
@@ -216,7 +216,7 @@ public class HooksValidationTests : TestBase
 
         if (shouldHaveMatcher)
         {
-            toolSpecificHooks.Should().Contain(hookType, 
+            toolSpecificHooks.Should().Contain(hookType,
                 "Tool-specific hooks should require matcher");
         }
         else
@@ -239,7 +239,7 @@ public class HooksValidationTests : TestBase
         // Assert
         foreach (var (scenario, expectedCode) in expectedExitCodes)
         {
-            expectedCode.Should().BeInRange(0, 1, 
+            expectedCode.Should().BeInRange(0, 1,
                 $"Exit code for '{scenario}' should be 0 (success) or 1 (error)");
         }
 
@@ -266,7 +266,7 @@ public class HooksValidationTests : TestBase
         {
             var regex = new Regex(pattern);
             regex.Should().NotBeNull($"Environment variable pattern '{pattern}' should be valid");
-            
+
             // Test with sample variables
             regex.IsMatch("PATH").Should().BeTrue("PATH should match environment variable patterns");
             regex.IsMatch("HOME").Should().BeTrue("HOME should match environment variable patterns");
@@ -277,7 +277,7 @@ public class HooksValidationTests : TestBase
     public void HookConfiguration_ShouldSupportMergingWithExistingSettings()
     {
         // This test validates the merging logic requirements
-        
+
         // Arrange - Scenarios for merging
         var mergingScenarios = new[]
         {
@@ -289,7 +289,7 @@ public class HooksValidationTests : TestBase
 
         // Assert
         mergingScenarios.Should().HaveCount(4, "Should support all merging scenarios");
-        mergingScenarios.Should().AllSatisfy(scenario => 
+        mergingScenarios.Should().AllSatisfy(scenario =>
             scenario.Should().NotBeNullOrEmpty("All merging scenarios should be defined"));
     }
 
@@ -302,7 +302,7 @@ public class HooksValidationTests : TestBase
         // Assert
         Enum.IsDefined(typeof(SettingsScope), scope).Should().BeTrue($"Scope '{scope}' should be valid");
         expectedPath.Should().NotBeNullOrEmpty("Expected path should be defined");
-        
+
         if (expectedPath.StartsWith("~/"))
         {
             expectedPath.Should().StartWith("~/", "User scope should use home directory");
@@ -311,7 +311,7 @@ public class HooksValidationTests : TestBase
         {
             expectedPath.Should().StartWith("./", "Project/Local scope should use current directory");
         }
-        
+
         expectedPath.Should().EndWith("settings.json", "All scopes should use settings.json filename");
         expectedPath.Should().Contain(".claude", "All scopes should use .claude directory");
     }
@@ -323,7 +323,7 @@ public class HooksValidationTests : TestBase
         var hookCommandTypes = new[]
         {
             typeof(PreToolUseCommand),
-            typeof(PostToolUseCommand), 
+            typeof(PostToolUseCommand),
             typeof(UserPromptSubmitCommand),
             typeof(StopCommand)
         };
@@ -333,13 +333,13 @@ public class HooksValidationTests : TestBase
         {
             commandType.Should().BeAssignableTo<AsyncCommand<HooksSettings>>(
                 $"Command {commandType.Name} should inherit from AsyncCommand<HooksSettings>");
-                
+
             // Verify ExecuteAsync method exists
-            var executeMethod = commandType.GetMethod("ExecuteAsync", 
+            var executeMethod = commandType.GetMethod("ExecuteAsync",
                 new[] { typeof(CommandContext), typeof(HooksSettings) });
             executeMethod.Should().NotBeNull(
                 $"Command {commandType.Name} should have ExecuteAsync method");
-            
+
             executeMethod!.ReturnType.Should().Be(typeof(Task<int>),
                 "ExecuteAsync should return Task<int>");
         }
@@ -360,8 +360,8 @@ public class HooksValidationTests : TestBase
 
         foreach (var interfaceMethod in interfaceMethods)
         {
-            var matchingMethod = serviceMethods.FirstOrDefault(m => 
-                m.Name == interfaceMethod.Name && 
+            var matchingMethod = serviceMethods.FirstOrDefault(m =>
+                m.Name == interfaceMethod.Name &&
                 ParametersMatch(m.GetParameters(), interfaceMethod.GetParameters()));
 
             matchingMethod.Should().NotBeNull(
@@ -372,7 +372,7 @@ public class HooksValidationTests : TestBase
     private static void ValidateToolSpecificHook(JsonElement hooksElement, string hookType, string expectedCommand, bool shouldHaveMatcher)
     {
         hooksElement.TryGetProperty(hookType, out var hookArray).Should().BeTrue($"Hook type '{hookType}' should exist");
-        
+
         var hooks = hookArray.EnumerateArray().ToList();
         hooks.Should().HaveCountGreaterThan(0, $"Hook type '{hookType}' should have configurations");
 
@@ -398,7 +398,7 @@ public class HooksValidationTests : TestBase
     private static void ValidateGlobalHook(JsonElement hooksElement, string hookType, string expectedCommand)
     {
         hooksElement.TryGetProperty(hookType, out var hookArray).Should().BeTrue($"Hook type '{hookType}' should exist");
-        
+
         var hooks = hookArray.EnumerateArray().ToList();
         hooks.Should().HaveCountGreaterThan(0, $"Hook type '{hookType}' should have configurations");
 
@@ -420,12 +420,12 @@ public class HooksValidationTests : TestBase
     private static bool ParametersMatch(ParameterInfo[] params1, ParameterInfo[] params2)
     {
         if (params1.Length != params2.Length) return false;
-        
+
         for (int i = 0; i < params1.Length; i++)
         {
             if (params1[i].ParameterType != params2[i].ParameterType) return false;
         }
-        
+
         return true;
     }
 }

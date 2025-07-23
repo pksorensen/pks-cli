@@ -13,23 +13,23 @@ public class ProjectIdentity
     public DateTime LastModified { get; set; }
     public string Version { get; set; } = "1.0.0";
     public ProjectStatus Status { get; set; } = ProjectStatus.Active;
-    
+
     // GitHub Integration
     public string? GitHubRepository { get; set; }
-    
+
     // MCP Integration
     public string? McpServerId { get; set; }
     public McpServerConfiguration? McpConfiguration { get; set; }
-    
+
     // Agent Framework
     public List<AgentInfo> Agents { get; set; } = new();
-    
+
     // Hooks System
     public HooksConfiguration? HooksConfiguration { get; set; }
-    
+
     // PRD Tools
     public PrdConfiguration? PrdConfiguration { get; set; }
-    
+
     // Additional metadata
     public Dictionary<string, string> Metadata { get; set; } = new();
     public string[] Tags { get; set; } = Array.Empty<string>();

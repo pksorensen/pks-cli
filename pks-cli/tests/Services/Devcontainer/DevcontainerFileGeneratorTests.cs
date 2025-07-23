@@ -51,7 +51,7 @@ public class DevcontainerFileGeneratorTests : TestBase
         // Verify JSON structure
         var jsonDocument = JsonDocument.Parse(result.Content);
         var root = jsonDocument.RootElement;
-        
+
         root.GetProperty("name").GetString().Should().Be(configuration.Name);
         root.GetProperty("image").GetString().Should().Be(configuration.Image);
         root.TryGetProperty("features", out _).Should().BeTrue();
@@ -174,7 +174,7 @@ public class DevcontainerFileGeneratorTests : TestBase
 
         var jsonDocument = JsonDocument.Parse(result.Content);
         var root = jsonDocument.RootElement;
-        
+
         root.GetProperty("name").GetString().Should().Be(configuration.Name);
         root.GetProperty("image").GetString().Should().Be(configuration.Image);
         root.TryGetProperty("features", out var features).Should().BeTrue();
@@ -188,7 +188,7 @@ public class DevcontainerFileGeneratorTests : TestBase
     [InlineData("")]
     [InlineData("   ")]
     [InlineData(null)]
-    public async Task GenerateDevcontainerJsonAsync_WithInvalidOutputPath_ShouldReturnError(string invalidPath)
+    public async Task GenerateDevcontainerJsonAsync_WithInvalidOutputPath_ShouldReturnError(string? invalidPath)
     {
         // Arrange
         var mockGenerator = DevcontainerServiceMocks.CreateFileGenerator();

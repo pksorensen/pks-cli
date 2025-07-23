@@ -19,7 +19,7 @@ public class McpHostingService : IMcpHostingService, IDisposable
     private readonly ILogger<McpHostingService> _logger;
     private readonly IServiceProvider _serviceProvider;
     private readonly McpResourceService _resourceService;
-    
+
     private McpServerStatusInfo _currentStatus;
     private McpServerLifecycleState _lifecycleState;
     private IHost? _mcpHost;
@@ -35,14 +35,14 @@ public class McpHostingService : IMcpHostingService, IDisposable
         _logger = logger;
         _serviceProvider = serviceProvider;
         _resourceService = resourceService;
-        
+
         _currentStatus = new McpServerStatusInfo
         {
             Status = McpServerStatus.Stopped,
             Version = "1.0.0"
         };
         _lifecycleState = McpServerLifecycleState.Stopped;
-        
+
         // SDK-based hosting with WithToolsFromAssembly() handles tool discovery automatically
         _logger.LogInformation("SDK-based MCP hosting service initialized");
     }
@@ -81,10 +81,10 @@ public class McpHostingService : IMcpHostingService, IDisposable
                 "stdio" => await StartStdioServerAsync(config, cancellationToken),
                 "http" => await StartHttpServerAsync(config, cancellationToken),
                 "sse" => await StartSseServerAsync(config, cancellationToken),
-                _ => new McpServerResult 
-                { 
-                    Success = false, 
-                    Message = $"Unsupported transport: {config.Transport}" 
+                _ => new McpServerResult
+                {
+                    Success = false,
+                    Message = $"Unsupported transport: {config.Transport}"
                 }
             };
 
@@ -209,10 +209,10 @@ public class McpHostingService : IMcpHostingService, IDisposable
         };
 
         await StopServerAsync(cancellationToken);
-        
+
         // Wait a moment for clean shutdown
         await Task.Delay(1000, cancellationToken);
-        
+
         return await StartServerAsync(currentConfig, cancellationToken);
     }
 
@@ -308,10 +308,10 @@ public class McpHostingService : IMcpHostingService, IDisposable
             // No manual registration needed - the SDK handles everything
 
 
-           
+
 
             var app = builder.Build();
-          
+
             app.MapMcp();
 
 
@@ -349,7 +349,7 @@ public class McpHostingService : IMcpHostingService, IDisposable
             // Create host builder with MCP services and SSE transport
             var builder = Host.CreateApplicationBuilder();
             builder.Logging.SetMinimumLevel(LogLevel.Warning);
-            
+
             // Register MCP server with SSE transport
             builder.Services
                 .AddMcpServer()
@@ -385,7 +385,7 @@ public class McpHostingService : IMcpHostingService, IDisposable
         // With WithToolsFromAssembly(), tool discovery is automatic
         // The SDK will discover classes with McpServerToolType attribute
         _logger.LogInformation("Using SDK-based tool discovery with WithToolsFromAssembly()");
-        
+
         // Static methods in tool classes can have dependencies injected as parameters
         // The SDK will use the service provider to resolve these dependencies
     }
@@ -396,7 +396,7 @@ public class McpHostingService : IMcpHostingService, IDisposable
         var resources = _resourceService.GetAvailableResources();
         foreach (var resource in resources)
         {
-            
+
 
             _logger.LogDebug("Registering resource handler: {ResourceUri}", resource.Uri);
             // In the real implementation, we would register proper MCP resource handlers
@@ -413,7 +413,7 @@ public class McpHostingService : IMcpHostingService, IDisposable
     public async Task<McpServerInfo> GetServerInfoAsync()
     {
         await Task.CompletedTask;
-        
+
         return new McpServerInfo
         {
             Transport = _currentStatus.Transport,
@@ -431,10 +431,10 @@ public class McpHostingService : IMcpHostingService, IDisposable
 
     public async Task<bool> StartAsync(string transport = "stdio")
     {
-        var config = new McpServerConfig 
-        { 
+        var config = new McpServerConfig
+        {
             Transport = transport,
-            Port = transport == "stdio" ? 0 : 3000 
+            Port = transport == "stdio" ? 0 : 3000
         };
         var result = await StartServerAsync(config);
         return result.Success;
@@ -449,7 +449,7 @@ public class McpHostingService : IMcpHostingService, IDisposable
     public async Task<McpConfiguration> GetConfigurationAsync()
     {
         await Task.CompletedTask;
-        
+
         return new McpConfiguration
         {
             DefaultTransport = "stdio",
@@ -464,10 +464,10 @@ public class McpHostingService : IMcpHostingService, IDisposable
     public async Task<bool> UpdateConfigurationAsync(McpConfiguration configuration)
     {
         await Task.CompletedTask;
-        
-        _logger.LogInformation("Configuration update requested with transport: {Transport}, maxConnections: {MaxConnections}", 
+
+        _logger.LogInformation("Configuration update requested with transport: {Transport}, maxConnections: {MaxConnections}",
             configuration.DefaultTransport, configuration.MaxConnections);
-        
+
         // In a real implementation, we would apply these configuration changes
         // For now, just return true to indicate the configuration was "updated"
         return true;
@@ -476,11 +476,11 @@ public class McpHostingService : IMcpHostingService, IDisposable
     public async Task<IEnumerable<McpLogEntry>> GetLogsAsync(int entryCount = 50, string? logLevel = null)
     {
         await Task.CompletedTask;
-        
+
         // In a real implementation, we would retrieve actual log entries
         // For now, return some sample log entries
         var logs = new List<McpLogEntry>();
-        
+
         for (int i = 0; i < Math.Min(entryCount, 10); i++)
         {
             logs.Add(new McpLogEntry
@@ -492,23 +492,23 @@ public class McpHostingService : IMcpHostingService, IDisposable
                 Exception = i % 5 == 0 ? "Sample exception details" : null
             });
         }
-        
+
         if (!string.IsNullOrEmpty(logLevel))
         {
             logs = logs.Where(l => string.Equals(l.Level, logLevel, StringComparison.OrdinalIgnoreCase)).ToList();
         }
-        
+
         return logs;
     }
 
     public async Task<McpPerformanceMetrics> GetPerformanceMetricsAsync()
     {
         await Task.CompletedTask;
-        
-        var uptime = _lifecycleState == McpServerLifecycleState.Running 
-            ? DateTime.UtcNow - _currentStatus.StartTime 
+
+        var uptime = _lifecycleState == McpServerLifecycleState.Running
+            ? DateTime.UtcNow - _currentStatus.StartTime
             : TimeSpan.Zero;
-        
+
         return new McpPerformanceMetrics
         {
             TotalRequests = 42, // Sample data
@@ -525,7 +525,7 @@ public class McpHostingService : IMcpHostingService, IDisposable
     public void Dispose()
     {
         _logger.LogInformation("Disposing MCP hosting service");
-        
+
         try
         {
             StopServerAsync(CancellationToken.None).GetAwaiter().GetResult();

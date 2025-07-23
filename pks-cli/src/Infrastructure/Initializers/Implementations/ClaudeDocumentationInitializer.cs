@@ -44,18 +44,18 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
         // Check if we have specific templates for the project type
         var projectType = context.GetOption("project-type", "console");
         var specificTemplatePath = Path.Combine(TemplatePath, $"CLAUDE-{projectType}.md");
-        
+
         if (File.Exists(specificTemplatePath))
         {
             // Process only the specific template file
             var content = await File.ReadAllTextAsync(specificTemplatePath);
             var processedContent = await ProcessTemplateContentAsync(content, specificTemplatePath, "CLAUDE.md", context);
             var targetPath = Path.Combine(context.TargetDirectory, "CLAUDE.md");
-            
+
             await WriteFileAsync(targetPath, processedContent, context);
             result.AffectedFiles.Add(targetPath);
             result.Message = $"Generated CLAUDE.md documentation from {projectType} template";
-            
+
             return result;
         }
         else
@@ -76,7 +76,7 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
     {
         // Process file inclusions first
         content = await ProcessFileInclusionsAsync(content, context);
-        
+
         // Add custom placeholder replacements for CLAUDE.md specific content
         var customPlaceholders = GetCustomPlaceholders(context);
         return ReplacePlaceholdersWithCustom(content, context, customPlaceholders);
@@ -139,22 +139,22 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
         // Process @FILENAME.md patterns for file inclusion
         var includePattern = @"@([A-Z]+\.md)";
         var matches = System.Text.RegularExpressions.Regex.Matches(content, includePattern);
-        
+
         foreach (System.Text.RegularExpressions.Match match in matches)
         {
             var fileName = match.Groups[1].Value;
             var includePath = Path.Combine(TemplatePath, fileName);
-            
+
             if (File.Exists(includePath))
             {
                 try
                 {
                     var includeContent = await File.ReadAllTextAsync(includePath);
-                    
+
                     // Process placeholders in the included content
                     var customPlaceholders = GetCustomPlaceholders(context);
                     includeContent = ReplacePlaceholdersWithCustom(includeContent, context, customPlaceholders);
-                    
+
                     // Replace the @FILENAME.md with the actual content
                     content = content.Replace(match.Value, includeContent);
                 }
@@ -170,7 +170,7 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
                 content = content.Replace(match.Value, $"<!-- {fileName} not found -->");
             }
         }
-        
+
         return content;
     }
 
@@ -354,7 +354,7 @@ dotnet add package [PackageName] --version [Version]
     private string InferTechStack(InitializationContext context, string projectType)
     {
         var template = context.Template.ToLowerInvariant();
-        
+
         return projectType.ToLowerInvariant() switch
         {
             "web" => ".NET 8 Web Application with ASP.NET Core",
@@ -377,12 +377,12 @@ dotnet add package [PackageName] --version [Version]
   - **Infrastructure/** - Data access and external integrations
   - **Middleware/** - Custom middleware components
   - **Configuration/** - Startup and configuration classes",
-            
+
             "console" => $@"  - **Commands/** - Individual command implementations
   - **Services/** - Business logic and application services
   - **Infrastructure/** - Configuration and dependency injection
   - **Models/** - Data models and DTOs",
-            
+
             _ => $@"  - **Core/** - Domain models and business logic
   - **Infrastructure/** - Data access and external services
   - **Application/** - Use cases and application services

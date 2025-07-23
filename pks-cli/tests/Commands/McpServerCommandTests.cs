@@ -47,7 +47,7 @@ public class McpServerCommandTests : TestBase
         var mockConfiguration = new Mock<IOptions<McpConfiguration>>();
         mockConfiguration.Setup(x => x.Value).Returns(new McpConfiguration());
         services.AddSingleton(mockConfiguration.Object);
-        
+
         // Create command after services are configured
         var mockLogger = new Mock<ILogger<McpCommand>>();
         _command = new McpCommand(_mockMcpService.Object, mockConfiguration.Object, mockLogger.Object);
@@ -100,11 +100,11 @@ public class McpServerCommandTests : TestBase
 
         // Act
         var task = _command.ExecuteAsync(null!, settings);
-        
+
         // Simulate Ctrl+C by cancelling quickly
         await Task.Delay(50);
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; };
-        
+
         // Give it time to process
         await Task.Delay(200);
 

@@ -233,7 +233,7 @@ public class McpServerConnectionTests : TestBase
         // var toolsAfterRestart = mcpToolService.GetAvailableTools();
         // toolsAfterRestart.Should().NotBeEmpty();
         // toolsAfterRestart.Count().Should().Be(initialToolCount);
-        
+
         // Verify restart was successful
         restartResult.Success.Should().BeTrue();
     }
@@ -243,7 +243,7 @@ public class McpServerConnectionTests : TestBase
         var json = JsonSerializer.Serialize(request);
         var bytes = Encoding.UTF8.GetBytes(json);
         var header = $"Content-Length: {bytes.Length}\r\n\r\n";
-        
+
         await process.StandardInput.WriteAsync(header);
         await process.StandardInput.WriteAsync(json);
         await process.StandardInput.FlushAsync();

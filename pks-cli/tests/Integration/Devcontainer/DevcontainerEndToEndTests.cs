@@ -157,7 +157,7 @@ public class DevcontainerEndToEndTests : TestBase
         var config = JsonSerializer.Deserialize<DevcontainerConfiguration>(devcontainerJson);
 
         config!.Features.Should().NotBeEmpty();
-        
+
         // Verify feature resolution converted simple names to full identifiers
         var features = config.Features.Keys.ToList();
         features.Should().Contain(f => f.Contains("ghcr.io/devcontainers/features/dotnet"));
@@ -455,14 +455,14 @@ public class DevcontainerEndToEndTests : TestBase
     private string CreateTestProject(string projectName)
     {
         var testArtifactsPath = Path.Combine(Path.GetTempPath(), "test-artifacts", "devcontainer-e2e", projectName);
-        
+
         if (Directory.Exists(testArtifactsPath))
         {
             Directory.Delete(testArtifactsPath, true);
         }
-        
+
         Directory.CreateDirectory(testArtifactsPath);
-        
+
         // Create a basic .csproj file to simulate an existing project
         var csprojPath = Path.Combine(testArtifactsPath, $"{projectName}.csproj");
         var csprojContent = $"""
@@ -474,9 +474,9 @@ public class DevcontainerEndToEndTests : TestBase
               </PropertyGroup>
             </Project>
             """;
-        
+
         File.WriteAllText(csprojPath, csprojContent);
-        
+
         return testArtifactsPath;
     }
 }

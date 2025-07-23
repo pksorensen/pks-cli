@@ -29,25 +29,25 @@ public class McpServerTests : TestBase
     protected override void ConfigureServices(IServiceCollection services)
     {
         base.ConfigureServices(services);
-        
+
         // Create and configure mock service
         _mockMcpService = new Mock<IMcpHostingService>();
         _mockConfiguration = new Mock<IOptions<McpConfiguration>>();
-        
+
         // Setup default mock behaviors
         _mockMcpService.Setup(x => x.StartServerAsync(It.IsAny<McpServerConfig>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new McpServerResult { Success = true, Port = 8080 });
-            
+
         _mockMcpService.Setup(x => x.StopServerAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
         _mockConfiguration.Setup(x => x.Value)
             .Returns(new McpConfiguration());
-        
+
         services.AddSingleton(_mockMcpService.Object);
         services.AddSingleton(_mockConfiguration.Object);
         services.AddLogging();
-        
+
         // Create command after services are configured
         var mockLogger = new Mock<ILogger<McpCommand>>();
         _command = new McpCommand(_mockMcpService.Object, _mockConfiguration.Object, mockLogger.Object);
@@ -57,9 +57,9 @@ public class McpServerTests : TestBase
     public async Task ExecuteAsync_ShouldStartMcpServer_WhenValidConfigurationProvided()
     {
         // Arrange
-        var expectedResult = new McpServerResult 
-        { 
-            Success = true, 
+        var expectedResult = new McpServerResult
+        {
+            Success = true,
             Port = 8080,
             Message = "MCP Server started successfully"
         };
@@ -67,8 +67,8 @@ public class McpServerTests : TestBase
         _mockMcpService.Setup(x => x.StartServerAsync(It.IsAny<McpServerConfig>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(expectedResult);
 
-        var settings = new McpSettings 
-        { 
+        var settings = new McpSettings
+        {
             Transport = "stdio",
             Port = 8080,
             Debug = true
@@ -90,17 +90,17 @@ public class McpServerTests : TestBase
     public async Task ExecuteAsync_ShouldReturnError_WhenStartupFails()
     {
         // Arrange
-        var failedResult = new McpServerResult 
-        { 
-            Success = false, 
+        var failedResult = new McpServerResult
+        {
+            Success = false,
             Message = "Failed to start server: Port already in use"
         };
 
         _mockMcpService.Setup(x => x.StartServerAsync(It.IsAny<McpServerConfig>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(failedResult);
 
-        var settings = new McpSettings 
-        { 
+        var settings = new McpSettings
+        {
             Transport = "http",
             Port = 8080
         };

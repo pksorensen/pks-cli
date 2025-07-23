@@ -35,7 +35,7 @@ public class DevcontainerIntegrationTests : TestBase
     protected override void ConfigureServices(IServiceCollection services)
     {
         base.ConfigureServices(services);
-        
+
         services.AddSingleton(_mockDevcontainerService.Object);
         services.AddSingleton(_mockFeatureRegistry.Object);
         services.AddSingleton(_mockTemplateService.Object);
@@ -322,9 +322,9 @@ public class DevcontainerIntegrationTests : TestBase
         {
             Name = "extension-validation-test",
             OutputPath = CreateTempDirectory(),
-            Extensions = new List<string> 
-            { 
-                "ms-dotnettools.csharp", 
+            Extensions = new List<string>
+            {
+                "ms-dotnettools.csharp",
                 "ms-vscode.vscode-docker",
                 "invalid-extension-id"
             }
@@ -333,14 +333,14 @@ public class DevcontainerIntegrationTests : TestBase
         // Setup extension validation
         _mockExtensionService.Setup(x => x.ValidateExtensionAsync("ms-dotnettools.csharp"))
             .ReturnsAsync(new ExtensionValidationResult { IsValid = true, Exists = true });
-        
+
         _mockExtensionService.Setup(x => x.ValidateExtensionAsync("ms-vscode.vscode-docker"))
             .ReturnsAsync(new ExtensionValidationResult { IsValid = true, Exists = true });
-        
+
         _mockExtensionService.Setup(x => x.ValidateExtensionAsync("invalid-extension-id"))
-            .ReturnsAsync(new ExtensionValidationResult 
-            { 
-                IsValid = false, 
+            .ReturnsAsync(new ExtensionValidationResult
+            {
+                IsValid = false,
                 Exists = false,
                 ErrorMessage = "Extension not found"
             });
@@ -352,7 +352,7 @@ public class DevcontainerIntegrationTests : TestBase
 
         // Assert
         result.Should().NotBeNull();
-        
+
         // Verify all extensions were validated
         _mockExtensionService.Verify(x => x.ValidateExtensionAsync("ms-dotnettools.csharp"), Times.Once);
         _mockExtensionService.Verify(x => x.ValidateExtensionAsync("ms-vscode.vscode-docker"), Times.Once);
@@ -414,7 +414,7 @@ public class DevcontainerIntegrationTests : TestBase
 
         // Verify merging was called
         _mockDevcontainerService.Verify(x => x.MergeConfigurationsAsync(
-            It.IsAny<DevcontainerConfiguration>(), 
+            It.IsAny<DevcontainerConfiguration>(),
             It.IsAny<DevcontainerConfiguration>()), Times.Once);
     }
 
@@ -448,19 +448,19 @@ public class DevcontainerIntegrationTests : TestBase
         foreach (var extension in options.Extensions)
         {
             _mockExtensionService.Setup(x => x.ValidateExtensionAsync(extension))
-                .ReturnsAsync(new ExtensionValidationResult 
-                { 
-                    IsValid = true, 
-                    Exists = true 
+                .ReturnsAsync(new ExtensionValidationResult
+                {
+                    IsValid = true,
+                    Exists = true
                 });
         }
 
         // Setup file generator
         _mockFileGenerator.Setup(x => x.ValidateOutputPathAsync(options.OutputPath))
-            .ReturnsAsync(new PathValidationResult 
-            { 
-                IsValid = true, 
-                CanWrite = true 
+            .ReturnsAsync(new PathValidationResult
+            {
+                IsValid = true,
+                CanWrite = true
             });
 
         // Setup devcontainer service for successful creation
@@ -480,7 +480,7 @@ public class DevcontainerIntegrationTests : TestBase
     private async Task<DevcontainerResult> ExecuteCompleteWorkflow(DevcontainerOptions options)
     {
         // This simulates the complete workflow that would be orchestrated by the actual implementation
-        
+
         // 1. Validate output path
         var pathValidation = await _mockFileGenerator.Object.ValidateOutputPathAsync(options.OutputPath);
         if (!pathValidation.IsValid || !pathValidation.CanWrite)
