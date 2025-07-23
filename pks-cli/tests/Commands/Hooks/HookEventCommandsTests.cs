@@ -25,6 +25,18 @@ public class HookEventCommandsTests : TestBase
         _testDirectory = CreateTempDirectory();
     }
 
+    private static string ToKebabCase(string pascalCase)
+    {
+        return pascalCase switch
+        {
+            "PreToolUse" => "pre-tool-use",
+            "PostToolUse" => "post-tool-use", 
+            "UserPromptSubmit" => "user-prompt-submit",
+            "Stop" => "stop",
+            _ => pascalCase.ToLower()
+        };
+    }
+
     [Fact]
     public async Task PreToolUseCommand_ShouldExecuteSuccessfully()
     {
@@ -167,7 +179,7 @@ public class HookEventCommandsTests : TestBase
         // Arrange
         var command = (AsyncCommand<HooksSettings>)Activator.CreateInstance(commandType)!;
         var settings = new HooksSettings();
-        var context = CreateMockCommandContext(expectedEventType.ToLower());
+        var context = CreateMockCommandContext(ToKebabCase(expectedEventType));
         
         AnsiConsole.Console = _testConsole;
 

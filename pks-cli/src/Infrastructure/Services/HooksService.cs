@@ -401,6 +401,7 @@ public class HooksService : IHooksService
             if (hooksSection[legacyName] != null && hooksSection[newName] == null)
             {
                 // Clone the legacy hook configuration to avoid parent reference issues
+                // Note: JsonNode.Parse(ToJsonString()) is the safest way to clone JsonNode in .NET
                 var legacyNode = hooksSection[legacyName];
                 var clonedNode = JsonNode.Parse(legacyNode!.ToJsonString());
                 

@@ -50,11 +50,14 @@ public class HooksServiceTests : TestBase
             var json = await File.ReadAllTextAsync(settingsPath);
             var settings = JsonDocument.Parse(json);
 
-            // Verify all 4 hook types are present
-            VerifyHookConfiguration(settings, "preToolUse", "pks hooks pre-tool-use");
-            VerifyHookConfiguration(settings, "postToolUse", "pks hooks post-tool-use");
-            VerifyHookConfiguration(settings, "userPromptSubmit", "pks hooks user-prompt-submit");
-            VerifyHookConfiguration(settings, "stop", "pks hooks stop");
+            // Verify all 7 hook types are present
+            VerifyHookConfiguration(settings, "PreToolUse", "pks hooks pre-tool-use");
+            VerifyHookConfiguration(settings, "PostToolUse", "pks hooks post-tool-use");
+            VerifyHookConfiguration(settings, "UserPromptSubmit", "pks hooks user-prompt-submit");
+            VerifyHookConfiguration(settings, "Notification", "pks hooks notification");
+            VerifyHookConfiguration(settings, "Stop", "pks hooks stop");
+            VerifyHookConfiguration(settings, "SubagentStop", "pks hooks subagent-stop");
+            VerifyHookConfiguration(settings, "PreCompact", "pks hooks pre-compact");
         }
         finally
         {

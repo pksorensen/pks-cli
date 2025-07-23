@@ -22,20 +22,23 @@ public class HooksValidationTests : TestBase
         // Arrange - Expected hook types from Claude Code specification
         var expectedHookTypes = new Dictionary<string, string>
         {
-            ["preToolUse"] = "pks hooks pre-tool-use",
-            ["postToolUse"] = "pks hooks post-tool-use", 
-            ["userPromptSubmit"] = "pks hooks user-prompt-submit",
-            ["stop"] = "pks hooks stop"
+            ["PreToolUse"] = "pks hooks pre-tool-use",
+            ["PostToolUse"] = "pks hooks post-tool-use", 
+            ["UserPromptSubmit"] = "pks hooks user-prompt-submit",
+            ["Notification"] = "pks hooks notification",
+            ["Stop"] = "pks hooks stop",
+            ["SubagentStop"] = "pks hooks subagent-stop",
+            ["PreCompact"] = "pks hooks pre-compact"
         };
 
-        // Assert - All 4 hook types must be present
-        expectedHookTypes.Should().HaveCount(4, "Claude Code specification requires exactly 4 hook types");
+        // Assert - All 7 hook types must be present
+        expectedHookTypes.Should().HaveCount(7, "Claude Code specification requires exactly 7 hook types");
 
         foreach (var (jsonProperty, cliCommand) in expectedHookTypes)
         {
-            // Validate JSON property naming (camelCase)
-            jsonProperty.Should().MatchRegex(@"^[a-z][a-zA-Z]*$", 
-                $"JSON property '{jsonProperty}' should use camelCase");
+            // Validate JSON property naming (PascalCase)
+            jsonProperty.Should().MatchRegex(@"^[A-Z][a-zA-Z]*$", 
+                $"JSON property '{jsonProperty}' should use PascalCase");
                 
             // Validate CLI command naming (kebab-case)
             cliCommand.Should().StartWith("pks hooks ");
@@ -49,7 +52,10 @@ public class HooksValidationTests : TestBase
     [InlineData("PreToolUseCommand", "pre-tool-use")]
     [InlineData("PostToolUseCommand", "post-tool-use")]
     [InlineData("UserPromptSubmitCommand", "user-prompt-submit")]
+    [InlineData("NotificationCommand", "notification")]
     [InlineData("StopCommand", "stop")]
+    [InlineData("SubagentStopCommand", "subagent-stop")]
+    [InlineData("PreCompactCommand", "pre-compact")]
     public void HookCommandClasses_ShouldFollowNamingConvention(string className, string expectedCommandName)
     {
         // Arrange
