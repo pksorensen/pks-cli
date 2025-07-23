@@ -17,8 +17,10 @@ using System.Text;
 // Set UTF-8 encoding for proper ASCII art display
 Console.OutputEncoding = Encoding.UTF8;
 
-// Check if we're running MCP with stdio transport - skip banner in that case
+// Check if we should skip banner output
 var commandArgs = Environment.GetCommandLineArgs();
+
+// Skip banner for MCP stdio transport
 var isMcpStdio = commandArgs.Length > 2 && 
                  commandArgs.Any(a => a.Equals("mcp", StringComparison.OrdinalIgnoreCase)) &&
                  (commandArgs.Any(a => a.Equals("--transport", StringComparison.OrdinalIgnoreCase) && 
@@ -26,8 +28,21 @@ var isMcpStdio = commandArgs.Length > 2 &&
                   commandArgs[Array.IndexOf(commandArgs, a) + 1].Equals("stdio", StringComparison.OrdinalIgnoreCase)) ||
                   !commandArgs.Any(a => a.Equals("--transport", StringComparison.OrdinalIgnoreCase) || a.Equals("-t", StringComparison.OrdinalIgnoreCase)));
 
-// Display welcome banner with fancy ASCII art (unless in MCP stdio mode)
-if (!isMcpStdio)
+// Skip banner for hooks commands (Claude Code compatibility)
+var isHooksCommand = commandArgs.Length > 1 && 
+                     commandArgs[1].Equals("hooks", StringComparison.OrdinalIgnoreCase);
+
+// Skip banner for hooks commands with --json flag OR when it's a hook event command
+var hasJsonFlag = commandArgs.Any(a => a.Equals("--json", StringComparison.OrdinalIgnoreCase) || 
+                                      a.Equals("-j", StringComparison.OrdinalIgnoreCase));
+
+var isHookEventCommand = commandArgs.Length > 2 && 
+                        commandArgs[1].Equals("hooks", StringComparison.OrdinalIgnoreCase) &&
+                        new[] { "pre-tool-use", "post-tool-use", "user-prompt-submit", "stop" }
+                            .Contains(commandArgs[2], StringComparer.OrdinalIgnoreCase);
+
+// Display welcome banner with fancy ASCII art (unless we should skip it)
+if (!isMcpStdio && !(isHooksCommand && (hasJsonFlag || isHookEventCommand)))
 {
     DisplayWelcomeBanner();
 }
@@ -246,6 +261,15 @@ app.Configure(config =>
             
         hooks.AddCommand<StopCommand>("stop")
             .WithDescription("Handle Stop hook event from Claude Code");
+            
+        hooks.AddCommand<NotificationCommand>("notification")
+            .WithDescription("Handle Notification hook event from Claude Code");
+            
+        hooks.AddCommand<SubagentStopCommand>("subagent-stop")
+            .WithDescription("Handle SubagentStop hook event from Claude Code");
+            
+        hooks.AddCommand<PreCompactCommand>("pre-compact")
+            .WithDescription("Handle PreCompact hook event from Claude Code");
     });
         
     // Add PRD branch command with subcommands

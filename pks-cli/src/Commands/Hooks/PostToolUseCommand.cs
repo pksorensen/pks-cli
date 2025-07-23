@@ -1,3 +1,4 @@
+using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -5,52 +6,49 @@ namespace PKS.Commands.Hooks;
 
 /// <summary>
 /// Command for handling PostToolUse hook events from Claude Code
+/// This hook is called after Claude Code executes a tool and can process the results
 /// </summary>
-public class PostToolUseCommand : AsyncCommand<HooksSettings>
+public class PostToolUseCommand : BaseHookCommand
 {
-    public override async Task<int> ExecuteAsync(CommandContext context, HooksSettings settings)
+    /// <summary>
+    /// Process the PostToolUse hook event
+    /// For now, we just proceed without any special processing
+    /// </summary>
+    protected override async Task<HookDecision> ProcessHookEventAsync(CommandContext context, HooksSettings settings)
     {
-        AnsiConsole.MarkupLine("[cyan]PKS Hooks: PostToolUse Event Triggered[/]");
+        // Read any context information from stdin (tool execution results)
+        var stdinContent = await ReadStdinAsync();
         
-        // Print all environment variables
-        AnsiConsole.MarkupLine("\n[yellow]Environment Variables:[/]");
-        foreach (var env in Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>().OrderBy(e => e.Key))
+        // For debugging in non-JSON mode, we can still show environment info
+        if (!settings.Json)
         {
-            AnsiConsole.MarkupLine($"  [dim]{env.Key}[/] = [green]{env.Value}[/]");
+            await ShowDebugInformationAsync(stdinContent);
         }
         
-        // Print command line arguments
-        AnsiConsole.MarkupLine("\n[yellow]Command Line Arguments:[/]");
-        var args = Environment.GetCommandLineArgs();
-        for (int i = 0; i < args.Length; i++)
+        // For now, we don't process tool results - just proceed
+        // Future enhancements could analyze tool execution results and provide feedback
+        return HookDecision.Proceed();
+    }
+    
+    /// <summary>
+    /// Show debug information in non-JSON mode only
+    /// </summary>
+    private async Task ShowDebugInformationAsync(string? stdinContent)
+    {
+        AnsiConsole.MarkupLine("\n[yellow]Debug Information:[/]");
+        
+        if (!string.IsNullOrEmpty(stdinContent))
         {
-            AnsiConsole.MarkupLine($"  [dim]args[{i}][/] = [green]{args[i]}[/]");
+            AnsiConsole.MarkupLine("[dim]Tool Execution Results:[/]");
+            AnsiConsole.WriteLine(stdinContent);
+        }
+        else
+        {
+            AnsiConsole.MarkupLine("[dim]No tool results received[/]");
         }
         
-        // Read stdin if available
-        AnsiConsole.MarkupLine("\n[yellow]STDIN Input:[/]");
-        try
-        {
-            if (!Console.IsInputRedirected)
-            {
-                AnsiConsole.MarkupLine("  [dim]No piped input detected[/]");
-            }
-            else
-            {
-                var stdinContent = await Console.In.ReadToEndAsync();
-                AnsiConsole.MarkupLine($"  [green]{stdinContent}[/]");
-            }
-        }
-        catch (Exception ex)
-        {
-            AnsiConsole.MarkupLine($"  [red]Error reading stdin: {ex.Message}[/]");
-        }
+        AnsiConsole.MarkupLine($"[dim]Working Directory:[/] {Directory.GetCurrentDirectory()}");
         
-        // Print working directory
-        AnsiConsole.MarkupLine($"\n[yellow]Working Directory:[/] [green]{Directory.GetCurrentDirectory()}[/]");
-        
-        // Success exit code
-        AnsiConsole.MarkupLine("\n[green]✓ PostToolUse hook completed successfully[/]");
-        return 0;
+        await Task.CompletedTask;
     }
 }
