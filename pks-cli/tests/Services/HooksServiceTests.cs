@@ -149,7 +149,7 @@ public class HooksServiceTests : TestBase
             var settings = JsonDocument.Parse(json);
 
             // Verify PKS hooks are present
-            VerifyHookConfiguration(settings, "preToolUse", "pks hooks pre-tool-use");
+            VerifyHookConfiguration(settings, "PreToolUse", "pks hooks pre-tool-use");
         }
         finally
         {
@@ -358,7 +358,7 @@ public class HooksServiceTests : TestBase
     public void HookCommands_ShouldFollowCorrectNamingConvention(string hookCommand)
     {
         // Assert - Verify naming convention is correct for Claude Code integration
-        hookCommand.Should().MatchRegex(@"^[a-z]+-[a-z]+-?[a-z]*$",
+        hookCommand.Should().MatchRegex(@"^[a-z]+(-[a-z]+)*$",
             "Hook commands should use kebab-case naming convention");
 
         // Verify it doesn't contain underscores or camelCase
@@ -369,15 +369,15 @@ public class HooksServiceTests : TestBase
     [Fact]
     public void ClaudeCodeHookTypes_ShouldMatchSpecification()
     {
-        // Arrange - Expected hook types from Claude Code specification
-        var expectedHookTypes = new[] { "preToolUse", "postToolUse", "userPromptSubmit", "stop" };
+        // Arrange - Expected hook types from Claude Code specification (now PascalCase)
+        var expectedHookTypes = new[] { "PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop" };
 
         // Assert - These are the exact hook types Claude Code expects
         foreach (var hookType in expectedHookTypes)
         {
-            // Verify camelCase format for JSON configuration
-            hookType.Should().MatchRegex(@"^[a-z][a-zA-Z]*$",
-                "Hook types in JSON should be camelCase");
+            // Verify PascalCase format for JSON configuration
+            hookType.Should().MatchRegex(@"^[A-Z][a-zA-Z]*$",
+                "Hook types in JSON should be PascalCase");
         }
     }
 
