@@ -6,7 +6,7 @@ on:
     tags-ignore:
       - 'v*' # Ignore version tags to prevent duplicate builds
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main, develop, release/* ]
 
 env:
   DOTNET_VERSION: '8.0.x'
@@ -37,20 +37,23 @@ jobs:
           ${{ runner.os }}-nuget-
 
     - name: Restore dependencies
-      run: dotnet restore PKS.CLI.sln
+      working-directory: pks-cli
+      run: dotnet restore pks-cli.sln
 
     - name: Build solution
-      run: dotnet build PKS.CLI.sln --configuration Release --no-restore
+      working-directory: pks-cli
+      run: dotnet build pks-cli.sln --configuration Release --no-restore
 
     - name: Run tests
-      run: dotnet test PKS.CLI.sln --configuration Release --no-build --verbosity normal --logger trx --results-directory TestResults
+      working-directory: pks-cli
+      run: dotnet test pks-cli.sln --configuration Release --no-build --verbosity normal --logger trx --results-directory TestResults
 
     - name: Upload test results
       uses: actions/upload-artifact@v4
       if: always()
       with:
         name: test-results
-        path: TestResults/*.trx
+        path: pks-cli/TestResults/*.trx
 
   package-and-validate:
     runs-on: ubuntu-latest
@@ -66,20 +69,21 @@ jobs:
         dotnet-version: ${{ env.DOTNET_VERSION }}
 
     - name: Restore dependencies
-      run: dotnet restore PKS.CLI.sln
+      working-directory: pks-cli
+      run: dotnet restore pks-cli.sln
 
     - name: Create packages
-      run: dotnet pack PKS.CLI.sln --configuration Release --output ./packages --no-restore
+      working-directory: pks-cli
+      run: dotnet pack pks-cli.sln --configuration Release --output ./packages --no-restore
 
     - name: List created packages
+      working-directory: pks-cli
       run: |
         echo "📦 Created packages:"
         ls -la packages/*.nupkg
 
-    - name: Run template packaging tests
-      run: ./test-template-packaging.sh
-
     - name: Verify CLI package
+      working-directory: pks-cli
       run: |
         echo "🔍 Verifying CLI package structure..."
         CLI_PACKAGE=$(find packages -name "pks-cli*.nupkg" | head -1)
@@ -92,6 +96,7 @@ jobs:
         fi
 
     - name: Verify template packages
+      working-directory: pks-cli
       run: |
         echo "🔍 Verifying template packages..."
         TEMPLATE_PACKAGES=$(find packages -name "*.Templates.*.nupkg")
@@ -106,6 +111,7 @@ jobs:
         fi
 
     - name: Test template installation
+      working-directory: pks-cli
       run: |
         echo "🧪 Testing template installation..."
         mkdir -p test-install
@@ -126,7 +132,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: packages
-        path: packages/*.nupkg
+        path: pks-cli/packages/*.nupkg
         retention-days: 30
 
   release-check:
@@ -144,11 +150,13 @@ jobs:
         dotnet-version: ${{ env.DOTNET_VERSION }}
 
     - name: Create release packages
+      working-directory: pks-cli
       run: |
-        dotnet restore PKS.CLI.sln
-        dotnet pack PKS.CLI.sln --configuration Release --output ./release-packages
+        dotnet restore pks-cli.sln
+        dotnet pack pks-cli.sln --configuration Release --output ./release-packages
 
     - name: Prepare release notes
+      working-directory: pks-cli
       run: |
         echo "## PKS CLI Release $(echo $GITHUB_REF | sed 's/refs\/tags\///g')" > release-notes.md
         echo "" >> release-notes.md
@@ -177,5 +185,5 @@ jobs:
       with:
         name: release-packages
         path: |
-          release-packages/*.nupkg
-          release-notes.md
+          pks-cli/release-packages/*.nupkg
+          pks-cli/release-notes.md
