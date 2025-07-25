@@ -4,6 +4,19 @@
   <RunConfiguration>
     <ResultsDirectory>../../test-artifacts/results</ResultsDirectory>
     <TargetFramework>net8.0</TargetFramework>
+    <!-- Test session timeout in milliseconds (2 minutes) -->
+    <TestSessionTimeout>120000</TestSessionTimeout>
+    <!-- Enable parallel execution with limited threads -->
+    <MaxCpuCount>2</MaxCpuCount>
+    <!-- Enable parallel execution within assemblies for better performance -->
+    <DisableParallelization>false</DisableParallelization>
+    <!-- Collect dumps for hanging tests -->
+    <CollectDumpOnTestSessionHang>true</CollectDumpOnTestSessionHang>
+    <!-- Individual test timeout (15 seconds - optimized) -->
+    <TestCaseTimeout>15000</TestCaseTimeout>
+    <!-- Performance optimization settings -->
+    <TreatNoTestsAsError>false</TreatNoTestsAsError>
+    <SolutionDirectory>..</SolutionDirectory>
   </RunConfiguration>
 
   <!-- Code coverage settings -->
