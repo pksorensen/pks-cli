@@ -619,7 +619,8 @@ public class DevcontainerWizardCommandTests : TestBase
             _mockFeatureRegistry.Object,
             _mockTemplateService.Object,
             _mockExtensionService.Object,
-            CreateMockNuGetService().Object);
+            CreateMockNuGetService().Object,
+            TestConsole);
 
         return command;
     }
@@ -632,7 +633,8 @@ public class DevcontainerWizardCommandTests : TestBase
             _mockFeatureRegistry.Object,
             _mockTemplateService.Object,
             _mockExtensionService.Object,
-            mockNuGetService.Object);
+            mockNuGetService.Object,
+            TestConsole);
 
         return command;
     }
@@ -645,7 +647,8 @@ public class DevcontainerWizardCommandTests : TestBase
             _mockFeatureRegistry.Object,
             _mockTemplateService.Object,
             _mockExtensionService.Object,
-            mockNuGetService.Object);
+            mockNuGetService.Object,
+            TestConsole);
 
         return command;
     }

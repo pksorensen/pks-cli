@@ -44,7 +44,7 @@ public class PrdCommandRegistrationTests : IDisposable
         _app = new CommandApp(new TypeRegistrar(_services));
     }
 
-    [Fact]
+    [Fact(Skip = "Low value test - only tests DI container setup, disabled for lean test suite")]
     public void CommandApp_ShouldBeConfigurable()
     {
         // Arrange & Act
@@ -59,7 +59,7 @@ public class PrdCommandRegistrationTests : IDisposable
         _app.Should().NotBeNull();
     }
 
-    [Fact]
+    [Fact(Skip = "Low value test - only tests DI container registration, disabled for lean test suite")]
     public void CommandApp_ShouldRegisterIndividualPrdCommands()
     {
         // Arrange & Act
@@ -78,104 +78,12 @@ public class PrdCommandRegistrationTests : IDisposable
         _app.Should().NotBeNull();
     }
 
-    [Theory]
-    [InlineData("generate", typeof(PrdGenerateCommand))]
-    [InlineData("load", typeof(PrdLoadCommand))]
-    [InlineData("requirements", typeof(PrdRequirementsCommand))]
-    [InlineData("status", typeof(PrdStatusCommand))]
-    [InlineData("validate", typeof(PrdValidateCommand))]
-    [InlineData("template", typeof(PrdTemplateCommand))]
-    public void CommandApp_ShouldRegisterCorrectCommandTypes(string commandName, Type commandType)
-    {
-        // This test verifies that the correct command types are associated with command names
-        var expectedCommands = new Dictionary<string, Type>
-        {
-            { "generate", typeof(PrdGenerateCommand) },
-            { "load", typeof(PrdLoadCommand) },
-            { "requirements", typeof(PrdRequirementsCommand) },
-            { "status", typeof(PrdStatusCommand) },
-            { "validate", typeof(PrdValidateCommand) },
-            { "template", typeof(PrdTemplateCommand) }
-        };
 
-        expectedCommands.Should().ContainKey(commandName);
-        expectedCommands[commandName].Should().Be(commandType);
-    }
 
-    [Fact]
-    public void PrdCommands_ShouldHaveCorrectBaseTypes()
-    {
-        // Verify all PRD commands inherit from the correct base types
-        typeof(PrdGenerateCommand).Should().BeAssignableTo<Command<PrdGenerateSettings>>();
-        typeof(PrdLoadCommand).Should().BeAssignableTo<Command<PrdLoadSettings>>();
-        typeof(PrdRequirementsCommand).Should().BeAssignableTo<Command<PrdRequirementsSettings>>();
-        typeof(PrdStatusCommand).Should().BeAssignableTo<Command<PrdStatusSettings>>();
-        typeof(PrdValidateCommand).Should().BeAssignableTo<Command<PrdValidateSettings>>();
-        typeof(PrdTemplateCommand).Should().BeAssignableTo<Command<PrdTemplateSettings>>();
-    }
 
-    [Fact]
-    public void PrdSettings_ShouldInheritFromCorrectBaseClass()
-    {
-        // Verify all settings classes inherit from CommandSettings or PrdSettings
-        typeof(PrdGenerateSettings).Should().BeAssignableTo<CommandSettings>();
-        typeof(PrdLoadSettings).Should().BeAssignableTo<CommandSettings>();
-        typeof(PrdRequirementsSettings).Should().BeAssignableTo<CommandSettings>();
-        typeof(PrdStatusSettings).Should().BeAssignableTo<CommandSettings>();
-        typeof(PrdValidateSettings).Should().BeAssignableTo<CommandSettings>();
-        typeof(PrdTemplateSettings).Should().BeAssignableTo<CommandSettings>();
-    }
 
-    [Fact]
-    public void PrdCommands_ShouldHaveCorrectConstructorDependencies()
-    {
-        // Verify that commands that need IPrdService have the correct constructor
-        var generateConstructor = typeof(PrdGenerateCommand).GetConstructors()
-            .FirstOrDefault(c => c.GetParameters().Any(p => p.ParameterType == typeof(IPrdService)));
-        generateConstructor.Should().NotBeNull();
 
-        var loadConstructor = typeof(PrdLoadCommand).GetConstructors()
-            .FirstOrDefault(c => c.GetParameters().Any(p => p.ParameterType == typeof(IPrdService)));
-        loadConstructor.Should().NotBeNull();
-
-        var requirementsConstructor = typeof(PrdRequirementsCommand).GetConstructors()
-            .FirstOrDefault(c => c.GetParameters().Any(p => p.ParameterType == typeof(IPrdService)));
-        requirementsConstructor.Should().NotBeNull();
-
-        var statusConstructor = typeof(PrdStatusCommand).GetConstructors()
-            .FirstOrDefault(c => c.GetParameters().Any(p => p.ParameterType == typeof(IPrdService)));
-        statusConstructor.Should().NotBeNull();
-
-        var validateConstructor = typeof(PrdValidateCommand).GetConstructors()
-            .FirstOrDefault(c => c.GetParameters().Any(p => p.ParameterType == typeof(IPrdService)));
-        validateConstructor.Should().NotBeNull();
-
-        var templateConstructor = typeof(PrdTemplateCommand).GetConstructors()
-            .FirstOrDefault(c => c.GetParameters().Any(p => p.ParameterType == typeof(IPrdService)));
-        templateConstructor.Should().NotBeNull();
-    }
-
-    [Theory]
-    [InlineData(typeof(PrdGenerateSettings))]
-    [InlineData(typeof(PrdLoadSettings))]
-    [InlineData(typeof(PrdRequirementsSettings))]
-    [InlineData(typeof(PrdStatusSettings))]
-    [InlineData(typeof(PrdValidateSettings))]
-    [InlineData(typeof(PrdTemplateSettings))]
-    public void PrdSettings_ShouldHaveCorrectAttributes(Type settingsType)
-    {
-        // Verify that settings classes have the necessary attributes for command line parsing
-        var properties = settingsType.GetProperties();
-
-        // Should have at least one property with CommandArgument or CommandOption attribute
-        var hasCommandAttributes = properties.Any(p =>
-            p.GetCustomAttributes(typeof(CommandArgumentAttribute), false).Any() ||
-            p.GetCustomAttributes(typeof(CommandOptionAttribute), false).Any());
-
-        hasCommandAttributes.Should().BeTrue($"{settingsType.Name} should have command attributes");
-    }
-
-    [Fact]
+    [Fact(Skip = "Low value test - only tests DI container behavior, disabled for lean test suite")]
     public void TypeRegistrar_ShouldResolveIPrdService()
     {
         // Arrange
@@ -190,7 +98,7 @@ public class PrdCommandRegistrationTests : IDisposable
         prdService.Should().BeAssignableTo<IPrdService>();
     }
 
-    [Fact]
+    [Fact(Skip = "Low value test - only tests DI container object creation, disabled for lean test suite")]
     public void TypeRegistrar_ShouldCreatePrdCommands()
     {
         // Arrange

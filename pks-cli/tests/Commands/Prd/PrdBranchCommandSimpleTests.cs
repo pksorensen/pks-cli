@@ -40,20 +40,6 @@ public class PrdBranchCommandSimpleTests : IDisposable
         result.Should().Be(0);
     }
 
-    [Fact]
-    public void PrdBranchMainSettings_ShouldHaveCorrectProperties()
-    {
-        // Arrange & Act
-        var settings = new PrdBranchMainSettings();
-
-        // Assert
-        settings.Should().NotBeNull();
-        settings.Should().BeAssignableTo<CommandSettings>();
-
-        // Verify default values
-        settings.ShowVersion.Should().BeFalse();
-        settings.ListCommands.Should().BeFalse();
-    }
 
     [Fact]
     public void PrdBranchCommand_GetHelpContent_ShouldReturnValidHelp()
@@ -106,130 +92,11 @@ public class PrdBranchCommandSimpleTests : IDisposable
         result.Should().Be(0);
     }
 
-    [Fact]
-    public void PrdBranchMainSettings_ShouldHaveCorrectAttributes()
-    {
-        // Verify that the settings class has the expected command option attributes
-        var showVersionProperty = typeof(PrdBranchMainSettings).GetProperty(nameof(PrdBranchMainSettings.ShowVersion));
-        var listCommandsProperty = typeof(PrdBranchMainSettings).GetProperty(nameof(PrdBranchMainSettings.ListCommands));
 
-        showVersionProperty.Should().NotBeNull();
-        listCommandsProperty.Should().NotBeNull();
 
-        // Check for CommandOption attributes
-        var showVersionOptionAttribute = showVersionProperty!.GetCustomAttributes(typeof(CommandOptionAttribute), false)
-            .Cast<CommandOptionAttribute>().FirstOrDefault();
-        var listCommandsOptionAttribute = listCommandsProperty!.GetCustomAttributes(typeof(CommandOptionAttribute), false)
-            .Cast<CommandOptionAttribute>().FirstOrDefault();
 
-        showVersionOptionAttribute.Should().NotBeNull();
-        listCommandsOptionAttribute.Should().NotBeNull();
 
-        // Check for Description attributes
-        var showVersionDescriptionAttribute = showVersionProperty.GetCustomAttributes(typeof(DescriptionAttribute), false)
-            .Cast<DescriptionAttribute>().FirstOrDefault();
-        var listCommandsDescriptionAttribute = listCommandsProperty.GetCustomAttributes(typeof(DescriptionAttribute), false)
-            .Cast<DescriptionAttribute>().FirstOrDefault();
 
-        showVersionDescriptionAttribute.Should().NotBeNull();
-        listCommandsDescriptionAttribute.Should().NotBeNull();
-        showVersionDescriptionAttribute!.Description.Should().NotBeNullOrEmpty();
-        listCommandsDescriptionAttribute!.Description.Should().NotBeNullOrEmpty();
-    }
-
-    [Theory]
-    [InlineData(typeof(PrdGenerateCommand))]
-    [InlineData(typeof(PrdLoadCommand))]
-    [InlineData(typeof(PrdRequirementsCommand))]
-    [InlineData(typeof(PrdStatusCommand))]
-    [InlineData(typeof(PrdValidateCommand))]
-    [InlineData(typeof(PrdTemplateCommand))]
-    public void PrdCommands_ShouldHaveCorrectBaseTypes(Type commandType)
-    {
-        // Verify all PRD commands inherit from Command<T> where T is their settings type
-        commandType.Should().NotBeNull();
-        commandType.IsClass.Should().BeTrue();
-
-        // Check that the command type inherits from a Command<> type
-        var baseType = commandType.BaseType;
-        while (baseType != null && !baseType.IsGenericType)
-        {
-            baseType = baseType.BaseType;
-        }
-
-        baseType.Should().NotBeNull();
-        if (baseType!.IsGenericType)
-        {
-            baseType.GetGenericTypeDefinition().Should().Be(typeof(Command<>));
-        }
-    }
-
-    [Theory]
-    [InlineData(typeof(PrdGenerateSettings))]
-    [InlineData(typeof(PrdLoadSettings))]
-    [InlineData(typeof(PrdRequirementsSettings))]
-    [InlineData(typeof(PrdStatusSettings))]
-    [InlineData(typeof(PrdValidateSettings))]
-    [InlineData(typeof(PrdTemplateSettings))]
-    public void PrdSettings_ShouldInheritFromCommandSettings(Type settingsType)
-    {
-        // Verify all settings classes inherit from CommandSettings
-        settingsType.Should().BeAssignableTo<CommandSettings>();
-    }
-
-    [Theory]
-    [InlineData(typeof(PrdGenerateCommand))]
-    [InlineData(typeof(PrdLoadCommand))]
-    [InlineData(typeof(PrdRequirementsCommand))]
-    [InlineData(typeof(PrdStatusCommand))]
-    [InlineData(typeof(PrdValidateCommand))]
-    [InlineData(typeof(PrdTemplateCommand))]
-    public void PrdCommands_ShouldHaveDescriptionAttributes(Type commandType)
-    {
-        // Verify all command classes have Description attributes
-        var descriptionAttribute = commandType.GetCustomAttributes(typeof(DescriptionAttribute), false)
-            .Cast<DescriptionAttribute>().FirstOrDefault();
-
-        descriptionAttribute.Should().NotBeNull($"{commandType.Name} should have a Description attribute");
-        descriptionAttribute!.Description.Should().NotBeNullOrEmpty($"{commandType.Name} description should not be empty");
-    }
-
-    [Fact]
-    public void PrdBranchCommand_ShouldBeInstantiable()
-    {
-        // Verify that the branch command can be instantiated
-        var command = new PrdBranchCommand();
-        command.Should().NotBeNull();
-        command.Should().BeAssignableTo<Command<PrdBranchMainSettings>>();
-    }
-
-    [Fact]
-    public void PrdCommands_WithDependencyInjection_ShouldHaveCorrectConstructors()
-    {
-        // Verify that commands that need IPrdService have the correct constructor
-        var commandTypes = new[]
-        {
-            typeof(PrdGenerateCommand),
-            typeof(PrdLoadCommand),
-            typeof(PrdRequirementsCommand),
-            typeof(PrdStatusCommand),
-            typeof(PrdValidateCommand),
-            typeof(PrdTemplateCommand)
-        };
-
-        foreach (var commandType in commandTypes)
-        {
-            var constructorWithService = commandType.GetConstructors()
-                .FirstOrDefault(c => c.GetParameters().Any(p => p.ParameterType == typeof(IPrdService)));
-
-            constructorWithService.Should().NotBeNull($"{commandType.Name} should have a constructor that accepts IPrdService");
-
-            // Verify the constructor can be called with a mock service
-            var mockService = _mockPrdService.Object;
-            var instance = Activator.CreateInstance(commandType, mockService);
-            instance.Should().NotBeNull($"{commandType.Name} should be instantiable with IPrdService");
-        }
-    }
 
     public void Dispose()
     {

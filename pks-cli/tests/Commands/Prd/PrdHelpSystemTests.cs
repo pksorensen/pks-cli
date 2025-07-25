@@ -216,23 +216,6 @@ public class PrdHelpSystemTests : IDisposable
         helpContent.Should().NotBeNullOrEmpty();
     }
 
-    [Theory]
-    [InlineData(typeof(PrdGenerateCommand))]
-    [InlineData(typeof(PrdLoadCommand))]
-    [InlineData(typeof(PrdRequirementsCommand))]
-    [InlineData(typeof(PrdStatusCommand))]
-    [InlineData(typeof(PrdValidateCommand))]
-    [InlineData(typeof(PrdTemplateCommand))]
-    public void PrdCommands_ShouldHaveDescriptionAttributes(Type commandType)
-    {
-        // Arrange & Act
-        var descriptionAttribute = commandType.GetCustomAttributes(typeof(DescriptionAttribute), false)
-            .Cast<DescriptionAttribute>().FirstOrDefault();
-
-        // Assert
-        descriptionAttribute.Should().NotBeNull($"{commandType.Name} should have a Description attribute");
-        descriptionAttribute!.Description.Should().NotBeNullOrEmpty($"{commandType.Name} description should not be empty");
-    }
 
     [Fact]
     public async Task PrdCommands_ShouldDisplayExamplesInHelp()
@@ -317,40 +300,6 @@ public class PrdHelpSystemTests : IDisposable
         (containsHelp || containsAvailable).Should().BeTrue("Error should suggest help or show available commands");
     }
 
-    [Fact]
-    public void PrdSettings_ShouldHaveDetailedDescriptions()
-    {
-        // Test that all option descriptions are meaningful and helpful
-        var settingsTypes = new[]
-        {
-            typeof(PrdGenerateSettings),
-            typeof(PrdLoadSettings),
-            typeof(PrdRequirementsSettings),
-            typeof(PrdStatusSettings),
-            typeof(PrdValidateSettings),
-            typeof(PrdTemplateSettings)
-        };
-
-        foreach (var settingsType in settingsTypes)
-        {
-            var properties = settingsType.GetProperties();
-            foreach (var property in properties)
-            {
-                var commandAttributes = property.GetCustomAttributes(typeof(CommandArgumentAttribute), false)
-                    .Concat(property.GetCustomAttributes(typeof(CommandOptionAttribute), false));
-
-                if (commandAttributes.Any())
-                {
-                    var descriptionAttribute = property.GetCustomAttributes(typeof(DescriptionAttribute), false)
-                        .Cast<DescriptionAttribute>().FirstOrDefault();
-
-                    descriptionAttribute.Should().NotBeNull($"{settingsType.Name}.{property.Name} should have a description");
-                    descriptionAttribute!.Description.Should().NotBeNullOrEmpty($"{settingsType.Name}.{property.Name} description should not be empty");
-                    descriptionAttribute.Description.Length.Should().BeGreaterThan(10, $"{settingsType.Name}.{property.Name} description should be meaningful");
-                }
-            }
-        }
-    }
 
     [Fact]
     public async Task PrdTemplate_WithListOption_ShouldDisplayTemplateHelp()

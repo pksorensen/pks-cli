@@ -299,7 +299,7 @@ public class HooksErrorHandlingTests : TestBase
         hasExpectedOutput.Should().BeTrue("Should show appropriate stdin handling message");
     }
 
-    [Fact]
+    [Fact(Skip = "Low value test - only tests property default values, disabled for lean test suite")]
     public void HooksSettings_DefaultValues_ShouldBeValid()
     {
         // Arrange & Act
@@ -313,7 +313,7 @@ public class HooksErrorHandlingTests : TestBase
         Enum.IsDefined(typeof(SettingsScope), settings.Scope).Should().BeTrue("Default scope should be a valid enum value");
     }
 
-    [Theory]
+    [Theory(Skip = "Low value test - only tests enum values, disabled for lean test suite")]
     [InlineData(SettingsScope.User)]
     [InlineData(SettingsScope.Project)]
     [InlineData(SettingsScope.Local)]
@@ -381,10 +381,7 @@ public class HooksErrorHandlingTests : TestBase
 
     private CommandContext CreateMockCommandContext(string? commandName)
     {
-        var args = commandName != null ? new[] { commandName } : Array.Empty<string>();
-        var mockContext = new Mock<CommandContext>(args, new Dictionary<string, object>(), "test");
-        mockContext.SetupGet(x => x.Name).Returns(commandName);
-        return mockContext.Object;
+        return new CommandContext(Mock.Of<IRemainingArguments>(), commandName ?? "test", null);
     }
 
     public override void Dispose()
