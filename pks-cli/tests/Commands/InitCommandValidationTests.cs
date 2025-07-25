@@ -106,14 +106,14 @@ namespace PKS.CLI.Tests.Commands
         {
             // Use reflection to call the private static method
             var initCommandType = typeof(InitCommand);
-            var method = initCommandType.GetMethod("ValidateProjectName", 
+            var method = initCommandType.GetMethod("ValidateProjectName",
                 BindingFlags.NonPublic | BindingFlags.Static);
-            
+
             if (method == null)
                 throw new InvalidOperationException("ValidateProjectName method not found");
 
             var result = method.Invoke(null, new object[] { projectName });
-            
+
             if (result is not ValidationResult validationResult)
                 throw new InvalidOperationException("Method did not return ValidationResult");
 

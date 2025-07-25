@@ -111,7 +111,7 @@ namespace PKS.CLI.Tests.Integration.Templates
 
             // Verify our templates appear in the list
             Assert.NotEmpty(listResult.Templates);
-            
+
             foreach (var template in listResult.Templates)
             {
                 _output.WriteLine($"Found template: {template.Name} ({template.ShortName})");
@@ -138,7 +138,7 @@ namespace PKS.CLI.Tests.Integration.Templates
             var createResult = await _templatePackagingService.CreateProjectFromTemplateAsync(
                 "pks-devcontainer", "TestDevContainer", testProjectPath);
 
-            Assert.True(createResult.Success, 
+            Assert.True(createResult.Success,
                 $"Template creation failed:\nOutput: {createResult.Output}\nError: {createResult.Error}");
 
             _output.WriteLine($"Project created at: {createResult.ProjectPath}");
@@ -156,7 +156,7 @@ namespace PKS.CLI.Tests.Integration.Templates
                 var filePath = Path.Combine(createResult.ProjectPath, expectedFile);
                 Assert.True(File.Exists(filePath), $"Expected file not created: {expectedFile}");
                 _output.WriteLine($"Verified file exists: {expectedFile}");
-                
+
                 // Verify file has content
                 var content = File.ReadAllText(filePath);
                 Assert.False(string.IsNullOrWhiteSpace(content), $"File {expectedFile} should not be empty");
@@ -207,11 +207,11 @@ namespace PKS.CLI.Tests.Integration.Templates
             var ciResult = await _templatePackagingService.PackSolutionAsync(_solutionPath, _testPackageOutputPath, "Release");
 
             Assert.True(ciResult.Success, $"CI-style pack command failed:\n{ciResult.Output}\n{ciResult.Error}");
-            
+
             _output.WriteLine("CI-style pack command succeeded");
             _output.WriteLine($"Pack duration: {ciResult.Duration}");
             _output.WriteLine($"Packages created: {ciResult.CreatedPackages.Count}");
-            
+
             // Verify that packages were created quickly (mocked service should be fast)
             Assert.True(ciResult.Duration < TimeSpan.FromMinutes(1), "CI pack should complete quickly");
             Assert.NotEmpty(ciResult.CreatedPackages);

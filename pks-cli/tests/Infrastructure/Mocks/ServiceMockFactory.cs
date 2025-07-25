@@ -94,7 +94,7 @@ public static class ServiceMockFactory
             .ReturnsAsync(PKS.Infrastructure.Initializers.Service.ValidationResult.Valid());
 
         mock.Setup(x => x.CreateContext(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<Dictionary<string, object?>>()))
-            .Returns((string projectName, string template, string targetDirectory, bool force, Dictionary<string, object?> options) => 
+            .Returns((string projectName, string template, string targetDirectory, bool force, Dictionary<string, object?> options) =>
                 new PKS.Infrastructure.Initializers.Context.InitializationContext
                 {
                     ProjectName = projectName,
@@ -163,32 +163,32 @@ public static class ServiceMockFactory
         var currentTransport = "stdio";
 
         mock.Setup(x => x.StartServerAsync(It.IsAny<McpServerConfig>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((McpServerConfig config, CancellationToken ct) => 
+            .ReturnsAsync((McpServerConfig config, CancellationToken ct) =>
             {
                 isRunning = true;
                 currentTransport = config.Transport;
-                return new McpServerResult 
-                { 
-                    Success = true, 
-                    Port = 8080, 
+                return new McpServerResult
+                {
+                    Success = true,
+                    Port = 8080,
                     Transport = config.Transport,
                     Message = "Server started successfully"
                 };
             });
 
         mock.Setup(x => x.StopServerAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(() => 
+            .ReturnsAsync(() =>
             {
                 isRunning = false;
                 return true;
             });
 
         mock.Setup(x => x.GetServerStatusAsync())
-            .ReturnsAsync(() => new McpServerStatusInfo 
-            { 
-                Status = isRunning ? McpServerStatus.Running : McpServerStatus.Stopped, 
-                Port = isRunning ? 8080 : 0, 
-                Transport = currentTransport 
+            .ReturnsAsync(() => new McpServerStatusInfo
+            {
+                Status = isRunning ? McpServerStatus.Running : McpServerStatus.Stopped,
+                Port = isRunning ? 8080 : 0,
+                Transport = currentTransport
             });
 
         return mock;
@@ -235,7 +235,7 @@ public static class ServiceMockFactory
                 new() {
                     Name = "Agents",
                     Uri = "pks://agents",
-                    MimeType = "application/json", 
+                    MimeType = "application/json",
                     Description = "List of all AI agents managed by PKS CLI",
                     Metadata = new Dictionary<string, object> { ["category"] = "pks" }
                 },
@@ -243,7 +243,7 @@ public static class ServiceMockFactory
                     Name = "Current Tasks",
                     Uri = "pks://tasks",
                     MimeType = "application/json",
-                    Description = "Current and historical tasks managed by PKS CLI", 
+                    Description = "Current and historical tasks managed by PKS CLI",
                     Metadata = new Dictionary<string, object> { ["category"] = "pks" }
                 }
             });
@@ -338,18 +338,18 @@ public static class ServiceMockFactory
             });
 
         mock.Setup(x => x.ExtractTemplateAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new NuGetTemplateExtractionResult 
-            { 
-                Success = true, 
-                ExtractedPath = "/temp/extracted", 
-                Message = "Template extracted successfully" 
+            .ReturnsAsync(new NuGetTemplateExtractionResult
+            {
+                Success = true,
+                ExtractedPath = "/temp/extracted",
+                Message = "Template extracted successfully"
             });
 
         mock.Setup(x => x.GetTemplateDetailsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new NuGetTemplateDetails 
-            { 
-                Id = "test-template", 
-                Title = "Test Template", 
+            .ReturnsAsync(new NuGetTemplateDetails
+            {
+                Id = "test-template",
+                Title = "Test Template",
                 Description = "Test template for unit tests",
                 Version = "1.0.0"
             });
@@ -399,7 +399,7 @@ public static class ServiceMockFactory
             .ReturnsAsync((string packagePath, string workingDirectory, CancellationToken ct) =>
             {
                 var packageName = Path.GetFileNameWithoutExtension(packagePath);
-                
+
                 return new PKS.Infrastructure.Services.InstallationResult
                 {
                     Success = true,
@@ -450,12 +450,12 @@ public static class ServiceMockFactory
 
                 // Create mock project structure based on template
                 Directory.CreateDirectory(projectPath);
-                
+
                 if (templateName == "pks-devcontainer")
                 {
                     var devcontainerDir = Path.Combine(projectPath, ".devcontainer");
                     Directory.CreateDirectory(devcontainerDir);
-                    
+
                     var devcontainerJson = Path.Combine(devcontainerDir, "devcontainer.json");
                     File.WriteAllText(devcontainerJson, "{ \"name\": \"Test DevContainer\" }");
                     createdFiles.Add(devcontainerJson);

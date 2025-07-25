@@ -49,7 +49,7 @@ public abstract class IntegrationTestBase : IDisposable
     {
         // Add common test services
         services.AddSingleton<IAnsiConsole>(TestConsole);
-        
+
         // Add logging with custom logger for test output capture
         services.AddLogging(builder =>
         {
@@ -67,7 +67,7 @@ public abstract class IntegrationTestBase : IDisposable
 
         // Register real service implementations for integration testing
         RegisterRealServices(services);
-        
+
         // Register initializers
         RegisterInitializers(services);
     }
@@ -119,7 +119,7 @@ public abstract class IntegrationTestBase : IDisposable
     protected string CreateTestProject(string projectName)
     {
         var projectPath = Path.Combine(TestArtifactsPath, projectName);
-        
+
         if (Directory.Exists(projectPath))
         {
             Directory.Delete(projectPath, true);
@@ -148,9 +148,9 @@ public abstract class IntegrationTestBase : IDisposable
     /// Creates an initialization context for testing
     /// </summary>
     protected PKS.Infrastructure.Initializers.Context.InitializationContext CreateInitializationContext(
-        string projectName, 
-        string template, 
-        string projectPath, 
+        string projectName,
+        string template,
+        string projectPath,
         Dictionary<string, object>? options = null)
     {
         return new PKS.Infrastructure.Initializers.Context.InitializationContext
@@ -170,7 +170,7 @@ public abstract class IntegrationTestBase : IDisposable
     protected void AssertFileExists(string filePath, string? expectedContent = null)
     {
         File.Exists(filePath).Should().BeTrue($"File {filePath} should exist");
-        
+
         if (expectedContent != null)
         {
             var actualContent = File.ReadAllText(filePath);
@@ -193,10 +193,10 @@ public abstract class IntegrationTestBase : IDisposable
     {
         var rawOutput = TestConsole.Output;
         var cleanedOutput = StripAnsiEscapeCodes(rawOutput);
-        
+
         if (!cleanedOutput.Contains(expectedText))
         {
-            rawOutput.Should().Contain(expectedText, 
+            rawOutput.Should().Contain(expectedText,
                 $"Expected text '{expectedText}' not found in console output. Raw output: '{rawOutput}', Cleaned output: '{cleanedOutput}'");
         }
     }
@@ -208,7 +208,7 @@ public abstract class IntegrationTestBase : IDisposable
     {
         if (string.IsNullOrEmpty(text))
             return text;
-            
+
         return System.Text.RegularExpressions.Regex.Replace(text, @"\x1B\[[0-9;]*[A-Za-z]", "");
     }
 
@@ -366,9 +366,9 @@ internal class IntegrationDevcontainerService : IDevcontainerService
 
             // Generate devcontainer.json
             var devcontainerJsonPath = Path.Combine(options.OutputPath, "devcontainer.json");
-            var devcontainerJson = System.Text.Json.JsonSerializer.Serialize(config, new System.Text.Json.JsonSerializerOptions 
-            { 
-                WriteIndented = true 
+            var devcontainerJson = System.Text.Json.JsonSerializer.Serialize(config, new System.Text.Json.JsonSerializerOptions
+            {
+                WriteIndented = true
             });
             await File.WriteAllTextAsync(devcontainerJsonPath, devcontainerJson);
             generatedFiles.Add(devcontainerJsonPath);
@@ -604,10 +604,10 @@ internal class IntegrationDevcontainerFileGenerator : IDevcontainerFileGenerator
         {
             var devcontainerPath = Path.Combine(outputPath, ".devcontainer");
             Directory.CreateDirectory(devcontainerPath);
-            
+
             var filePath = Path.Combine(devcontainerPath, "devcontainer.json");
             var content = System.Text.Json.JsonSerializer.Serialize(configuration, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-            
+
             return Task.FromResult(new FileGenerationResult
             {
                 Success = true,
@@ -631,7 +631,7 @@ internal class IntegrationDevcontainerFileGenerator : IDevcontainerFileGenerator
         {
             var devcontainerPath = Path.Combine(outputPath, ".devcontainer");
             Directory.CreateDirectory(devcontainerPath);
-            
+
             var filePath = Path.Combine(devcontainerPath, "Dockerfile");
             var content = $@"FROM {configuration.Image}
 
@@ -642,7 +642,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /workspace
 ";
-            
+
             return Task.FromResult(new FileGenerationResult
             {
                 Success = true,
@@ -666,7 +666,7 @@ WORKDIR /workspace
         {
             var devcontainerPath = Path.Combine(outputPath, ".devcontainer");
             Directory.CreateDirectory(devcontainerPath);
-            
+
             var filePath = Path.Combine(devcontainerPath, "docker-compose.yml");
             var content = @"version: '3.8'
 
@@ -680,7 +680,7 @@ services:
     working_dir: /workspaces
     command: sleep infinity
 ";
-            
+
             return Task.FromResult(new FileGenerationResult
             {
                 Success = true,
@@ -704,7 +704,7 @@ services:
         {
             var directory = Path.GetDirectoryName(path);
             var isReadOnlyPath = path.StartsWith("/readonly") || path.Contains("readonly");
-            
+
             return Task.FromResult(new PathValidationResult
             {
                 IsValid = directory != null && !isReadOnlyPath,
@@ -734,7 +734,7 @@ services:
 .devcontainer/.tmp
 .devcontainer/mounts
 ";
-            
+
             return Task.FromResult(new FileGenerationResult
             {
                 Success = true,
@@ -758,13 +758,13 @@ services:
         {
             var vscodeDir = Path.Combine(outputPath, ".vscode");
             Directory.CreateDirectory(vscodeDir);
-            
+
             var filePath = Path.Combine(vscodeDir, "settings.json");
             var content = @"{
     ""dotnet.completion.showCompletionItemsFromUnimportedNamespaces"": true,
     ""dotnet.server.useOmnisharp"": false
 }";
-            
+
             return Task.FromResult(new FileGenerationResult
             {
                 Success = true,
@@ -802,7 +802,7 @@ This project includes a devcontainer configuration for development.
 - Base Image: {configuration.Image}
 - Features: {string.Join("", "", configuration.Features.Keys)}
 ";
-            
+
             return Task.FromResult(new FileGenerationResult
             {
                 Success = true,
@@ -871,7 +871,7 @@ internal class IntegrationTemplatePackagingService : ITemplatePackagingService
     {
         // Simulate successful packaging by creating mock package files
         Directory.CreateDirectory(outputPath);
-        
+
         var packages = new List<string>
         {
             Path.Combine(outputPath, "pks-cli.1.0.0.nupkg"),
@@ -898,7 +898,7 @@ internal class IntegrationTemplatePackagingService : ITemplatePackagingService
     public Task<InstallationResult> InstallTemplateAsync(string packagePath, string workingDirectory, CancellationToken cancellationToken = default)
     {
         var packageName = Path.GetFileNameWithoutExtension(packagePath);
-        
+
         return Task.FromResult(new InstallationResult
         {
             Success = true,
@@ -936,7 +936,7 @@ internal class IntegrationTemplatePackagingService : ITemplatePackagingService
     {
         var projectPath = Path.Combine(workingDirectory, projectName);
         Directory.CreateDirectory(projectPath);
-        
+
         var createdFiles = new List<string>
         {
             Path.Combine(projectPath, $"{projectName}.csproj"),

@@ -77,7 +77,7 @@ public class InitCommand : Command<InitCommand.Settings>
         if (string.IsNullOrEmpty(settings.Description))
         {
             settings.Description = _console.Ask<string>(
-                "What's the [cyan]description/objective[/] of your project?") 
+                "What's the [cyan]description/objective[/] of your project?")
                 ?? $"A .NET project initialized with PKS CLI using {settings.Template} template";
         }
 

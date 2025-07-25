@@ -28,13 +28,13 @@ public class DevcontainerValidationTests : TestBase
     protected override void ConfigureServices(IServiceCollection services)
     {
         base.ConfigureServices(services);
-        
+
         // Initialize mocks here to avoid constructor ordering issues
         try
         {
             _mockDevcontainerService = DevcontainerServiceMocks.CreateDevcontainerService();
             _mockFeatureRegistry = DevcontainerServiceMocks.CreateFeatureRegistry();
-            
+
             if (_mockDevcontainerService?.Object != null)
                 services.AddSingleton(_mockDevcontainerService.Object);
             if (_mockFeatureRegistry?.Object != null)

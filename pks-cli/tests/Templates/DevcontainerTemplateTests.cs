@@ -132,7 +132,7 @@ namespace PksCli.Tests.Templates
             // Arrange
             CreateTemplateStructure();
             var contentDevcontainerPath = Path.Combine(_templatePath, "content", ".devcontainer");
-            
+
             // Create devcontainer.json with the correct placeholder format
             var devcontainerJsonPath = Path.Combine(contentDevcontainerPath, "devcontainer.json");
             var devcontainerContent = @"{
@@ -148,7 +148,7 @@ namespace PksCli.Tests.Templates
             // Verify the placeholder exists (PKSDevContainer is replaced with ProjectName value)
             var writtenContent = File.ReadAllText(devcontainerJsonPath);
             writtenContent.Should().Contain("PKSDevContainer");
-            
+
             // Also verify the template.json has the correct replacement configuration
             var templateJsonPath = Path.Combine(_templatePath, ".template.config", "template.json");
             var templateJson = File.ReadAllText(templateJsonPath);

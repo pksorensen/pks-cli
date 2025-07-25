@@ -28,7 +28,7 @@ public class McpIntegrationTests : TestBase
     protected override void ConfigureServices(IServiceCollection services)
     {
         base.ConfigureServices(services);
-        
+
         // MCP services are already registered in TestBase
         // No additional configuration needed
     }

@@ -87,7 +87,7 @@ public static class TestTimeoutHelper
         TimeSpan timeout)
     {
         using var cts = new CancellationTokenSource(timeout);
-        
+
         try
         {
             return await Task.Run(operation, cts.Token);

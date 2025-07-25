@@ -28,7 +28,7 @@ public class DevcontainerFeatureRegistryTests : TestBase
     protected override void ConfigureServices(IServiceCollection services)
     {
         base.ConfigureServices(services);
-        
+
         // Create the mock here since constructor runs after ConfigureServices
         var mockRegistry = DevcontainerServiceMocks.CreateFeatureRegistry();
         services.AddSingleton(mockRegistry.Object);

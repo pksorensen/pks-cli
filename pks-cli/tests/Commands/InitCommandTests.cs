@@ -30,10 +30,10 @@ namespace PKS.CLI.Tests.Commands
         private void InitializeMocks()
         {
             _mockInitializationService = new Mock<IInitializationService>();
-            
+
             // Setup default mock behavior
             _mockInitializationService.Setup(x => x.ValidateProjectName(It.IsAny<string>()))
-                .Returns((string name) => 
+                .Returns((string name) =>
                 {
                     if (string.IsNullOrWhiteSpace(name))
                         return ValidationResult.Invalid("Project name is required");
@@ -47,7 +47,7 @@ namespace PKS.CLI.Tests.Commands
                         return ValidationResult.Invalid("Project name cannot start or end with a dot");
                     return ValidationResult.Valid();
                 });
-            
+
             // Setup ValidateTargetDirectoryAsync to prevent null reference exceptions
             _mockInitializationService.Setup(x => x.ValidateTargetDirectoryAsync(It.IsAny<string>(), It.IsAny<bool>()))
                 .ReturnsAsync(ValidationResult.Valid());
@@ -56,26 +56,26 @@ namespace PKS.CLI.Tests.Commands
         protected override void ConfigureServices(IServiceCollection services)
         {
             base.ConfigureServices(services);
-            
+
             // Ensure mocks are initialized
             if (_mockInitializationService == null)
             {
                 InitializeMocks();
             }
-            
+
             // Replace the default initialization service with our mock
             services.AddSingleton<IInitializationService>(_mockInitializationService.Object);
             services.AddTransient<InitCommand>();
         }
-        
+
         private bool IsReservedWindowsName(string name)
         {
-            var reserved = new[] { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", 
-                                  "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", 
+            var reserved = new[] { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4",
+                                  "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2",
                                   "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" };
             return reserved.Contains(name.ToUpperInvariant());
         }
-        
+
         private bool HasInvalidCharacters(string name)
         {
             var invalidChars = new[] { '/', '\\', ':', '*', '?', '<', '>', '|', '"' };
@@ -92,7 +92,7 @@ namespace PKS.CLI.Tests.Commands
             // For empty project names, the command will try to prompt for input
             // We provide test input to simulate user entering an invalid name with forbidden characters
             TestConsole.Input.PushTextWithEnter("invalid/name"); // This will cause validation to fail due to '/' character
-            
+
             var command = CreateMockCommand();
             var settings = new InitCommand.Settings
             {
@@ -247,7 +247,7 @@ namespace PKS.CLI.Tests.Commands
 
             // Use test working directory instead of Environment.CurrentDirectory for container safety
             var targetDirectory = Path.Combine(_testWorkingDirectory, projectName);
-            
+
             _mockInitializationService
                 .Setup(x => x.ValidateTargetDirectoryAsync(targetDirectory, false))
                 .ReturnsAsync(ValidationResult.Valid());
@@ -273,7 +273,7 @@ namespace PKS.CLI.Tests.Commands
                 StartTime = DateTime.Now.AddSeconds(-1),
                 EndTime = DateTime.Now
             };
-            
+
             _mockInitializationService
                 .Setup(x => x.InitializeProjectAsync(It.IsAny<InitializationContext>()))
                 .ReturnsAsync(summary);
@@ -332,7 +332,7 @@ namespace PKS.CLI.Tests.Commands
             {
                 // Ignore cleanup errors
             }
-            
+
             base.Dispose();
         }
     }

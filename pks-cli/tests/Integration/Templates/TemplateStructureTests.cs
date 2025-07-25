@@ -70,7 +70,7 @@ namespace PKS.CLI.Tests.Integration.Templates
             // Verify it's valid JSON
             var configJson = JsonDocument.Parse(configContent);
             var root = configJson.RootElement;
-            
+
             Assert.True(root.TryGetProperty("name", out _), "Template config should have 'name' property");
             Assert.True(root.TryGetProperty("shortName", out _), "Template config should have 'shortName' property");
             Assert.True(root.TryGetProperty("identity", out _), "Template config should have 'identity' property");
@@ -114,7 +114,7 @@ namespace PKS.CLI.Tests.Integration.Templates
             var root = json.RootElement;
 
             Assert.True(root.TryGetProperty("name", out _), "devcontainer.json should have 'name' property");
-            
+
             // Check for build configuration
             if (root.TryGetProperty("build", out var buildElement))
             {
@@ -237,7 +237,7 @@ namespace PKS.CLI.Tests.Integration.Templates
                 {
                     var fileInfo = new FileInfo(file);
                     Assert.True(fileInfo.Length > 0, $"File should not be empty: {file}");
-                    
+
                     // Don't validate binary files
                     var extension = Path.GetExtension(file).ToLowerInvariant();
                     if (extension is ".png" or ".jpg" or ".jpeg" or ".gif" or ".ico")

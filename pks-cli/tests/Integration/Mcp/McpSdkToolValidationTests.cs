@@ -107,7 +107,7 @@ public class McpSdkToolValidationTests : TestBase
             .ReturnsAsync(new GitHubRepository
             {
                 Name = "test-repo",
-                FullName = "owner/test-repo",  
+                FullName = "owner/test-repo",
                 Description = "Test repository",
                 HtmlUrl = "https://github.com/owner/test-repo",
                 CloneUrl = "https://github.com/owner/test-repo.git",
@@ -175,8 +175,8 @@ public class McpSdkToolValidationTests : TestBase
         prdServiceMock.Setup(x => x.ValidatePrdAsync(It.IsAny<PrdValidationOptions>()))
             .ReturnsAsync(new PrdValidationResult { Success = true, IsValid = true, OverallScore = 95 });
         prdServiceMock.Setup(x => x.GetAvailableTemplatesAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<PrdTemplateInfo> 
-            { 
+            .ReturnsAsync(new List<PrdTemplateInfo>
+            {
                 new PrdTemplateInfo { Id = "standard", Name = "Standard", Category = "business", IsDefault = true }
             });
         prdServiceMock.Setup(x => x.LoadPrdAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))

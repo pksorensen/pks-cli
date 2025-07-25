@@ -63,7 +63,7 @@ public class McpServerTests : TestBase
         // 1. A testable wrapper around the command
         // 2. Dependency injection for the cancellation mechanism  
         // 3. Or a different approach that doesn't require indefinite waiting
-        
+
         // Arrange
         var expectedResult = new McpServerResult
         {

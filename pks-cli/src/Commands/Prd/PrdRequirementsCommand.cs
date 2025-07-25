@@ -254,7 +254,7 @@ public class PrdRequirementsCommand : Command<PrdRequirementsSettings>
         if (loadResult.Requirements != null)
         {
             var reqIndex = 1;
-            
+
             // Add functional requirements
             foreach (var functionalReq in loadResult.Requirements.Functional ?? Array.Empty<string>())
             {

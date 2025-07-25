@@ -41,7 +41,7 @@ public class McpServerConnectionTests : TestBase
     {
         // Use the new process helper with proper timeout handling
         using var processHelper = new TestProcessHelper();
-        
+
         // Arrange
         var projectPath = Path.Combine(Directory.GetCurrentDirectory(), "..", "..", "..", "..", "..", "src");
         var arguments = $"run --project \"{projectPath}\" -- mcp --transport stdio";

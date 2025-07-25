@@ -36,7 +36,7 @@ public class DevcontainerFileGeneratorTests : TestBase
     protected override void ConfigureServices(IServiceCollection services)
     {
         base.ConfigureServices(services);
-        
+
         // Create the mock here since constructor runs after ConfigureServices
         var mockFileGenerator = DevcontainerServiceMocks.CreateFileGenerator();
         services.AddSingleton(mockFileGenerator.Object);

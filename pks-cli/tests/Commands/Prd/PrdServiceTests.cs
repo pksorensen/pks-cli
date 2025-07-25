@@ -185,7 +185,7 @@ public class PrdServiceTests
     {
         // Arrange - Create a temporary empty PRD file
         var tempPath = Path.GetTempFileName() + ".md";
-        
+
         try
         {
             // Create a minimal PRD file with empty configuration

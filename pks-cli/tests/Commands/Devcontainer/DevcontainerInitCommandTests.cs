@@ -317,10 +317,10 @@ public class DevcontainerInitCommandTests : TestBase
 
         // Setup path validation to fail for this specific path (simulating read-only)
         _mockDevcontainerService.Setup(x => x.ValidateOutputPathAsync(existingPath))
-            .ReturnsAsync(new PathValidationResult 
-            { 
-                IsValid = false, 
-                CanWrite = false, 
+            .ReturnsAsync(new PathValidationResult
+            {
+                IsValid = false,
+                CanWrite = false,
                 Errors = new List<string> { "Output path is read-only" }
             });
 

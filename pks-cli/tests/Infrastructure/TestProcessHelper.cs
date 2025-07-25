@@ -26,7 +26,7 @@ public class TestProcessHelper : IDisposable
         string? workingDirectory = null)
     {
         Process? process = null;
-        
+
         try
         {
             process = new Process
@@ -94,7 +94,7 @@ public class TestProcessHelper : IDisposable
         {
             if (process != null)
                 KillProcess(process);
-                
+
             return new ProcessResult
             {
                 ExitCode = -1,
@@ -221,7 +221,7 @@ public class ProcessResult
     public string StandardError { get; set; } = string.Empty;
     public bool TimedOut { get; set; }
     public Exception? Exception { get; set; }
-    
+
     public bool IsSuccess => ExitCode == 0 && Exception == null && !TimedOut;
 }
 

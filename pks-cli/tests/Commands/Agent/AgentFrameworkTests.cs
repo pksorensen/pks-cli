@@ -41,12 +41,12 @@ public class AgentFrameworkTests : TestBase
         services.AddSingleton(_mockAgentService.Object);
         services.AddSingleton<ILogger<AgentCommand>>(Mock.Of<ILogger<AgentCommand>>());
         services.AddTransient<AgentCommand>();
-        
+
         // Store original console and set static console to TestConsole for these tests
         // This is necessary because AgentCommand uses AnsiConsole.MarkupLine() directly
         _originalConsole = AnsiConsole.Console;
         AnsiConsole.Console = TestConsole;
-        
+
         // Register IAnsiConsole explicitly for this test
         services.AddSingleton<IAnsiConsole>(TestConsole);
     }

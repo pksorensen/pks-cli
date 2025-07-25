@@ -407,7 +407,7 @@ public class PrdIntegrationTests : IDisposable
 
         // Assert - The help commands should return successful status
         result.Should().Be(0, "Help commands should execute successfully");
-        
+
         // Note: Help output might be handled differently in Spectre.Console.Cli
         // For now, we'll just verify the command executes without error
     }

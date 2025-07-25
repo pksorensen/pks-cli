@@ -161,15 +161,15 @@ public static class DevcontainerServiceMocks
 
         // Setup template extraction
         mock.Setup(x => x.ExtractTemplateAsync(It.IsAny<string>(), It.IsAny<DevcontainerOptions>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((string templateId, DevcontainerOptions options, CancellationToken cancellationToken) => 
+            .ReturnsAsync((string templateId, DevcontainerOptions options, CancellationToken cancellationToken) =>
             {
                 // Create mock extracted files
                 var devcontainerDir = Path.Combine(options.OutputPath, ".devcontainer");
                 Directory.CreateDirectory(devcontainerDir);
-                
+
                 var devcontainerJsonPath = Path.Combine(devcontainerDir, "devcontainer.json");
                 var dockerfilePath = Path.Combine(devcontainerDir, "Dockerfile");
-                
+
                 // Create mock files with placeholder replacement
                 var devcontainerContent = $@"{{
     ""name"": ""{options.Name}"",
@@ -182,10 +182,10 @@ public static class DevcontainerServiceMocks
         }}
     }}
 }}";
-                
+
                 File.WriteAllText(devcontainerJsonPath, devcontainerContent);
                 File.WriteAllText(dockerfilePath, "FROM mcr.microsoft.com/dotnet/sdk:8.0\nWORKDIR /workspace");
-                
+
                 return new NuGetTemplateExtractionResult
                 {
                     Success = true,
@@ -231,7 +231,7 @@ public static class DevcontainerServiceMocks
 
         // Setup validation
         mock.Setup(x => x.ValidateOutputPathAsync(It.IsAny<string>()))
-            .ReturnsAsync((string path) => 
+            .ReturnsAsync((string path) =>
             {
                 var isReadOnlyPath = path.StartsWith("/readonly") || path.Contains("readonly");
                 return new PathValidationResult

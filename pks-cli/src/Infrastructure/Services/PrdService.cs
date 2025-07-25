@@ -185,7 +185,7 @@ public class PrdService : IPrdService
                 // Parse the saved document to get real requirement counts
                 var content = await File.ReadAllTextAsync(filePath, cancellationToken);
                 var parsedDoc = await ParseMarkdownPrdAsync(content, filePath, cancellationToken);
-                
+
                 if (parsedDoc != null)
                 {
                     status.TotalRequirements = parsedDoc.Requirements.Count;
@@ -303,7 +303,7 @@ public class PrdService : IPrdService
         // Parse the actual document from file for proper validation
         var content = await File.ReadAllTextAsync(options.FilePath);
         var document = await ParseMarkdownPrdAsync(content, options.FilePath, CancellationToken.None);
-        
+
         if (document == null)
         {
             return new PrdValidationResult
@@ -1695,7 +1695,7 @@ public class PrdService : IPrdService
     private int CountRequirementsInContent(string content)
     {
         if (string.IsNullOrEmpty(content)) return 0;
-        
+
         // Count various requirement patterns in the content
         var patterns = new[]
         {
@@ -1717,7 +1717,7 @@ public class PrdService : IPrdService
     private int CountUserStoriesInContent(string content)
     {
         if (string.IsNullOrEmpty(content)) return 0;
-        
+
         var storyPattern = @"As an?\s+(.+?),?\s+I want\s+(.+?),?\s+so that\s+(.+?)(?:\.|$)";
         var matches = Regex.Matches(content, storyPattern, RegexOptions.IgnoreCase);
         return Math.Max(matches.Count, 1); // Return at least 1 for test compatibility

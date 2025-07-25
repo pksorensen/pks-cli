@@ -55,7 +55,7 @@ public abstract class TestBase : IDisposable
         // Add common test services
         services.AddSingleton<IAnsiConsole>(TestConsole);
         services.AddSingleton(MockLogger.Object);
-        
+
         // Add logger factory for generic logger creation
         services.AddLogging(builder =>
         {
@@ -79,7 +79,7 @@ public abstract class TestBase : IDisposable
         services.AddSingleton(ServiceMockFactory.CreateKubernetesService().Object);
         services.AddSingleton(ServiceMockFactory.CreateConfigurationService().Object);
         services.AddSingleton(ServiceMockFactory.CreateDeploymentService().Object);
-        
+
         // For real services, register concrete implementations that work with actual interfaces
         services.AddSingleton<PKS.Infrastructure.Initializers.Service.IInitializationService, PKS.Infrastructure.Initializers.Service.InitializationService>();
 
@@ -94,7 +94,7 @@ public abstract class TestBase : IDisposable
         // MCP services with proper interface and concrete registration
         var mcpHostingService = ServiceMockFactory.CreateMcpHostingService();
         services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.IMcpHostingService>(mcpHostingService.Object);
-        
+
         // Add concrete MCP services that require loggers
         services.AddSingleton<ILogger<PKS.CLI.Infrastructure.Services.MCP.McpResourceService>>(
             Mock.Of<ILogger<PKS.CLI.Infrastructure.Services.MCP.McpResourceService>>());
@@ -102,7 +102,7 @@ public abstract class TestBase : IDisposable
             Mock.Of<ILogger<PKS.CLI.Infrastructure.Services.MCP.McpToolService>>());
         services.AddSingleton<ILogger<PKS.CLI.Infrastructure.Services.MCP.McpHostingService>>(
             Mock.Of<ILogger<PKS.CLI.Infrastructure.Services.MCP.McpHostingService>>());
-            
+
         // Register concrete MCP services for direct use in integration tests
         services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.McpResourceService>();
         services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.McpToolService>();
@@ -110,16 +110,16 @@ public abstract class TestBase : IDisposable
         // Devcontainer services with proper interface registration
         var devcontainerService = ServiceMockFactory.CreateDevcontainerService();
         services.AddSingleton<PKS.Infrastructure.Services.IDevcontainerService>(devcontainerService.Object);
-        
+
         var featureRegistry = ServiceMockFactory.CreateDevcontainerFeatureRegistry();
         services.AddSingleton<PKS.Infrastructure.Services.IDevcontainerFeatureRegistry>(featureRegistry.Object);
-        
+
         var templateService = ServiceMockFactory.CreateDevcontainerTemplateService();
         services.AddSingleton<PKS.Infrastructure.Services.IDevcontainerTemplateService>(templateService.Object);
-        
+
         var fileGenerator = ServiceMockFactory.CreateDevcontainerFileGenerator();
         services.AddSingleton<PKS.Infrastructure.Services.IDevcontainerFileGenerator>(fileGenerator.Object);
-        
+
         var extensionService = ServiceMockFactory.CreateVsCodeExtensionService();
         services.AddSingleton<PKS.Infrastructure.Services.IVsCodeExtensionService>(extensionService.Object);
 
@@ -139,7 +139,7 @@ public abstract class TestBase : IDisposable
         services.AddTransient<PKS.Infrastructure.Initializers.Implementations.ReadmeInitializer>();
         services.AddTransient<PKS.Infrastructure.Initializers.Implementations.ClaudeDocumentationInitializer>();
         services.AddTransient<PKS.Infrastructure.Initializers.Implementations.McpConfigurationInitializer>();
-        
+
         services.AddSingleton<PKS.Infrastructure.Initializers.Registry.IInitializerRegistry, PKS.Infrastructure.Initializers.Registry.InitializerRegistry>();
 
         // Keep test interface registrations separate
@@ -189,17 +189,17 @@ public abstract class TestBase : IDisposable
         // Get both raw output and cleaned output for more flexible assertions
         var rawOutput = TestConsole.Output;
         var cleanedOutput = StripAnsiEscapeCodes(rawOutput);
-        
+
         // Debug output for troubleshooting
         System.Diagnostics.Debug.WriteLine($"Raw output length: {rawOutput.Length}");
         System.Diagnostics.Debug.WriteLine($"Raw output: '{rawOutput}'");
         System.Diagnostics.Debug.WriteLine($"Cleaned output: '{cleanedOutput}'");
         System.Diagnostics.Debug.WriteLine($"Looking for: '{expectedText}'");
-        
+
         // Check both cleaned and raw output
         if (!cleanedOutput.Contains(expectedText) && !rawOutput.Contains(expectedText))
         {
-            rawOutput.Should().Contain(expectedText, 
+            rawOutput.Should().Contain(expectedText,
                 $"Expected text '{expectedText}' not found in console output. Raw output: '{rawOutput}', Cleaned output: '{cleanedOutput}'");
         }
     }
@@ -211,7 +211,7 @@ public abstract class TestBase : IDisposable
     {
         if (string.IsNullOrEmpty(text))
             return text;
-            
+
         // Remove ANSI escape sequences (ESC[ followed by any number of parameter bytes, then a final byte)
         return System.Text.RegularExpressions.Regex.Replace(text, @"\x1B\[[0-9;]*[A-Za-z]", "");
     }
@@ -271,7 +271,7 @@ public abstract class TestBase : IDisposable
         try
         {
             var processes = Process.GetProcessesByName("dotnet")
-                .Where(p => p.ProcessName.Contains("pks") || 
+                .Where(p => p.ProcessName.Contains("pks") ||
                            p.StartInfo.Arguments?.Contains("pks") == true)
                 .ToArray();
 

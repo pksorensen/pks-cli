@@ -23,7 +23,7 @@ namespace PKS.Infrastructure.Services
         {
             var stopwatch = Stopwatch.StartNew();
             var result = new PackagingResult();
-            
+
             try
             {
                 // Create output directory if it doesn't exist
@@ -79,7 +79,7 @@ namespace PKS.Infrastructure.Services
         public async Task<InstallationResult> InstallTemplateAsync(string packagePath, string workingDirectory, CancellationToken cancellationToken = default)
         {
             var result = new InstallationResult();
-            
+
             try
             {
                 var startInfo = new ProcessStartInfo
@@ -127,7 +127,7 @@ namespace PKS.Infrastructure.Services
         public async Task<UninstallationResult> UninstallTemplateAsync(string packageName, string workingDirectory, CancellationToken cancellationToken = default)
         {
             var result = new UninstallationResult();
-            
+
             try
             {
                 var startInfo = new ProcessStartInfo
@@ -169,7 +169,7 @@ namespace PKS.Infrastructure.Services
         public async Task<TemplateListResult> ListTemplatesAsync(string workingDirectory, CancellationToken cancellationToken = default)
         {
             var result = new TemplateListResult();
-            
+
             try
             {
                 var startInfo = new ProcessStartInfo
@@ -216,7 +216,7 @@ namespace PKS.Infrastructure.Services
         public async Task<ProjectCreationResult> CreateProjectFromTemplateAsync(string templateName, string projectName, string workingDirectory, CancellationToken cancellationToken = default)
         {
             var result = new ProjectCreationResult();
-            
+
             try
             {
                 // Create project directory
@@ -270,7 +270,7 @@ namespace PKS.Infrastructure.Services
         public async Task<PackageValidationResult> ValidatePackageAsync(string packagePath, CancellationToken cancellationToken = default)
         {
             var result = new PackageValidationResult();
-            
+
             try
             {
                 if (!File.Exists(packagePath))
@@ -283,7 +283,7 @@ namespace PKS.Infrastructure.Services
                 // Extract and read .nuspec file from .nupkg
                 using var archive = ZipFile.OpenRead(packagePath);
                 var nuspecEntry = archive.Entries.FirstOrDefault(e => e.Name.EndsWith(".nuspec"));
-                
+
                 if (nuspecEntry == null)
                 {
                     result.Success = false;
@@ -298,7 +298,7 @@ namespace PKS.Infrastructure.Services
                 // Parse .nuspec XML
                 var nuspecXml = XDocument.Parse(nuspecContent);
                 var metadata = nuspecXml.Root?.Element("metadata");
-                
+
                 if (metadata == null)
                 {
                     result.Success = false;
@@ -332,7 +332,7 @@ namespace PKS.Infrastructure.Services
         private List<string> ParseInstalledTemplatesFromOutput(string output)
         {
             var templates = new List<string>();
-            
+
             // Parse the output to extract template names
             // This is a simplified parser - in practice you'd need more robust parsing
             var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -355,7 +355,7 @@ namespace PKS.Infrastructure.Services
         private List<PackagingTemplateInfo> ParseTemplatesFromListOutput(string output)
         {
             var templates = new List<PackagingTemplateInfo>();
-            
+
             // Create mock templates for PKS templates since this is primarily for testing
             templates.Add(new PackagingTemplateInfo
             {

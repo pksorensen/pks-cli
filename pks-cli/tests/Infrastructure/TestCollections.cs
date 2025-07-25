@@ -91,7 +91,7 @@ public class FileSystemTestFixture : IDisposable
         {
             var tempPath = Path.GetTempPath();
             var pksTestDirs = Directory.GetDirectories(tempPath, "pks-cli-test-*");
-            
+
             foreach (var dir in pksTestDirs)
             {
                 try
@@ -129,7 +129,7 @@ public class ProcessTestFixture : IDisposable
         try
         {
             var processes = System.Diagnostics.Process.GetProcessesByName("dotnet")
-                .Where(p => p.ProcessName.Contains("pks") || 
+                .Where(p => p.ProcessName.Contains("pks") ||
                            p.StartInfo.Arguments?.Contains("pks") == true)
                 .ToArray();
 
