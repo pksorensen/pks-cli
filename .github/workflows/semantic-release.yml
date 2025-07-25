@@ -5,6 +5,11 @@ on:
     branches:
       - main
       - release/*
+    # Only run when there are actual changes to code
+    paths:
+      - 'pks-cli/src/**'
+      - 'pks-cli/templates/**'
+      - '.github/workflows/semantic-release.yml'
   workflow_dispatch:
 
 permissions:
