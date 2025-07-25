@@ -19,12 +19,15 @@ jobs:
         dotnet-version: 8.0.x
         
     - name: Restore dependencies
+      working-directory: ./pks-cli
       run: dotnet restore
       
     - name: Build
+      working-directory: ./pks-cli
       run: dotnet build --no-restore
       
     - name: Test - Core Stable Tests Only (CI Ready)
+      working-directory: ./pks-cli
       run: |
         cd tests
         dotnet test --no-build --settings .runsettings \
