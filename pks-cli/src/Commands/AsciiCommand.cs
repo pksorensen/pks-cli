@@ -32,7 +32,7 @@ public class AsciiCommand : Command<AsciiCommand.Settings>
     public override int Execute(CommandContext context, Settings? settings)
     {
         if (settings == null) throw new ArgumentNullException(nameof(settings));
-        
+
         if (string.IsNullOrEmpty(settings.Text))
         {
             settings.Text = AnsiConsole.Ask<string>("What text should I convert to [cyan]ASCII art[/]?");
@@ -49,7 +49,7 @@ public class AsciiCommand : Command<AsciiCommand.Settings>
     private int DisplayAsciiArt(Settings settings)
     {
         var asciiArt = GenerateAsciiArt(settings.Text!, settings.Style);
-        
+
         if (settings.UseGradient)
         {
             DisplayGradientArt(asciiArt, settings.Color);
@@ -98,7 +98,7 @@ public class AsciiCommand : Command<AsciiCommand.Settings>
                     for (int i = 0; i < frames.Length; i++)
                     {
                         ctx.Status($"Frame {i + 1}/{frames.Length} - Cycle {cycle + 1}/3");
-                        
+
                         Console.Clear();
                         var color = colors[i % colors.Length];
                         AnsiConsole.MarkupLine($"[{color}]{frames[i]}[/]");

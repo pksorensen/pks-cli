@@ -218,6 +218,23 @@ dotnet pack --configuration Release
 dotnet tool install -g --add-source ./bin/Release pks-cli --force
 ```
 
+### Docker Installation
+```bash
+# Pull and run the latest Docker image
+docker pull registry.kjeldager.io/si14agents/cli:latest
+docker run --rm -it registry.kjeldager.io/si14agents/cli:latest --help
+
+# Or use convenience scripts (Linux/macOS)
+./scripts/docker-run.sh --help
+
+# Windows users
+.\scripts\docker-run.ps1 --help
+# or
+scripts\docker-run.bat --help
+```
+
+See [DOCKER.md](DOCKER.md) for complete Docker usage guide including Windows-specific instructions.
+
 ### From NuGet (Coming Soon)
 ```bash
 # Future: Install from NuGet registry

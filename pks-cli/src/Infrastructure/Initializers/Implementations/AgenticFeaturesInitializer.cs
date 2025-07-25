@@ -39,12 +39,12 @@ public class AgenticFeaturesInitializer : CodeInitializer
 
         // Create Agents directory structure
         CreateDirectoryStructure(projectPath, "Agents", "Agents/Core", "Agents/Implementations", "Configuration");
-        
+
         // Create .pks/agents directory structure for PKS CLI agent management
         var pksDir = Path.Combine(projectPath, ".pks");
         var agentsDir = Path.Combine(pksDir, "agents");
         CreateDirectoryStructure(projectPath, ".pks", ".pks/agents");
-        
+
         // Create README for agents directory
         var agentReadmeContent = GenerateAgentsDirectoryReadme();
         await CreateFileAsync(Path.Combine(agentsDir, "README.md"), agentReadmeContent, context, result);
@@ -73,12 +73,12 @@ public class AgenticFeaturesInitializer : CodeInitializer
         }
 
         result.Message = $"Added agentic features with {aiProvider} AI provider";
-        
+
         if (enableMonitoring)
         {
             result.Data["monitoring"] = "enabled";
         }
-        
+
         if (enableAutoScaling)
         {
             result.Data["auto-scaling"] = "enabled";

@@ -17,7 +17,7 @@ public class McpCommand : AsyncCommand<McpSettings>
     private readonly ILogger<McpCommand> _logger;
 
     public McpCommand(
-        IMcpHostingService mcpHostingService, 
+        IMcpHostingService mcpHostingService,
         IOptions<McpConfiguration> mcpConfiguration,
         ILogger<McpCommand> logger)
     {
@@ -31,7 +31,7 @@ public class McpCommand : AsyncCommand<McpSettings>
         try
         {
             var isStdioTransport = string.Equals(settings.Transport, "stdio", StringComparison.OrdinalIgnoreCase);
-            
+
             // Suppress logging to stdout for stdio transport
             if (!isStdioTransport)
             {
@@ -54,7 +54,7 @@ public class McpCommand : AsyncCommand<McpSettings>
             };
 
             var result = await _mcpHostingService.StartServerAsync(config, cancellationTokenSource.Token);
-            
+
             if (!result.Success)
             {
                 if (!isStdioTransport)
@@ -73,7 +73,7 @@ public class McpCommand : AsyncCommand<McpSettings>
                     "sse" => $"SSE transport on port {result.Port}",
                     _ => $"{settings.Transport} transport"
                 };
-                
+
                 AnsiConsole.MarkupLine($"[green]✓[/] MCP Server started successfully with {transportInfo}");
                 AnsiConsole.MarkupLine("[dim]Server is ready to accept connections. Press Ctrl+C to stop.[/]");
             }
@@ -89,9 +89,9 @@ public class McpCommand : AsyncCommand<McpSettings>
                 {
                     AnsiConsole.MarkupLine("[cyan]Stopping MCP Server...[/]");
                 }
-                
+
                 await _mcpHostingService.StopServerAsync();
-                
+
                 if (settings.Debug && !isStdioTransport)
                 {
                     AnsiConsole.MarkupLine("[green]✓[/] MCP Server stopped successfully");
@@ -103,7 +103,7 @@ public class McpCommand : AsyncCommand<McpSettings>
         catch (Exception ex)
         {
             var isStdioTransport = string.Equals(settings.Transport, "stdio", StringComparison.OrdinalIgnoreCase);
-            
+
             if (!isStdioTransport)
             {
                 _logger.LogError(ex, "Error starting MCP server");

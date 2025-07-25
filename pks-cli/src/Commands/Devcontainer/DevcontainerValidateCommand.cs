@@ -19,7 +19,8 @@ public class DevcontainerValidateCommand : DevcontainerCommand<DevcontainerValid
     public DevcontainerValidateCommand(
         IDevcontainerService devcontainerService,
         IDevcontainerFeatureRegistry featureRegistry,
-        IVsCodeExtensionService extensionService)
+        IVsCodeExtensionService extensionService,
+        IAnsiConsole console) : base(console)
     {
         _devcontainerService = devcontainerService ?? throw new ArgumentNullException(nameof(devcontainerService));
         _featureRegistry = featureRegistry ?? throw new ArgumentNullException(nameof(featureRegistry));
@@ -40,7 +41,7 @@ public class DevcontainerValidateCommand : DevcontainerCommand<DevcontainerValid
 
             // Determine configuration path
             var configPath = DetermineConfigPath(settings);
-            
+
             if (!File.Exists(configPath))
             {
                 DisplayError($"Devcontainer configuration not found at: {configPath}");
@@ -56,7 +57,7 @@ public class DevcontainerValidateCommand : DevcontainerCommand<DevcontainerValid
             try
             {
                 var configContent = await File.ReadAllTextAsync(configPath);
-                configuration = JsonSerializer.Deserialize<DevcontainerConfiguration>(configContent) 
+                configuration = JsonSerializer.Deserialize<DevcontainerConfiguration>(configContent)
                     ?? throw new InvalidOperationException("Failed to deserialize configuration");
             }
             catch (Exception ex)
@@ -95,7 +96,7 @@ public class DevcontainerValidateCommand : DevcontainerCommand<DevcontainerValid
 
             // Aggregate results
             var aggregatedResult = AggregateValidationResults(results);
-            
+
             // Display results
             DisplayValidationSummary(aggregatedResult, settings);
 
@@ -117,8 +118,8 @@ public class DevcontainerValidateCommand : DevcontainerCommand<DevcontainerValid
     {
         if (!string.IsNullOrEmpty(settings.ConfigPath))
         {
-            return Path.IsPathFullyQualified(settings.ConfigPath) 
-                ? settings.ConfigPath 
+            return Path.IsPathFullyQualified(settings.ConfigPath)
+                ? settings.ConfigPath
                 : Path.GetFullPath(settings.ConfigPath);
         }
 
@@ -143,7 +144,7 @@ public class DevcontainerValidateCommand : DevcontainerCommand<DevcontainerValid
     }
 
     private async Task<ValidationResult> ValidateConfigurationStructureAsync(
-        DevcontainerConfiguration configuration, 
+        DevcontainerConfiguration configuration,
         DevcontainerValidateSettings settings)
     {
         var result = new ValidationResult("Configuration Structure");
@@ -184,7 +185,7 @@ public class DevcontainerValidateCommand : DevcontainerCommand<DevcontainerValid
 
         // Use the devcontainer service for additional validation
         var serviceValidation = await _devcontainerService.ValidateConfigurationAsync(configuration);
-        
+
         result.AddErrors(serviceValidation.Errors);
         result.AddWarnings(serviceValidation.Warnings);
         result.AddSuggestions(serviceValidation.Suggestions);
@@ -193,7 +194,7 @@ public class DevcontainerValidateCommand : DevcontainerCommand<DevcontainerValid
     }
 
     private async Task<ValidationResult> ValidateFeaturesAsync(
-        DevcontainerConfiguration configuration, 
+        DevcontainerConfiguration configuration,
         DevcontainerValidateSettings settings)
     {
         var result = new ValidationResult("Features");
@@ -251,7 +252,7 @@ public class DevcontainerValidateCommand : DevcontainerCommand<DevcontainerValid
         // Check for feature conflicts and dependencies
         var featureIds = configuration.Features.Keys.ToList();
         var resolutionResult = await _devcontainerService.ResolveFeatureDependenciesAsync(featureIds);
-        
+
         if (!resolutionResult.Success)
         {
             result.AddError($"Feature dependency resolution failed: {resolutionResult.ErrorMessage}");
@@ -261,7 +262,7 @@ public class DevcontainerValidateCommand : DevcontainerCommand<DevcontainerValid
         {
             var severity = conflict.Severity == ConflictSeverity.Warning ? "Warning" : "Error";
             var message = $"{severity}: {conflict.Feature1} conflicts with {conflict.Feature2} - {conflict.Reason}";
-            
+
             if (conflict.Severity == ConflictSeverity.Warning)
             {
                 result.AddWarning(message);
@@ -287,13 +288,13 @@ public class DevcontainerValidateCommand : DevcontainerCommand<DevcontainerValid
     }
 
     private async Task<ValidationResult> ValidateExtensionsAsync(
-        DevcontainerConfiguration configuration, 
+        DevcontainerConfiguration configuration,
         DevcontainerValidateSettings settings)
     {
         var result = new ValidationResult("Extensions");
 
         var extensions = GetExtensionsFromConfiguration(configuration);
-        
+
         if (!extensions.Any())
         {
             result.AddInfo("No VS Code extensions configured");
@@ -305,7 +306,7 @@ public class DevcontainerValidateCommand : DevcontainerCommand<DevcontainerValid
             try
             {
                 var validation = await _extensionService.ValidateExtensionAsync(extensionId);
-                
+
                 if (!validation.IsValid)
                 {
                     result.AddError($"Extension '{extensionId}': {validation.ErrorMessage}");
@@ -344,7 +345,7 @@ public class DevcontainerValidateCommand : DevcontainerCommand<DevcontainerValid
         }
 
         var seenPorts = new HashSet<int>();
-        
+
         foreach (var port in configuration.ForwardPorts)
         {
             if (port < 1 || port > 65535)
@@ -409,7 +410,7 @@ public class DevcontainerValidateCommand : DevcontainerCommand<DevcontainerValid
         // Validate workspace folder
         if (!string.IsNullOrEmpty(configuration.WorkspaceFolder))
         {
-            if (!Path.IsPathFullyQualified(configuration.WorkspaceFolder) && 
+            if (!Path.IsPathFullyQualified(configuration.WorkspaceFolder) &&
                 !configuration.WorkspaceFolder.StartsWith("/"))
             {
                 result.AddWarning($"Workspace folder should be an absolute path: {configuration.WorkspaceFolder}");
@@ -467,8 +468,8 @@ public class DevcontainerValidateCommand : DevcontainerCommand<DevcontainerValid
             return false;
 
         // Basic validation - more comprehensive validation would require additional logic
-        return !imageName.Contains(" ") && 
-               !imageName.StartsWith("-") && 
+        return !imageName.Contains(" ") &&
+               !imageName.StartsWith("-") &&
                !imageName.EndsWith("-") &&
                imageName.All(c => char.IsLetterOrDigit(c) || ".-/:_".Contains(c));
     }
@@ -486,10 +487,10 @@ public class DevcontainerValidateCommand : DevcontainerCommand<DevcontainerValid
         }
 
         aggregated.IsValid = aggregated.TotalErrors == 0;
-        aggregated.OverallSeverity = aggregated.TotalErrors > 0 
-            ? ValidationSeverity.Error 
-            : aggregated.TotalWarnings > 0 
-                ? ValidationSeverity.Warning 
+        aggregated.OverallSeverity = aggregated.TotalErrors > 0
+            ? ValidationSeverity.Error
+            : aggregated.TotalWarnings > 0
+                ? ValidationSeverity.Warning
                 : ValidationSeverity.None;
 
         return aggregated;

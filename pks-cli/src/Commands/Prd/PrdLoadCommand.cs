@@ -31,15 +31,15 @@ public class PrdLoadCommand : Command<PrdLoadSettings>
         {
             // Load PRD with progress indicator
             PrdLoadResult loadResult = null!;
-            
+
             await AnsiConsole.Status()
                 .Spinner(Spinner.Known.Star2)
                 .SpinnerStyle(Style.Parse("green bold"))
                 .StartAsync($"Loading PRD from {settings.FilePath}...", async ctx =>
                 {
                     ctx.Status("Parsing PRD file...");
-                    loadResult = await _prdService.LoadPrdAsync(settings.FilePath);
-                    
+                    loadResult = await _prdService.LoadPrdAsync(settings.FilePath, CancellationToken.None);
+
                     ctx.Status("Processing content...");
                     await Task.Delay(200);
                 });
@@ -122,7 +122,7 @@ public class PrdLoadCommand : Command<PrdLoadSettings>
         table.AddRow("Template", loadResult.Template ?? "Unknown");
         table.AddRow("Sections", loadResult.Sections?.Count.ToString() ?? "0");
         table.AddRow("Status", loadResult.Success ? "Loaded" : "Failed");
-        
+
         // Note: Metadata not available in PrdLoadResult
         table.AddRow("Message", loadResult.Message ?? "No message");
 
@@ -132,13 +132,13 @@ public class PrdLoadCommand : Command<PrdLoadSettings>
     private void DisplayValidationResults(PrdValidationResult validation)
     {
         AnsiConsole.WriteLine();
-        
+
         var statusColor = validation.IsValid ? "green" : "red";
         var statusText = validation.IsValid ? "✅ Valid" : "❌ Issues Found";
-        
+
         AnsiConsole.MarkupLine($"[bold]Validation Status:[/] [{statusColor}]{statusText}[/]");
         AnsiConsole.MarkupLine($"[bold]Completeness Score:[/] {validation.CompletenessScore:F1}%");
-        
+
         if (validation.Errors.Any())
         {
             AnsiConsole.WriteLine();
@@ -194,7 +194,7 @@ public class PrdLoadCommand : Command<PrdLoadSettings>
 
             var json = System.Text.Json.JsonSerializer.Serialize(exportData, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
             await File.WriteAllTextAsync(exportPath, json);
-            
+
             AnsiConsole.MarkupLine($"[green]✅ PRD data exported to: {exportPath}[/]");
         }
         catch (Exception ex)

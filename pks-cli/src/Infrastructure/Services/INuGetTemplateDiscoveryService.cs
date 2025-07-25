@@ -129,7 +129,7 @@ public interface INuGetTemplateDiscoveryService
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Dictionary of package IDs with available updates</returns>
     Task<Dictionary<string, string>> CheckForUpdatesAsync(
-        Dictionary<string, string> installedPackages, 
+        Dictionary<string, string> installedPackages,
         CancellationToken cancellationToken = default);
 
     /// <summary>

@@ -1,0 +1,253 @@
+# Recommended CI/CD Pipeline Configuration for PKS CLI
+# Based on Final CI/CD Readiness Assessment - July 25, 2025
+
+name: PKS CLI - Phased CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop, fix/* ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  CONFIGURATION: 'Release'
+
+jobs:
+  # Phase 1: Core Stability Tests (High Priority - CI/CD Ready)
+  core-tests:
+    name: "Core Stability Tests (CI/CD Ready)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+    
+    - name: Restore dependencies
+      run: dotnet restore pks-cli/PKS.CLI.sln
+    
+    - name: Build solution
+      run: dotnet build pks-cli/PKS.CLI.sln --configuration ${{ env.CONFIGURATION }} --no-restore
+    
+    - name: Run Core Tests (Critical Priority)
+      run: |
+        cd pks-cli/tests
+        dotnet test \
+          --configuration ${{ env.CONFIGURATION }} \
+          --no-build \
+          --verbosity normal \
+          --logger "trx;LogFileName=core-test-results.trx" \
+          --filter "Priority=Critical|Category=Unit|TestCategory=InitCommand" \
+          --collect:"XPlat Code Coverage"
+    
+    - name: Publish Core Test Results
+      uses: dorny/test-reporter@v1
+      if: always()
+      with:
+        name: Core Tests Results
+        path: 'pks-cli/tests/TestResults/core-test-results.trx'
+        reporter: dotnet-trx
+        fail-on-error: true
+    
+    - name: Validate Core Pass Rate
+      run: |
+        cd pks-cli/tests
+        PASS_RATE=$(dotnet test --filter "Priority=Critical|Category=Unit|TestCategory=InitCommand" --logger "console;verbosity=quiet" | grep -o "Passed.*Failed" | tail -1 || echo "Passed: 0, Failed: 0")
+        echo "Core test pass rate: $PASS_RATE"
+        # Fail if core tests have any failures
+        if echo "$PASS_RATE" | grep -q "Failed: [1-9]"; then
+          echo "❌ Core tests have failures - blocking CI/CD"
+          exit 1
+        fi
+        echo "✅ Core tests passed - CI/CD can proceed"
+
+  # Phase 2: Extended Stable Tests (Medium Priority)
+  extended-tests:
+    name: "Extended Stable Tests"
+    runs-on: ubuntu-latest
+    needs: core-tests
+    timeout-minutes: 25
+    continue-on-error: true  # Don't block CI/CD on these
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+    
+    - name: Restore dependencies
+      run: dotnet restore pks-cli/PKS.CLI.sln
+    
+    - name: Build solution
+      run: dotnet build pks-cli/PKS.CLI.sln --configuration ${{ env.CONFIGURATION }} --no-restore
+    
+    - name: Run Extended Tests (Stable Categories)
+      run: |
+        cd pks-cli/tests
+        dotnet test \
+          --configuration ${{ env.CONFIGURATION }} \
+          --no-build \
+          --verbosity normal \
+          --logger "trx;LogFileName=extended-test-results.trx" \
+          --filter "Category!=Mock&Category!=Integration&Category!=Wizard&Priority!=Low" \
+          --collect:"XPlat Code Coverage"
+    
+    - name: Publish Extended Test Results
+      uses: dorny/test-reporter@v1
+      if: always()
+      with:
+        name: Extended Tests Results
+        path: 'pks-cli/tests/TestResults/extended-test-results.trx'
+        reporter: dotnet-trx
+        fail-on-error: false  # Report but don't fail CI/CD
+
+  # Phase 3: Full Test Suite (Informational - Known Issues)
+  full-test-suite:
+    name: "Full Test Suite (Informational)"
+    runs-on: ubuntu-latest
+    needs: core-tests
+    timeout-minutes: 45
+    continue-on-error: true  # Always continue - this is informational
+    if: github.event_name == 'pull_request'  # Only run on PRs for visibility
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+    
+    - name: Restore dependencies
+      run: dotnet restore pks-cli/PKS.CLI.sln
+    
+    - name: Build solution
+      run: dotnet build pks-cli/PKS.CLI.sln --configuration ${{ env.CONFIGURATION }} --no-restore
+    
+    - name: Run Full Test Suite
+      run: |
+        cd pks-cli/tests
+        dotnet test \
+          --configuration ${{ env.CONFIGURATION }} \
+          --no-build \
+          --verbosity normal \
+          --logger "trx;LogFileName=full-test-results.trx" \
+          --collect:"XPlat Code Coverage"
+    
+    - name: Publish Full Test Results
+      uses: dorny/test-reporter@v1
+      if: always()
+      with:
+        name: Full Test Suite Results (Known Issues)
+        path: 'pks-cli/tests/TestResults/full-test-results.trx'
+        reporter: dotnet-trx
+        fail-on-error: false
+    
+    - name: Generate Test Coverage Report
+      run: |
+        cd pks-cli/tests
+        dotnet tool install -g dotnet-reportgenerator-globaltool
+        reportgenerator \
+          -reports:"TestResults/*/coverage.cobertura.xml" \
+          -targetdir:"TestResults/coverage-report" \
+          -reporttypes:"Html;Badges"
+    
+    - name: Upload Coverage Report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: coverage-report
+        path: pks-cli/tests/TestResults/coverage-report/
+
+  # Build and Package (Only runs if core tests pass)
+  build-and-package:
+    name: "Build and Package"
+    runs-on: ubuntu-latest
+    needs: core-tests
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+    
+    - name: Restore dependencies
+      run: dotnet restore pks-cli/PKS.CLI.sln
+    
+    - name: Build solution
+      run: dotnet build pks-cli/PKS.CLI.sln --configuration ${{ env.CONFIGURATION }} --no-restore
+    
+    - name: Pack NuGet packages
+      run: |
+        cd pks-cli/src
+        dotnet pack --configuration ${{ env.CONFIGURATION }} --no-build --output ../packages
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: nuget-packages
+        path: pks-cli/packages/*.nupkg
+
+  # Integration Status Summary
+  integration-status:
+    name: "CI/CD Integration Status"
+    runs-on: ubuntu-latest
+    needs: [core-tests, build-and-package]
+    if: always()
+    
+    steps:
+    - name: Report CI/CD Status
+      run: |
+        echo "## PKS CLI CI/CD Pipeline Status" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [[ "${{ needs.core-tests.result }}" == "success" ]]; then
+          echo "✅ **Core Tests**: PASSED - CI/CD Pipeline Ready" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Core Tests**: FAILED - CI/CD Pipeline Blocked" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [[ "${{ needs.build-and-package.result }}" == "success" ]]; then
+          echo "✅ **Build & Package**: PASSED - Artifacts Ready" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Build & Package**: FAILED - No Artifacts" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Test Categories Status:" >> $GITHUB_STEP_SUMMARY
+        echo "- **Core Tests (Critical)**: ${{ needs.core-tests.result == 'success' && '✅ Ready for CI/CD' || '❌ Blocking CI/CD' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Extended Tests**: ${{ needs.extended-tests.result == 'success' && '✅ Passing' || '⚠️ Known Issues (Non-blocking)' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Full Test Suite**: ${{ needs.full-test-suite.result == 'success' && '✅ All Passing' || '⚠️ Known Issues (70.2% pass rate)' }}" >> $GITHUB_STEP_SUMMARY
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Current Status (Based on July 25, 2025 Assessment):" >> $GITHUB_STEP_SUMMARY
+        echo "- **Overall Pass Rate**: 70.2% (Target: 90%)" >> $GITHUB_STEP_SUMMARY
+        echo "- **CI/CD Readiness**: Partial (Core functionality stable)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Deployment Status**: ${{ needs.core-tests.result == 'success' && needs.build-and-package.result == 'success' && '🚀 Ready for deployment' || '⛔ Deployment blocked' }}" >> $GITHUB_STEP_SUMMARY
+
+# Test Filters Explanation:
+# 
+# Core Tests (CI/CD Blocking):
+# - Priority=Critical: Tests marked as critical for basic functionality
+# - Category=Unit: Pure unit tests with high reliability
+# - TestCategory=InitCommand: Project initialization tests (high pass rate)
+#
+# Extended Tests (Non-blocking):
+# - Excludes: Category=Mock (marked as "no real value")
+# - Excludes: Category=Integration (complex scenarios, 60% pass rate)
+# - Excludes: Category=Wizard (UI interaction, 40% pass rate)
+# - Excludes: Priority=Low (edge cases and display formatting)
+#
+# Full Test Suite:
+# - Runs all tests for visibility and tracking
+# - Never blocks CI/CD pipeline
+# - Provides complete test coverage metrics

@@ -12,7 +12,7 @@ public class McpConfigurationInitializer : TemplateInitializer
     public override string Name => "MCP Configuration";
     public override string Description => "Creates MCP (Model Context Protocol) configuration for AI tool integration";
     public override int Order => 75; // Run after basic project structure but before deployment
-    
+
     protected override string TemplateDirectory => "mcp";
 
     public override IEnumerable<InitializerOption> GetOptions()
@@ -31,7 +31,7 @@ public class McpConfigurationInitializer : TemplateInitializer
     public override Task<bool> ShouldRunAsync(InitializationContext context)
     {
         // Run if MCP features are explicitly enabled or if using agentic template
-        return Task.FromResult(context.GetOption("mcp", false) || 
+        return Task.FromResult(context.GetOption("mcp", false) ||
                context.GetOption("enable-mcp", false) ||
                (context.Template?.Equals("agentic", StringComparison.OrdinalIgnoreCase) == true));
     }
@@ -84,7 +84,7 @@ public class McpConfigurationInitializer : TemplateInitializer
 
         result.Warnings.Add("Configure environment variables for secure API keys and endpoints");
         result.Warnings.Add("Add the .mcp.json to your AI tool's configuration directory");
-        
+
         await base.PostProcessTemplateAsync(context, result);
     }
 }

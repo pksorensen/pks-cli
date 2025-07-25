@@ -38,7 +38,7 @@ public class PrdStatusCommand : Command<PrdStatusSettings>
 
             // Set default file path if not provided
             var filePath = settings.FilePath ?? Path.Combine(Environment.CurrentDirectory, "docs", "PRD.md");
-            
+
             if (settings.Watch)
             {
                 await WatchPrdAsync(filePath);
@@ -57,8 +57,8 @@ public class PrdStatusCommand : Command<PrdStatusSettings>
 
     private async Task DisplayPrdStatusAsync(string filePath, PrdStatusSettings settings)
     {
-        var status = await _prdService.GetPrdStatusAsync(filePath);
-        
+        var status = await _prdService.GetPrdStatusAsync(filePath, CancellationToken.None);
+
         if (!status.Exists)
         {
             AnsiConsole.MarkupLine($"[red]PRD file not found: {filePath}[/]");
@@ -126,8 +126,8 @@ public class PrdStatusCommand : Command<PrdStatusSettings>
 
     private async Task CheckAllPrdsAsync()
     {
-        var prdFiles = await _prdService.FindPrdFilesAsync(Environment.CurrentDirectory);
-        
+        var prdFiles = await _prdService.FindPrdFilesAsync(Environment.CurrentDirectory, true, CancellationToken.None);
+
         if (!prdFiles.Any())
         {
             AnsiConsole.MarkupLine("[yellow]No PRD files found in the current directory[/]");
@@ -146,9 +146,9 @@ public class PrdStatusCommand : Command<PrdStatusSettings>
 
         foreach (var file in prdFiles)
         {
-            var status = await _prdService.GetPrdStatusAsync(file);
+            var status = await _prdService.GetPrdStatusAsync(file, CancellationToken.None);
             var relativePath = Path.GetRelativePath(Environment.CurrentDirectory, file);
-            
+
             var completionColor = status.CompletionPercentage switch
             {
                 >= 80 => "green",
@@ -176,7 +176,7 @@ public class PrdStatusCommand : Command<PrdStatusSettings>
 
         var lastModified = DateTime.MinValue;
         var cancellationToken = new CancellationTokenSource();
-        
+
         Console.CancelKeyPress += (sender, e) =>
         {
             e.Cancel = true;
@@ -212,12 +212,12 @@ public class PrdStatusCommand : Command<PrdStatusSettings>
     {
         try
         {
-            var statusJson = JsonSerializer.Serialize(status, new JsonSerializerOptions 
-            { 
+            var statusJson = JsonSerializer.Serialize(status, new JsonSerializerOptions
+            {
                 WriteIndented = true,
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase
             });
-            
+
             await File.WriteAllTextAsync(exportPath, statusJson);
             AnsiConsole.MarkupLine($"[green]✅ Status exported to: {exportPath}[/]");
         }

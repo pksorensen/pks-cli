@@ -96,7 +96,7 @@ public class PrdCommandTests
         // Assert
         Assert.Equal(0, result);
         _mockPrdService.Verify(s => s.GeneratePrdAsync(
-            It.Is<PrdGenerationRequest>(r => 
+            It.Is<PrdGenerationRequest>(r =>
                 r.IdeaDescription == "Build a task management app" &&
                 r.ProjectName == "TaskMaster"),
             It.IsAny<CancellationToken>()), Times.Once);
@@ -120,7 +120,7 @@ public class PrdCommandTests
         // Assert
         Assert.Equal(1, result);
         _mockPrdService.Verify(s => s.GeneratePrdAsync(
-            It.IsAny<PrdGenerationRequest>(), 
+            It.IsAny<PrdGenerationRequest>(),
             It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -362,9 +362,9 @@ public class PrdCommandTests
 
         _mockPrdService
             .Setup(s => s.GenerateTemplateAsync(
-                "NewProject", 
-                PrdTemplateType.Standard, 
-                "template-output.md", 
+                "NewProject",
+                PrdTemplateType.Standard,
+                "template-output.md",
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync("template-output.md");
 
@@ -376,9 +376,9 @@ public class PrdCommandTests
         // Assert
         Assert.Equal(0, result);
         _mockPrdService.Verify(s => s.GenerateTemplateAsync(
-            "NewProject", 
-            PrdTemplateType.Standard, 
-            "template-output.md", 
+            "NewProject",
+            PrdTemplateType.Standard,
+            "template-output.md",
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -400,9 +400,9 @@ public class PrdCommandTests
         // Assert
         Assert.Equal(0, result);
         _mockPrdService.Verify(s => s.GenerateTemplateAsync(
-            It.IsAny<string>(), 
-            It.IsAny<PrdTemplateType>(), 
-            It.IsAny<string>(), 
+            It.IsAny<string>(),
+            It.IsAny<PrdTemplateType>(),
+            It.IsAny<string>(),
             It.IsAny<CancellationToken>()), Times.Never);
     }
 

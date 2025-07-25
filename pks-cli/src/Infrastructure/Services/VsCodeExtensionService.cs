@@ -23,7 +23,7 @@ public class VsCodeExtensionService : IVsCodeExtensionService
     public async Task<List<VsCodeExtension>> GetRecommendedExtensionsAsync(string[] categories)
     {
         await EnsureExtensionsLoadedAsync();
-        
+
         if (!categories.Any())
         {
             return new List<VsCodeExtension>();
@@ -38,7 +38,7 @@ public class VsCodeExtensionService : IVsCodeExtensionService
     public async Task<List<VsCodeExtension>> SearchExtensionsAsync(string query)
     {
         await EnsureExtensionsLoadedAsync();
-        
+
         if (string.IsNullOrEmpty(query))
         {
             return new List<VsCodeExtension>();
@@ -65,15 +65,15 @@ public class VsCodeExtensionService : IVsCodeExtensionService
         try
         {
             await EnsureExtensionsLoadedAsync();
-            
+
             lock (_lock)
             {
                 var extension = _extensions.FirstOrDefault(e => e.Id.Equals(extensionId, StringComparison.OrdinalIgnoreCase));
-                
+
                 result.Exists = extension != null;
                 result.IsValid = extension != null;
                 result.IsCompatible = extension != null; // For now, assume all extensions are compatible
-                
+
                 if (extension != null)
                 {
                     result.LatestVersion = extension.Version;
@@ -101,7 +101,7 @@ public class VsCodeExtensionService : IVsCodeExtensionService
     public async Task<List<VsCodeExtension>> GetEssentialExtensionsAsync(List<string> features)
     {
         await EnsureExtensionsLoadedAsync();
-        
+
         if (!features.Any())
         {
             return new List<VsCodeExtension>();
@@ -113,11 +113,11 @@ public class VsCodeExtensionService : IVsCodeExtensionService
 
             foreach (var feature in features)
             {
-                var relevantExtensions = _extensions.Where(e => 
-                    e.IsEssential && 
+                var relevantExtensions = _extensions.Where(e =>
+                    e.IsEssential &&
                     (e.RequiredFeatures.Contains(feature, StringComparer.OrdinalIgnoreCase) ||
                      e.Tags.Any(t => feature.Contains(t, StringComparison.OrdinalIgnoreCase)))).ToList();
-                
+
                 essentialExtensions.AddRange(relevantExtensions);
             }
 
@@ -129,7 +129,7 @@ public class VsCodeExtensionService : IVsCodeExtensionService
     public async Task<List<string>> GetAvailableCategoriesAsync()
     {
         await EnsureExtensionsLoadedAsync();
-        
+
         lock (_lock)
         {
             return _extensions.Select(e => e.Category).Distinct().OrderBy(c => c).ToList();
@@ -139,7 +139,7 @@ public class VsCodeExtensionService : IVsCodeExtensionService
     public async Task<List<VsCodeExtension>> GetExtensionsByCategoryAsync(string category)
     {
         await EnsureExtensionsLoadedAsync();
-        
+
         lock (_lock)
         {
             return _extensions.Where(e => e.Category.Equals(category, StringComparison.OrdinalIgnoreCase)).ToList();
@@ -149,7 +149,7 @@ public class VsCodeExtensionService : IVsCodeExtensionService
     public async Task<string?> GetLatestVersionAsync(string extensionId)
     {
         await EnsureExtensionsLoadedAsync();
-        
+
         lock (_lock)
         {
             return _extensions.FirstOrDefault(e => e.Id.Equals(extensionId, StringComparison.OrdinalIgnoreCase))?.Version;
@@ -171,7 +171,7 @@ public class VsCodeExtensionService : IVsCodeExtensionService
     private async Task EnsureExtensionsLoadedAsync()
     {
         bool needsRefresh;
-        
+
         lock (_lock)
         {
             needsRefresh = !_extensions.Any() || DateTime.UtcNow - _lastRefresh > _cacheTimeout;
@@ -188,13 +188,13 @@ public class VsCodeExtensionService : IVsCodeExtensionService
         try
         {
             var extensions = await LoadBuiltInExtensionsAsync();
-            
+
             lock (_lock)
             {
                 _extensions = extensions;
                 _lastRefresh = DateTime.UtcNow;
             }
-            
+
             _logger.LogInformation("Initialized with {Count} built-in extensions", extensions.Count);
         }
         catch (Exception ex)
@@ -208,15 +208,15 @@ public class VsCodeExtensionService : IVsCodeExtensionService
         try
         {
             _logger.LogInformation("Refreshing VS Code extensions");
-            
+
             var newExtensions = await LoadBuiltInExtensionsAsync();
-            
+
             lock (_lock)
             {
                 _extensions = newExtensions;
                 _lastRefresh = DateTime.UtcNow;
             }
-            
+
             _logger.LogInformation("Successfully refreshed {Count} extensions", newExtensions.Count);
         }
         catch (Exception ex)
@@ -228,7 +228,7 @@ public class VsCodeExtensionService : IVsCodeExtensionService
     private static async Task<List<VsCodeExtension>> LoadBuiltInExtensionsAsync()
     {
         await Task.Delay(50); // Simulate async operation
-        
+
         return new List<VsCodeExtension>
         {
             // .NET Development Extensions

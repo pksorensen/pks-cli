@@ -66,11 +66,11 @@ public class McpResourceService
                 Method = method,
                 Service = service
             };
-            
+
             _resources[attribute.Uri] = resourceDefinition;
             _resourceServices[attribute.Uri] = service;
-            
-            _logger.LogDebug("Registered MCP resource: {Uri} -> {ServiceType}.{MethodName}", 
+
+            _logger.LogDebug("Registered MCP resource: {Uri} -> {ServiceType}.{MethodName}",
                 attribute.Uri, serviceType.Name, method.Name);
         }
     }
@@ -113,13 +113,13 @@ public class McpResourceService
 
             var serviceInstance = _resourceServices[uri];
             var result = resourceDefinition.Method.Invoke(serviceInstance, null);
-            
+
             // Handle async results
             if (result is Task<string> stringTask)
             {
                 return await stringTask;
             }
-            
+
             if (result is Task task)
             {
                 await task;
@@ -201,7 +201,7 @@ public class McpResourceService
 
         // Register the 3 core PKS resources using hardcoded definitions for now
         // TODO: Convert these to attribute-based once we have proper service implementations
-        
+
         RegisterHardcodedResource(
             "pks://projects",
             "PKS Projects",
@@ -211,7 +211,7 @@ public class McpResourceService
         );
 
         RegisterHardcodedResource(
-            "pks://agents", 
+            "pks://agents",
             "PKS Agents",
             "List of all AI agents managed by PKS CLI",
             "application/json",
@@ -220,7 +220,7 @@ public class McpResourceService
 
         RegisterHardcodedResource(
             "pks://tasks",
-            "PKS Tasks", 
+            "PKS Tasks",
             "Current and historical tasks managed by PKS CLI",
             "application/json",
             GenerateTasksResourceContent
@@ -242,7 +242,7 @@ public class McpResourceService
 
         _resources[uri] = resourceDefinition;
         _resourceServices[uri] = hardcodedService;
-        
+
         _logger.LogDebug("Registered hardcoded PKS resource: {Uri}", uri);
     }
 
@@ -266,7 +266,7 @@ public class McpResourceService
                 new
                 {
                     name = "another-project",
-                    path = "/workspace/another-project", 
+                    path = "/workspace/another-project",
                     type = "api",
                     created = DateTime.UtcNow.AddDays(-3),
                     lastModified = DateTime.UtcNow.AddMinutes(-30),
@@ -361,7 +361,7 @@ public class McpResourceService
                     id = "task-002",
                     name = "Deploy to Kubernetes",
                     type = "deployment",
-                    status = "in-progress", 
+                    status = "in-progress",
                     progress = 75,
                     created = DateTime.UtcNow.AddMinutes(-30),
                     completed = (DateTime?)null,

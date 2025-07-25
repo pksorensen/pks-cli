@@ -35,7 +35,7 @@ public class DevcontainerWizardCommandTests : TestBase
     protected override void ConfigureServices(IServiceCollection services)
     {
         base.ConfigureServices(services);
-        
+
         services.AddSingleton(_mockDevcontainerService.Object);
         services.AddSingleton(_mockFeatureRegistry.Object);
         services.AddSingleton(_mockTemplateService.Object);
@@ -78,7 +78,7 @@ public class DevcontainerWizardCommandTests : TestBase
         };
 
         var command = CreateMockWizardCommand();
-        
+
         // Setup console input
         TestConsole.Input.PushTextWithEnter("my-project");
         TestConsole.Input.PushKey(ConsoleKey.Enter); // Select first template
@@ -104,7 +104,7 @@ public class DevcontainerWizardCommandTests : TestBase
         };
 
         var command = CreateMockWizardCommand();
-        
+
         // Setup console input
         TestConsole.Input.PushTextWithEnter("test-project");
         TestConsole.Input.PushKey(ConsoleKey.DownArrow); // Navigate templates
@@ -133,7 +133,7 @@ public class DevcontainerWizardCommandTests : TestBase
         };
 
         var command = CreateMockWizardCommand();
-        
+
         // Setup console input to select features
         TestConsole.Input.PushTextWithEnter("test-project");
         TestConsole.Input.PushKey(ConsoleKey.Enter); // Select first template
@@ -164,7 +164,7 @@ public class DevcontainerWizardCommandTests : TestBase
         };
 
         var command = CreateMockWizardCommand();
-        
+
         // Setup console input to select extensions
         TestConsole.Input.PushTextWithEnter("test-project");
         TestConsole.Input.PushKey(ConsoleKey.Enter); // Select first template
@@ -195,7 +195,7 @@ public class DevcontainerWizardCommandTests : TestBase
         };
 
         var command = CreateMockWizardCommand();
-        
+
         // Setup console input
         TestConsole.Input.PushTextWithEnter("test-project");
         TestConsole.Input.PushKey(ConsoleKey.Enter); // Select first template
@@ -221,7 +221,7 @@ public class DevcontainerWizardCommandTests : TestBase
         };
 
         var command = CreateMockWizardCommand();
-        
+
         // Setup console input
         TestConsole.Input.PushTextWithEnter("test-project");
         TestConsole.Input.PushKey(ConsoleKey.Enter); // Select first template
@@ -257,7 +257,7 @@ public class DevcontainerWizardCommandTests : TestBase
         };
 
         var command = CreateMockWizardCommand();
-        
+
         // Setup console input
         TestConsole.Input.PushTextWithEnter("test-project");
         TestConsole.Input.PushKey(ConsoleKey.Enter); // Select first template
@@ -295,7 +295,7 @@ public class DevcontainerWizardCommandTests : TestBase
             });
 
         var command = CreateMockWizardCommand();
-        
+
         // Setup console input
         TestConsole.Input.PushTextWithEnter("test-project");
         TestConsole.Input.PushKey(ConsoleKey.Enter); // Select first template
@@ -325,7 +325,7 @@ public class DevcontainerWizardCommandTests : TestBase
         };
 
         var command = CreateMockWizardCommand();
-        
+
         // Setup console input to cancel
         TestConsole.Input.PushTextWithEnter("test-project");
         TestConsole.Input.PushKey(ConsoleKey.Enter); // Select first template
@@ -352,7 +352,7 @@ public class DevcontainerWizardCommandTests : TestBase
         };
 
         var command = CreateMockWizardCommand();
-        
+
         // Setup console input
         TestConsole.Input.PushTextWithEnter("test-project");
         TestConsole.Input.PushKey(ConsoleKey.Enter);
@@ -383,7 +383,7 @@ public class DevcontainerWizardCommandTests : TestBase
         };
 
         var command = CreateMockWizardCommand();
-        
+
         // Setup console input
         TestConsole.Input.PushTextWithEnter("test-project");
         TestConsole.Input.PushKey(ConsoleKey.Enter); // Select first NuGet template
@@ -413,7 +413,7 @@ public class DevcontainerWizardCommandTests : TestBase
         };
 
         var command = CreateMockWizardCommand();
-        
+
         // Setup console input
         TestConsole.Input.PushTextWithEnter("test-project");
         TestConsole.Input.PushKey(ConsoleKey.Enter); // Select template
@@ -443,7 +443,7 @@ public class DevcontainerWizardCommandTests : TestBase
         };
 
         var command = CreateMockWizardCommand();
-        
+
         // Setup console input
         TestConsole.Input.PushTextWithEnter("test-project");
         TestConsole.Input.PushKey(ConsoleKey.Enter); // Select template
@@ -472,7 +472,7 @@ public class DevcontainerWizardCommandTests : TestBase
         };
 
         var command = CreateMockWizardCommand();
-        
+
         // Setup console input
         TestConsole.Input.PushTextWithEnter("test-project");
         TestConsole.Input.PushKey(ConsoleKey.DownArrow); // Navigate templates
@@ -504,7 +504,7 @@ public class DevcontainerWizardCommandTests : TestBase
         };
 
         var command = CreateMockWizardCommand();
-        
+
         // Setup console input to simulate typing and auto-completion
         TestConsole.Input.PushTextWithEnter("test-project");
         TestConsole.Input.PushText("dotnet"); // Type partial template name
@@ -534,7 +534,7 @@ public class DevcontainerWizardCommandTests : TestBase
         };
 
         var command = CreateMockWizardCommandWithNoNuGetTemplates();
-        
+
         // Setup console input
         TestConsole.Input.PushTextWithEnter("test-project");
         TestConsole.Input.PushKey(ConsoleKey.Enter); // Select first built-in template
@@ -563,7 +563,7 @@ public class DevcontainerWizardCommandTests : TestBase
         };
 
         var command = CreateMockWizardCommandWithNuGetError();
-        
+
         // Setup console input
         TestConsole.Input.PushTextWithEnter("test-project");
         TestConsole.Input.PushKey(ConsoleKey.Enter); // Select template
@@ -593,7 +593,7 @@ public class DevcontainerWizardCommandTests : TestBase
         };
 
         var command = CreateMockWizardCommand();
-        
+
         // Setup console input with invalid then valid name
         TestConsole.Input.PushTextWithEnter(invalidName);
         TestConsole.Input.PushTextWithEnter("valid-project");
@@ -619,7 +619,8 @@ public class DevcontainerWizardCommandTests : TestBase
             _mockFeatureRegistry.Object,
             _mockTemplateService.Object,
             _mockExtensionService.Object,
-            CreateMockNuGetService().Object);
+            CreateMockNuGetService().Object,
+            TestConsole);
 
         return command;
     }
@@ -632,7 +633,8 @@ public class DevcontainerWizardCommandTests : TestBase
             _mockFeatureRegistry.Object,
             _mockTemplateService.Object,
             _mockExtensionService.Object,
-            mockNuGetService.Object);
+            mockNuGetService.Object,
+            TestConsole);
 
         return command;
     }
@@ -645,7 +647,8 @@ public class DevcontainerWizardCommandTests : TestBase
             _mockFeatureRegistry.Object,
             _mockTemplateService.Object,
             _mockExtensionService.Object,
-            mockNuGetService.Object);
+            mockNuGetService.Object,
+            TestConsole);
 
         return command;
     }
@@ -653,7 +656,7 @@ public class DevcontainerWizardCommandTests : TestBase
     private Mock<INuGetTemplateDiscoveryService> CreateMockNuGetService()
     {
         var mock = new Mock<INuGetTemplateDiscoveryService>();
-        
+
         mock.Setup(x => x.DiscoverTemplatesAsync(It.IsAny<string>(), It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NuGetDevcontainerTemplate>
             {
@@ -674,7 +677,7 @@ public class DevcontainerWizardCommandTests : TestBase
     private Mock<INuGetTemplateDiscoveryService> CreateMockNuGetServiceWithNoTemplates()
     {
         var mock = new Mock<INuGetTemplateDiscoveryService>();
-        
+
         mock.Setup(x => x.DiscoverTemplatesAsync(It.IsAny<string>(), It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NuGetDevcontainerTemplate>());
 
@@ -684,7 +687,7 @@ public class DevcontainerWizardCommandTests : TestBase
     private Mock<INuGetTemplateDiscoveryService> CreateMockNuGetServiceWithError()
     {
         var mock = new Mock<INuGetTemplateDiscoveryService>();
-        
+
         mock.Setup(x => x.DiscoverTemplatesAsync(It.IsAny<string>(), It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Unable to connect to the remote server"));
 
@@ -701,11 +704,11 @@ public class DevcontainerWizardCommandTests : TestBase
     {
         // Simulate wizard execution
         TestConsole.WriteLine("Devcontainer Configuration Wizard");
-        
+
         if (settings.FromTemplates)
         {
             TestConsole.WriteLine("Discovering NuGet templates...");
-            
+
             if (settings.Sources?.Any() == true)
             {
                 TestConsole.WriteLine("Using custom NuGet sources:");
@@ -714,7 +717,7 @@ public class DevcontainerWizardCommandTests : TestBase
                     TestConsole.WriteLine($"  • {source}");
                 }
             }
-            
+
             if (settings.AddSources?.Any() == true)
             {
                 TestConsole.WriteLine("Including additional NuGet sources:");
@@ -723,12 +726,12 @@ public class DevcontainerWizardCommandTests : TestBase
                     TestConsole.WriteLine($"  • {source}");
                 }
             }
-            
+
             TestConsole.WriteLine("Found templates with pks-devcontainers tag:");
             TestConsole.WriteLine("  • PKS Universal DevContainer v1.0.0");
             TestConsole.WriteLine("  • PKS .NET DevContainer v2.1.0");
             TestConsole.WriteLine("  • PKS Microservices DevContainer v1.5.0");
-            
+
             if (settings.Verbose)
             {
                 TestConsole.WriteLine("Template Details");
@@ -742,7 +745,7 @@ public class DevcontainerWizardCommandTests : TestBase
         {
             TestConsole.WriteLine("Loading templates...");
         }
-        
+
         TestConsole.WriteLine("Loading features...");
         TestConsole.WriteLine("Loading extensions...");
 
@@ -756,7 +759,7 @@ public class DevcontainerWizardCommandTests : TestBase
 
         TestConsole.WriteLine("Enter project name:");
         var projectName = "test-project"; // Simulated input
-        
+
         if (string.IsNullOrWhiteSpace(projectName) || projectName.Contains("invalid-name"))
         {
             TestConsole.WriteLine("Invalid project name. Project names must not be empty and contain only valid characters.");
@@ -770,7 +773,7 @@ public class DevcontainerWizardCommandTests : TestBase
             TestConsole.WriteLine("1. PKS Universal DevContainer - Universal DevContainer template");
             TestConsole.WriteLine("2. PKS .NET DevContainer - Specialized .NET development environment");
             TestConsole.WriteLine("3. PKS Microservices DevContainer - Microservices development template");
-            
+
             // Simulate auto-completion
             var input = "dotnet"; // Simulated partial input
             if (input?.Contains("dotnet") == true)
@@ -814,10 +817,10 @@ public class DevcontainerWizardCommandTests : TestBase
         if (!settings.SkipTemplates)
         {
             TestConsole.WriteLine("Validating configuration...");
-            
+
             var validationResult = await _mockDevcontainerService.Object.ValidateConfigurationAsync(
                 DevcontainerTestData.GetBasicConfiguration());
-            
+
             if (!validationResult.IsValid)
             {
                 TestConsole.WriteLine("Validation Errors:");
@@ -847,7 +850,7 @@ public class DevcontainerWizardCommandTests : TestBase
         }
 
         TestConsole.WriteLine("Creating devcontainer...");
-        
+
         var options = new DevcontainerOptions
         {
             Name = projectName ?? "test-project",
@@ -865,7 +868,7 @@ public class DevcontainerWizardCommandTests : TestBase
     {
         // Simulate wizard execution with no NuGet templates found
         TestConsole.WriteLine("Devcontainer Configuration Wizard");
-        
+
         if (settings.FromTemplates)
         {
             TestConsole.WriteLine("Discovering NuGet templates...");
@@ -906,7 +909,7 @@ public class DevcontainerWizardCommandTests : TestBase
     {
         // Simulate wizard execution with NuGet connection error
         TestConsole.WriteLine("Devcontainer Configuration Wizard");
-        
+
         if (settings.FromTemplates)
         {
             TestConsole.WriteLine("Discovering NuGet templates...");

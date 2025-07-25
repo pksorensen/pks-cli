@@ -71,7 +71,7 @@ public class DevcontainerUniversalTemplateTests : TestBase
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory("universal-template-structure-test");
         var rootDevcontainerPath = "/workspace/.devcontainer";
-        
+
         var options = new DevcontainerOptions
         {
             Name = "test-structure",
@@ -126,7 +126,7 @@ public class DevcontainerUniversalTemplateTests : TestBase
     {
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory("universal-template-config-sections-test");
-        
+
         var options = new DevcontainerOptions
         {
             Name = "ConfigSectionTest",
@@ -159,7 +159,7 @@ public class DevcontainerUniversalTemplateTests : TestBase
             extractedConfig!.Build.Should().NotBeNull();
             extractedConfig.Build!.DockerfilePath.Should().Be(rootConfig.Build.DockerfilePath);
             extractedConfig.Build!.Context.Should().Be(rootConfig.Build.Context);
-            
+
             if (rootConfig.Build.Args != null)
             {
                 extractedConfig.Build.Args.Should().NotBeNull();
@@ -213,7 +213,7 @@ public class DevcontainerUniversalTemplateTests : TestBase
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory("universal-template-placeholders-test");
         var projectName = "MyAwesomeProject";
-        
+
         var options = new DevcontainerOptions
         {
             Name = projectName,
@@ -237,7 +237,7 @@ public class DevcontainerUniversalTemplateTests : TestBase
 
         // Verify other content remained unchanged
         var rootContent = await File.ReadAllTextAsync("/workspace/.devcontainer/devcontainer.json");
-        
+
         // Extract non-placeholder content for comparison
         var rootNonPlaceholderLines = rootContent.Split('\n')
             .Where(line => !line.Contains("${projectName}") && !line.Contains("{{ProjectName}}"))
@@ -252,7 +252,7 @@ public class DevcontainerUniversalTemplateTests : TestBase
         // Most lines should be identical (accounting for some differences due to placeholder context)
         var matchingLines = rootNonPlaceholderLines.Intersect(extractedNonPlaceholderLines).Count();
         var totalLines = rootNonPlaceholderLines.Count;
-        
+
         var matchRatio = (double)matchingLines / totalLines;
         matchRatio.Should().BeGreaterThan(0.8, "Most non-placeholder content should remain unchanged");
     }
@@ -262,7 +262,7 @@ public class DevcontainerUniversalTemplateTests : TestBase
     {
         // Arrange
         var testOutputPath = CreateTestArtifactDirectory("universal-template-permissions-test");
-        
+
         var options = new DevcontainerOptions
         {
             Name = "permissions-test",
@@ -278,15 +278,15 @@ public class DevcontainerUniversalTemplateTests : TestBase
 
         // Check if any script files were extracted and verify they have executable permissions
         var extractedFiles = extractionResult.ExtractedFiles;
-        var scriptFiles = extractedFiles.Where(f => 
-            f.EndsWith(".sh") || 
-            f.EndsWith(".py") || 
+        var scriptFiles = extractedFiles.Where(f =>
+            f.EndsWith(".sh") ||
+            f.EndsWith(".py") ||
             Path.GetFileNameWithoutExtension(f).StartsWith("init-")).ToList();
 
         foreach (var scriptFile in scriptFiles)
         {
             File.Exists(scriptFile).Should().BeTrue();
-            
+
             // On Unix systems, check if the file has execute permissions
             if (Environment.OSVersion.Platform == PlatformID.Unix)
             {
@@ -303,7 +303,7 @@ public class DevcontainerUniversalTemplateTests : TestBase
         // Arrange
         var testOutputPath1 = CreateTestArtifactDirectory("universal-template-multiple-1");
         var testOutputPath2 = CreateTestArtifactDirectory("universal-template-multiple-2");
-        
+
         var options1 = new DevcontainerOptions
         {
             Name = "test-project-1",
@@ -313,7 +313,7 @@ public class DevcontainerUniversalTemplateTests : TestBase
 
         var options2 = new DevcontainerOptions
         {
-            Name = "test-project-2", 
+            Name = "test-project-2",
             OutputPath = testOutputPath2,
             Template = "pks-universal-devcontainer"
         };
@@ -352,7 +352,7 @@ public class DevcontainerUniversalTemplateTests : TestBase
             var normalizedContent1 = content1.Replace("test-project-1", "PROJECT_NAME");
             var normalizedContent2 = content2.Replace("test-project-2", "PROJECT_NAME");
 
-            normalizedContent1.Should().Be(normalizedContent2, 
+            normalizedContent1.Should().Be(normalizedContent2,
                 $"Normalized content should be identical for file: {relativeFile}");
         }
     }
@@ -398,7 +398,7 @@ public class DevcontainerUniversalTemplateTests : TestBase
         // Most lines should match
         var matchingLines = rootLines.Intersect(extractedLines).Count();
         var matchRatio = (double)matchingLines / rootLines.Count;
-        
+
         matchRatio.Should().BeGreaterThan(0.9, "Dockerfiles should be nearly identical");
     }
 
@@ -440,12 +440,12 @@ public class DevcontainerUniversalTemplateTests : TestBase
     private string CreateTestArtifactDirectory(string testName)
     {
         var testArtifactsPath = Path.Combine(Path.GetTempPath(), "test-artifacts", "universal-template", testName);
-        
+
         if (Directory.Exists(testArtifactsPath))
         {
             Directory.Delete(testArtifactsPath, true);
         }
-        
+
         Directory.CreateDirectory(testArtifactsPath);
         return testArtifactsPath;
     }

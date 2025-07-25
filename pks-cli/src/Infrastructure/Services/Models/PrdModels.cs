@@ -78,18 +78,18 @@ public class PrdDocument
     public List<PrdRequirement> Requirements { get; set; } = new();
     public List<UserStory> UserStories { get; set; } = new();
     public Dictionary<string, object> Metadata { get; set; } = new();
-    
+
     // Helper methods
-    public PrdSection? GetSection(string id) => 
-        Sections.FirstOrDefault(s => s.Id == id) ?? 
+    public PrdSection? GetSection(string id) =>
+        Sections.FirstOrDefault(s => s.Id == id) ??
         Sections.SelectMany(s => GetAllSubSections(s)).FirstOrDefault(s => s.Id == id);
-    
-    public PrdRequirement? GetRequirement(string id) => 
+
+    public PrdRequirement? GetRequirement(string id) =>
         Requirements.FirstOrDefault(r => r.Id == id);
-    
-    public UserStory? GetUserStory(string id) => 
+
+    public UserStory? GetUserStory(string id) =>
         UserStories.FirstOrDefault(us => us.Id == id);
-    
+
     private IEnumerable<PrdSection> GetAllSubSections(PrdSection section)
     {
         yield return section;
@@ -137,7 +137,7 @@ public class PrdStatus
     public int InProgressRequirements { get; set; }
     public int PendingRequirements { get; set; }
     public int TotalUserStories { get; set; }
-    public double CompletionPercentage => TotalRequirements > 0 ? 
+    public double CompletionPercentage => TotalRequirements > 0 ?
         (double)CompletedRequirements / TotalRequirements * 100 : 0;
     public List<string> RecentChanges { get; set; } = new();
 }

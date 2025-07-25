@@ -77,7 +77,7 @@ public abstract class BaseDevcontainerFeature : IDevcontainerFeature
     public virtual async Task<Dictionary<string, object>> GenerateConfigurationAsync(Dictionary<string, object>? options = null)
     {
         await Task.CompletedTask; // For async compliance
-        
+
         var config = new Dictionary<string, object>(DefaultOptions);
 
         if (options != null)
@@ -104,7 +104,7 @@ public abstract class BaseDevcontainerFeature : IDevcontainerFeature
     public virtual async Task<bool> IsCompatibleWithImageAsync(string baseImage)
     {
         await Task.CompletedTask; // For async compliance
-        
+
         // Most features are compatible with most images
         // Subclasses can override for specific compatibility checks
         return !string.IsNullOrEmpty(baseImage);
@@ -203,7 +203,7 @@ public abstract class BaseDevcontainerFeature : IDevcontainerFeature
                     }
 
                     var numericValue = Convert.ToDouble(value);
-                    
+
                     if (optionDef.Minimum != null && numericValue < Convert.ToDouble(optionDef.Minimum))
                     {
                         result.IsValid = false;

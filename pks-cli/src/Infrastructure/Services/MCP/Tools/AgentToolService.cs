@@ -126,7 +126,7 @@ public class AgentToolService
             {
                 // Return list of all agents
                 var agents = await _agentFrameworkService.ListAgentsAsync();
-                
+
                 return new
                 {
                     success = true,
@@ -148,7 +148,7 @@ public class AgentToolService
             {
                 // Get specific agent status
                 var status = await _agentFrameworkService.GetAgentStatusAsync(agentId);
-                
+
                 var result = new
                 {
                     success = true,

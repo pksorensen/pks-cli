@@ -24,7 +24,7 @@ public class PrdCommand : Command<PrdMainSettings>
     public override int Execute(CommandContext context, PrdMainSettings? settings)
     {
         if (settings == null) throw new ArgumentNullException(nameof(settings));
-        
+
         // Display help when no subcommand is provided
         AnsiConsole.MarkupLine("[cyan]PKS PRD Management[/]");
         AnsiConsole.WriteLine();
@@ -37,7 +37,7 @@ public class PrdCommand : Command<PrdMainSettings>
         AnsiConsole.MarkupLine("  [green]pks prd template[/] <name> - Generate PRD template");
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("Use [yellow]pks prd <command> --help[/] for more information about a command.");
-        
+
         return 0;
     }
 }

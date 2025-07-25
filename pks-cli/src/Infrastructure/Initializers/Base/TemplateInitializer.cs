@@ -47,14 +47,14 @@ public abstract class TemplateInitializer : BaseInitializer
         }
 
         var result = InitializationResult.CreateSuccess($"Applied template from {TemplateDirectory}");
-        
+
         try
         {
             await ProcessTemplateDirectoryAsync(TemplatePath, context.TargetDirectory, context, result);
-            
+
             // Allow derived classes to perform additional processing
             await PostProcessTemplateAsync(context, result);
-            
+
             return result;
         }
         catch (Exception ex)
@@ -83,7 +83,7 @@ public abstract class TemplateInitializer : BaseInitializer
 
             var processedDirName = ReplacePlaceholders(dirName, context);
             var targetSubDir = Path.Combine(targetDir, processedDirName);
-            
+
             EnsureDirectoryExists(targetSubDir);
             await ProcessTemplateDirectoryAsync(directory, targetSubDir, context, result);
         }
@@ -99,16 +99,16 @@ public abstract class TemplateInitializer : BaseInitializer
         var targetFile = Path.Combine(targetDir, processedPath);
 
         var extension = Path.GetExtension(templateFile);
-        
+
         if (TemplateExtensions.Contains(extension))
         {
             // Process as template with placeholder replacement
             var content = await File.ReadAllTextAsync(templateFile);
             var processedContent = ReplacePlaceholders(content, context);
-            
+
             // Allow derived classes to further process content
             processedContent = await ProcessTemplateContentAsync(processedContent, templateFile, targetFile, context);
-            
+
             await WriteFileAsync(targetFile, processedContent, context);
         }
         else
@@ -142,7 +142,7 @@ public abstract class TemplateInitializer : BaseInitializer
     protected string ReplacePlaceholdersWithCustom(string content, InitializationContext context, Dictionary<string, string> customPlaceholders)
     {
         var result = ReplacePlaceholders(content, context);
-        
+
         foreach (var placeholder in customPlaceholders)
         {
             result = result.Replace(placeholder.Key, placeholder.Value);

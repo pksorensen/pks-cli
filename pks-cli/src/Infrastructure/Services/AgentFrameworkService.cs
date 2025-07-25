@@ -52,7 +52,7 @@ public class AgentFrameworkService : IAgentFrameworkService
             // Create agent directory structure
             var agentsDir = GetAgentsDirectory();
             var agentDir = Path.Combine(agentsDir, configuration.Name);
-            
+
             await CreateAgentDirectoryAsync(agentDir, configuration);
 
             // Create agent info
@@ -389,18 +389,18 @@ pks agent remove my-agent
 
         // Create knowledge.md
         var knowledgePath = Path.Combine(agentDir, "knowledge.md");
-        var knowledgeContent = !string.IsNullOrWhiteSpace(configuration.Knowledge) 
-            ? configuration.Knowledge 
+        var knowledgeContent = !string.IsNullOrWhiteSpace(configuration.Knowledge)
+            ? configuration.Knowledge
             : GenerateDefaultKnowledge(configuration);
-        
+
         await File.WriteAllTextAsync(knowledgePath, knowledgeContent);
 
         // Create persona.md
         var personaPath = Path.Combine(agentDir, "persona.md");
-        var personaContent = !string.IsNullOrWhiteSpace(configuration.Persona) 
-            ? configuration.Persona 
+        var personaContent = !string.IsNullOrWhiteSpace(configuration.Persona)
+            ? configuration.Persona
             : GenerateDefaultPersona(configuration);
-        
+
         await File.WriteAllTextAsync(personaPath, personaContent);
     }
 
@@ -580,7 +580,7 @@ The agent should be aware of:
         {
             _logger.LogError(ex, "Failed to load agents from file system");
         }
-        
+
         return Task.CompletedTask;
     }
 }

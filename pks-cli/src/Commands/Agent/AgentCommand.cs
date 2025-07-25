@@ -68,7 +68,7 @@ public class AgentCommand : AsyncCommand<AgentSettings>
             AnsiConsole.MarkupLine($"[dim]Agent ID: {result.AgentId}[/]");
             AnsiConsole.MarkupLine($"[dim]Name: {configuration.Name}[/]");
             AnsiConsole.MarkupLine($"[dim]Type: {configuration.Type}[/]");
-            
+
             if (!string.IsNullOrWhiteSpace(result.Message))
             {
                 AnsiConsole.MarkupLine($"[green]{result.Message}[/]");
@@ -110,7 +110,7 @@ public class AgentCommand : AsyncCommand<AgentSettings>
         {
             var lastActivity = agent.LastActivity?.ToString("yyyy-MM-dd HH:mm") ?? "Never";
             var createdAt = agent.CreatedAt.ToString("yyyy-MM-dd");
-            
+
             table.AddRow(
                 agent.Name,
                 agent.Type,
@@ -246,7 +246,7 @@ public class AgentCommand : AsyncCommand<AgentSettings>
         if (!string.IsNullOrWhiteSpace(settings.ConfigFile))
         {
             AnsiConsole.MarkupLine($"[cyan]📄 Loading configuration from file: {settings.ConfigFile}[/]");
-            
+
             try
             {
                 configuration = await _agentService.LoadConfigurationAsync(settings.ConfigFile);

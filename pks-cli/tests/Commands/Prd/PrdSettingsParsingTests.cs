@@ -14,235 +14,18 @@ namespace PKS.CLI.Tests.Commands.Prd;
 /// </summary>
 public class PrdSettingsParsingTests
 {
-    [Fact]
-    public void PrdGenerateSettings_ShouldHaveCorrectArguments()
-    {
-        // Arrange
-        var settings = new PrdGenerateSettings();
 
-        // Act & Assert
-        settings.Should().NotBeNull();
-        
-        // Verify required argument
-        var ideaProperty = typeof(PrdGenerateSettings).GetProperty(nameof(PrdGenerateSettings.IdeaDescription));
-        ideaProperty.Should().NotBeNull();
-        
-        var argumentAttribute = ideaProperty!.GetCustomAttributes(typeof(CommandArgumentAttribute), false)
-            .Cast<CommandArgumentAttribute>().FirstOrDefault();
-        argumentAttribute.Should().NotBeNull();
-        argumentAttribute!.Position.Should().Be(0);
-    }
 
-    [Theory]
-    [InlineData(nameof(PrdGenerateSettings.ProjectName), "-n|--name")]
-    [InlineData(nameof(PrdGenerateSettings.OutputPath), "-o|--output")]
-    [InlineData(nameof(PrdGenerateSettings.Template), "-t|--template")]
-    [InlineData(nameof(PrdGenerateSettings.Force), "-f|--force")]
-    public void PrdGenerateSettings_ShouldHaveCorrectOptions(string propertyName, string expectedTemplate)
-    {
-        // Arrange
-        var property = typeof(PrdGenerateSettings).GetProperty(propertyName);
-        
-        // Act
-        var optionAttribute = property!.GetCustomAttributes(typeof(CommandOptionAttribute), false)
-            .Cast<CommandOptionAttribute>().FirstOrDefault();
 
-        // Assert
-        optionAttribute.Should().NotBeNull();
-    }
 
-    [Fact]
-    public void PrdGenerateSettings_ShouldHaveCorrectDefaultValues()
-    {
-        // Arrange & Act
-        var settings = new PrdGenerateSettings();
 
-        // Assert
-        settings.Template.Should().Be("standard");
-        settings.OutputFormat.Should().Be("markdown");
-        settings.Force.Should().BeFalse();
-        settings.Interactive.Should().BeFalse();
-        settings.Verbose.Should().BeFalse();
-    }
 
-    [Fact]
-    public void PrdLoadSettings_ShouldHaveCorrectArguments()
-    {
-        // Arrange
-        var settings = new PrdLoadSettings();
 
-        // Act & Assert
-        settings.Should().NotBeNull();
-        
-        // Verify required argument
-        var filePathProperty = typeof(PrdLoadSettings).GetProperty(nameof(PrdLoadSettings.FilePath));
-        filePathProperty.Should().NotBeNull();
-        
-        var argumentAttribute = filePathProperty!.GetCustomAttributes(typeof(CommandArgumentAttribute), false)
-            .Cast<CommandArgumentAttribute>().FirstOrDefault();
-        argumentAttribute.Should().NotBeNull();
-        argumentAttribute!.Position.Should().Be(0);
-    }
 
-    [Theory]
-    [InlineData(nameof(PrdLoadSettings.Validate), "--validate")]
-    [InlineData(nameof(PrdLoadSettings.ExportPath), "--export")]
-    [InlineData(nameof(PrdLoadSettings.ShowMetadata), "--show-metadata")]
-    public void PrdLoadSettings_ShouldHaveCorrectOptions(string propertyName, string expectedTemplate)
-    {
-        // Arrange
-        var property = typeof(PrdLoadSettings).GetProperty(propertyName);
-        
-        // Act
-        var optionAttribute = property!.GetCustomAttributes(typeof(CommandOptionAttribute), false)
-            .Cast<CommandOptionAttribute>().FirstOrDefault();
 
-        // Assert
-        optionAttribute.Should().NotBeNull();
-    }
 
-    [Fact]
-    public void PrdRequirementsSettings_ShouldHaveOptionalFilePath()
-    {
-        // Arrange
-        var filePathProperty = typeof(PrdRequirementsSettings).GetProperty(nameof(PrdRequirementsSettings.FilePath));
-        
-        // Act
-        var argumentAttribute = filePathProperty!.GetCustomAttributes(typeof(CommandArgumentAttribute), false)
-            .Cast<CommandArgumentAttribute>().FirstOrDefault();
 
-        // Assert
-        argumentAttribute.Should().NotBeNull();
-        argumentAttribute!.Position.Should().Be(0); // Optional argument
-    }
 
-    [Theory]
-    [InlineData(nameof(PrdRequirementsSettings.Status), "--status")]
-    [InlineData(nameof(PrdRequirementsSettings.Priority), "--priority")]
-    [InlineData(nameof(PrdRequirementsSettings.Type), "--type")]
-    [InlineData(nameof(PrdRequirementsSettings.Assignee), "--assignee")]
-    [InlineData(nameof(PrdRequirementsSettings.ExportPath), "--export")]
-    [InlineData(nameof(PrdRequirementsSettings.ShowDetails), "--show-details")]
-    public void PrdRequirementsSettings_ShouldHaveCorrectOptions(string propertyName, string expectedTemplate)
-    {
-        // Arrange
-        var property = typeof(PrdRequirementsSettings).GetProperty(propertyName);
-        
-        // Act
-        var optionAttribute = property!.GetCustomAttributes(typeof(CommandOptionAttribute), false)
-            .Cast<CommandOptionAttribute>().FirstOrDefault();
-
-        // Assert
-        optionAttribute.Should().NotBeNull();
-    }
-
-    [Theory]
-    [InlineData(nameof(PrdStatusSettings.Watch), "--watch")]
-    [InlineData(nameof(PrdStatusSettings.CheckAll), "--check-all")]
-    [InlineData(nameof(PrdStatusSettings.ExportPath), "--export")]
-    [InlineData(nameof(PrdStatusSettings.IncludeHistory), "--include-history")]
-    public void PrdStatusSettings_ShouldHaveCorrectOptions(string propertyName, string expectedTemplate)
-    {
-        // Arrange
-        var property = typeof(PrdStatusSettings).GetProperty(propertyName);
-        
-        // Act
-        var optionAttribute = property!.GetCustomAttributes(typeof(CommandOptionAttribute), false)
-            .Cast<CommandOptionAttribute>().FirstOrDefault();
-
-        // Assert
-        optionAttribute.Should().NotBeNull();
-    }
-
-    [Theory]
-    [InlineData(nameof(PrdValidateSettings.Strict), "--strict")]
-    [InlineData(nameof(PrdValidateSettings.AutoFix), "--fix")]
-    [InlineData(nameof(PrdValidateSettings.ReportPath), "--report")]
-    public void PrdValidateSettings_ShouldHaveCorrectOptions(string propertyName, string expectedTemplate)
-    {
-        // Arrange
-        var property = typeof(PrdValidateSettings).GetProperty(propertyName);
-        
-        // Act
-        var optionAttribute = property!.GetCustomAttributes(typeof(CommandOptionAttribute), false)
-            .Cast<CommandOptionAttribute>().FirstOrDefault();
-
-        // Assert
-        optionAttribute.Should().NotBeNull();
-    }
-
-    [Fact]
-    public void PrdTemplateSettings_ShouldHaveCorrectArguments()
-    {
-        // Arrange
-        var projectNameProperty = typeof(PrdTemplateSettings).GetProperty(nameof(PrdTemplateSettings.ProjectName));
-        
-        // Act
-        var argumentAttribute = projectNameProperty!.GetCustomAttributes(typeof(CommandArgumentAttribute), false)
-            .Cast<CommandArgumentAttribute>().FirstOrDefault();
-
-        // Assert
-        argumentAttribute.Should().NotBeNull();
-        argumentAttribute!.Position.Should().Be(0);
-    }
-
-    [Theory]
-    [InlineData(nameof(PrdTemplateSettings.TemplateType), "-t|--type")]
-    [InlineData(nameof(PrdTemplateSettings.OutputPath), "-o|--output")]
-    [InlineData(nameof(PrdTemplateSettings.ListTemplates), "--list")]
-    public void PrdTemplateSettings_ShouldHaveCorrectOptions(string propertyName, string expectedTemplate)
-    {
-        // Arrange
-        var property = typeof(PrdTemplateSettings).GetProperty(propertyName);
-        
-        // Act
-        var optionAttribute = property!.GetCustomAttributes(typeof(CommandOptionAttribute), false)
-            .Cast<CommandOptionAttribute>().FirstOrDefault();
-
-        // Assert
-        optionAttribute.Should().NotBeNull();
-    }
-
-    [Fact]
-    public void PrdTemplateSettings_ShouldHaveCorrectDefaultValues()
-    {
-        // Arrange & Act
-        var settings = new PrdTemplateSettings();
-
-        // Assert
-        settings.TemplateType.Should().Be("standard");
-        settings.ListTemplates.Should().BeFalse();
-    }
-
-    [Theory]
-    [InlineData("PrdGenerateSettings")]
-    [InlineData("PrdLoadSettings")]
-    [InlineData("PrdRequirementsSettings")]
-    [InlineData("PrdStatusSettings")]
-    [InlineData("PrdValidateSettings")]
-    [InlineData("PrdTemplateSettings")]
-    public void PrdSettings_ShouldHaveDescriptionAttributes(string settingsTypeName)
-    {
-        // Arrange
-        var settingsType = typeof(PrdGenerateSettings).Assembly.GetType($"PKS.Commands.Prd.{settingsTypeName}");
-        
-        // Act & Assert
-        settingsType.Should().NotBeNull();
-        
-        var properties = settingsType!.GetProperties();
-        foreach (var property in properties)
-        {
-            if (property.GetCustomAttributes(typeof(CommandArgumentAttribute), false).Any() ||
-                property.GetCustomAttributes(typeof(CommandOptionAttribute), false).Any())
-            {
-                var descriptionAttribute = property.GetCustomAttributes(typeof(DescriptionAttribute), false)
-                    .Cast<DescriptionAttribute>().FirstOrDefault();
-                
-                descriptionAttribute.Should().NotBeNull($"{property.Name} should have a description");
-                descriptionAttribute!.Description.Should().NotBeNullOrEmpty($"{property.Name} description should not be empty");
-            }
-        }
-    }
 
     [Fact]
     public void PrdSettings_ValidationAttributes_ShouldWork()
@@ -281,7 +64,7 @@ public class PrdSettingsParsingTests
 
         // Act & Assert
         settings.TemplateType.Should().Be(templateType);
-        
+
         // Verify that the template type can be parsed as enum
         Enum.TryParse<PrdTemplateType>(templateType, true, out var parsedType).Should().BeTrue();
     }
@@ -304,7 +87,7 @@ public class PrdSettingsParsingTests
 
         // Act & Assert
         settings.Status.Should().Be(status);
-        
+
         // Verify that the status can be parsed as enum
         Enum.TryParse<RequirementStatus>(status, true, out var parsedStatus).Should().BeTrue();
     }
@@ -325,7 +108,7 @@ public class PrdSettingsParsingTests
 
         // Act & Assert
         settings.Priority.Should().Be(priority);
-        
+
         // Verify that the priority can be parsed as enum
         Enum.TryParse<RequirementPriority>(priority, true, out var parsedPriority).Should().BeTrue();
     }

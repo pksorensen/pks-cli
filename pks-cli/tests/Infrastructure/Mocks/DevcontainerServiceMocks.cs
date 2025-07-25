@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using PKS.CLI.Tests.Infrastructure.Fixtures.Devcontainer;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
+using System.Linq;
 
 namespace PKS.CLI.Tests.Infrastructure.Mocks;
 
@@ -17,7 +18,7 @@ public static class DevcontainerServiceMocks
     public static Mock<PKS.Infrastructure.Services.IDevcontainerService> CreateDevcontainerService()
     {
         var mock = new Mock<PKS.Infrastructure.Services.IDevcontainerService>();
-        
+
         // Setup successful configuration creation
         mock.Setup(x => x.CreateConfigurationAsync(It.IsAny<DevcontainerOptions>()))
             .ReturnsAsync((DevcontainerOptions options) => new DevcontainerResult
@@ -52,12 +53,12 @@ public static class DevcontainerServiceMocks
 
         // Setup configuration merging
         mock.Setup(x => x.MergeConfigurationsAsync(It.IsAny<DevcontainerConfiguration>(), It.IsAny<DevcontainerConfiguration>()))
-            .ReturnsAsync((DevcontainerConfiguration base_, DevcontainerConfiguration overlay) => 
+            .ReturnsAsync((DevcontainerConfiguration base_, DevcontainerConfiguration overlay) =>
             {
                 var merged = new DevcontainerConfiguration
                 {
-                    Name = overlay.Name ?? base_.Name,
-                    Image = overlay.Image ?? base_.Image,
+                    Name = !string.IsNullOrEmpty(overlay.Name) ? overlay.Name : base_.Name,
+                    Image = !string.IsNullOrEmpty(overlay.Image) ? overlay.Image : base_.Image,
                     Features = base_.Features.Concat(overlay.Features).ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
                     Customizations = base_.Customizations.Concat(overlay.Customizations).ToDictionary(kvp => kvp.Key, kvp => kvp.Value)
                 };
@@ -83,7 +84,7 @@ public static class DevcontainerServiceMocks
             .ReturnsAsync((string id) => features.FirstOrDefault(f => f.Id == id));
 
         mock.Setup(x => x.SearchFeaturesAsync(It.IsAny<string>()))
-            .ReturnsAsync((string query) => features.Where(f => 
+            .ReturnsAsync((string query) => features.Where(f =>
                 f.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                 f.Description.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                 f.Tags.Any(t => t.Contains(query, StringComparison.OrdinalIgnoreCase))).ToList());
@@ -158,6 +159,41 @@ public static class DevcontainerServiceMocks
                 }
             });
 
+        // Setup template extraction
+        mock.Setup(x => x.ExtractTemplateAsync(It.IsAny<string>(), It.IsAny<DevcontainerOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string templateId, DevcontainerOptions options, CancellationToken cancellationToken) =>
+            {
+                // Create mock extracted files
+                var devcontainerDir = Path.Combine(options.OutputPath, ".devcontainer");
+                Directory.CreateDirectory(devcontainerDir);
+
+                var devcontainerJsonPath = Path.Combine(devcontainerDir, "devcontainer.json");
+                var dockerfilePath = Path.Combine(devcontainerDir, "Dockerfile");
+
+                // Create mock files with placeholder replacement
+                var devcontainerContent = $@"{{
+    ""name"": ""{options.Name}"",
+    ""build"": {{
+        ""dockerfile"": ""Dockerfile""
+    }},
+    ""features"": {{
+        ""ghcr.io/devcontainers/features/dotnet:2"": {{
+            ""version"": ""8.0""
+        }}
+    }}
+}}";
+
+                File.WriteAllText(devcontainerJsonPath, devcontainerContent);
+                File.WriteAllText(dockerfilePath, "FROM mcr.microsoft.com/dotnet/sdk:8.0\nWORKDIR /workspace");
+
+                return new NuGetTemplateExtractionResult
+                {
+                    Success = true,
+                    ExtractedFiles = new List<string> { devcontainerJsonPath, dockerfilePath },
+                    Message = "Template extracted successfully"
+                };
+            });
+
         return mock;
     }
 
@@ -195,11 +231,15 @@ public static class DevcontainerServiceMocks
 
         // Setup validation
         mock.Setup(x => x.ValidateOutputPathAsync(It.IsAny<string>()))
-            .ReturnsAsync((string path) => new PathValidationResult
+            .ReturnsAsync((string path) =>
             {
-                IsValid = Directory.Exists(Path.GetDirectoryName(path)!),
-                CanWrite = true,
-                Errors = new List<string>()
+                var isReadOnlyPath = path.StartsWith("/readonly") || path.Contains("readonly");
+                return new PathValidationResult
+                {
+                    IsValid = !isReadOnlyPath && Directory.Exists(Path.GetDirectoryName(path)!),
+                    CanWrite = !isReadOnlyPath,
+                    Errors = isReadOnlyPath ? new List<string> { "Path is read-only" } : new List<string>()
+                };
             });
 
         return mock;
@@ -215,11 +255,11 @@ public static class DevcontainerServiceMocks
 
         // Setup extension discovery
         mock.Setup(x => x.GetRecommendedExtensionsAsync(It.IsAny<string[]>()))
-            .ReturnsAsync((string[] categories) => extensions.Where(e => 
+            .ReturnsAsync((string[] categories) => extensions.Where(e =>
                 categories.Contains(e.Category)).ToList());
 
         mock.Setup(x => x.SearchExtensionsAsync(It.IsAny<string>()))
-            .ReturnsAsync((string query) => extensions.Where(e => 
+            .ReturnsAsync((string query) => extensions.Where(e =>
                 e.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                 e.Description.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList());
 

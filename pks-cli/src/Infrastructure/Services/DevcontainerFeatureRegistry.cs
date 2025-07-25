@@ -24,7 +24,7 @@ public class DevcontainerFeatureRegistry : IDevcontainerFeatureRegistry
     public async Task<List<DevcontainerFeature>> GetAvailableFeaturesAsync()
     {
         await EnsureFeaturesLoadedAsync();
-        
+
         lock (_lock)
         {
             return new List<DevcontainerFeature>(_features);
@@ -34,7 +34,7 @@ public class DevcontainerFeatureRegistry : IDevcontainerFeatureRegistry
     public async Task<DevcontainerFeature?> GetFeatureAsync(string id)
     {
         await EnsureFeaturesLoadedAsync();
-        
+
         lock (_lock)
         {
             return _features.FirstOrDefault(f => f.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
@@ -44,7 +44,7 @@ public class DevcontainerFeatureRegistry : IDevcontainerFeatureRegistry
     public async Task<List<DevcontainerFeature>> SearchFeaturesAsync(string query)
     {
         await EnsureFeaturesLoadedAsync();
-        
+
         if (string.IsNullOrEmpty(query))
         {
             return await GetAvailableFeaturesAsync();
@@ -66,7 +66,7 @@ public class DevcontainerFeatureRegistry : IDevcontainerFeatureRegistry
     public async Task<List<DevcontainerFeature>> GetFeaturesByCategory(string category)
     {
         await EnsureFeaturesLoadedAsync();
-        
+
         lock (_lock)
         {
             return _features.Where(f => f.Category.Equals(category, StringComparison.OrdinalIgnoreCase)).ToList();
@@ -89,7 +89,7 @@ public class DevcontainerFeatureRegistry : IDevcontainerFeatureRegistry
 
             if (feature.IsDeprecated)
             {
-                result.Warnings.Add($"Feature '{featureId}' is deprecated" + 
+                result.Warnings.Add($"Feature '{featureId}' is deprecated" +
                     (string.IsNullOrEmpty(feature.DeprecationMessage) ? "" : $": {feature.DeprecationMessage}"));
             }
 
@@ -163,7 +163,7 @@ public class DevcontainerFeatureRegistry : IDevcontainerFeatureRegistry
     public async Task<List<string>> GetAvailableCategoriesAsync()
     {
         await EnsureFeaturesLoadedAsync();
-        
+
         lock (_lock)
         {
             return _features.Select(f => f.Category).Distinct().OrderBy(c => c).ToList();
@@ -175,20 +175,20 @@ public class DevcontainerFeatureRegistry : IDevcontainerFeatureRegistry
         try
         {
             _logger.LogInformation("Refreshing devcontainer features from remote sources");
-            
+
             // In a real implementation, this would fetch from:
             // - GitHub's devcontainer features repository
             // - Custom feature registries
             // - Local feature definitions
-            
+
             var newFeatures = await LoadBuiltInFeaturesAsync();
-            
+
             lock (_lock)
             {
                 _features = newFeatures;
                 _lastRefresh = DateTime.UtcNow;
             }
-            
+
             _logger.LogInformation("Successfully refreshed {Count} features", newFeatures.Count);
             return true;
         }
@@ -202,7 +202,7 @@ public class DevcontainerFeatureRegistry : IDevcontainerFeatureRegistry
     public async Task<List<DevcontainerFeature>> GetCompatibleFeaturesAsync(string baseImage)
     {
         await EnsureFeaturesLoadedAsync();
-        
+
         // For now, return all features as most devcontainer features are cross-platform
         // In a real implementation, this would check feature compatibility with the base image
         lock (_lock)
@@ -214,7 +214,7 @@ public class DevcontainerFeatureRegistry : IDevcontainerFeatureRegistry
     private async Task EnsureFeaturesLoadedAsync()
     {
         bool needsRefresh;
-        
+
         lock (_lock)
         {
             needsRefresh = !_features.Any() || DateTime.UtcNow - _lastRefresh > _cacheTimeout;
@@ -231,13 +231,13 @@ public class DevcontainerFeatureRegistry : IDevcontainerFeatureRegistry
         try
         {
             var features = await LoadBuiltInFeaturesAsync();
-            
+
             lock (_lock)
             {
                 _features = features;
                 _lastRefresh = DateTime.UtcNow;
             }
-            
+
             _logger.LogInformation("Initialized with {Count} built-in features", features.Count);
         }
         catch (Exception ex)
@@ -250,7 +250,7 @@ public class DevcontainerFeatureRegistry : IDevcontainerFeatureRegistry
     {
         // This would normally load from external sources, but for now we'll use built-in definitions
         await Task.Delay(100); // Simulate async operation
-        
+
         return new List<DevcontainerFeature>
         {
             new()
@@ -578,7 +578,7 @@ public class DevcontainerFeatureRegistry : IDevcontainerFeatureRegistry
                     }
 
                     var numericValue = Convert.ToDouble(value);
-                    
+
                     if (optionDef.Minimum != null && numericValue < Convert.ToDouble(optionDef.Minimum))
                     {
                         result.IsValid = false;

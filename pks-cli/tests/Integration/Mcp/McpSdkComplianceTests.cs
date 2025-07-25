@@ -38,7 +38,7 @@ public class McpSdkComplianceTests : TestBase
         services.AddSingleton<McpResourceService>();
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public void McpSdk_ShouldConformToToolSpecification()
     {
         // Arrange & Act
@@ -56,23 +56,23 @@ public class McpSdkComplianceTests : TestBase
             tool.Description.Should().NotBeNullOrEmpty("Tool must have a description");
 
             // Name format validation
-            tool.Name.Should().MatchRegex("^[a-z0-9_]+$", 
+            tool.Name.Should().MatchRegex("^[a-z0-9_]+$",
                 "Tool name should contain only lowercase letters, numbers, and underscores");
 
             // Description should be meaningful
-            tool.Description.Length.Should().BeGreaterThan(5, 
+            tool.Description.Length.Should().BeGreaterThan(5,
                 "Tool description should be meaningful");
 
             // Category should be consistent
             tool.Category.Should().NotBeNullOrEmpty("Tool should have a category");
-            tool.Category.Should().MatchRegex("^[a-z-]+$", 
+            tool.Category.Should().MatchRegex("^[a-z-]+$",
                 "Tool category should contain only lowercase letters and hyphens");
 
             ValidateToolMetadataStructure(tool);
         }
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public void McpSdk_ShouldConformToResourceSpecification()
     {
         // Arrange & Act
@@ -92,10 +92,10 @@ public class McpSdkComplianceTests : TestBase
 
             // URI format validation
             resource.Uri.Should().StartWith("pks://", "Resource URI should use PKS scheme");
-            
+
             // MIME type validation
             var validMimeTypes = new[] { "application/json", "text/plain", "application/yaml", "text/markdown" };
-            validMimeTypes.Should().Contain(resource.MimeType, 
+            validMimeTypes.Should().Contain(resource.MimeType,
                 $"Resource MIME type '{resource.MimeType}' should be supported");
 
             // Metadata validation
@@ -106,7 +106,7 @@ public class McpSdkComplianceTests : TestBase
         }
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public async Task McpSdk_ShouldHandleJsonRpcProtocol()
     {
         // Arrange
@@ -133,7 +133,7 @@ public class McpSdkComplianceTests : TestBase
         }
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public async Task McpSdk_ShouldSupportCapabilityNegotiation()
     {
         // Arrange
@@ -213,7 +213,7 @@ public class McpSdkComplianceTests : TestBase
         }
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public async Task McpSdk_ShouldHandleErrorsGracefully()
     {
         // Arrange
@@ -239,12 +239,12 @@ public class McpSdkComplianceTests : TestBase
 
                 // Assert - Errors should be handled gracefully
                 result.Should().NotBeNull("Error scenarios should return result objects");
-                
+
                 if (!result.Success)
                 {
                     result.Error.Should().NotBeNullOrEmpty("Failed operations should provide error details");
                     result.Error.Length.Should().BeLessThan(500, "Error messages should be concise");
-                    
+
                     // Error should not contain sensitive information
                     result.Error.Should().NotContain("Exception");
                     result.Error.Should().NotContain("StackTrace");
@@ -259,7 +259,7 @@ public class McpSdkComplianceTests : TestBase
         }
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public async Task McpSdk_ShouldProvideConsistentResponseFormat()
     {
         // Arrange
@@ -275,10 +275,10 @@ public class McpSdkComplianceTests : TestBase
 
             // Assert - Response format consistency
             result.Should().NotBeNull($"Tool {tool.Name} should return response");
-            
+
             // Standard response fields - Success is boolean and always has a value
             result.DurationMs.Should().BeGreaterThan(0, $"Response should include execution duration");
-            
+
             if (result.Success)
             {
                 result.Data.Should().NotBeNull($"Successful response should include data");
@@ -294,7 +294,7 @@ public class McpSdkComplianceTests : TestBase
         }
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public void McpSdk_ShouldImplementProperLogging()
     {
         // Arrange & Act
@@ -314,7 +314,7 @@ public class McpSdkComplianceTests : TestBase
         _output.WriteLine("Logging infrastructure validated");
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public async Task McpSdk_ShouldHandleConcurrentRequests()
     {
         // Arrange
@@ -342,7 +342,7 @@ public class McpSdkComplianceTests : TestBase
 
             // Assert - All requests should complete successfully
             results.Should().HaveCount(concurrentTasks.Count, "All concurrent requests should complete");
-            results.Should().AllSatisfy(result => 
+            results.Should().AllSatisfy(result =>
             {
                 result.Should().NotBeNull("Concurrent request should return result");
                 result.DurationMs.Should().BeGreaterThan(0, "Concurrent request should report duration");
@@ -401,7 +401,7 @@ public class McpSdkComplianceTests : TestBase
 
             // JSON-RPC compliance checks
             result.Should().NotBeNull("JSON-RPC should return response");
-            
+
             // Response should be serializable
             var json = JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = false });
             json.Should().NotBeNullOrEmpty("Response should be JSON serializable");

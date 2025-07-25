@@ -51,9 +51,10 @@ public class PrdTemplateCommand : Command<PrdTemplateSettings>
 
             // Generate template
             var outputPath = await _prdService.GenerateTemplateAsync(
-                settings.ProjectName, 
-                templateType, 
-                settings.OutputPath);
+                settings.ProjectName,
+                templateType,
+                settings.OutputPath,
+                CancellationToken.None);
 
             var panel = new Panel($"""
                 📝 [bold green]PRD template generated![/]
@@ -111,7 +112,7 @@ public class PrdTemplateCommand : Command<PrdTemplateSettings>
         }
 
         AnsiConsole.Write(table);
-        
+
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("Usage: [yellow]pks prd template <project-name> --type <template-type>[/]");
     }

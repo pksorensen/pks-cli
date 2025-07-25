@@ -20,7 +20,7 @@ public class DevcontainerFileGenerator : IDevcontainerFileGenerator
     public async Task<FileGenerationResult> GenerateDevcontainerJsonAsync(DevcontainerConfiguration configuration, string outputPath)
     {
         var result = new FileGenerationResult();
-        
+
         try
         {
             var devcontainerDir = Path.Combine(outputPath, ".devcontainer");
@@ -48,7 +48,7 @@ public class DevcontainerFileGenerator : IDevcontainerFileGenerator
             result.FileSize = content.Length;
 
             _logger.LogDebug("Generated devcontainer.json at {FilePath}", filePath);
-            
+
             return result;
         }
         catch (Exception ex)
@@ -91,7 +91,7 @@ public class DevcontainerFileGenerator : IDevcontainerFileGenerator
             result.FileSize = content.Length;
 
             _logger.LogDebug("Generated Dockerfile at {FilePath}", filePath);
-            
+
             return result;
         }
         catch (Exception ex)
@@ -134,7 +134,7 @@ public class DevcontainerFileGenerator : IDevcontainerFileGenerator
             result.FileSize = content.Length;
 
             _logger.LogDebug("Generated docker-compose.yml at {FilePath}", filePath);
-            
+
             return result;
         }
         catch (Exception ex)
@@ -163,7 +163,7 @@ public class DevcontainerFileGenerator : IDevcontainerFileGenerator
             result.ResolvedPath = fullPath;
 
             var directory = Directory.Exists(fullPath) ? fullPath : Path.GetDirectoryName(fullPath);
-            
+
             if (string.IsNullOrEmpty(directory))
             {
                 result.IsValid = false;
@@ -225,7 +225,7 @@ public class DevcontainerFileGenerator : IDevcontainerFileGenerator
         try
         {
             var filePath = Path.Combine(outputPath, ".gitignore");
-            
+
             var content = GenerateGitIgnoreContent();
 
             // If .gitignore already exists, append our entries
@@ -252,7 +252,7 @@ public class DevcontainerFileGenerator : IDevcontainerFileGenerator
             result.FileSize = content.Length;
 
             _logger.LogDebug("Generated/updated .gitignore at {FilePath}", filePath);
-            
+
             return result;
         }
         catch (Exception ex)
@@ -277,7 +277,7 @@ public class DevcontainerFileGenerator : IDevcontainerFileGenerator
             Directory.CreateDirectory(vscodeDir);
 
             var settings = GenerateVSCodeSettings(configuration);
-            
+
             var jsonOptions = new JsonSerializerOptions
             {
                 WriteIndented = true,
@@ -294,7 +294,7 @@ public class DevcontainerFileGenerator : IDevcontainerFileGenerator
             result.FileSize = content.Length;
 
             _logger.LogDebug("Generated VS Code settings.json at {FilePath}", filePath);
-            
+
             return result;
         }
         catch (Exception ex)
@@ -313,7 +313,7 @@ public class DevcontainerFileGenerator : IDevcontainerFileGenerator
         try
         {
             var filePath = Path.Combine(outputPath, "README-devcontainer.md");
-            
+
             var content = GenerateReadmeContent(configuration);
 
             await File.WriteAllTextAsync(filePath, content, Encoding.UTF8);
@@ -324,7 +324,7 @@ public class DevcontainerFileGenerator : IDevcontainerFileGenerator
             result.FileSize = content.Length;
 
             _logger.LogDebug("Generated README-devcontainer.md at {FilePath}", filePath);
-            
+
             return result;
         }
         catch (Exception ex)
@@ -360,19 +360,19 @@ public class DevcontainerFileGenerator : IDevcontainerFileGenerator
             // Generate additional files based on options
             if (options != null)
             {
-                if (options.CustomSettings.ContainsKey("generateGitIgnore") && 
+                if (options.CustomSettings.ContainsKey("generateGitIgnore") &&
                     options.CustomSettings["generateGitIgnore"] is true)
                 {
                     results.Add(await GenerateGitIgnoreAsync(outputPath));
                 }
 
-                if (options.CustomSettings.ContainsKey("generateVSCodeSettings") && 
+                if (options.CustomSettings.ContainsKey("generateVSCodeSettings") &&
                     options.CustomSettings["generateVSCodeSettings"] is true)
                 {
                     results.Add(await GenerateVSCodeSettingsAsync(configuration, outputPath));
                 }
 
-                if (options.CustomSettings.ContainsKey("generateReadme") && 
+                if (options.CustomSettings.ContainsKey("generateReadme") &&
                     options.CustomSettings["generateReadme"] is true)
                 {
                     results.Add(await GenerateReadmeAsync(configuration, outputPath));
@@ -396,7 +396,7 @@ public class DevcontainerFileGenerator : IDevcontainerFileGenerator
     private static string GenerateDockerfileContent(DevcontainerConfiguration configuration)
     {
         var baseImage = !string.IsNullOrEmpty(configuration.Image) ? configuration.Image : "mcr.microsoft.com/dotnet/sdk:8.0";
-        
+
         var dockerfile = new StringBuilder();
         dockerfile.AppendLine($"FROM {baseImage}");
         dockerfile.AppendLine();
@@ -469,7 +469,7 @@ public class DevcontainerFileGenerator : IDevcontainerFileGenerator
 
         compose.AppendLine("    volumes:");
         compose.AppendLine("      - ../..:/workspaces:cached");
-        
+
         if (configuration.Mounts?.Any() == true)
         {
             foreach (var mount in configuration.Mounts)
@@ -492,12 +492,12 @@ public class DevcontainerFileGenerator : IDevcontainerFileGenerator
         if (configuration.RemoteEnv?.Any() == true || configuration.ContainerEnv?.Any() == true)
         {
             compose.AppendLine("    environment:");
-            
+
             foreach (var env in configuration.RemoteEnv ?? new Dictionary<string, string>())
             {
                 compose.AppendLine($"      - {env.Key}={env.Value}");
             }
-            
+
             foreach (var env in configuration.ContainerEnv ?? new Dictionary<string, string>())
             {
                 compose.AppendLine($"      - {env.Key}={env.Value}");
@@ -659,17 +659,17 @@ public class DevcontainerFileGenerator : IDevcontainerFileGenerator
         readme.AppendLine("You can customize this development environment by modifying:");
         readme.AppendLine();
         readme.AppendLine("- `.devcontainer/devcontainer.json` - Main configuration file");
-        
+
         if (configuration.Build != null)
         {
             readme.AppendLine("- `.devcontainer/Dockerfile` - Container build instructions");
         }
-        
+
         if (!string.IsNullOrEmpty(configuration.DockerComposeFile))
         {
             readme.AppendLine("- `.devcontainer/docker-compose.yml` - Multi-service setup");
         }
-        
+
         readme.AppendLine();
         readme.AppendLine("For more information about Development Containers, see the [official documentation](https://containers.dev/).");
 

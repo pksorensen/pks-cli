@@ -31,7 +31,7 @@ public class ProjectToolService
         bool mcp = false,
         bool force = false)
     {
-        logger.LogInformation("MCP Tool: Initializing project '{ProjectName}' with template '{Template}'", 
+        logger.LogInformation("MCP Tool: Initializing project '{ProjectName}' with template '{Template}'",
             projectName, template);
 
         try
@@ -65,10 +65,10 @@ public class ProjectToolService
 
             // Create initialization context
             var initContext = initializationService.CreateContext(
-                projectName, 
-                template, 
-                targetDirectory, 
-                force, 
+                projectName,
+                template,
+                targetDirectory,
+                force,
                 options);
 
             // Run initialization
@@ -138,7 +138,7 @@ public class ProjectToolService
         string agentType = "deployment",
         string priority = "medium")
     {
-        logger.LogInformation("MCP Tool: Creating task '{TaskDescription}' for agent type '{AgentType}' with priority '{Priority}'", 
+        logger.LogInformation("MCP Tool: Creating task '{TaskDescription}' for agent type '{AgentType}' with priority '{Priority}'",
             taskDescription, agentType, priority);
 
         // Simulate task creation since we don't have a full task management system yet

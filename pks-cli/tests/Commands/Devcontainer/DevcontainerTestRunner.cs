@@ -73,7 +73,7 @@ public class DevcontainerTestRunner : TestBase
     private async Task TestDevcontainerService()
     {
         var service = DevcontainerServiceMocks.CreateDevcontainerService().Object;
-        
+
         // Test basic functionality
         var options = new DevcontainerOptions
         {
@@ -245,7 +245,7 @@ public class DevcontainerTestRunner : TestBase
     private async Task TestErrorHandling()
     {
         var service = DevcontainerServiceMocks.CreateDevcontainerService();
-        
+
         // Setup error scenario
         service.Setup(x => x.CreateConfigurationAsync(It.IsAny<DevcontainerOptions>()))
             .ReturnsAsync(new DevcontainerResult
@@ -265,7 +265,7 @@ public class DevcontainerTestRunner : TestBase
     private async Task TestValidation()
     {
         var service = DevcontainerServiceMocks.CreateDevcontainerService();
-        
+
         // Setup validation scenario
         service.Setup(x => x.ValidateConfigurationAsync(It.IsAny<DevcontainerConfiguration>()))
             .ReturnsAsync(new DevcontainerValidationResult

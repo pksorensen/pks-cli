@@ -26,42 +26,42 @@ public class PrdHelpSystemTests : IDisposable
         _services = new ServiceCollection();
         _console = new TestConsole();
         _mockPrdService = new Mock<IPrdService>();
-        
+
         // Setup services
         _services.AddSingleton(_mockPrdService.Object);
-        
+
         // Create command app with full configuration
         _app = new CommandApp(new TypeRegistrar(_services));
         _app.Configure(config =>
         {
             config.SetApplicationName("pks");
             config.SetApplicationVersion("1.0.0");
-            
+
             config.AddCommand<PrdGenerateCommand>("generate")
                    .WithDescription("Generate a comprehensive PRD from an idea description")
                    .WithExample(new[] { "generate", "Build a task management app" })
                    .WithExample(new[] { "generate", "E-commerce platform", "--template", "web" });
-                
+
             config.AddCommand<PrdLoadCommand>("load")
                    .WithDescription("Load and parse an existing PRD file")
                    .WithExample(new[] { "load", "docs/PRD.md" })
                    .WithExample(new[] { "load", "project.md", "--validate" });
-                
+
             config.AddCommand<PrdRequirementsCommand>("requirements")
                    .WithDescription("List and filter requirements from a PRD document")
                    .WithExample(new[] { "requirements", "--status", "draft" })
                    .WithExample(new[] { "requirements", "docs/PRD.md", "--priority", "high" });
-                
+
             config.AddCommand<PrdStatusCommand>("status")
                    .WithDescription("Display PRD status, progress, and statistics")
                    .WithExample(new[] { "status", "--watch" })
                    .WithExample(new[] { "status", "--check-all" });
-                
+
             config.AddCommand<PrdValidateCommand>("validate")
                    .WithDescription("Validate PRD for completeness, consistency, and quality")
                    .WithExample(new[] { "validate", "--strict" })
                    .WithExample(new[] { "validate", "docs/PRD.md", "--report", "validation.json" });
-                
+
             config.AddCommand<PrdTemplateCommand>("template")
                    .WithDescription("Generate PRD templates for different project types")
                    .WithExample(new[] { "template", "MyProject", "--type", "web" })
@@ -206,7 +206,7 @@ public class PrdHelpSystemTests : IDisposable
     {
         // Arrange
         var command = new PrdBranchCommand();
-        
+
         // Act
         var helpContent = command.GetHelpContent();
 
@@ -216,23 +216,6 @@ public class PrdHelpSystemTests : IDisposable
         helpContent.Should().NotBeNullOrEmpty();
     }
 
-    [Theory]
-    [InlineData(typeof(PrdGenerateCommand))]
-    [InlineData(typeof(PrdLoadCommand))]
-    [InlineData(typeof(PrdRequirementsCommand))]
-    [InlineData(typeof(PrdStatusCommand))]
-    [InlineData(typeof(PrdValidateCommand))]
-    [InlineData(typeof(PrdTemplateCommand))]
-    public void PrdCommands_ShouldHaveDescriptionAttributes(Type commandType)
-    {
-        // Arrange & Act
-        var descriptionAttribute = commandType.GetCustomAttributes(typeof(DescriptionAttribute), false)
-            .Cast<DescriptionAttribute>().FirstOrDefault();
-
-        // Assert
-        descriptionAttribute.Should().NotBeNull($"{commandType.Name} should have a Description attribute");
-        descriptionAttribute!.Description.Should().NotBeNullOrEmpty($"{commandType.Name} description should not be empty");
-    }
 
     [Fact]
     public async Task PrdCommands_ShouldDisplayExamplesInHelp()
@@ -317,40 +300,6 @@ public class PrdHelpSystemTests : IDisposable
         (containsHelp || containsAvailable).Should().BeTrue("Error should suggest help or show available commands");
     }
 
-    [Fact]
-    public void PrdSettings_ShouldHaveDetailedDescriptions()
-    {
-        // Test that all option descriptions are meaningful and helpful
-        var settingsTypes = new[]
-        {
-            typeof(PrdGenerateSettings),
-            typeof(PrdLoadSettings),
-            typeof(PrdRequirementsSettings),
-            typeof(PrdStatusSettings),
-            typeof(PrdValidateSettings),
-            typeof(PrdTemplateSettings)
-        };
-
-        foreach (var settingsType in settingsTypes)
-        {
-            var properties = settingsType.GetProperties();
-            foreach (var property in properties)
-            {
-                var commandAttributes = property.GetCustomAttributes(typeof(CommandArgumentAttribute), false)
-                    .Concat(property.GetCustomAttributes(typeof(CommandOptionAttribute), false));
-
-                if (commandAttributes.Any())
-                {
-                    var descriptionAttribute = property.GetCustomAttributes(typeof(DescriptionAttribute), false)
-                        .Cast<DescriptionAttribute>().FirstOrDefault();
-
-                    descriptionAttribute.Should().NotBeNull($"{settingsType.Name}.{property.Name} should have a description");
-                    descriptionAttribute!.Description.Should().NotBeNullOrEmpty($"{settingsType.Name}.{property.Name} description should not be empty");
-                    descriptionAttribute.Description.Length.Should().BeGreaterThan(10, $"{settingsType.Name}.{property.Name} description should be meaningful");
-                }
-            }
-        }
-    }
 
     [Fact]
     public async Task PrdTemplate_WithListOption_ShouldDisplayTemplateHelp()

@@ -17,7 +17,7 @@ public class GitHubService : IGitHubService
     {
         _httpClient = httpClient;
         _configurationService = configurationService;
-        
+
         // Configure HttpClient for GitHub API
         _httpClient.DefaultRequestHeaders.Add("User-Agent", "PKS-CLI/1.0.0");
         _httpClient.DefaultRequestHeaders.Add("Accept", "application/vnd.github.v3+json");
@@ -48,12 +48,12 @@ public class GitHubService : IGitHubService
         try
         {
             var response = await _httpClient.PostAsync($"{_baseUrl}/user/repos", content);
-            
+
             if (response.IsSuccessStatusCode)
             {
                 var responseJson = await response.Content.ReadAsStringAsync();
                 var repoData = JsonSerializer.Deserialize<JsonElement>(responseJson);
-                
+
                 return new GitHubRepository
                 {
                     Id = repoData.GetProperty("id").GetInt64(),
@@ -108,7 +108,7 @@ public class GitHubService : IGitHubService
             var validation = await ValidateTokenAsync(personalAccessToken);
             config.IsValid = validation.IsValid;
             config.TokenScopes = validation.Scopes;
-            
+
             // Store encrypted token for project
             await _configurationService.SetAsync($"github.{projectId}.token", personalAccessToken, false, true);
         }
@@ -131,12 +131,12 @@ public class GitHubService : IGitHubService
         try
         {
             var response = await _httpClient.GetAsync($"{_baseUrl}/repos/{owner}/{repositoryName}");
-            
+
             if (response.IsSuccessStatusCode)
             {
                 var responseJson = await response.Content.ReadAsStringAsync();
                 var repoData = JsonSerializer.Deserialize<JsonElement>(responseJson);
-                
+
                 return new GitHubRepository
                 {
                     Id = repoData.GetProperty("id").GetInt64(),
@@ -150,7 +150,7 @@ public class GitHubService : IGitHubService
                     CreatedAt = DateTime.Parse(repoData.GetProperty("created_at").GetString()!)
                 };
             }
-            
+
             return null;
         }
         catch
@@ -179,10 +179,10 @@ public class GitHubService : IGitHubService
         try
         {
             var response = await _httpClient.GetAsync($"{_baseUrl}/user");
-            
+
             if (response.IsSuccessStatusCode)
             {
-                var scopes = response.Headers.Contains("X-OAuth-Scopes") 
+                var scopes = response.Headers.Contains("X-OAuth-Scopes")
                     ? response.Headers.GetValues("X-OAuth-Scopes").FirstOrDefault()?.Split(',').Select(s => s.Trim()).ToArray() ?? Array.Empty<string>()
                     : Array.Empty<string>();
 
@@ -193,7 +193,7 @@ public class GitHubService : IGitHubService
                     ValidatedAt = DateTime.UtcNow
                 };
             }
-            
+
             return new GitHubTokenValidation
             {
                 IsValid = false,
@@ -237,12 +237,12 @@ public class GitHubService : IGitHubService
         try
         {
             var response = await _httpClient.PostAsync($"{_baseUrl}/repos/{owner}/{repositoryName}/issues", content);
-            
+
             if (response.IsSuccessStatusCode)
             {
                 var responseJson = await response.Content.ReadAsStringAsync();
                 var issueData = JsonSerializer.Deserialize<JsonElement>(responseJson);
-                
+
                 return new GitHubIssue
                 {
                     Id = issueData.GetProperty("id").GetInt64(),
@@ -389,10 +389,10 @@ public class GitHubService : IGitHubService
             {
                 var responseJson = await response.Content.ReadAsStringAsync();
                 var repoData = JsonSerializer.Deserialize<JsonElement>(responseJson);
-                
+
                 accessLevel.HasAccess = true;
-                accessLevel.AccessLevel = repoData.TryGetProperty("permissions", out var perms) 
-                    ? GetAccessLevelFromPermissions(perms) 
+                accessLevel.AccessLevel = repoData.TryGetProperty("permissions", out var perms)
+                    ? GetAccessLevelFromPermissions(perms)
                     : "read";
                 accessLevel.CanWrite = accessLevel.AccessLevel is "write" or "admin";
                 accessLevel.CanAdmin = accessLevel.AccessLevel == "admin";
@@ -409,7 +409,7 @@ public class GitHubService : IGitHubService
         catch (Exception ex)
         {
             accessLevel.ErrorMessage = ex.Message;
-            
+
             // Simulate access check for development/testing
             await Task.Delay(100);
             accessLevel.HasAccess = true;
@@ -446,7 +446,7 @@ public class GitHubService : IGitHubService
     {
         // Simulate git command execution
         await Task.Delay(100);
-        
+
         // In a real implementation, this would use Process.Start to execute git commands
         // For simulation purposes, we just delay to represent the operation
     }
@@ -457,12 +457,12 @@ public class GitHubService : IGitHubService
         {
             var uri = new Uri(repositoryUrl);
             var pathParts = uri.AbsolutePath.Trim('/').Split('/');
-            
+
             if (pathParts.Length >= 2)
             {
                 var owner = pathParts[0];
-                var repo = pathParts[1].EndsWith(".git") 
-                    ? pathParts[1][..^4] 
+                var repo = pathParts[1].EndsWith(".git")
+                    ? pathParts[1][..^4]
                     : pathParts[1];
                 return (owner, repo);
             }
@@ -471,7 +471,7 @@ public class GitHubService : IGitHubService
         {
             // Invalid URL format
         }
-        
+
         return (string.Empty, string.Empty);
     }
 
@@ -483,7 +483,7 @@ public class GitHubService : IGitHubService
             return "write";
         if (permissions.TryGetProperty("pull", out var pull) && pull.GetBoolean())
             return "read";
-        
+
         return "none";
     }
 
@@ -527,8 +527,8 @@ public class GitHubService : IGitHubService
             CommitCount = Random.Shared.Next(1, 50),
             PullRequestCount = Random.Shared.Next(0, 10),
             IssueCount = Random.Shared.Next(0, 5),
-            RecentCommits = new List<GitHubCommit> 
-            { 
+            RecentCommits = new List<GitHubCommit>
+            {
                 new() { Sha = "abc123", HtmlUrl = "https://github.com/example/repo/commit/abc123", Commit = new GitHubCommitDetail { Message = "Initial commit", Author = new GitHubCommitAuthor { Name = "Developer", Date = DateTime.UtcNow.AddDays(-3) } } },
                 new() { Sha = "def456", HtmlUrl = "https://github.com/example/repo/commit/def456", Commit = new GitHubCommitDetail { Message = "Add features", Author = new GitHubCommitAuthor { Name = "Developer", Date = DateTime.UtcNow.AddDays(-2) } } },
                 new() { Sha = "ghi789", HtmlUrl = "https://github.com/example/repo/commit/ghi789", Commit = new GitHubCommitDetail { Message = "Fix bugs", Author = new GitHubCommitAuthor { Name = "Developer", Date = DateTime.UtcNow.AddDays(-1) } } }

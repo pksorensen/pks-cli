@@ -72,7 +72,7 @@ public class DotNetProjectInitializer : CodeInitializer
     {
         var nullable = enableNullable ? "<Nullable>enable</Nullable>" : "";
         var usings = implicitUsings ? "<ImplicitUsings>enable</ImplicitUsings>" : "";
-        
+
         var outputType = context.Template.ToLowerInvariant() switch
         {
             "console" or "agent" => "Exe",

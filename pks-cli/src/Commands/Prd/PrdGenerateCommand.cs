@@ -91,7 +91,7 @@ public class PrdGenerateCommand : Command<PrdGenerateSettings>
 
             // Generate PRD with progress indicator
             PrdGenerationResult generateResult = null!;
-            
+
             await AnsiConsole.Status()
                 .Spinner(Spinner.Known.Star2)
                 .SpinnerStyle(Style.Parse("green bold"))
@@ -99,11 +99,11 @@ public class PrdGenerateCommand : Command<PrdGenerateSettings>
                 {
                     ctx.Status("Analyzing idea and requirements...");
                     await Task.Delay(500);
-                    
+
                     ctx.Status("Generating sections and requirements...");
-                    var generateResult = await _prdService.GeneratePrdAsync(request);
+                    generateResult = await _prdService.GeneratePrdAsync(request, CancellationToken.None);
                     // Note: generateResult contains the generated PRD information
-                    
+
                     ctx.Status("Formatting and saving PRD...");
                     await Task.Delay(300);
                 });
@@ -164,7 +164,7 @@ public class PrdGenerateCommand : Command<PrdGenerateSettings>
 
         if (string.IsNullOrEmpty(settings.ProjectName))
         {
-            settings.ProjectName = AnsiConsole.Ask<string>("What's the [cyan]project name[/]?", 
+            settings.ProjectName = AnsiConsole.Ask<string>("What's the [cyan]project name[/]?",
                 Path.GetFileName(Environment.CurrentDirectory));
         }
 

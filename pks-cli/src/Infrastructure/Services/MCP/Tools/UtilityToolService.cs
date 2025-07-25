@@ -30,7 +30,7 @@ public class UtilityToolService
         [Description("The width constraint for the ASCII art")] int width = 80,
         [Description("The font to use for ASCII art generation")] string font = "default")
     {
-        _logger.LogInformation("MCP Tool: Generating ASCII art for '{Text}' with style '{Style}' and font '{Font}'", 
+        _logger.LogInformation("MCP Tool: Generating ASCII art for '{Text}' with style '{Style}' and font '{Font}'",
             text, style, font);
 
         try
@@ -165,7 +165,7 @@ public class UtilityToolService
         [Description("The text alignment (left, center, right)")] string alignment = "center",
         [Description("The padding around the text (0-10)")] int padding = 2)
     {
-        _logger.LogInformation("MCP Tool: Generating banner for '{Text}' with border '{BorderStyle}' and alignment '{Alignment}'", 
+        _logger.LogInformation("MCP Tool: Generating banner for '{Text}' with border '{BorderStyle}' and alignment '{Alignment}'",
             text, borderStyle, alignment);
 
         try
@@ -298,10 +298,10 @@ public class UtilityToolService
     {
         var lines = new List<string>();
         var paddedText = text.PadCenter(Math.Max(text.Length, width - 4));
-        
+
         lines.Add($"{paddedText}");
         lines.Add($"{new string('=', paddedText.Length)}");
-        
+
         return string.Join('\n', lines);
     }
 
@@ -311,7 +311,7 @@ public class UtilityToolService
         // In a real implementation, this would use a proper QR code library
         var lines = new List<string>();
         var random = new Random(text.GetHashCode()); // Deterministic based on input
-        
+
         for (int i = 0; i < size; i++)
         {
             var line = "";
@@ -325,7 +325,7 @@ public class UtilityToolService
             }
             lines.Add(line);
         }
-        
+
         return string.Join('\n', lines);
     }
 
@@ -334,7 +334,7 @@ public class UtilityToolService
         var lines = text.Split('\n');
         var maxLength = lines.Max(l => l.Length);
         var totalWidth = maxLength + (padding * 2);
-        
+
         var (topLeft, topRight, bottomLeft, bottomRight, horizontal, vertical) = borderStyle.ToLower() switch
         {
             "double" => ("╔", "╗", "╚", "╝", "═", "║"),
@@ -344,16 +344,16 @@ public class UtilityToolService
         };
 
         var result = new List<string>();
-        
+
         // Top border
         result.Add($"{topLeft}{new string(horizontal[0], totalWidth)}{topRight}");
-        
+
         // Padding rows above text
         for (int i = 0; i < padding; i++)
         {
             result.Add($"{vertical}{new string(' ', totalWidth)}{vertical}");
         }
-        
+
         // Text lines
         foreach (var line in lines)
         {
@@ -363,19 +363,19 @@ public class UtilityToolService
                 "right" => line.PadLeft(maxLength),
                 _ => line.PadCenter(maxLength) // center
             };
-            
+
             result.Add($"{vertical}{new string(' ', padding)}{alignedLine}{new string(' ', padding)}{vertical}");
         }
-        
+
         // Padding rows below text
         for (int i = 0; i < padding; i++)
         {
             result.Add($"{vertical}{new string(' ', totalWidth)}{vertical}");
         }
-        
+
         // Bottom border
         result.Add($"{bottomLeft}{new string(horizontal[0], totalWidth)}{bottomRight}");
-        
+
         return string.Join('\n', result);
     }
 
@@ -383,7 +383,7 @@ public class UtilityToolService
     {
         var uniqueChars = ascii.Distinct().Count();
         var lines = ascii.Split('\n').Length;
-        
+
         return (uniqueChars, lines) switch
         {
             ( < 10, < 5) => "simple",
@@ -413,11 +413,11 @@ public static class StringExtensions
     public static string PadCenter(this string text, int totalWidth)
     {
         if (text.Length >= totalWidth) return text;
-        
+
         var padding = totalWidth - text.Length;
         var leftPadding = padding / 2;
         var rightPadding = padding - leftPadding;
-        
+
         return new string(' ', leftPadding) + text + new string(' ', rightPadding);
     }
 }

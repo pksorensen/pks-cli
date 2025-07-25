@@ -49,7 +49,7 @@ public class DotNetFeature : BaseDevcontainerFeature
     public override async Task<bool> IsCompatibleWithImageAsync(string baseImage)
     {
         await Task.CompletedTask;
-        
+
         // .NET is compatible with most Linux-based images
         var incompatibleImages = new[] { "alpine", "scratch" };
         return !incompatibleImages.Any(img => baseImage.Contains(img, StringComparison.OrdinalIgnoreCase));
@@ -58,7 +58,7 @@ public class DotNetFeature : BaseDevcontainerFeature
     public override async Task<List<string>> GetRecommendedExtensionsAsync()
     {
         await Task.CompletedTask;
-        
+
         return new List<string>
         {
             "ms-dotnettools.csharp",
@@ -69,7 +69,7 @@ public class DotNetFeature : BaseDevcontainerFeature
     public override async Task<Dictionary<string, string>> GetEnvironmentVariablesAsync()
     {
         await Task.CompletedTask;
-        
+
         return new Dictionary<string, string>
         {
             ["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1",
@@ -81,14 +81,14 @@ public class DotNetFeature : BaseDevcontainerFeature
     public override async Task<List<int>> GetForwardedPortsAsync()
     {
         await Task.CompletedTask;
-        
+
         return new List<int> { 5000, 5001 }; // Default ASP.NET Core ports
     }
 
     public override async Task<List<string>> GetPostCreateCommandsAsync()
     {
         await Task.CompletedTask;
-        
+
         return new List<string>
         {
             "dotnet --version",
@@ -100,7 +100,7 @@ public class DotNetFeature : BaseDevcontainerFeature
     public override async Task<Dictionary<string, object>> GenerateConfigurationAsync(Dictionary<string, object>? options = null)
     {
         var config = await base.GenerateConfigurationAsync(options);
-        
+
         // Validate version format
         if (config.TryGetValue("version", out var versionObj) && versionObj is string version)
         {

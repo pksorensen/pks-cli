@@ -86,7 +86,7 @@ public class PrdServiceTests
             // Assert
             Assert.True(result);
             Assert.True(File.Exists(tempPath));
-            
+
             var content = await File.ReadAllTextAsync(tempPath);
             Assert.Contains("Test Project", content);
         }
@@ -151,57 +151,92 @@ public class PrdServiceTests
     {
         // Arrange
         var document = CreateTestPrdDocument();
+        var tempPath = Path.GetTempFileName() + ".md";
 
-        // Act
-        var validationOptions = new PrdValidationOptions
+        try
         {
-            FilePath = "test.md",
-            Strictness = "standard",
-            IncludeSuggestions = true
-        };
-        var validation = await _prdService.ValidatePrdAsync(validationOptions);
+            // Save the test document to a temp file for validation
+            await _prdService.SavePrdAsync(document, tempPath);
 
-        // Assert
-        Assert.True(validation.IsValid);
-        Assert.Empty(validation.Errors);
-        Assert.True(validation.CompletenessScore > 0);
+            // Act
+            var validationOptions = new PrdValidationOptions
+            {
+                FilePath = tempPath,
+                Strictness = "standard",
+                IncludeSuggestions = true
+            };
+            var validation = await _prdService.ValidatePrdAsync(validationOptions);
+
+            // Assert
+            Assert.True(validation.IsValid);
+            Assert.Empty(validation.Errors ?? new List<string>());
+            Assert.True(validation.CompletenessScore > 0);
+        }
+        finally
+        {
+            // Cleanup
+            if (File.Exists(tempPath))
+                File.Delete(tempPath);
+        }
     }
 
     [Fact]
     public async Task ValidatePrdAsync_WithIncompleteDocument_ShouldReturnErrors()
     {
-        // Arrange
-        var document = new PrdDocument
-        {
-            Configuration = new PrdConfiguration(), // Empty configuration
-            Requirements = new List<PrdRequirement>(),
-            UserStories = new List<UserStory>(),
-            Sections = new List<PrdSection>()
-        };
+        // Arrange - Create a temporary empty PRD file
+        var tempPath = Path.GetTempFileName() + ".md";
 
-        // Act
-        var validationOptions = new PrdValidationOptions
+        try
         {
-            FilePath = "empty.md",
-            Strictness = "strict",
-            IncludeSuggestions = true
-        };
-        var validation = await _prdService.ValidatePrdAsync(validationOptions);
+            // Create a minimal PRD file with empty configuration
+            var emptyPrdContent = @"# Empty Project - Product Requirements Document
 
-        // Assert
-        Assert.False(validation.IsValid);
-        Assert.NotEmpty(validation.Errors);
-        Assert.True(validation.CompletenessScore < 100);
+**Version:** 1.0.0
+**Author:** 
+**Created:** 2024-01-01
+**Updated:** 2024-01-01
+
+## Overview
+
+
+## Requirements
+
+
+## User Stories
+
+";
+            await File.WriteAllTextAsync(tempPath, emptyPrdContent);
+
+            // Act
+            var validationOptions = new PrdValidationOptions
+            {
+                FilePath = tempPath,
+                Strictness = "strict",
+                IncludeSuggestions = true
+            };
+            var validation = await _prdService.ValidatePrdAsync(validationOptions);
+
+            // Assert
+            Assert.False(validation.IsValid);
+            Assert.NotEmpty(validation.Errors ?? new List<object>());
+            Assert.True(validation.CompletenessScore < 100);
+        }
+        finally
+        {
+            // Cleanup
+            if (File.Exists(tempPath))
+                File.Delete(tempPath);
+        }
     }
 
     [Fact]
     public async Task FindPrdFilesAsync_WithValidDirectory_ShouldFindPrdFiles()
     {
         // Arrange
-        var tempDir = Path.GetTempPath();
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         var prdFile1 = Path.Combine(tempDir, "PRD.md");
         var prdFile2 = Path.Combine(tempDir, "requirements.md");
-        
+
         try
         {
             Directory.CreateDirectory(tempDir);
@@ -239,7 +274,7 @@ public class PrdServiceTests
             // Assert
             Assert.Equal(tempPath, result);
             Assert.True(File.Exists(tempPath));
-            
+
             var content = await File.ReadAllTextAsync(tempPath);
             Assert.Contains(projectName, content);
         }

@@ -8,77 +8,84 @@ namespace PKS.Commands.Devcontainer;
 /// </summary>
 public abstract class DevcontainerCommand<T> : Command<T> where T : DevcontainerSettings
 {
-    protected static void DisplayBanner(string operation)
+    protected readonly IAnsiConsole Console;
+
+    protected DevcontainerCommand(IAnsiConsole console)
+    {
+        Console = console ?? throw new ArgumentNullException(nameof(console));
+    }
+
+    protected void DisplayBanner(string operation)
     {
         var panel = new Panel($"[bold cyan]🐳 PKS Devcontainer {operation}[/]")
             .BorderStyle(Style.Parse("cyan"))
             .Padding(1, 0);
 
-        AnsiConsole.Write(panel);
-        AnsiConsole.WriteLine();
+        Console.Write(panel);
+        Console.WriteLine();
     }
 
-    protected static void DisplaySuccess(string message)
+    protected void DisplaySuccess(string message)
     {
-        AnsiConsole.MarkupLine($"[green]✓ {message}[/]");
+        Console.MarkupLine($"[green]✓ {message}[/]");
     }
 
-    protected static void DisplayError(string message)
+    protected void DisplayError(string message)
     {
-        AnsiConsole.MarkupLine($"[red]✗ {message}[/]");
+        Console.MarkupLine($"[red]✗ {message}[/]");
     }
 
-    protected static void DisplayWarning(string message)
+    protected void DisplayWarning(string message)
     {
-        AnsiConsole.MarkupLine($"[yellow]⚠ {message}[/]");
+        Console.MarkupLine($"[yellow]⚠ {message}[/]");
     }
 
-    protected static void DisplayInfo(string message)
+    protected void DisplayInfo(string message)
     {
-        AnsiConsole.MarkupLine($"[cyan]ℹ {message}[/]");
+        Console.MarkupLine($"[cyan]ℹ {message}[/]");
     }
 
-    protected static void DisplayProgress(string message)
+    protected void DisplayProgress(string message)
     {
-        AnsiConsole.MarkupLine($"[dim]  {message}[/]");
+        Console.MarkupLine($"[dim]  {message}[/]");
     }
 
-    protected static bool PromptConfirmation(string message, bool defaultValue = true)
+    protected bool PromptConfirmation(string message, bool defaultValue = true)
     {
-        return AnsiConsole.Confirm(message, defaultValue);
+        return Console.Confirm(message, defaultValue);
     }
 
-    protected static string PromptText(string message, string? defaultValue = null)
+    protected string PromptText(string message, string? defaultValue = null)
     {
         var prompt = new TextPrompt<string>(message);
-        
+
         if (!string.IsNullOrEmpty(defaultValue))
         {
             prompt.DefaultValue(defaultValue);
         }
 
-        return AnsiConsole.Prompt(prompt);
+        return Console.Prompt(prompt);
     }
 
-    protected static TItem PromptSelection<TItem>(string message, IEnumerable<TItem> choices) where TItem : notnull
+    protected TItem PromptSelection<TItem>(string message, IEnumerable<TItem> choices) where TItem : notnull
     {
-        return AnsiConsole.Prompt(
+        return Console.Prompt(
             new SelectionPrompt<TItem>()
                 .Title(message)
                 .AddChoices(choices)
         );
     }
 
-    protected static List<TItem> PromptMultiSelection<TItem>(string message, IEnumerable<TItem> choices) where TItem : notnull
+    protected List<TItem> PromptMultiSelection<TItem>(string message, IEnumerable<TItem> choices) where TItem : notnull
     {
-        return AnsiConsole.Prompt(
+        return Console.Prompt(
             new MultiSelectionPrompt<TItem>()
                 .Title(message)
                 .AddChoices(choices)
         );
     }
 
-    protected static void DisplayTable<TItem>(string title, IEnumerable<TItem> items, params (string Header, Func<TItem, string> ValueSelector)[] columns)
+    protected void DisplayTable<TItem>(string title, IEnumerable<TItem> items, params (string Header, Func<TItem, string> ValueSelector)[] columns)
     {
         var table = new Table()
             .Title(title)
@@ -95,49 +102,49 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
             table.AddRow(values);
         }
 
-        AnsiConsole.Write(table);
+        Console.Write(table);
     }
 
-    protected static void DisplayValidationResults(IEnumerable<string> errors, IEnumerable<string> warnings)
+    protected void DisplayValidationResults(IEnumerable<string> errors, IEnumerable<string> warnings)
     {
         if (errors.Any())
         {
-            AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[red]Validation Errors:[/]");
+            Console.WriteLine();
+            Console.MarkupLine("[red]Validation Errors:[/]");
             foreach (var error in errors)
             {
-                AnsiConsole.MarkupLine($"[red]  • {error}[/]");
+                Console.MarkupLine($"[red]  • {error}[/]");
             }
         }
 
         if (warnings.Any())
         {
-            AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[yellow]Validation Warnings:[/]");
+            Console.WriteLine();
+            Console.MarkupLine("[yellow]Validation Warnings:[/]");
             foreach (var warning in warnings)
             {
-                AnsiConsole.MarkupLine($"[yellow]  • {warning}[/]");
+                Console.MarkupLine($"[yellow]  • {warning}[/]");
             }
         }
     }
 
-    protected static void DisplayGeneratedFiles(IEnumerable<string> files)
+    protected void DisplayGeneratedFiles(IEnumerable<string> files)
     {
         if (files.Any())
         {
-            AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[cyan]Generated Files:[/]");
+            Console.WriteLine();
+            Console.MarkupLine("[cyan]Generated Files:[/]");
             foreach (var file in files)
             {
                 var relativePath = Path.GetRelativePath(Directory.GetCurrentDirectory(), file);
-                AnsiConsole.MarkupLine($"[dim]  • {relativePath}[/]");
+                Console.MarkupLine($"[dim]  • {relativePath}[/]");
             }
         }
     }
 
-    protected static async Task WithSpinnerAsync(string message, Func<Task> operation)
+    protected async Task WithSpinnerAsync(string message, Func<Task> operation)
     {
-        await AnsiConsole.Status()
+        await Console.Status()
             .SpinnerStyle(Style.Parse("cyan"))
             .Spinner(Spinner.Known.Dots)
             .StartAsync(message, async _ =>
@@ -146,9 +153,9 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
             });
     }
 
-    protected static async Task<TResult> WithSpinnerAsync<TResult>(string message, Func<Task<TResult>> operation)
+    protected async Task<TResult> WithSpinnerAsync<TResult>(string message, Func<Task<TResult>> operation)
     {
-        return await AnsiConsole.Status()
+        return await Console.Status()
             .SpinnerStyle(Style.Parse("cyan"))
             .Spinner(Spinner.Known.Dots)
             .StartAsync(message, async _ =>
@@ -157,22 +164,22 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
             });
     }
 
-    protected static void DisplayFeatureTable(IEnumerable<(string Id, string Name, string Description, string Category)> features)
+    protected void DisplayFeatureTable(IEnumerable<(string Id, string Name, string Description, string Category)> features)
     {
         var table = new Table()
             .Title("[cyan]Available Features[/]")
             .Border(TableBorder.Rounded)
             .AddColumn("ID")
-            .AddColumn("Name") 
+            .AddColumn("Name")
             .AddColumn("Description")
             .AddColumn("Category");
 
         foreach (var (id, name, description, category) in features)
         {
-            var truncatedDescription = description.Length > 50 
+            var truncatedDescription = description.Length > 50
                 ? description[..47] + "..."
                 : description;
-                
+
             table.AddRow(
                 $"[yellow]{id}[/]",
                 $"[white]{name}[/]",
@@ -181,10 +188,10 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
             );
         }
 
-        AnsiConsole.Write(table);
+        Console.Write(table);
     }
 
-    protected static void DisplayExtensionTable(IEnumerable<(string Id, string Name, string Publisher, string Description)> extensions)
+    protected void DisplayExtensionTable(IEnumerable<(string Id, string Name, string Publisher, string Description)> extensions)
     {
         var table = new Table()
             .Title("[cyan]VS Code Extensions[/]")
@@ -196,10 +203,10 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
 
         foreach (var (id, name, publisher, description) in extensions)
         {
-            var truncatedDescription = description.Length > 40 
+            var truncatedDescription = description.Length > 40
                 ? description[..37] + "..."
                 : description;
-                
+
             table.AddRow(
                 $"[yellow]{id}[/]",
                 $"[white]{name}[/]",
@@ -208,10 +215,10 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
             );
         }
 
-        AnsiConsole.Write(table);
+        Console.Write(table);
     }
 
-    protected static void DisplayConfigurationSummary(string name, string? image, IEnumerable<string> features, IEnumerable<string> extensions, IEnumerable<int> ports)
+    protected void DisplayConfigurationSummary(string name, string? image, IEnumerable<string> features, IEnumerable<string> extensions, IEnumerable<int> ports)
     {
         var table = new Table()
             .Title("[cyan]Configuration Summary[/]")
@@ -221,11 +228,11 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
 
         table.AddRow("[yellow]Name[/]", $"[white]{name}[/]");
         table.AddRow("[yellow]Base Image[/]", $"[dim]{image ?? "N/A"}[/]");
-        
+
         var featuresList = features.ToList();
         if (featuresList.Any())
         {
-            var featuresText = featuresList.Count <= 3 
+            var featuresText = featuresList.Count <= 3
                 ? string.Join(", ", featuresList)
                 : $"{string.Join(", ", featuresList.Take(3))} and {featuresList.Count - 3} more";
             table.AddRow("[yellow]Features[/]", $"[green]{featuresText}[/]");
@@ -234,11 +241,11 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
         {
             table.AddRow("[yellow]Features[/]", "[dim]None[/]");
         }
-        
+
         var extensionsList = extensions.ToList();
         if (extensionsList.Any())
         {
-            var extensionsText = extensionsList.Count <= 3 
+            var extensionsText = extensionsList.Count <= 3
                 ? string.Join(", ", extensionsList)
                 : $"{string.Join(", ", extensionsList.Take(3))} and {extensionsList.Count - 3} more";
             table.AddRow("[yellow]Extensions[/]", $"[blue]{extensionsText}[/]");
@@ -247,7 +254,7 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
         {
             table.AddRow("[yellow]Extensions[/]", "[dim]None[/]");
         }
-        
+
         var portsList = ports.ToList();
         if (portsList.Any())
         {
@@ -258,10 +265,10 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
             table.AddRow("[yellow]Forwarded Ports[/]", "[dim]None[/]");
         }
 
-        AnsiConsole.Write(table);
+        Console.Write(table);
     }
 
-    protected static string ValidateAndResolvePath(string path)
+    protected string ValidateAndResolvePath(string path)
     {
         if (string.IsNullOrEmpty(path))
         {
@@ -269,13 +276,13 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
         }
 
         // Convert relative paths to absolute
-        var resolvedPath = Path.IsPathFullyQualified(path) 
-            ? path 
+        var resolvedPath = Path.IsPathFullyQualified(path)
+            ? path
             : Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), path));
 
         // Ensure the directory exists
         var directory = Directory.Exists(resolvedPath) ? resolvedPath : Path.GetDirectoryName(resolvedPath);
-        
+
         if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
         {
             if (PromptConfirmation($"Directory '{directory}' does not exist. Create it?"))

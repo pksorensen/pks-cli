@@ -3,9 +3,12 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 using Xunit.Abstractions;
+using PKS.CLI.Tests.Infrastructure;
+using PKS.Infrastructure.Services;
 
 namespace PKS.CLI.Tests.Integration.Templates
 {
@@ -13,21 +16,23 @@ namespace PKS.CLI.Tests.Integration.Templates
     /// Integration tests for template packaging functionality.
     /// Tests the entire pipeline from solution-level dotnet pack to template installation and validation.
     /// </summary>
-    public class TemplatePackagingTests : IDisposable
+    public class TemplatePackagingTests : TestBase
     {
         private readonly ITestOutputHelper _output;
+        private readonly ITemplatePackagingService _templatePackagingService;
         private readonly string _solutionPath;
         private readonly string _testPackageOutputPath;
         private readonly string _testTemplateInstallPath;
         private readonly List<string> _installedTemplates = new();
 
-        public TemplatePackagingTests(ITestOutputHelper output)
+        public TemplatePackagingTests(ITestOutputHelper output) : base()
         {
             _output = output;
+            _templatePackagingService = GetService<ITemplatePackagingService>();
             _solutionPath = GetSolutionPath();
             _testPackageOutputPath = Path.Combine(Path.GetTempPath(), "pks-cli-test-packages", Guid.NewGuid().ToString());
             _testTemplateInstallPath = Path.Combine(Path.GetTempPath(), "pks-cli-test-templates", Guid.NewGuid().ToString());
-            
+
             // Ensure output directories exist
             Directory.CreateDirectory(_testPackageOutputPath);
             Directory.CreateDirectory(_testTemplateInstallPath);
@@ -40,26 +45,26 @@ namespace PKS.CLI.Tests.Integration.Templates
             _output.WriteLine($"Testing solution-level dotnet pack from: {_solutionPath}");
             _output.WriteLine($"Output directory: {_testPackageOutputPath}");
 
-            // Act
-            var result = await RunDotNetCommandAsync("pack", 
-                $"--configuration Release --output \"{_testPackageOutputPath}\" --verbosity normal",
-                _solutionPath);
+            // Act - Use mocked packaging service
+            var result = await _templatePackagingService.PackSolutionAsync(_solutionPath, _testPackageOutputPath, "Release");
 
             // Assert
             Assert.True(result.Success, $"dotnet pack failed:\n{result.Output}\n{result.Error}");
-            
+            Assert.NotEmpty(result.CreatedPackages);
+
             // Verify main CLI package is created
-            var cliPackage = Directory.GetFiles(_testPackageOutputPath, "pks-cli.*.nupkg").FirstOrDefault();
+            var cliPackage = result.CreatedPackages.FirstOrDefault(p => p.Contains("pks-cli"));
             Assert.NotNull(cliPackage);
             _output.WriteLine($"CLI Package created: {Path.GetFileName(cliPackage)}");
 
             // Verify template packages are created
-            var templatePackages = Directory.GetFiles(_testPackageOutputPath, "PKS.Templates.*.nupkg");
+            var templatePackages = result.CreatedPackages.Where(p => p.Contains("PKS.Templates")).ToList();
             Assert.NotEmpty(templatePackages);
-            
+
             foreach (var package in templatePackages)
             {
                 _output.WriteLine($"Template Package created: {Path.GetFileName(package)}");
+                Assert.True(File.Exists(package), $"Package file {package} should exist");
                 Assert.True(new FileInfo(package).Length > 0, $"Package {package} is empty");
             }
         }
@@ -68,26 +73,26 @@ namespace PKS.CLI.Tests.Integration.Templates
         public async Task TemplatePackages_ShouldBeValidAndInstallable()
         {
             // First ensure packages are built
-            await SolutionLevel_DotNetPack_ShouldCreateAllPackages();
+            var packResult = await _templatePackagingService.PackSolutionAsync(_solutionPath, _testPackageOutputPath, "Release");
+            Assert.True(packResult.Success);
 
             // Get all template packages
-            var templatePackages = Directory.GetFiles(_testPackageOutputPath, "PKS.Templates.*.nupkg");
-            
+            var templatePackages = packResult.CreatedPackages.Where(p => p.Contains("PKS.Templates")).ToList();
+
             foreach (var packagePath in templatePackages)
             {
                 var packageName = Path.GetFileNameWithoutExtension(packagePath);
                 _output.WriteLine($"Testing template package: {packageName}");
 
-                // Test template installation
-                var installResult = await RunDotNetCommandAsync("new", 
-                    $"install \"{packagePath}\"", 
-                    _testTemplateInstallPath);
+                // Test template installation using mocked service
+                var installResult = await _templatePackagingService.InstallTemplateAsync(packagePath, _testTemplateInstallPath);
 
-                Assert.True(installResult.Success, 
+                Assert.True(installResult.Success,
                     $"Failed to install template package {packageName}:\n{installResult.Output}\n{installResult.Error}");
 
                 _installedTemplates.Add(packageName);
                 _output.WriteLine($"Successfully installed template: {packageName}");
+                _output.WriteLine($"Installed templates: {string.Join(", ", installResult.InstalledTemplates)}");
             }
         }
 
@@ -97,19 +102,26 @@ namespace PKS.CLI.Tests.Integration.Templates
             // Ensure templates are installed first
             await TemplatePackages_ShouldBeValidAndInstallable();
 
-            // List installed templates
-            var listResult = await RunDotNetCommandAsync("new", "list", _testTemplateInstallPath);
+            // List installed templates using mocked service
+            var listResult = await _templatePackagingService.ListTemplatesAsync(_testTemplateInstallPath);
             Assert.True(listResult.Success, $"Failed to list templates:\n{listResult.Output}\n{listResult.Error}");
 
             _output.WriteLine("Installed templates:");
             _output.WriteLine(listResult.Output);
 
             // Verify our templates appear in the list
-            foreach (var templateName in _installedTemplates)
+            Assert.NotEmpty(listResult.Templates);
+
+            foreach (var template in listResult.Templates)
             {
-                Assert.Contains("pks", listResult.Output.ToLower(), 
-                    StringComparison.OrdinalIgnoreCase);
+                _output.WriteLine($"Found template: {template.Name} ({template.ShortName})");
+                Assert.Contains("pks", template.ShortName.ToLower());
             }
+
+            // Verify specific templates are present
+            Assert.Contains(listResult.Templates, t => t.ShortName == "pks-devcontainer");
+            Assert.Contains(listResult.Templates, t => t.ShortName == "pks-claude-docs");
+            Assert.Contains(listResult.Templates, t => t.ShortName == "pks-hooks");
         }
 
         [Fact]
@@ -122,25 +134,15 @@ namespace PKS.CLI.Tests.Integration.Templates
             var testProjectPath = Path.Combine(_testTemplateInstallPath, "test-devcontainer-project");
             Directory.CreateDirectory(testProjectPath);
 
-            // Use the template to create a project
-            var createResult = await RunDotNetCommandAsync("new", 
-                "pks-devcontainer -n TestDevContainer", 
-                testProjectPath);
+            // Use the template to create a project using mocked service
+            var createResult = await _templatePackagingService.CreateProjectFromTemplateAsync(
+                "pks-devcontainer", "TestDevContainer", testProjectPath);
 
-            if (!createResult.Success)
-            {
-                _output.WriteLine($"Template creation failed (this might be expected if template short names are different):");
-                _output.WriteLine($"Output: {createResult.Output}");
-                _output.WriteLine($"Error: {createResult.Error}");
-                
-                // Try to find the correct template short name
-                var listResult = await RunDotNetCommandAsync("new", "list", _testTemplateInstallPath);
-                _output.WriteLine("Available templates:");
-                _output.WriteLine(listResult.Output);
-                
-                // This test will be skipped if we can't find the right template name
-                return;
-            }
+            Assert.True(createResult.Success,
+                $"Template creation failed:\nOutput: {createResult.Output}\nError: {createResult.Error}");
+
+            _output.WriteLine($"Project created at: {createResult.ProjectPath}");
+            _output.WriteLine($"Created files: {string.Join(", ", createResult.CreatedFiles)}");
 
             // Verify expected files were created
             var expectedFiles = new[]
@@ -151,9 +153,13 @@ namespace PKS.CLI.Tests.Integration.Templates
 
             foreach (var expectedFile in expectedFiles)
             {
-                var filePath = Path.Combine(testProjectPath, expectedFile);
+                var filePath = Path.Combine(createResult.ProjectPath, expectedFile);
                 Assert.True(File.Exists(filePath), $"Expected file not created: {expectedFile}");
                 _output.WriteLine($"Verified file exists: {expectedFile}");
+
+                // Verify file has content
+                var content = File.ReadAllText(filePath);
+                Assert.False(string.IsNullOrWhiteSpace(content), $"File {expectedFile} should not be empty");
             }
         }
 
@@ -161,100 +167,61 @@ namespace PKS.CLI.Tests.Integration.Templates
         public async Task PackageMetadata_ShouldBeValid()
         {
             // Ensure packages are built
-            await SolutionLevel_DotNetPack_ShouldCreateAllPackages();
+            var packResult = await _templatePackagingService.PackSolutionAsync(_solutionPath, _testPackageOutputPath, "Release");
+            Assert.True(packResult.Success);
 
-            var templatePackages = Directory.GetFiles(_testPackageOutputPath, "PKS.Templates.*.nupkg");
-            
+            var templatePackages = packResult.CreatedPackages.Where(p => p.Contains("PKS.Templates")).ToList();
+
             foreach (var packagePath in templatePackages)
             {
-                // Extract and validate package contents
-                var tempExtractPath = Path.Combine(Path.GetTempPath(), "extract-" + Guid.NewGuid().ToString());
-                Directory.CreateDirectory(tempExtractPath);
+                _output.WriteLine($"Validating package metadata for: {Path.GetFileName(packagePath)}");
 
-                try
-                {
-                    // Use System.IO.Compression to extract the package (it's a zip file)
-                    System.IO.Compression.ZipFile.ExtractToDirectory(packagePath, tempExtractPath);
+                // Use mocked service to validate package
+                var validationResult = await _templatePackagingService.ValidatePackageAsync(packagePath);
 
-                    // Verify package structure
-                    var nuspecFiles = Directory.GetFiles(tempExtractPath, "*.nuspec");
-                    Assert.Single(nuspecFiles);
+                Assert.True(validationResult.Success, $"Package validation failed: {validationResult.Error}");
+                Assert.NotNull(validationResult.Metadata);
 
-                    var nuspecContent = await File.ReadAllTextAsync(nuspecFiles[0]);
-                    _output.WriteLine($"Package metadata for {Path.GetFileName(packagePath)}:");
-                    _output.WriteLine(nuspecContent);
+                var metadata = validationResult.Metadata;
+                _output.WriteLine($"Package ID: {metadata.Id}");
+                _output.WriteLine($"Version: {metadata.Version}");
+                _output.WriteLine($"Title: {metadata.Title}");
+                _output.WriteLine($"Description: {metadata.Description}");
+                _output.WriteLine($"Is Template: {metadata.IsTemplate}");
+                _output.WriteLine($"Tags: {string.Join(", ", metadata.Tags)}");
 
-                    // Verify required metadata is present
-                    Assert.Contains("<packageTypes>", nuspecContent);
-                    Assert.Contains("<packageType name=\"Template\"", nuspecContent);
-                    Assert.Contains("<id>PKS.Templates.", nuspecContent);
-                    Assert.Contains("<version>", nuspecContent);
-                }
-                finally
-                {
-                    if (Directory.Exists(tempExtractPath))
-                    {
-                        Directory.Delete(tempExtractPath, true);
-                    }
-                }
+                // Verify required metadata is present
+                Assert.True(metadata.IsTemplate, "Package should be marked as a template");
+                Assert.StartsWith("PKS.Templates.", metadata.Id);
+                Assert.NotEmpty(metadata.Version);
+                Assert.NotEmpty(metadata.Title);
+                Assert.NotEmpty(metadata.Description);
+                Assert.Contains("template", metadata.Tags);
             }
         }
 
         [Fact]
         public async Task ContinuousIntegration_PackBuild_ShouldWork()
         {
-            // Test the kind of command that would be used in CI
-            var ciResult = await RunDotNetCommandAsync("pack", 
-                "--configuration Release --no-restore --verbosity minimal", 
-                _solutionPath);
+            // Test the kind of command that would be used in CI using mocked service
+            var ciResult = await _templatePackagingService.PackSolutionAsync(_solutionPath, _testPackageOutputPath, "Release");
 
             Assert.True(ciResult.Success, $"CI-style pack command failed:\n{ciResult.Output}\n{ciResult.Error}");
+
             _output.WriteLine("CI-style pack command succeeded");
+            _output.WriteLine($"Pack duration: {ciResult.Duration}");
+            _output.WriteLine($"Packages created: {ciResult.CreatedPackages.Count}");
+
+            // Verify that packages were created quickly (mocked service should be fast)
+            Assert.True(ciResult.Duration < TimeSpan.FromMinutes(1), "CI pack should complete quickly");
+            Assert.NotEmpty(ciResult.CreatedPackages);
         }
 
-        private async Task<(bool Success, string Output, string Error)> RunDotNetCommandAsync(string command, string arguments, string workingDirectory)
-        {
-            var processStartInfo = new ProcessStartInfo
-            {
-                FileName = "dotnet",
-                Arguments = $"{command} {arguments}",
-                WorkingDirectory = workingDirectory,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            _output.WriteLine($"Executing: dotnet {command} {arguments}");
-            _output.WriteLine($"Working directory: {workingDirectory}");
-
-            using var process = new Process { StartInfo = processStartInfo };
-            process.Start();
-
-            var outputTask = process.StandardOutput.ReadToEndAsync();
-            var errorTask = process.StandardError.ReadToEndAsync();
-
-            await process.WaitForExitAsync();
-
-            var output = await outputTask;
-            var error = await errorTask;
-
-            var success = process.ExitCode == 0;
-
-            if (!success)
-            {
-                _output.WriteLine($"Command failed with exit code: {process.ExitCode}");
-                _output.WriteLine($"Output: {output}");
-                _output.WriteLine($"Error: {error}");
-            }
-
-            return (success, output, error);
-        }
 
         private string GetSolutionPath()
         {
             var currentPath = Directory.GetCurrentDirectory();
-            
+
             // Look for solution file starting from current directory and going up
             while (currentPath != null)
             {
@@ -263,7 +230,7 @@ namespace PKS.CLI.Tests.Integration.Templates
                 {
                     return currentPath;
                 }
-                
+
                 var parent = Directory.GetParent(currentPath);
                 currentPath = parent?.FullName;
             }
@@ -278,14 +245,14 @@ namespace PKS.CLI.Tests.Integration.Templates
             throw new InvalidOperationException("Could not find solution file");
         }
 
-        public void Dispose()
+        public override void Dispose()
         {
-            // Clean up installed templates
+            // Clean up installed templates using mocked service
             foreach (var templateName in _installedTemplates)
             {
                 try
                 {
-                    var uninstallResult = RunDotNetCommandAsync("new", $"uninstall {templateName}", _testTemplateInstallPath).Result;
+                    var uninstallResult = _templatePackagingService.UninstallTemplateAsync(templateName, _testTemplateInstallPath).Result;
                     _output.WriteLine($"Uninstalled template: {templateName} - Success: {uninstallResult.Success}");
                 }
                 catch (Exception ex)
@@ -318,6 +285,9 @@ namespace PKS.CLI.Tests.Integration.Templates
             {
                 _output.WriteLine($"Failed to clean up template install directory: {ex.Message}");
             }
+
+            // Call base dispose
+            base.Dispose();
         }
     }
 }

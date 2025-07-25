@@ -83,7 +83,7 @@ public class GitHubIntegrationInitializer : CodeInitializer
             // Create .pks/project-info.md for documentation
             var projectInfoContent = GenerateProjectInfoMarkdown(projectIdentity, context);
             var projectInfoPath = Path.Combine(context.TargetDirectory, ".pks", "project-info.md");
-            
+
             Directory.CreateDirectory(Path.GetDirectoryName(projectInfoPath)!);
             await CreateFileAsync("/.pks/project-info.md", projectInfoContent, context, result);
 
@@ -124,16 +124,16 @@ public class GitHubIntegrationInitializer : CodeInitializer
             {
                 // Configure GitHub integration
                 var config = await _gitHubService.ConfigureProjectIntegrationAsync(projectId, repositoryUrl, token);
-                
+
                 if (config.IsValid)
                 {
                     // Associate repository with project
                     await _projectIdentityService.AssociateGitHubRepositoryAsync(projectId, repositoryUrl, token);
-                    
+
                     // Create GitHub configuration file
                     var githubConfigContent = GenerateGitHubConfigurationFile(config, context);
                     await CreateFileAsync("/.pks/github-config.json", githubConfigContent, context, result);
-                    
+
                     result.Message += $" GitHub repository: {repositoryUrl}";
                 }
                 else

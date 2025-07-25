@@ -150,3 +150,66 @@ public class HookTestResult
     public string? Error => Errors?.FirstOrDefault(); // First error for convenience
     public int ExitCode { get; set; } = 0;
 }
+
+/// <summary>
+/// Result of validating hook configuration
+/// </summary>
+public class HookValidationResult
+{
+    public bool IsValid { get; set; } = true;
+    public List<string> Errors { get; set; } = new();
+    public List<string> Warnings { get; set; } = new();
+    public string? Message => Errors.Any() ? string.Join("; ", Errors) : (Warnings.Any() ? string.Join("; ", Warnings) : null);
+}
+
+/// <summary>
+/// Represents a Claude Code hook decision response
+/// Used for JSON output format required by Claude Code hooks
+/// </summary>
+public class HookDecision
+{
+    /// <summary>
+    /// Hook decision: "block", "approve", or null for proceed
+    /// </summary>
+    public string? Decision { get; set; }
+
+    /// <summary>
+    /// Optional message explaining the decision (required for "block")
+    /// </summary>
+    public string? Message { get; set; }
+
+    /// <summary>
+    /// Whether Claude should continue processing (default: true)
+    /// </summary>
+    public bool? Continue { get; set; }
+
+    /// <summary>
+    /// Reason for stopping when Continue is false
+    /// </summary>
+    public string? StopReason { get; set; }
+
+    /// <summary>
+    /// Whether to suppress stdout output (default: false)
+    /// </summary>
+    public bool? SuppressOutput { get; set; }
+
+    /// <summary>
+    /// Creates a decision to block with a reason
+    /// </summary>
+    public static HookDecision Block(string message) => new() { Decision = "block", Message = message };
+
+    /// <summary>
+    /// Creates a decision to approve/bypass permissions
+    /// </summary>
+    public static HookDecision Approve() => new() { Decision = "approve" };
+
+    /// <summary>
+    /// Creates a decision to proceed (no explicit decision)
+    /// </summary>
+    public static HookDecision Proceed() => new();
+
+    /// <summary>
+    /// Creates a decision to stop processing
+    /// </summary>
+    public static HookDecision Stop(string reason) => new() { Continue = false, StopReason = reason };
+}

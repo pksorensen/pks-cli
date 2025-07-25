@@ -45,7 +45,7 @@ public class DevcontainerInitializer : CodeInitializer
     {
         // Run if devcontainer is explicitly enabled
         var enabled = context.GetOption("devcontainer", false);
-        
+
         // Auto-enable for certain templates that benefit from devcontainers
         if (!enabled)
         {
@@ -69,19 +69,19 @@ public class DevcontainerInitializer : CodeInitializer
         {
             // Prepare devcontainer options based on context
             var devcontainerOptions = await PrepareDevcontainerOptionsAsync(context);
-            
+
             // Create devcontainer configuration
             AnsiConsole.MarkupLine("[cyan]Creating devcontainer configuration...[/]");
             var devcontainerResult = await _devcontainerService.CreateConfigurationAsync(devcontainerOptions);
-            
+
             if (!devcontainerResult.Success)
             {
                 var errorMsg = $"Failed to create devcontainer configuration: {devcontainerResult.Message}";
                 result.Errors.Add(errorMsg);
-                
+
                 // Add individual errors from the devcontainer service
                 result.Errors.AddRange(devcontainerResult.Errors);
-                
+
                 AnsiConsole.MarkupLine($"[red]✗[/] {errorMsg}");
                 return;
             }
@@ -94,12 +94,12 @@ public class DevcontainerInitializer : CodeInitializer
 
             // Add warnings from devcontainer creation
             result.Warnings.AddRange(devcontainerResult.Warnings);
-            
+
             // Store devcontainer info in result data
             result.Data["devcontainer_enabled"] = "true";
             result.Data["devcontainer_features"] = string.Join(", ", devcontainerOptions.Features);
             result.Data["devcontainer_template"] = devcontainerOptions.Template ?? "custom";
-            
+
             result.Warnings.Add("Remember to install the Dev Containers extension in VS Code");
             result.Warnings.Add("Use 'Dev Containers: Reopen in Container' command to start development");
 
@@ -223,12 +223,12 @@ public class DevcontainerInitializer : CodeInitializer
             case "api":
                 options.Features.Add("ghcr.io/devcontainers/features/docker-in-docker:2");
                 break;
-                
+
             case "web":
                 options.Features.Add("ghcr.io/devcontainers/features/node:1");
                 options.Features.Add("ghcr.io/devcontainers/features/docker-in-docker:2");
                 break;
-                
+
             case "agent":
             case "agentic":
                 options.Features.Add("ghcr.io/devcontainers/features/docker-in-docker:2");
@@ -247,7 +247,7 @@ public class DevcontainerInitializer : CodeInitializer
         {
             options.Features.Add("ghcr.io/devcontainers/features/github-cli:1");
         }
-        
+
         return Task.CompletedTask;
     }
 
@@ -259,13 +259,13 @@ public class DevcontainerInitializer : CodeInitializer
                 options.ForwardPorts.Add(5000); // HTTP
                 options.ForwardPorts.Add(5001); // HTTPS
                 break;
-                
+
             case "web":
                 options.ForwardPorts.Add(5000); // HTTP
                 options.ForwardPorts.Add(5001); // HTTPS
                 options.ForwardPorts.Add(3000); // Potential frontend dev server
                 break;
-                
+
             case "agent":
             case "agentic":
                 options.ForwardPorts.Add(8080); // MCP server port

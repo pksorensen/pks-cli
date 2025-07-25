@@ -65,7 +65,7 @@ public class DevcontainerService : IDevcontainerService
 
             // Start with base configuration
             DevcontainerConfiguration config;
-            
+
             if (options.SelectedTemplate != null)
             {
                 // Apply NuGet/external template
@@ -139,19 +139,19 @@ public class DevcontainerService : IDevcontainerService
 
             // Generate or extract files
             List<string> generatedFiles;
-            
+
             if (options.SelectedTemplate != null)
             {
                 // Extract NuGet template files
-                _logger.LogDebug("Extracting NuGet template files for {TemplateId} v{Version}", 
+                _logger.LogDebug("Extracting NuGet template files for {TemplateId} v{Version}",
                     options.SelectedTemplate.Id, options.TemplateVersion ?? "1.0.0");
-                    
+
                 var extractionResult = await _nugetTemplateService.ExtractTemplateAsync(
                     options.SelectedTemplate.Id,
                     options.TemplateVersion ?? "1.0.0",
                     options.OutputPath,
                     options.NuGetSources.Any() ? options.NuGetSources : null);
-                    
+
                 if (!extractionResult.Success)
                 {
                     result.Success = false;
@@ -159,7 +159,7 @@ public class DevcontainerService : IDevcontainerService
                     result.Message = "Template extraction failed";
                     return result;
                 }
-                
+
                 generatedFiles = extractionResult.ExtractedFiles;
                 _logger.LogDebug("Successfully extracted {Count} files from NuGet template", generatedFiles.Count);
             }
@@ -176,7 +176,7 @@ public class DevcontainerService : IDevcontainerService
                     result.Message = "File generation failed";
                     return result;
                 }
-                
+
                 generatedFiles = generationResults.Select(r => r.FilePath).ToList();
             }
 
@@ -186,7 +186,7 @@ public class DevcontainerService : IDevcontainerService
             result.Message = "Devcontainer configuration created successfully";
             result.Duration = DateTime.UtcNow - startTime;
 
-            _logger.LogInformation("Successfully created devcontainer configuration in {Duration}ms", 
+            _logger.LogInformation("Successfully created devcontainer configuration in {Duration}ms",
                 result.Duration.TotalMilliseconds);
 
             return result;
@@ -204,20 +204,41 @@ public class DevcontainerService : IDevcontainerService
 
     public async Task<DevcontainerValidationResult> ValidateConfigurationAsync(DevcontainerConfiguration configuration)
     {
+        if (configuration == null)
+        {
+            throw new ArgumentNullException(nameof(configuration));
+        }
+
         var result = new DevcontainerValidationResult();
         var errors = new List<string>();
         var warnings = new List<string>();
 
         try
         {
-            // Validate required fields
-            if (string.IsNullOrEmpty(configuration.Name))
+            // Validate required fields  
+            if (string.IsNullOrWhiteSpace(configuration.Name))
             {
-                errors.Add("Name is required");
+                errors.Add("Project name is required");
             }
-            else if (!IsValidName(configuration.Name))
+            else
             {
-                errors.Add("Name contains invalid characters");
+                // Detailed validation with specific error messages
+                if (configuration.Name.Contains(' '))
+                {
+                    errors.Add("Project name cannot contain spaces");
+                }
+                else if (configuration.Name != configuration.Name.ToLowerInvariant())
+                {
+                    errors.Add("Project name must be lowercase");
+                }
+                else if (char.IsDigit(configuration.Name[0]))
+                {
+                    errors.Add("Project name cannot start with a number");
+                }
+                else if (configuration.Name.Any(c => !char.IsLetterOrDigit(c) && c != '-' && c != '_'))
+                {
+                    errors.Add("Project name contains invalid characters");
+                }
             }
 
             if (string.IsNullOrEmpty(configuration.Image) && configuration.Build == null)
@@ -285,8 +306,8 @@ public class DevcontainerService : IDevcontainerService
             }
 
             // Determine severity
-            result.Severity = errors.Any() ? ValidationSeverity.Error : 
-                             warnings.Any() ? ValidationSeverity.Warning : 
+            result.Severity = errors.Any() ? ValidationSeverity.Error :
+                             warnings.Any() ? ValidationSeverity.Warning :
                              ValidationSeverity.None;
 
             result.IsValid = !errors.Any();
@@ -456,7 +477,7 @@ public class DevcontainerService : IDevcontainerService
             // Merge arrays (combine unique values)
             merged.ForwardPorts = baseConfig.ForwardPorts.Union(overlayConfig.ForwardPorts).Distinct().ToArray();
             merged.Mounts = baseConfig.Mounts.Union(overlayConfig.Mounts).Distinct().ToArray();
-            
+
             if (baseConfig.RunArgs != null || overlayConfig.RunArgs != null)
             {
                 merged.RunArgs = (baseConfig.RunArgs ?? Array.Empty<string>())
@@ -583,7 +604,7 @@ public class DevcontainerService : IDevcontainerService
             result.ResolvedPath = fullPath;
 
             var directory = Directory.Exists(fullPath) ? fullPath : Path.GetDirectoryName(fullPath);
-            
+
             if (string.IsNullOrEmpty(directory))
             {
                 result.IsValid = false;
@@ -779,7 +800,7 @@ public class DevcontainerService : IDevcontainerService
     private async Task<DevcontainerConfiguration> CreateUpdatedConfigurationAsync(DevcontainerConfiguration existing, DevcontainerOptions updates)
     {
         var updated = JsonSerializer.Deserialize<DevcontainerConfiguration>(JsonSerializer.Serialize(existing));
-        
+
         if (updated == null)
         {
             throw new InvalidOperationException("Failed to clone existing configuration");
@@ -855,16 +876,34 @@ public class DevcontainerService : IDevcontainerService
 
     private static bool IsValidName(string name)
     {
-        // Name should contain only alphanumeric characters, hyphens, and underscores
-        return Regex.IsMatch(name, @"^[a-zA-Z0-9_-]+$");
+        if (string.IsNullOrWhiteSpace(name))
+            return false;
+
+        // Check for spaces
+        if (name.Contains(' '))
+            return false;
+
+        // Check for uppercase letters (should be lowercase only)
+        if (name != name.ToLowerInvariant())
+            return false;
+
+        // Check if starts with number
+        if (char.IsDigit(name[0]))
+            return false;
+
+        // Check for invalid characters (allow only letters, digits, hyphens, underscores)
+        if (name.Any(c => !char.IsLetterOrDigit(c) && c != '-' && c != '_'))
+            return false;
+
+        return true;
     }
 
     private static bool IsValidImageName(string imageName)
     {
         // Basic image name validation
-        return !string.IsNullOrEmpty(imageName) && 
-               !imageName.Contains(' ') && 
-               !imageName.StartsWith('-') && 
+        return !string.IsNullOrEmpty(imageName) &&
+               !imageName.Contains(' ') &&
+               !imageName.StartsWith('-') &&
                !imageName.EndsWith('-');
     }
 
@@ -872,7 +911,7 @@ public class DevcontainerService : IDevcontainerService
     public async Task<DevcontainerResult> InitializeAsync(DevcontainerConfiguration config)
     {
         _logger.LogInformation("Initializing devcontainer with name: {Name}", config.Name);
-        
+
         var options = new DevcontainerOptions
         {
             Name = config.Name,
@@ -897,12 +936,12 @@ public class DevcontainerService : IDevcontainerService
     public async Task<DevcontainerResult> AddFeaturesAsync(List<string> features)
     {
         _logger.LogInformation("Adding features: {Features}", string.Join(", ", features));
-        
+
         var result = new DevcontainerResult { Success = true };
-        
+
         // Simulate adding features
         await Task.Delay(100);
-        
+
         try
         {
             var configPath = Path.Combine(Environment.CurrentDirectory, ".devcontainer", "devcontainer.json");
@@ -929,7 +968,7 @@ public class DevcontainerService : IDevcontainerService
     public async Task<bool> IsRunningAsync()
     {
         await Task.Delay(10); // Simulate async operation
-        
+
         // In a real implementation, you would check Docker containers
         // For now, simulate that 30% of the time a devcontainer is running
         return DateTime.Now.Millisecond % 10 < 3;
@@ -938,7 +977,7 @@ public class DevcontainerService : IDevcontainerService
     public async Task<DevcontainerRuntimeInfo> GetRuntimeInfoAsync()
     {
         await Task.Delay(50); // Simulate async operation
-        
+
         return new DevcontainerRuntimeInfo
         {
             ContainerId = $"dc-{Guid.NewGuid().ToString()[..8]}",
@@ -959,9 +998,9 @@ public class DevcontainerService : IDevcontainerService
     public async Task<DevcontainerResult> RebuildAsync(bool force = false)
     {
         _logger.LogInformation("Rebuilding devcontainer, force: {Force}", force);
-        
+
         await Task.Delay(1000); // Simulate rebuild operation
-        
+
         return new DevcontainerResult
         {
             Success = true,
@@ -979,9 +1018,9 @@ public class DevcontainerService : IDevcontainerService
     public async Task<DevcontainerConfiguration> GetConfigurationAsync()
     {
         await Task.Delay(50); // Simulate async operation
-        
+
         var configPath = Path.Combine(Environment.CurrentDirectory, ".devcontainer", "devcontainer.json");
-        
+
         if (File.Exists(configPath))
         {
             try
@@ -996,7 +1035,7 @@ public class DevcontainerService : IDevcontainerService
                 return CreateDefaultConfiguration();
             }
         }
-        
+
         return CreateDefaultConfiguration();
     }
 
@@ -1015,13 +1054,13 @@ public class DevcontainerService : IDevcontainerService
     private List<string> GetExtensionsFromConfig(DevcontainerConfiguration config)
     {
         var extensions = new List<string>();
-        
+
         if (config.Customizations.TryGetValue("vscode", out var vsCodeCustomization))
         {
             // In a real implementation, you would properly parse the JSON structure
             // For now, return an empty list
         }
-        
+
         return extensions;
     }
 }

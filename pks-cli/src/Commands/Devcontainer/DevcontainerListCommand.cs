@@ -45,7 +45,7 @@ public class DevcontainerListCommand : Command<DevcontainerListSettings>
 
             // Determine what to list based on command name and options
             var commandName = context.Name?.ToLower();
-            
+
             return commandName switch
             {
                 "features" => await ListFeaturesAsync(settings),
@@ -228,7 +228,7 @@ public class DevcontainerListCommand : Command<DevcontainerListSettings>
         // Apply filters
         if (!string.IsNullOrEmpty(settings.SearchQuery))
         {
-            templates = templates.Where(t => 
+            templates = templates.Where(t =>
                 t.Name.Contains(settings.SearchQuery, StringComparison.OrdinalIgnoreCase) ||
                 t.Description.Contains(settings.SearchQuery, StringComparison.OrdinalIgnoreCase) ||
                 t.Category.Contains(settings.SearchQuery, StringComparison.OrdinalIgnoreCase)
@@ -237,7 +237,7 @@ public class DevcontainerListCommand : Command<DevcontainerListSettings>
 
         if (!string.IsNullOrEmpty(settings.Category))
         {
-            templates = templates.Where(t => 
+            templates = templates.Where(t =>
                 t.Category.Equals(settings.Category, StringComparison.OrdinalIgnoreCase)
             ).ToList();
         }
@@ -262,7 +262,7 @@ public class DevcontainerListCommand : Command<DevcontainerListSettings>
             // Get all available categories and then get extensions from each
             var categories = await _extensionService.GetAvailableCategoriesAsync();
             extensions = new List<VsCodeExtension>();
-            
+
             foreach (var category in categories)
             {
                 var categoryExtensions = await _extensionService.GetExtensionsByCategoryAsync(category);
@@ -297,7 +297,7 @@ public class DevcontainerListCommand : Command<DevcontainerListSettings>
 
         foreach (var feature in features.Take(settings.Limit ?? features.Count))
         {
-            var description = feature.Description.Length > 60 
+            var description = feature.Description.Length > 60
                 ? feature.Description[..57] + "..."
                 : feature.Description;
 
@@ -331,7 +331,7 @@ public class DevcontainerListCommand : Command<DevcontainerListSettings>
                     new Text($"Repository: {feature.Repository}"),
                     new Text($"Description: {feature.Description}"),
                     new Text($"Tags: {string.Join(", ", feature.Tags)}"),
-                    feature.Dependencies.Any() 
+                    feature.Dependencies.Any()
                         ? new Text($"Dependencies: {string.Join(", ", feature.Dependencies)}")
                         : new Text("Dependencies: None"),
                     feature.ConflictsWith.Any()
@@ -378,7 +378,7 @@ public class DevcontainerListCommand : Command<DevcontainerListSettings>
 
         foreach (var template in templates.Take(settings.Limit ?? templates.Count))
         {
-            var baseImage = template.BaseImage.Length > 30 
+            var baseImage = template.BaseImage.Length > 30
                 ? template.BaseImage[..27] + "..."
                 : template.BaseImage;
 

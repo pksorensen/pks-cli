@@ -18,7 +18,7 @@ public class InitializationSummary
     public int FilesCreated { get; set; }
     public int WarningsCount { get; set; }
     public int ErrorsCount { get; set; }
-    
+
     public TimeSpan Duration => EndTime?.Subtract(StartTime) ?? TimeSpan.Zero;
 }
 

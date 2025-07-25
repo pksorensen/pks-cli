@@ -39,7 +39,7 @@ public class McpManagementToolService
         bool includeTools = true,
         bool includeResources = true)
     {
-        _logger.LogInformation("MCP Tool: Getting MCP server status, includeConfig: {IncludeConfig}, includeTools: {IncludeTools}, includeResources: {IncludeResources}", 
+        _logger.LogInformation("MCP Tool: Getting MCP server status, includeConfig: {IncludeConfig}, includeTools: {IncludeTools}, includeResources: {IncludeResources}",
             includeConfig, includeTools, includeResources);
 
         try
@@ -153,7 +153,7 @@ public class McpManagementToolService
         try
         {
             var isRunning = await _mcpHostingService.IsRunningAsync();
-            
+
             if (isRunning && !force)
             {
                 return new
@@ -178,7 +178,7 @@ public class McpManagementToolService
             if (startResult)
             {
                 var serverInfo = await _mcpHostingService.GetServerInfoAsync();
-                
+
                 return new
                 {
                     success = true,
@@ -230,13 +230,13 @@ public class McpManagementToolService
         bool force = false,
         int gracePeriodSeconds = 10)
     {
-        _logger.LogInformation("MCP Tool: Stopping MCP server, force: {Force}, gracePeriod: {GracePeriod}s", 
+        _logger.LogInformation("MCP Tool: Stopping MCP server, force: {Force}, gracePeriod: {GracePeriod}s",
             force, gracePeriodSeconds);
 
         try
         {
             var isRunning = await _mcpHostingService.IsRunningAsync();
-            
+
             if (!isRunning)
             {
                 return new
@@ -304,7 +304,7 @@ public class McpManagementToolService
         string transport = "stdio",
         int stopGracePeriodSeconds = 5)
     {
-        _logger.LogInformation("MCP Tool: Restarting MCP server with transport '{Transport}', stopGracePeriod: {StopGracePeriod}s", 
+        _logger.LogInformation("MCP Tool: Restarting MCP server with transport '{Transport}', stopGracePeriod: {StopGracePeriod}s",
             transport, stopGracePeriodSeconds);
 
         try
@@ -343,7 +343,7 @@ public class McpManagementToolService
             if (startResult)
             {
                 var newServerInfo = await _mcpHostingService.GetServerInfoAsync();
-                
+
                 return new
                 {
                     success = true,
@@ -359,7 +359,7 @@ public class McpManagementToolService
                         supportedTransports = newServerInfo.SupportedTransports,
                         activeConnections = newServerInfo.ActiveConnections
                     },
-                    message = isRunning 
+                    message = isRunning
                         ? $"MCP server restarted successfully (was running for {originalUptime:hh\\:mm\\:ss})"
                         : "MCP server started successfully"
                 };
@@ -401,14 +401,14 @@ public class McpManagementToolService
         string? logLevel = null,
         bool includeMetrics = true)
     {
-        _logger.LogInformation("MCP Tool: Getting MCP server logs, entryCount: {EntryCount}, logLevel: {LogLevel}, includeMetrics: {IncludeMetrics}", 
+        _logger.LogInformation("MCP Tool: Getting MCP server logs, entryCount: {EntryCount}, logLevel: {LogLevel}, includeMetrics: {IncludeMetrics}",
             entryCount, logLevel, includeMetrics);
 
         try
         {
             // Get server logs
             var logs = await _mcpHostingService.GetLogsAsync(entryCount, logLevel);
-            
+
             var baseResult = new
             {
                 success = true,
@@ -430,7 +430,7 @@ public class McpManagementToolService
             if (includeMetrics)
             {
                 var metrics = await _mcpHostingService.GetPerformanceMetricsAsync();
-                
+
                 return new
                 {
                     success = baseResult.success,
@@ -483,7 +483,7 @@ public class McpManagementToolService
         int? maxConnections = null,
         int? requestTimeoutSeconds = null)
     {
-        _logger.LogInformation("MCP Tool: Configuring MCP server, defaultTransport: {DefaultTransport}, enableAutoToolDiscovery: {EnableAutoToolDiscovery}", 
+        _logger.LogInformation("MCP Tool: Configuring MCP server, defaultTransport: {DefaultTransport}, enableAutoToolDiscovery: {EnableAutoToolDiscovery}",
             defaultTransport, enableAutoToolDiscovery);
 
         try
@@ -505,13 +505,13 @@ public class McpManagementToolService
             // Track changes
             if (defaultTransport != null && defaultTransport != currentConfig.DefaultTransport)
                 changes.Add($"Default transport: {currentConfig.DefaultTransport} → {defaultTransport}");
-            
+
             if (enableAutoToolDiscovery.HasValue && enableAutoToolDiscovery != currentConfig.EnableAutoToolDiscovery)
                 changes.Add($"Auto tool discovery: {currentConfig.EnableAutoToolDiscovery} → {enableAutoToolDiscovery}");
-            
+
             if (maxConnections.HasValue && maxConnections != currentConfig.MaxConnections)
                 changes.Add($"Max connections: {currentConfig.MaxConnections} → {maxConnections}");
-            
+
             if (requestTimeoutSeconds.HasValue && requestTimeoutSeconds != currentConfig.RequestTimeoutSeconds)
                 changes.Add($"Request timeout: {currentConfig.RequestTimeoutSeconds}s → {requestTimeoutSeconds}s");
 
@@ -521,7 +521,7 @@ public class McpManagementToolService
             if (configResult)
             {
                 var isRunning = await _mcpHostingService.IsRunningAsync();
-                
+
                 return new
                 {
                     success = true,
@@ -539,7 +539,7 @@ public class McpManagementToolService
                     serverRunning = isRunning,
                     restartRequired = changes.Count > 0 && isRunning,
                     configuredAt = DateTime.UtcNow,
-                    message = changes.Count > 0 
+                    message = changes.Count > 0
                         ? $"Configuration updated with {changes.Count} changes. Restart may be required for all changes to take effect."
                         : "No configuration changes were necessary"
                 };
