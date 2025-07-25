@@ -6,10 +6,14 @@ using PKS.Infrastructure.Initializers.Service;
 public class InitCommand : Command<InitCommand.Settings>
 {
     private readonly IInitializationService _initializationService;
+    private readonly IAnsiConsole _console;
+    private readonly string? _workingDirectory;
 
-    public InitCommand(IInitializationService initializationService)
+    public InitCommand(IInitializationService initializationService, IAnsiConsole? console = null, string? workingDirectory = null)
     {
         _initializationService = initializationService;
+        _console = console ?? AnsiConsole.Console;
+        _workingDirectory = workingDirectory;
     }
     public class Settings : CommandSettings
     {
@@ -58,15 +62,23 @@ public class InitCommand : Command<InitCommand.Settings>
         // Interactive project name collection if not provided
         if (string.IsNullOrEmpty(settings.ProjectName))
         {
-            settings.ProjectName = AnsiConsole.Ask<string>("What's the [green]name[/] of your project?");
+            settings.ProjectName = _console.Ask<string>("What's the [green]name[/] of your project?");
+        }
+
+        // Validate project name
+        var projectNameValidation = _initializationService.ValidateProjectName(settings.ProjectName);
+        if (!projectNameValidation.IsValid)
+        {
+            _console.MarkupLine($"[red]❌ {projectNameValidation.ErrorMessage}[/]");
+            return 1;
         }
 
         // Interactive project description collection if not provided
         if (string.IsNullOrEmpty(settings.Description))
         {
-            settings.Description = AnsiConsole.Ask<string>(
-                "What's the [cyan]description/objective[/] of your project?",
-                defaultValue: $"A .NET project initialized with PKS CLI using {settings.Template} template");
+            settings.Description = _console.Ask<string>(
+                "What's the [cyan]description/objective[/] of your project?") 
+                ?? $"A .NET project initialized with PKS CLI using {settings.Template} template";
         }
 
         // Prepare options for initializers
@@ -89,14 +101,15 @@ public class InitCommand : Command<InitCommand.Settings>
             options["devcontainer-features"] = features;
         }
 
-        // Create target directory path
-        var targetDirectory = Path.Combine(Environment.CurrentDirectory, settings.ProjectName);
+        // Create target directory path - use working directory override for testing or default to current directory
+        var workingDir = _workingDirectory ?? Environment.CurrentDirectory;
+        var targetDirectory = Path.Combine(workingDir, settings.ProjectName);
 
         // Validate target directory first
         var validation = await _initializationService.ValidateTargetDirectoryAsync(targetDirectory, settings.Force);
         if (!validation.IsValid)
         {
-            AnsiConsole.MarkupLine($"[red]❌ {validation.ErrorMessage}[/]");
+            _console.MarkupLine($"[red]❌ {validation.ErrorMessage}[/]");
             return 1;
         }
 
@@ -113,7 +126,7 @@ public class InitCommand : Command<InitCommand.Settings>
             // Run initialization with status display
             InitializationSummary summary = null!;
 
-            await AnsiConsole.Status()
+            await _console.Status()
                 .Spinner(Spinner.Known.Star2)
                 .SpinnerStyle(Style.Parse("green bold"))
                 .StartAsync($"Initializing project '{settings.ProjectName}'...", async ctx =>
@@ -156,24 +169,24 @@ public class InitCommand : Command<InitCommand.Settings>
                 .BorderStyle("cyan1")
                 .Header(" [bold cyan]🚀 PKS Project Ready[/] ");
 
-                AnsiConsole.Write(panel);
+                _console.Write(panel);
 
                 // Show warnings if any
                 if (summary.WarningsCount > 0)
                 {
-                    AnsiConsole.MarkupLine($"\n[yellow]⚠️ {summary.WarningsCount} warning(s) occurred during initialization[/]");
+                    _console.MarkupLine($"\n[yellow]⚠️ {summary.WarningsCount} warning(s) occurred during initialization[/]");
                 }
 
                 return 0;
             }
             else
             {
-                AnsiConsole.MarkupLine($"[red]❌ Initialization failed: {summary.ErrorMessage}[/]");
+                _console.MarkupLine($"[red]❌ Initialization failed: {summary.ErrorMessage}[/]");
 
                 // Show detailed error information if available
                 if (summary.ErrorsCount > 0)
                 {
-                    AnsiConsole.MarkupLine($"[red]{summary.ErrorsCount} error(s) encountered[/]");
+                    _console.MarkupLine($"[red]{summary.ErrorsCount} error(s) encountered[/]");
                 }
 
                 return 1;
@@ -181,8 +194,9 @@ public class InitCommand : Command<InitCommand.Settings>
         }
         catch (Exception ex)
         {
-            AnsiConsole.WriteException(ex);
+            _console.WriteException(ex);
             return 1;
         }
     }
+
 }
