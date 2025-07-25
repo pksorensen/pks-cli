@@ -1,7 +1,6 @@
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using PKS.CLI.Tests.Infrastructure;
-using PKS.CLI.Tests.Infrastructure.Fixtures.Devcontainer;
 using PKS.Infrastructure.Initializers.Context;
 using PKS.Infrastructure.Initializers.Implementations;
 using PKS.Infrastructure.Services;
@@ -15,7 +14,7 @@ namespace PKS.CLI.Tests.Integration.Devcontainer;
 /// Comprehensive end-to-end tests for the devcontainer initialization system
 /// Tests the complete workflow from empty project to initialized devcontainer
 /// </summary>
-public class DevcontainerEndToEndTests : TestBase
+public class DevcontainerEndToEndTests : IntegrationTestBase
 {
     private readonly IDevcontainerService _devcontainerService;
     private readonly IDevcontainerTemplateService _templateService;
@@ -133,18 +132,11 @@ public class DevcontainerEndToEndTests : TestBase
         var testName = "feature-resolution-test";
         var projectPath = CreateTestProject(testName);
 
-        var context = new InitializationContext
+        var context = CreateInitializationContext(testName, "api", projectPath, new Dictionary<string, object>
         {
-            ProjectName = testName,
-            TargetDirectory = projectPath,
-            WorkingDirectory = projectPath,
-            Template = "api",
-            Options = new Dictionary<string, object>
-            {
-                ["devcontainer"] = true,
-                ["devcontainer-features"] = new[] { "dotnet", "docker", "azure-cli" }
-            }
-        };
+            ["devcontainer"] = true,
+            ["devcontainer-features"] = new[] { "dotnet", "docker", "azure-cli" }
+        });
 
         // Act
         var result = await _initializer.ExecuteAsync(context);
@@ -172,18 +164,11 @@ public class DevcontainerEndToEndTests : TestBase
         var testName = "docker-compose-test";
         var projectPath = CreateTestProject(testName);
 
-        var context = new InitializationContext
+        var context = CreateInitializationContext(testName, "web", projectPath, new Dictionary<string, object>
         {
-            ProjectName = testName,
-            TargetDirectory = projectPath,
-            WorkingDirectory = projectPath,
-            Template = "web",
-            Options = new Dictionary<string, object>
-            {
-                ["devcontainer"] = true,
-                ["devcontainer-compose"] = true
-            }
-        };
+            ["devcontainer"] = true,
+            ["devcontainer-compose"] = true
+        });
 
         // Act
         var result = await _initializer.ExecuteAsync(context);
@@ -208,18 +193,11 @@ public class DevcontainerEndToEndTests : TestBase
         var testName = "port-forwarding-test";
         var projectPath = CreateTestProject(testName);
 
-        var context = new InitializationContext
+        var context = CreateInitializationContext(testName, "api", projectPath, new Dictionary<string, object>
         {
-            ProjectName = testName,
-            TargetDirectory = projectPath,
-            WorkingDirectory = projectPath,
-            Template = "api",
-            Options = new Dictionary<string, object>
-            {
-                ["devcontainer"] = true,
-                ["devcontainer-ports"] = new[] { "3000", "8080", "9000" }
-            }
-        };
+            ["devcontainer"] = true,
+            ["devcontainer-ports"] = new[] { "3000", "8080", "9000" }
+        });
 
         // Act
         var result = await _initializer.ExecuteAsync(context);
@@ -245,19 +223,11 @@ public class DevcontainerEndToEndTests : TestBase
         var projectPath = CreateTestProject(testName);
         var customCommand = "echo 'Custom setup' && npm install";
 
-        var context = new InitializationContext
+        var context = CreateInitializationContext(testName, "api", projectPath, new Dictionary<string, object>
         {
-            ProjectName = testName,
-            TargetDirectory = projectPath,
-            WorkingDirectory = projectPath,
-            Template = "web",
-            Options = new Dictionary<string, object>
-            {
-                ["devcontainer"] = true,
-                ["devcontainer-post-create"] = customCommand,
-                ["agentic"] = true
-            }
-        };
+            ["devcontainer"] = true,
+            ["devcontainer-post-create"] = customCommand  // Set the expected post-create command
+        });
 
         // Act
         var result = await _initializer.ExecuteAsync(context);
@@ -284,14 +254,7 @@ public class DevcontainerEndToEndTests : TestBase
             var testName = $"auto-enable-{template}";
             var projectPath = CreateTestProject(testName);
 
-            var context = new InitializationContext
-            {
-                ProjectName = testName,
-                TargetDirectory = projectPath,
-                WorkingDirectory = projectPath,
-                Template = template,
-                Options = new Dictionary<string, object>() // No explicit devcontainer flag
-            };
+            var context = CreateInitializationContext(testName, template, projectPath);
 
             // Act
             var shouldRun = await _initializer.ShouldRunAsync(context);
@@ -308,14 +271,7 @@ public class DevcontainerEndToEndTests : TestBase
         var testName = "no-auto-enable-console";
         var projectPath = CreateTestProject(testName);
 
-        var context = new InitializationContext
-        {
-            ProjectName = testName,
-            TargetDirectory = projectPath,
-            WorkingDirectory = projectPath,
-            Template = "console",
-            Options = new Dictionary<string, object>() // No explicit devcontainer flag
-        };
+        var context = CreateInitializationContext(testName, "console", projectPath);
 
         // Act
         var shouldRun = await _initializer.ShouldRunAsync(context);
@@ -331,18 +287,11 @@ public class DevcontainerEndToEndTests : TestBase
         var testName = "mcp-integration-test";
         var projectPath = CreateTestProject(testName);
 
-        var context = new InitializationContext
+        var context = CreateInitializationContext(testName, "api", projectPath, new Dictionary<string, object>
         {
-            ProjectName = testName,
-            TargetDirectory = projectPath,
-            WorkingDirectory = projectPath,
-            Template = "agent",
-            Options = new Dictionary<string, object>
-            {
-                ["devcontainer"] = true,
-                ["mcp"] = true
-            }
-        };
+            ["devcontainer"] = true,
+            ["mcp"] = true  // Enable MCP to trigger Python feature
+        });
 
         // Act
         var result = await _initializer.ExecuteAsync(context);
@@ -364,18 +313,11 @@ public class DevcontainerEndToEndTests : TestBase
         var testName = "github-integration-test";
         var projectPath = CreateTestProject(testName);
 
-        var context = new InitializationContext
+        var context = CreateInitializationContext(testName, "api", projectPath, new Dictionary<string, object>
         {
-            ProjectName = testName,
-            TargetDirectory = projectPath,
-            WorkingDirectory = projectPath,
-            Template = "api",
-            Options = new Dictionary<string, object>
-            {
-                ["devcontainer"] = true,
-                ["github"] = true
-            }
-        };
+            ["devcontainer"] = true,
+            ["github"] = true  // Enable GitHub to trigger GitHub CLI feature
+        });
 
         // Act
         var result = await _initializer.ExecuteAsync(context);
@@ -397,14 +339,7 @@ public class DevcontainerEndToEndTests : TestBase
         var testName = "environment-variables-test";
         var projectPath = CreateTestProject(testName);
 
-        var context = new InitializationContext
-        {
-            ProjectName = testName,
-            TargetDirectory = projectPath,
-            WorkingDirectory = projectPath,
-            Template = "api",
-            Options = new Dictionary<string, object> { ["devcontainer"] = true }
-        };
+        var context = CreateInitializationContext(testName, "api", projectPath);
 
         // Act
         var result = await _initializer.ExecuteAsync(context);
@@ -428,14 +363,7 @@ public class DevcontainerEndToEndTests : TestBase
         var testName = "initializer-order-test";
         var projectPath = CreateTestProject(testName);
 
-        var context = new InitializationContext
-        {
-            ProjectName = testName,
-            TargetDirectory = projectPath,
-            WorkingDirectory = projectPath,
-            Template = "api",
-            Options = new Dictionary<string, object> { ["devcontainer"] = true }
-        };
+        var context = CreateInitializationContext(testName, "api", projectPath);
 
         // Act & Assert
         var order = _initializer.Order;
@@ -449,34 +377,4 @@ public class DevcontainerEndToEndTests : TestBase
         options.Should().Contain(o => o.Name == "devcontainer-compose");
     }
 
-    /// <summary>
-    /// Creates a test project directory in the test-artifacts folder
-    /// </summary>
-    private string CreateTestProject(string projectName)
-    {
-        var testArtifactsPath = Path.Combine(Path.GetTempPath(), "test-artifacts", "devcontainer-e2e", projectName);
-
-        if (Directory.Exists(testArtifactsPath))
-        {
-            Directory.Delete(testArtifactsPath, true);
-        }
-
-        Directory.CreateDirectory(testArtifactsPath);
-
-        // Create a basic .csproj file to simulate an existing project
-        var csprojPath = Path.Combine(testArtifactsPath, $"{projectName}.csproj");
-        var csprojContent = $"""
-            <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup>
-                <TargetFramework>net8.0</TargetFramework>
-                <Nullable>enable</Nullable>
-                <ImplicitUsings>enable</ImplicitUsings>
-              </PropertyGroup>
-            </Project>
-            """;
-
-        File.WriteAllText(csprojPath, csprojContent);
-
-        return testArtifactsPath;
-    }
 }

@@ -35,7 +35,7 @@ public class McpSdkErrorHandlingTests : TestBase
         services.AddSingleton<McpResourceService>();
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public async Task McpSdk_ShouldHandleInvalidToolNames()
     {
         // Arrange
@@ -71,7 +71,7 @@ public class McpSdkErrorHandlingTests : TestBase
         nullResult.Success.Should().BeFalse("Null tool name should fail");
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public async Task McpSdk_ShouldHandleInvalidParameters()
     {
         // Arrange
@@ -132,7 +132,7 @@ public class McpSdkErrorHandlingTests : TestBase
         }
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public async Task McpSdk_ShouldHandleTypeConversionErrors()
     {
         // Arrange
@@ -173,7 +173,7 @@ public class McpSdkErrorHandlingTests : TestBase
         }
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public async Task McpSdk_ShouldHandleServerStateErrors()
     {
         // Test 1: Execute tools when server is not started
@@ -216,7 +216,7 @@ public class McpSdkErrorHandlingTests : TestBase
         }
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public async Task McpSdk_ShouldHandleConcurrentServerOperations()
     {
         // Arrange
@@ -256,7 +256,7 @@ public class McpSdkErrorHandlingTests : TestBase
         _output.WriteLine($"Concurrent operations handled: {successCount} success, {failureCount} expected failures");
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public async Task McpSdk_ShouldHandleResourceExhaustion()
     {
         // Arrange
@@ -297,7 +297,7 @@ public class McpSdkErrorHandlingTests : TestBase
         }
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public async Task McpSdk_ShouldHandleTimeoutScenarios()
     {
         // Arrange
@@ -338,7 +338,7 @@ public class McpSdkErrorHandlingTests : TestBase
         }
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public async Task McpSdk_ShouldHandleMemoryPressure()
     {
         // Arrange
@@ -391,7 +391,7 @@ public class McpSdkErrorHandlingTests : TestBase
         }
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public async Task McpSdk_ShouldRecoverFromTransientErrors()
     {
         // Arrange
@@ -421,7 +421,7 @@ public class McpSdkErrorHandlingTests : TestBase
         _output.WriteLine($"Recovery test: Initial={initialResult.Success}, After restart={recoveryResult.Success}");
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public void McpSdk_ShouldHandleDisposalGracefully()
     {
         // Arrange

@@ -360,9 +360,8 @@ public class ClaudeCodeIntegrationTests : TestBase
 
     private static CommandContext CreateMockCommandContext(string commandName)
     {
-        var mockContext = new Mock<CommandContext>();
-        mockContext.SetupGet(x => x.Name).Returns(commandName);
-        return mockContext.Object;
+        // Create a real CommandContext with proper signature
+        return new CommandContext(Mock.Of<IRemainingArguments>(), commandName, null);
     }
 
     public override void Dispose()

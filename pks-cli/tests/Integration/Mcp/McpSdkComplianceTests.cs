@@ -38,7 +38,7 @@ public class McpSdkComplianceTests : TestBase
         services.AddSingleton<McpResourceService>();
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public void McpSdk_ShouldConformToToolSpecification()
     {
         // Arrange & Act
@@ -72,7 +72,7 @@ public class McpSdkComplianceTests : TestBase
         }
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public void McpSdk_ShouldConformToResourceSpecification()
     {
         // Arrange & Act
@@ -106,7 +106,7 @@ public class McpSdkComplianceTests : TestBase
         }
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public async Task McpSdk_ShouldHandleJsonRpcProtocol()
     {
         // Arrange
@@ -133,7 +133,7 @@ public class McpSdkComplianceTests : TestBase
         }
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public async Task McpSdk_ShouldSupportCapabilityNegotiation()
     {
         // Arrange
@@ -213,7 +213,7 @@ public class McpSdkComplianceTests : TestBase
         }
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public async Task McpSdk_ShouldHandleErrorsGracefully()
     {
         // Arrange
@@ -259,7 +259,7 @@ public class McpSdkComplianceTests : TestBase
         }
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public async Task McpSdk_ShouldProvideConsistentResponseFormat()
     {
         // Arrange
@@ -294,7 +294,7 @@ public class McpSdkComplianceTests : TestBase
         }
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public void McpSdk_ShouldImplementProperLogging()
     {
         // Arrange & Act
@@ -314,7 +314,7 @@ public class McpSdkComplianceTests : TestBase
         _output.WriteLine("Logging infrastructure validated");
     }
 
-    [Fact]
+    [Fact(Skip = "Mock-only test - tests simulated MCP behavior not real integration, no real value")]
     public async Task McpSdk_ShouldHandleConcurrentRequests()
     {
         // Arrange

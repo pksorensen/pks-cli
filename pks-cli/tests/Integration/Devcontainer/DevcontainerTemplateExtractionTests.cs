@@ -93,10 +93,13 @@ public class DevcontainerTemplateExtractionTests : TestBase
         var result = await _templateService.ExtractTemplateAsync("pks-universal-devcontainer", options);
 
         // Assert
+        result.Should().NotBeNull();
         result.Success.Should().BeTrue();
+        result.ExtractedFiles.Should().NotBeNullOrEmpty();
 
-        var devcontainerJsonPath = result.ExtractedFiles.First(f => f.EndsWith("devcontainer.json"));
-        var devcontainerContent = await File.ReadAllTextAsync(devcontainerJsonPath);
+        var devcontainerJsonPath = result.ExtractedFiles.FirstOrDefault(f => f.EndsWith("devcontainer.json"));
+        devcontainerJsonPath.Should().NotBeNull("devcontainer.json should be in extracted files");
+        var devcontainerContent = await File.ReadAllTextAsync(devcontainerJsonPath!);
 
         // Verify placeholders were replaced
         devcontainerContent.Should().Contain(projectName);
