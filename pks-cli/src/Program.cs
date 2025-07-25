@@ -122,6 +122,9 @@ services.AddTransient<PrdBranchCommand>();
 services.AddHttpClient<IGitHubService, GitHubService>();
 services.AddSingleton<IProjectIdentityService, ProjectIdentityService>();
 
+// Register Template Packaging service
+services.AddSingleton<ITemplatePackagingService, TemplatePackagingService>();
+
 // Register individual initializers as transient services
 services.AddTransient<PKS.Infrastructure.Initializers.Implementations.DotNetProjectInitializer>();
 services.AddTransient<PKS.Infrastructure.Initializers.Implementations.DevcontainerInitializer>();
