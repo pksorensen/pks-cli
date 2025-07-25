@@ -25,7 +25,8 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
         IDevcontainerTemplateService templateService,
         IVsCodeExtensionService extensionService,
         INuGetTemplateDiscoveryService nugetTemplateService,
-        ILogger<DevcontainerWizardCommand>? logger = null)
+        IAnsiConsole console,
+        ILogger<DevcontainerWizardCommand>? logger = null) : base(console)
     {
         _devcontainerService = devcontainerService ?? throw new ArgumentNullException(nameof(devcontainerService));
         _featureRegistry = featureRegistry ?? throw new ArgumentNullException(nameof(featureRegistry));
@@ -912,7 +913,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
         {
             AnsiConsole.Write($"Template: {query}");
 
-            var key = Console.ReadKey(true);
+            var key = System.Console.ReadKey(true);
 
             if (key.Key == ConsoleKey.Enter && filteredTemplates.Any())
             {
@@ -1130,7 +1131,7 @@ public class DevcontainerWizardCommand : DevcontainerCommand<DevcontainerWizardS
 
         do
         {
-            keyInfo = Console.ReadKey(true);
+            keyInfo = System.Console.ReadKey(true);
 
             if (keyInfo.Key == ConsoleKey.Backspace && password.Length > 0)
             {

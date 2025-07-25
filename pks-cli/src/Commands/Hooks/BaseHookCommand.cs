@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using PKS.Infrastructure.Services.Models;
@@ -103,7 +104,40 @@ public abstract class BaseHookCommand : AsyncCommand<HooksSettings>
     {
         var hookName = GetType().Name.Replace("Command", "");
 
-        AnsiConsole.MarkupLine($"[cyan]PKS Hooks: {hookName} Event Processed[/]");
+        AnsiConsole.MarkupLine($"[cyan]PKS Hooks: {hookName} Event Triggered[/]");
+
+        // Display environment variables
+        AnsiConsole.MarkupLine("\n[yellow]Environment Variables:[/]");
+        var envVars = Environment.GetEnvironmentVariables();
+        foreach (var key in envVars.Keys)
+        {
+            var value = envVars[key];
+            AnsiConsole.MarkupLine($"[dim]{key} = {value}[/]");
+        }
+
+        // Display command line arguments
+        AnsiConsole.MarkupLine("\n[yellow]Command Line Arguments:[/]");
+        var args = Environment.GetCommandLineArgs();
+        for (int i = 0; i < args.Length; i++)
+        {
+            AnsiConsole.MarkupLine($"[dim]args[{i}] = {args[i]}[/]");
+        }
+
+        // Display working directory
+        AnsiConsole.MarkupLine($"\n[yellow]Working Directory:[/]");
+        AnsiConsole.MarkupLine($"[dim]{Directory.GetCurrentDirectory()}[/]");
+
+        // Display STDIN input information
+        AnsiConsole.MarkupLine("\n[yellow]STDIN Input:[/]");
+        var stdinContent = await ReadStdinAsync();
+        if (!string.IsNullOrEmpty(stdinContent))
+        {
+            AnsiConsole.MarkupLine($"[dim]{stdinContent}[/]");
+        }
+        else
+        {
+            AnsiConsole.MarkupLine("[dim]No piped input detected[/]");
+        }
 
         if (!string.IsNullOrEmpty(decision.Decision))
         {
@@ -114,7 +148,7 @@ public abstract class BaseHookCommand : AsyncCommand<HooksSettings>
                 _ => "yellow"
             };
 
-            AnsiConsole.MarkupLine($"[{color}]Decision: {decision.Decision}[/]");
+            AnsiConsole.MarkupLine($"\n[{color}]Decision: {decision.Decision}[/]");
 
             if (!string.IsNullOrEmpty(decision.Message))
             {
@@ -124,14 +158,14 @@ public abstract class BaseHookCommand : AsyncCommand<HooksSettings>
 
         if (decision.Continue == false)
         {
-            AnsiConsole.MarkupLine($"[red]Continue: false[/]");
+            AnsiConsole.MarkupLine($"\n[red]Continue: false[/]");
             if (!string.IsNullOrEmpty(decision.StopReason))
             {
                 AnsiConsole.MarkupLine($"[dim]Reason: {decision.StopReason}[/]");
             }
         }
 
-        AnsiConsole.MarkupLine($"[green]✓ {hookName} hook completed successfully[/]");
+        AnsiConsole.MarkupLine($"\n[green]✓ {hookName} hook completed successfully[/]");
 
         await Task.CompletedTask;
     }

@@ -19,7 +19,8 @@ public class DevcontainerValidateCommand : DevcontainerCommand<DevcontainerValid
     public DevcontainerValidateCommand(
         IDevcontainerService devcontainerService,
         IDevcontainerFeatureRegistry featureRegistry,
-        IVsCodeExtensionService extensionService)
+        IVsCodeExtensionService extensionService,
+        IAnsiConsole console) : base(console)
     {
         _devcontainerService = devcontainerService ?? throw new ArgumentNullException(nameof(devcontainerService));
         _featureRegistry = featureRegistry ?? throw new ArgumentNullException(nameof(featureRegistry));
