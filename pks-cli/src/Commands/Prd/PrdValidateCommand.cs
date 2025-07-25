@@ -34,7 +34,7 @@ public class PrdValidateCommand : Command<PrdValidateSettings>
             var filePath = settings.FilePath ?? Path.Combine(Environment.CurrentDirectory, "docs", "PRD.md");
 
             // Load PRD
-            var loadResult = await _prdService.LoadPrdAsync(filePath);
+            var loadResult = await _prdService.LoadPrdAsync(filePath, CancellationToken.None);
             if (loadResult == null || !loadResult.Success)
             {
                 AnsiConsole.MarkupLine($"[red]Failed to load PRD from {filePath}: {loadResult?.Message}[/]");

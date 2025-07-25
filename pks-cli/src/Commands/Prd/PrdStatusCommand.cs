@@ -57,7 +57,7 @@ public class PrdStatusCommand : Command<PrdStatusSettings>
 
     private async Task DisplayPrdStatusAsync(string filePath, PrdStatusSettings settings)
     {
-        var status = await _prdService.GetPrdStatusAsync(filePath);
+        var status = await _prdService.GetPrdStatusAsync(filePath, CancellationToken.None);
 
         if (!status.Exists)
         {
@@ -126,7 +126,7 @@ public class PrdStatusCommand : Command<PrdStatusSettings>
 
     private async Task CheckAllPrdsAsync()
     {
-        var prdFiles = await _prdService.FindPrdFilesAsync(Environment.CurrentDirectory);
+        var prdFiles = await _prdService.FindPrdFilesAsync(Environment.CurrentDirectory, true, CancellationToken.None);
 
         if (!prdFiles.Any())
         {
@@ -146,7 +146,7 @@ public class PrdStatusCommand : Command<PrdStatusSettings>
 
         foreach (var file in prdFiles)
         {
-            var status = await _prdService.GetPrdStatusAsync(file);
+            var status = await _prdService.GetPrdStatusAsync(file, CancellationToken.None);
             var relativePath = Path.GetRelativePath(Environment.CurrentDirectory, file);
 
             var completionColor = status.CompletionPercentage switch

@@ -7,7 +7,7 @@ namespace PKS.Commands.Prd;
 /// <summary>
 /// Base settings for all PRD commands with shared options
 /// </summary>
-public abstract class PrdSettings : CommandSettings
+public class PrdSettings : CommandSettings
 {
     [CommandOption("-v|--verbose")]
     [Description("Enable verbose output with detailed information")]

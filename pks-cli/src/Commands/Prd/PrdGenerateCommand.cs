@@ -101,7 +101,7 @@ public class PrdGenerateCommand : Command<PrdGenerateSettings>
                     await Task.Delay(500);
 
                     ctx.Status("Generating sections and requirements...");
-                    var generateResult = await _prdService.GeneratePrdAsync(request);
+                    generateResult = await _prdService.GeneratePrdAsync(request, CancellationToken.None);
                     // Note: generateResult contains the generated PRD information
 
                     ctx.Status("Formatting and saving PRD...");

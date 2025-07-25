@@ -53,7 +53,8 @@ public class PrdTemplateCommand : Command<PrdTemplateSettings>
             var outputPath = await _prdService.GenerateTemplateAsync(
                 settings.ProjectName,
                 templateType,
-                settings.OutputPath);
+                settings.OutputPath,
+                CancellationToken.None);
 
             var panel = new Panel($"""
                 📝 [bold green]PRD template generated![/]

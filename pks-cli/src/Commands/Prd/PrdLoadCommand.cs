@@ -38,7 +38,7 @@ public class PrdLoadCommand : Command<PrdLoadSettings>
                 .StartAsync($"Loading PRD from {settings.FilePath}...", async ctx =>
                 {
                     ctx.Status("Parsing PRD file...");
-                    loadResult = await _prdService.LoadPrdAsync(settings.FilePath);
+                    loadResult = await _prdService.LoadPrdAsync(settings.FilePath, CancellationToken.None);
 
                     ctx.Status("Processing content...");
                     await Task.Delay(200);
