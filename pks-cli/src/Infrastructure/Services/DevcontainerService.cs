@@ -204,20 +204,41 @@ public class DevcontainerService : IDevcontainerService
 
     public async Task<DevcontainerValidationResult> ValidateConfigurationAsync(DevcontainerConfiguration configuration)
     {
+        if (configuration == null)
+        {
+            throw new ArgumentNullException(nameof(configuration));
+        }
+
         var result = new DevcontainerValidationResult();
         var errors = new List<string>();
         var warnings = new List<string>();
 
         try
         {
-            // Validate required fields
-            if (string.IsNullOrEmpty(configuration.Name))
+            // Validate required fields  
+            if (string.IsNullOrWhiteSpace(configuration.Name))
             {
-                errors.Add("Name is required");
+                errors.Add("Project name is required");
             }
-            else if (!IsValidName(configuration.Name))
+            else
             {
-                errors.Add("Name contains invalid characters");
+                // Detailed validation with specific error messages
+                if (configuration.Name.Contains(' '))
+                {
+                    errors.Add("Project name cannot contain spaces");
+                }
+                else if (configuration.Name != configuration.Name.ToLowerInvariant())
+                {
+                    errors.Add("Project name must be lowercase");
+                }
+                else if (char.IsDigit(configuration.Name[0]))
+                {
+                    errors.Add("Project name cannot start with a number");
+                }
+                else if (configuration.Name.Any(c => !char.IsLetterOrDigit(c) && c != '-' && c != '_'))
+                {
+                    errors.Add("Project name contains invalid characters");
+                }
             }
 
             if (string.IsNullOrEmpty(configuration.Image) && configuration.Build == null)
@@ -855,8 +876,26 @@ public class DevcontainerService : IDevcontainerService
 
     private static bool IsValidName(string name)
     {
-        // Name should contain only alphanumeric characters, hyphens, and underscores
-        return Regex.IsMatch(name, @"^[a-zA-Z0-9_-]+$");
+        if (string.IsNullOrWhiteSpace(name))
+            return false;
+
+        // Check for spaces
+        if (name.Contains(' '))
+            return false;
+
+        // Check for uppercase letters (should be lowercase only)
+        if (name != name.ToLowerInvariant())
+            return false;
+
+        // Check if starts with number
+        if (char.IsDigit(name[0]))
+            return false;
+
+        // Check for invalid characters (allow only letters, digits, hyphens, underscores)
+        if (name.Any(c => !char.IsLetterOrDigit(c) && c != '-' && c != '_'))
+            return false;
+
+        return true;
     }
 
     private static bool IsValidImageName(string imageName)
