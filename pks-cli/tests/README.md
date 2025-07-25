@@ -1,219 +1,242 @@
-# PKS CLI Tests
+# PKS CLI Test Suite
 
-This directory contains comprehensive test suites for the PKS CLI application following Test-Driven Development (TDD) principles.
+This directory contains the comprehensive test suite for PKS CLI with performance optimizations and timeout handling to prevent hanging tests.
 
-## Test Structure
+## Test Configuration
 
-The test project is organized to mirror the source code structure:
+### Performance Optimizations
 
-```
-PKS.CLI.Tests/
-├── Commands/                     # Command-specific tests
-│   ├── Hooks/                   # Hooks command tests
-│   ├── Mcp/                     # MCP server command tests
-│   └── Agent/                   # Agent framework command tests
-├── Infrastructure/               # Infrastructure and service tests
-│   ├── Initializers/            # Initializer system tests
-│   ├── Mocks/                   # Mock factories and utilities
-│   ├── Fixtures/                # Test data generators
-│   └── Utilities/               # Test utilities
-└── Services/                    # Service layer tests
-```
+The test suite has been optimized to prevent the 2-minute timeout hangs and improve execution speed:
+
+- **Sequential Execution**: Tests run sequentially (`maxParallelThreads: 1`) to prevent resource conflicts
+- **Timeout Controls**: Multiple timeout layers prevent hanging tests
+- **Process Management**: Automatic cleanup of background processes
+- **Resource Cleanup**: Proper disposal patterns and cleanup mechanisms
+
+### Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `.runsettings` | MSTest configuration with timeouts and execution settings |
+| `xunit.runner.json` | xUnit configuration for parallel execution control |
+| `run-tests.sh` | Unix test runner with category filtering |
+| `run-tests.ps1` | PowerShell test runner with category filtering |
 
 ## Test Categories
 
-### 1. Command Tests
-- **HooksCommandTests**: Tests for hooks management commands
-- **McpServerTests**: Tests for MCP server lifecycle management
-- **AgentFrameworkTests**: Tests for AI agent management
+Tests are organized using trait attributes for better filtering and execution control:
 
-### 2. Infrastructure Tests
-- **InitializationServiceTests**: Tests for project initialization orchestration
-- **InitializerRegistryTests**: Tests for initializer discovery and management
+### By Category
+- **Unit**: Fast, isolated unit tests
+- **Integration**: Component integration tests
+- **EndToEnd**: Full application workflow tests
+- **Performance**: Performance and load tests
+- **Smoke**: Quick validation tests
 
-### 3. Service Tests
-- Tests for core services (KubernetesService, ConfigurationService, etc.)
-- Integration tests for service interactions
+### By Speed
+- **Fast**: < 1 second execution time
+- **Medium**: 1-10 seconds execution time
+- **Slow**: > 10 seconds execution time
 
-## Test Infrastructure
-
-### TestBase Class
-All test classes inherit from `TestBase` which provides:
-- Dependency injection setup
-- Mock service factories
-- Console output testing utilities
-- Temporary file/directory management
-- Logging capture and assertions
-
-### Mock Factories
-The `ServiceMockFactory` provides pre-configured mocks for all services:
-- `CreateHooksService()` - Mock hooks management service
-- `CreateMcpServerService()` - Mock MCP server service  
-- `CreateAgentFrameworkService()` - Mock agent framework service
-- `CreateInitializationService()` - Mock initialization orchestration service
-
-### Test Data Generators
-The `TestDataGenerator` creates realistic test data:
-- Project configurations
-- Hook definitions and contexts
-- MCP server configurations
-- Agent configurations
-- File content for various types
+### By Reliability
+- **Stable**: Consistent, reliable tests
+- **Unstable**: Known flaky tests (often skipped in CI)
+- **Experimental**: New tests with unknown reliability
 
 ## Running Tests
 
-### Command Line
+### Basic Test Execution
+
 ```bash
 # Run all tests
 dotnet test
 
-# Run tests with detailed output
-dotnet test --verbosity detailed
+# Run with specific configuration
+dotnet test --settings .runsettings
 
-# Run specific test class
-dotnet test --filter "ClassName=HooksCommandTests"
+# Run specific category
+dotnet test --filter "Category=Unit"
 
-# Run tests with code coverage
-dotnet test --collect:"XPlat Code Coverage"
+# Run fast tests only
+dotnet test --filter "Speed=Fast"
+
+# Exclude unstable tests
+dotnet test --filter "Reliability!=Unstable"
 ```
 
-### IDE Integration
-Tests are compatible with:
-- Visual Studio Test Explorer
-- VS Code Test Explorer
-- JetBrains Rider
-- Any IDE with xUnit support
+### Using Test Runner Scripts
 
-## Test Conventions
+#### Unix/Linux/macOS
+```bash
+# Run all stable, fast tests
+./run-tests.sh --exclude-unstable --only-fast
 
-### Naming
-- Test methods: `MethodName_ShouldExpectedBehavior_WhenCondition`
-- Test classes: `{ClassUnderTest}Tests`
-- Mock variables: `_mock{ServiceName}`
+# Run unit tests with 10-minute timeout
+./run-tests.sh --category Unit --timeout-minutes 10
 
-### Structure (AAA Pattern)
-```csharp
-[Fact]
-public async Task Method_ShouldBehavior_WhenCondition()
-{
-    // Arrange - Set up test data and mocks
-    var input = TestDataGenerator.GenerateInput();
-    _mockService.Setup(x => x.Method()).ReturnsAsync(expectedResult);
-
-    // Act - Execute the method under test
-    var result = await _systemUnderTest.Method(input);
-
-    // Assert - Verify the results
-    result.Should().Be(expectedValue);
-    _mockService.Verify(x => x.Method(), Times.Once);
-}
+# Run integration tests excluding slow ones
+./run-tests.sh --category Integration --exclude-slow
 ```
 
-### Assertions
-We use FluentAssertions for readable test assertions:
-```csharp
-// Simple assertions
-result.Should().BeTrue();
-result.Should().Be(expectedValue);
+#### Windows PowerShell
+```powershell
+# Run all stable, fast tests
+.\run-tests.ps1 -ExcludeUnstable -OnlyFast
 
-// Collection assertions
-items.Should().HaveCount(3);
-items.Should().Contain(x => x.Name == "test");
+# Run unit tests with 10-minute timeout
+.\run-tests.ps1 -Category Unit -TimeoutMinutes 10
 
-// Exception assertions
-await Assert.ThrowsAsync<ArgumentException>(() => method());
-
-// Console output assertions (from TestBase)
-AssertConsoleOutput("Expected output text");
-AssertLogMessage(LogLevel.Information, "Expected log message");
+# Run integration tests excluding slow ones
+.\run-tests.ps1 -Category Integration -ExcludeSlow
 ```
 
-## TDD Workflow
+## Test Infrastructure
 
-### Red-Green-Refactor Cycle
+### Base Classes
 
-1. **Red Phase**: Write failing tests that define expected behavior
-   - All current tests are in this phase (failing by design)
-   - Tests define the interface and behavior contracts
+#### TestBase
+- Standard base for unit tests
+- Mock service registration
+- Console and logging capture
+- Proper disposal and cleanup
 
-2. **Green Phase**: Implement minimal code to make tests pass
-   - Implement the actual command classes
-   - Implement the service interfaces
-   - Make tests pass with simplest possible implementation
+#### IntegrationTestBase
+- Base for integration tests
+- Real service implementations
+- Test artifact management
+- Enhanced cleanup mechanisms
 
-3. **Refactor Phase**: Improve code quality while keeping tests green
-   - Optimize performance
-   - Improve code structure
-   - Add additional features
+### Helper Classes
 
-### Test-First Development
+#### TestTimeoutHelper
+- Timeout management for async operations
+- Configurable timeout values by test category
+- Cancellation token support
 
-1. **Write the test** defining expected behavior
-2. **Run the test** and verify it fails for the right reason
-3. **Write minimal code** to make the test pass
-4. **Run tests** to verify they pass
-5. **Refactor** both test and implementation code
-6. **Repeat** for next piece of functionality
+#### TestProcessHelper
+- Safe external process management
+- Automatic process cleanup
+- Timeout handling for process operations
 
-## Current Test Status
+#### TestTraits
+- Attribute system for test categorization
+- Standardized trait names and values
 
-### Failing Tests (Red Phase)
-All tests are currently failing by design as they define the expected behavior for components that need to be implemented:
+### Collections
 
-- ✅ **Test Infrastructure**: Complete and working
-- ❌ **HooksCommandTests**: 8 failing tests defining hooks command behavior
-- ❌ **McpServerTests**: 9 failing tests defining MCP server management
-- ❌ **AgentFrameworkTests**: 10 failing tests defining agent framework
+Tests are organized into collections to control parallel execution:
 
-### Implementation Status
-- ✅ Test project setup
-- ✅ Mock factories and test utilities
-- ✅ Test data generators
-- ❌ HooksCommand (to be implemented)
-- ❌ McpCommand (to be implemented)
-- ❌ AgentCommand (to be implemented)
-- ❌ Service implementations (to be implemented)
+- **Sequential**: Tests that must run one at a time
+- **Parallel**: Tests that can run in parallel within their group
+- **FileSystem**: Tests involving file operations
+- **Process**: Tests that start external processes
+- **Network**: Tests with network dependencies
 
-## Contributing
+## Timeout Configuration
 
-### Adding New Tests
-1. Follow the established naming conventions
-2. Use the TestBase class for common functionality
-3. Leverage existing mock factories and test data generators
-4. Write tests that define clear behavior expectations
-5. Use FluentAssertions for readable assertions
+### Timeout Layers
 
-### Test Categories
-Use Xunit categories to organize tests:
-```csharp
-[Fact]
-[Trait("Category", "Unit")]
-public void UnitTest() { }
+1. **Test Session Timeout**: 180 seconds (3 minutes) - prevents entire test run from hanging
+2. **Individual Test Timeout**: 30 seconds - prevents single tests from hanging
+3. **Operation Timeouts**: 5-30 seconds - prevents individual operations from hanging
 
-[Fact]
-[Trait("Category", "Integration")]
-public void IntegrationTest() { }
+### Timeout Values by Category
+
+| Category | Default Timeout |
+|----------|----------------|
+| Unit | 5 seconds |
+| Integration | 15 seconds |
+| EndToEnd | 30 seconds |
+| Performance | 30 seconds |
+
+## CI/CD Integration
+
+### GitHub Actions
+
+The test workflow is configured to:
+- Run only stable and fast tests in CI
+- Use proper timeout settings
+- Generate test reports and coverage
+- Fail fast on timeout or error
+
+```yaml
+- name: Test - Stable and Fast Tests Only
+  run: |
+    cd tests
+    dotnet test --settings .runsettings \
+      --filter "Reliability!=Unstable&Speed!=Slow" \
+      --timeout 180000
 ```
 
-### Test Data
-- Use TestDataGenerator for consistent test data
-- Create realistic but deterministic test scenarios
-- Avoid hardcoded values in test assertions
+## Troubleshooting
 
-## Coverage Goals
+### Common Issues
 
-We aim for:
-- **90%+ Code Coverage** on core functionality
-- **100% Coverage** on critical paths (commands, initialization)
-- **Comprehensive Edge Cases** for error conditions
-- **Integration Tests** for cross-service interactions
+#### Tests Hang or Timeout
+1. Check for infinite loops or blocking operations
+2. Ensure proper use of cancellation tokens
+3. Use TestTimeoutHelper for async operations
+4. Verify process cleanup in test disposal
 
-## Dependencies
+#### Resource Conflicts
+1. Use appropriate test collections
+2. Run tests sequentially if needed
+3. Ensure proper cleanup in test base classes
+4. Check for file locking issues
 
-The test project uses:
-- **xUnit** (v2.6.2) - Test framework
-- **FluentAssertions** (v6.12.0) - Assertion library
-- **Moq** (v4.20.69) - Mocking framework
-- **Spectre.Console.Testing** (v0.47.0) - Console testing utilities
-- **Microsoft.NET.Test.Sdk** (v17.8.0) - Test SDK
-- **coverlet.collector** (v6.0.0) - Code coverage
+#### Flaky Tests
+1. Mark unstable tests with `[UnstableTest]` attribute
+2. Use proper wait conditions instead of fixed delays
+3. Implement retry logic where appropriate
+4. Consider test isolation improvements
+
+### Debug Mode
+
+Enable debug output to troubleshoot test execution:
+
+```bash
+# Unix
+./run-tests.sh --debug --verbose
+
+# PowerShell
+.\run-tests.ps1 -Debug -Verbose
+```
+
+## Performance Monitoring
+
+### Metrics to Watch
+
+- **Test Execution Time**: Should complete within timeout limits
+- **Memory Usage**: Monitor for memory leaks in long-running tests
+- **Process Count**: Ensure no leaked processes after test completion
+- **File Handles**: Check for proper file cleanup
+
+### Performance Improvements
+
+1. **Process Management**: Automatic cleanup prevents resource leaks
+2. **Sequential Execution**: Eliminates race conditions and resource conflicts
+3. **Timeout Controls**: Prevents hanging tests from blocking CI/CD
+4. **Selective Test Running**: Filter tests by category, speed, and reliability
+
+## Best Practices
+
+### Writing Tests
+
+1. **Use Appropriate Attributes**: Mark tests with category, speed, and reliability traits
+2. **Implement Timeout Handling**: Use TestTimeoutHelper for async operations
+3. **Proper Cleanup**: Ensure resources are disposed in test base classes
+4. **Avoid External Dependencies**: Use mocks for external services in unit tests
+
+### Test Organization
+
+1. **Group Related Tests**: Use test collections for related functionality
+2. **Separate Fast and Slow Tests**: Allow selective execution based on speed
+3. **Mark Unstable Tests**: Prevent flaky tests from breaking CI/CD
+4. **Use Descriptive Names**: Make test intent clear from method names
+
+### Maintenance
+
+1. **Monitor Test Performance**: Track execution times and success rates
+2. **Update Timeout Values**: Adjust based on actual execution patterns
+3. **Clean Up Skipped Tests**: Regularly review and fix skipped tests
+4. **Review Unstable Tests**: Work to stabilize flaky tests over time
