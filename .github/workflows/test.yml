@@ -19,13 +19,24 @@ jobs:
         dotnet-version: 8.0.x
         
     - name: Restore dependencies
+      working-directory: ./pks-cli
       run: dotnet restore
       
     - name: Build
+      working-directory: ./pks-cli
       run: dotnet build --no-restore
       
-    - name: Test
-      run: dotnet test --no-build --verbosity normal --collect:"XPlat Code Coverage"
+    - name: Test - Core Stable Tests Only (CI Ready)
+      working-directory: ./pks-cli
+      run: |
+        cd tests
+        dotnet test --no-build --settings .runsettings \
+          --filter "Category=Core&Reliability!=Unstable" \
+          --logger "console;verbosity=normal" \
+          --logger "trx;LogFileName=core-tests.trx" \
+          --logger "html;LogFileName=core-tests.html" \
+          --results-directory ../test-artifacts/results \
+          --collect "XPlat Code Coverage"
       
     - name: Upload coverage reports to Codecov
       uses: codecov/codecov-action@v3

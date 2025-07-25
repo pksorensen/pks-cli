@@ -103,7 +103,7 @@ namespace PksCli.Tests.Templates
 
             // Assert
             templateConfig.RootElement.TryGetProperty("symbols", out var symbols).Should().BeTrue();
-            symbols.TryGetProperty("projectName", out var projectName).Should().BeTrue();
+            symbols.TryGetProperty("ProjectName", out var projectName).Should().BeTrue();
             projectName.GetProperty("type").GetString().Should().Be("parameter");
             projectName.GetProperty("datatype").GetString().Should().Be("string");
         }
@@ -132,19 +132,28 @@ namespace PksCli.Tests.Templates
             // Arrange
             CreateTemplateStructure();
             var contentDevcontainerPath = Path.Combine(_templatePath, "content", ".devcontainer");
-            CopyDevcontainerFiles(contentDevcontainerPath);
-
-            // Update devcontainer.json to include placeholders
+            
+            // Create devcontainer.json with the correct placeholder format
             var devcontainerJsonPath = Path.Combine(contentDevcontainerPath, "devcontainer.json");
-            var devcontainerContent = File.ReadAllText(devcontainerJsonPath);
-            devcontainerContent = devcontainerContent.Replace("\"name\": \"PKS CLI Development Container\"",
-                "\"name\": \"${projectName} Development Container\"");
+            var devcontainerContent = @"{
+  ""name"": ""PKSDevContainer Development Container"",
+  ""image"": ""mcr.microsoft.com/devcontainers/universal:2-linux"",
+  ""features"": {
+    ""ghcr.io/devcontainers/features/dotnet:2"": {}
+  }
+}";
             File.WriteAllText(devcontainerJsonPath, devcontainerContent);
 
             // Act & Assert
-            // This would be tested by actually instantiating the template
-            // For unit testing, we verify the placeholder exists
-            File.ReadAllText(devcontainerJsonPath).Should().Contain("${projectName}");
+            // Verify the placeholder exists (PKSDevContainer is replaced with ProjectName value)
+            var writtenContent = File.ReadAllText(devcontainerJsonPath);
+            writtenContent.Should().Contain("PKSDevContainer");
+            
+            // Also verify the template.json has the correct replacement configuration
+            var templateJsonPath = Path.Combine(_templatePath, ".template.config", "template.json");
+            var templateJson = File.ReadAllText(templateJsonPath);
+            templateJson.Should().Contain("\"replaces\": \"PKSDevContainer\"");
+            templateJson.Should().Contain("\"ProjectName\"");
         }
 
         private void CreateTemplateStructure()
@@ -164,15 +173,15 @@ namespace PksCli.Tests.Templates
     ""language"": ""C#"",
     ""type"": ""item""
   },
-  ""sourceName"": ""PKS.DevContainer"",
+  ""sourceName"": ""PKSDevContainer"",
   ""preferNameDirectory"": false,
   ""symbols"": {
-    ""projectName"": {
+    ""ProjectName"": {
       ""type"": ""parameter"",
       ""datatype"": ""string"",
       ""description"": ""The name of the project"",
       ""defaultValue"": ""MyProject"",
-      ""replaces"": ""${projectName}""
+      ""replaces"": ""PKSDevContainer""
     },
     ""enableNodeJs"": {
       ""type"": ""parameter"",

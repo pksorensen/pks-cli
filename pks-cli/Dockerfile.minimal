@@ -1,0 +1,65 @@
+# Ultra-minimal Dockerfile for PKS CLI
+# This version prioritizes smallest possible image size
+
+# Use the official .NET 8 SDK image for building
+FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS build
+
+# Set working directory
+WORKDIR /app
+
+# Copy only the essential project files first (for better layer caching)
+COPY src/pks-cli.csproj src/
+
+# Restore dependencies for main project only with Linux runtime
+WORKDIR /app/src
+RUN dotnet restore -r linux-musl-x64
+
+# Copy source code
+COPY src/ .
+
+# Build and publish with maximum optimizations for size
+RUN dotnet publish -c Release -o /app/publish \
+    --no-restore \
+    --self-contained true \
+    -r linux-musl-x64 \
+    /p:PublishSingleFile=true \
+    /p:PublishTrimmed=true \
+    /p:TrimMode=link \
+    /p:PublishReadyToRun=false
+
+# Use minimal Alpine base image (no .NET runtime needed due to self-contained)
+FROM alpine:3.18 AS runtime
+
+# Install only absolutely essential tools
+RUN apk add --no-cache \
+    git \
+    curl \
+    ca-certificates
+
+# Create non-root user
+RUN addgroup -g 1000 pksuser && \
+    adduser -D -u 1000 -G pksuser pksuser
+
+# Set working directory
+WORKDIR /app
+
+# Copy the self-contained published application
+COPY --from=build /app/publish .
+
+# Make the executable runnable
+RUN chmod +x pks-cli
+
+# Change ownership to non-root user
+RUN chown -R pksuser:pksuser /app
+
+# Switch to non-root user
+USER pksuser
+
+# Add app to PATH
+ENV PATH="/app:${PATH}"
+
+# Set the entry point to the self-contained executable
+ENTRYPOINT ["/app/pks-cli"]
+
+# Default command (show help)
+CMD ["--help"]

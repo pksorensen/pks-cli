@@ -1,0 +1,103 @@
+# Build outputs
+**/bin/
+**/obj/
+**/out/
+**/publish/
+**/artifacts/
+**/packages/
+**/test-packages/
+
+# Test artifacts and results
+**/TestResults/
+**/test-artifacts/
+**/*test-output*.log
+**/*.trx
+**/*.coverage
+**/*.coveragexml
+
+# Documentation and markdown files (except essential ones)
+**/docs/
+**/*.md
+!README.md
+!CHANGELOG.md
+
+# Git and version control
+.git/
+.gitignore
+.gitattributes
+
+# IDE and editor files
+.vs/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# Node.js (if any)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local environment files
+.env
+.env.local
+.env.*.local
+
+# Backup files
+**/backup/
+**/*.backup
+
+# Test scripts and validation
+test-validation.sh
+test_*.csx
+test_*.cs
+
+# Coverage reports
+coverage/
+*.lcov
+
+# JetBrains
+.idea/
+*.iml
+
+# Visual Studio Code
+.vscode/
+
+# Rider
+.idea/
+
+# NuGet packages (will be restored during build)
+*.nupkg
+*.snupkg
+
+# User-specific files
+*.user
+*.userosscache
+*.sln.docstates
+
+# MSTest test Results
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+
+# Benchmark results
+BenchmarkDotNet.Artifacts/
+
+# .NET Core project folders
+project.lock.json
+project.fragment.lock.json
+artifacts/
