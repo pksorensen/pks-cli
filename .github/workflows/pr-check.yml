@@ -59,7 +59,7 @@ jobs:
       run: |
         echo "🧪 Running stable core tests..."
         cd tests
-        dotnet test --no-build --settings .runsettings \
+        dotnet test --configuration Release --no-build --settings .runsettings \
           --filter "Category=Core&Reliability!=Unstable" \
           --logger "console;verbosity=normal" \
           --logger "trx;LogFileName=core-tests.trx" \
