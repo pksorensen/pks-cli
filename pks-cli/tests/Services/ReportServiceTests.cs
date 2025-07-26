@@ -258,9 +258,11 @@ public class ReportServiceTests
             },
             OperatingSystemInfo = new OperatingSystemInfo
             {
-                Name = "Linux",
-                OsArchitecture = System.Runtime.InteropServices.Architecture.X64,
-                IsWsl = false
+                Platform = "Linux",
+                OsArchitecture = "X64",
+                IsWindows = false,
+                IsLinux = true,
+                IsMacOs = false
             },
             HardwareInfo = new HardwareInfo
             {
