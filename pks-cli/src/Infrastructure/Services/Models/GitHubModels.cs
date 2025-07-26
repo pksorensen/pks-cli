@@ -329,3 +329,218 @@ public class GitHubWorkflowTemplateInfo
     public List<string> RequiredSecrets { get; set; } = new();
 }
 
+// === GitHub Device Code Flow Authentication Models ===
+
+/// <summary>
+/// Device code flow authentication request
+/// </summary>
+public class GitHubDeviceCodeRequest
+{
+    public string ClientId { get; set; } = string.Empty;
+    public string[] Scopes { get; set; } = Array.Empty<string>();
+}
+
+/// <summary>
+/// Device code flow response from GitHub
+/// </summary>
+public class GitHubDeviceCodeResponse
+{
+    public string DeviceCode { get; set; } = string.Empty;
+    public string UserCode { get; set; } = string.Empty;
+    public string VerificationUri { get; set; } = string.Empty;
+    public string VerificationUriComplete { get; set; } = string.Empty;
+    public int ExpiresIn { get; set; }
+    public int Interval { get; set; }
+}
+
+/// <summary>
+/// Device code authentication status
+/// </summary>
+public class GitHubDeviceAuthStatus
+{
+    public bool IsAuthenticated { get; set; }
+    public string? AccessToken { get; set; }
+    public string? RefreshToken { get; set; }
+    public string[] Scopes { get; set; } = Array.Empty<string>();
+    public DateTime? ExpiresAt { get; set; }
+    public string? Error { get; set; }
+    public string? ErrorDescription { get; set; }
+    public DateTime CheckedAt { get; set; }
+}
+
+/// <summary>
+/// Token polling request for device code flow
+/// </summary>
+public class GitHubTokenPollRequest
+{
+    public string ClientId { get; set; } = string.Empty;
+    public string DeviceCode { get; set; } = string.Empty;
+    public string GrantType { get; set; } = "urn:ietf:params:oauth:grant-type:device_code";
+}
+
+/// <summary>
+/// Token response from GitHub OAuth
+/// </summary>
+public class GitHubTokenResponse
+{
+    public string AccessToken { get; set; } = string.Empty;
+    public string TokenType { get; set; } = string.Empty;
+    public string[] Scopes { get; set; } = Array.Empty<string>();
+    public string? RefreshToken { get; set; }
+    public int? ExpiresIn { get; set; }
+}
+
+/// <summary>
+/// Comprehensive GitHub authentication configuration
+/// </summary>
+public class GitHubAuthConfig
+{
+    public string ClientId { get; set; } = string.Empty;
+    public string[] DefaultScopes { get; set; } = { "repo", "user:email", "write:packages" };
+    public string DeviceCodeUrl { get; set; } = "https://github.com/login/device/code";
+    public string TokenUrl { get; set; } = "https://github.com/login/oauth/access_token";
+    public string ApiBaseUrl { get; set; } = "https://api.github.com";
+    public int PollingIntervalSeconds { get; set; } = 5;
+    public int MaxPollingAttempts { get; set; } = 120; // 10 minutes max
+    public string UserAgent { get; set; } = "PKS-CLI/1.0.0";
+}
+
+/// <summary>
+/// Stored authentication token with metadata
+/// </summary>
+public class GitHubStoredToken
+{
+    public string AccessToken { get; set; } = string.Empty;
+    public string? RefreshToken { get; set; }
+    public string[] Scopes { get; set; } = Array.Empty<string>();
+    public DateTime CreatedAt { get; set; }
+    public DateTime? ExpiresAt { get; set; }
+    public string? AssociatedUser { get; set; }
+    public bool IsValid { get; set; }
+    public DateTime LastValidated { get; set; }
+}
+
+/// <summary>
+/// GitHub API error response
+/// </summary>
+public class GitHubApiError
+{
+    public string Message { get; set; } = string.Empty;
+    public string DocumentationUrl { get; set; } = string.Empty;
+    public List<GitHubApiErrorDetail> Errors { get; set; } = new();
+}
+
+/// <summary>
+/// Detailed GitHub API error information
+/// </summary>
+public class GitHubApiErrorDetail
+{
+    public string Resource { get; set; } = string.Empty;
+    public string Field { get; set; } = string.Empty;
+    public string Code { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Retry policy configuration for GitHub API calls
+/// </summary>
+public class GitHubRetryPolicy
+{
+    public int MaxRetries { get; set; } = 3;
+    public TimeSpan BaseDelay { get; set; } = TimeSpan.FromSeconds(1);
+    public double BackoffMultiplier { get; set; } = 2.0;
+    public TimeSpan MaxDelay { get; set; } = TimeSpan.FromSeconds(30);
+    public bool HandleRateLimiting { get; set; } = true;
+}
+
+/// <summary>
+/// Rate limiting information from GitHub API
+/// </summary>
+public class GitHubRateLimit
+{
+    public int Limit { get; set; }
+    public int Remaining { get; set; }
+    public DateTime ResetTime { get; set; }
+    public int Used { get; set; }
+    public string Resource { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Enhanced GitHub issue with additional metadata
+/// </summary>
+public class GitHubIssueDetailed : GitHubIssue
+{
+    public List<string> Labels { get; set; } = new();
+    public DateTime? UpdatedAt { get; set; }
+    public DateTime? ClosedAt { get; set; }
+    public GitHubUser? ClosedBy { get; set; }
+    public int Comments { get; set; }
+    public bool Locked { get; set; }
+    public string? ActiveLockReason { get; set; }
+    public string RepositoryUrl { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Batch issue creation request
+/// </summary>
+public class GitHubBatchIssueRequest
+{
+    public string Owner { get; set; } = string.Empty;
+    public string Repository { get; set; } = string.Empty;
+    public List<CreateIssueRequest> Issues { get; set; } = new();
+    public bool ContinueOnError { get; set; } = true;
+}
+
+/// <summary>
+/// Result of batch issue creation
+/// </summary>
+public class GitHubBatchIssueResult
+{
+    public int TotalRequested { get; set; }
+    public int SuccessfullyCreated { get; set; }
+    public int Failed { get; set; }
+    public List<GitHubIssueDetailed> CreatedIssues { get; set; } = new();
+    public List<GitHubBatchError> Errors { get; set; } = new();
+    public TimeSpan TotalTime { get; set; }
+}
+
+/// <summary>
+/// Error information for batch operations
+/// </summary>
+public class GitHubBatchError
+{
+    public int Index { get; set; }
+    public string RequestTitle { get; set; } = string.Empty;
+    public string ErrorMessage { get; set; } = string.Empty;
+    public int? StatusCode { get; set; }
+}
+
+/// <summary>
+/// Authentication flow progress information
+/// </summary>
+public class GitHubAuthProgress
+{
+    public GitHubAuthStep CurrentStep { get; set; }
+    public string? UserCode { get; set; }
+    public string? VerificationUrl { get; set; }
+    public TimeSpan? TimeRemaining { get; set; }
+    public string? StatusMessage { get; set; }
+    public bool IsComplete { get; set; }
+    public bool HasError { get; set; }
+    public string? ErrorMessage { get; set; }
+}
+
+/// <summary>
+/// Authentication flow step enumeration
+/// </summary>
+public enum GitHubAuthStep
+{
+    Initializing,
+    RequestingDeviceCode,
+    WaitingForUserAuthorization,
+    PollingForToken,
+    ValidatingToken,
+    Complete,
+    Error
+}
+
