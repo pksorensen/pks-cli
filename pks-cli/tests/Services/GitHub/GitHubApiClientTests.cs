@@ -214,7 +214,7 @@ public class GitHubApiClientTests : IDisposable
     {
         // Arrange
         var resetTime = DateTimeOffset.UtcNow.AddSeconds(2).ToUnixTimeSeconds();
-        
+
         // First response: rate limited
         _httpMessageHandler.SetupSequentialResponses(
             HttpMethod.Get,
@@ -276,7 +276,7 @@ public class GitHubApiClientTests : IDisposable
         // Act & Assert
         var exception = await Assert.ThrowsAsync<GitHubApiException>(
             () => _apiClient.GetAsync<dynamic>("repos/owner/nonexistent"));
-        
+
         Assert.Equal(HttpStatusCode.NotFound, exception.StatusCode);
         Assert.Contains("Not Found", exception.Message);
     }
@@ -294,7 +294,7 @@ public class GitHubApiClientTests : IDisposable
         // Act & Assert
         var exception = await Assert.ThrowsAsync<GitHubApiException>(
             () => _apiClient.GetAsync<dynamic>("repos/owner/repo"));
-        
+
         Assert.Equal(HttpStatusCode.InternalServerError, exception.StatusCode);
         Assert.Contains("failed after", exception.Message);
     }
@@ -381,7 +381,7 @@ public class GitHubApiClientTests : IDisposable
             // Act & Assert
             var exception = await Assert.ThrowsAsync<GitHubApiException>(
                 () => _apiClient.GetAsync<dynamic>("repos/owner/repo"));
-            
+
             Assert.Equal(statusCode, exception.StatusCode);
         }
     }

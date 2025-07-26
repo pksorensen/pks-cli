@@ -338,7 +338,7 @@ public class LoggingOrchestratorTests
         // Arrange
         var commandName = "test-command";
         var commandArgs = Array.Empty<string>();
-        
+
         _mockSessionService.Setup(s => s.StartSessionAsync(It.IsAny<string>(), It.IsAny<ClientInfo>()))
             .ThrowsAsync(new InvalidOperationException("Session creation failed"));
 
@@ -352,7 +352,7 @@ public class LoggingOrchestratorTests
     {
         // Arrange
         var context = CreateTestContext();
-        
+
         _mockTelemetryService.Setup(t => t.CompleteCommandExecutionAsync(
             It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<string>(), It.IsAny<string>()))
             .ThrowsAsync(new InvalidOperationException("Telemetry service failed"));

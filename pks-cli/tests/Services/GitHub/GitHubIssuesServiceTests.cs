@@ -230,7 +230,7 @@ public class GitHubIssuesServiceTests
         };
 
         var mockResponse = CreateMockIssueResponse(42, "Updated Title");
-        
+
         _mockApiClient
             .Setup(x => x.PatchAsync<dynamic>("repos/owner/repo/issues/42", It.IsAny<object>(), default))
             .ReturnsAsync(mockResponse);
@@ -248,7 +248,7 @@ public class GitHubIssuesServiceTests
     {
         // Arrange
         var mockResponse = CreateMockIssueResponse(42, "Test Issue", "closed");
-        
+
         _mockApiClient
             .Setup(x => x.PatchAsync<dynamic>("repos/owner/repo/issues/42", It.IsAny<object>(), default))
             .ReturnsAsync(mockResponse);
@@ -269,7 +269,7 @@ public class GitHubIssuesServiceTests
     {
         // Arrange
         var mockResponse = CreateMockIssueResponse(42, "Test Issue", "open");
-        
+
         _mockApiClient
             .Setup(x => x.PatchAsync<dynamic>("repos/owner/repo/issues/42", It.IsAny<object>(), default))
             .ReturnsAsync(mockResponse);
@@ -437,17 +437,17 @@ public class GitHubIssuesServiceTests
     [Theory]
     [InlineData(null)]
     [InlineData("test-user")]
-    public async Task CreateIssueAsync_WhenNotAuthenticatedButHasStoredToken_ShouldSetToken(string? associatedUser)
+    public async Task CreateIssueAsync_WhenNotAuthenticatedButHasStoredToken_ShouldSetToken()
     {
         // Arrange
         _mockApiClient.Setup(x => x.IsAuthenticated).Returns(false);
-        
+
         var storedToken = new GitHubStoredToken
         {
             AccessToken = "ghp_stored_token",
             IsValid = true
         };
-        
+
         _mockAuthService
             .Setup(x => x.GetStoredTokenAsync(null))
             .ReturnsAsync(storedToken);

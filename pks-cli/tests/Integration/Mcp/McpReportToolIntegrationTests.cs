@@ -19,17 +19,17 @@ public class McpReportToolIntegrationTests
     public McpReportToolIntegrationTests()
     {
         var services = new ServiceCollection();
-        
+
         // Mock dependencies
         _mockReportService = new Mock<IReportService>();
         services.AddSingleton(_mockReportService.Object);
-        
+
         // Add logging
         services.AddLogging(builder => builder.AddConsole());
-        
+
         // Add the report tool service
         services.AddSingleton<ReportToolService>();
-        
+
         _serviceProvider = services.BuildServiceProvider();
     }
 
@@ -65,7 +65,7 @@ public class McpReportToolIntegrationTests
         var expectedMethods = new[]
         {
             "CreateReportAsync",
-            "PreviewReportAsync", 
+            "PreviewReportAsync",
             "GetReportCapabilitiesAsync",
             "CreateBugReportAsync",
             "CreateFeatureRequestAsync"
@@ -104,7 +104,7 @@ public class McpReportToolIntegrationTests
                 .FirstOrDefault();
 
             Assert.NotNull(descriptionAttribute);
-            Assert.False(string.IsNullOrEmpty(descriptionAttribute.Description), 
+            Assert.False(string.IsNullOrEmpty(descriptionAttribute.Description),
                 $"Method {method.Name} should have a non-empty description");
         }
     }
@@ -327,6 +327,7 @@ public class McpReportToolIntegrationTests
         Assert.NotNull(featureResult);
     }
 
+    [Fact]
     public void Dispose()
     {
         _serviceProvider?.Dispose();

@@ -99,10 +99,10 @@ public class CommandTelemetryServiceTests
         // Arrange
         var correlationId1 = await _service.StartCommandExecutionAsync("command1", Array.Empty<string>());
         var correlationId2 = await _service.StartCommandExecutionAsync("command2", Array.Empty<string>());
-        
+
         await _service.RecordPerformanceMetricsAsync(correlationId1, 1000, 10, 20);
         await _service.RecordPerformanceMetricsAsync(correlationId2, 2000, 15, 30);
-        
+
         await _service.CompleteCommandExecutionAsync(correlationId1, true);
         await _service.CompleteCommandExecutionAsync(correlationId2, false, "Test error");
 
@@ -143,7 +143,7 @@ public class CommandTelemetryServiceTests
         // Arrange
         var correlationId1 = await _service.StartCommandExecutionAsync("command1", Array.Empty<string>());
         var correlationId2 = await _service.StartCommandExecutionAsync("command2", Array.Empty<string>());
-        
+
         await _service.CompleteCommandExecutionAsync(correlationId1, true);
         await _service.CompleteCommandExecutionAsync(correlationId2, true);
 
@@ -190,7 +190,7 @@ public class CommandTelemetryServiceTests
         Assert.Equal(2, command.FeaturesUsed.Count);
         Assert.Contains(command.FeaturesUsed, f => f.FeatureName == "feature1");
         Assert.Contains(command.FeaturesUsed, f => f.FeatureName == "feature2");
-        
+
         var feature1 = command.FeaturesUsed.First(f => f.FeatureName == "feature1");
         Assert.Contains("test", feature1.FeatureData.Keys);
         Assert.Equal("data", feature1.FeatureData["test"]);

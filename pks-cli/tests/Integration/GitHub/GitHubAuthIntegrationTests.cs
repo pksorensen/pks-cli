@@ -97,7 +97,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
             {
                 // Act - Store token
                 await _configurationService.SetAsync(storageKey, testToken, false, true);
-                
+
                 // Act - Retrieve token
                 var retrievedToken = await _configurationService.GetAsync(storageKey);
 
@@ -180,7 +180,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
                 result.RepositoryUrl.Should().Be(nonExistentRepo);
                 result.HasAccess.Should().BeFalse("should not have access to non-existent repository");
                 result.ErrorMessage.Should().NotBeNullOrEmpty("should provide error message");
-                
+
                 _logger.LogInformation($"Repository access denied as expected: {result.ErrorMessage}");
             }
             finally
@@ -210,7 +210,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
 
             // Check if token has required scopes for report functionality
             var missingScopes = requiredScopes.Except(result.Scopes).ToList();
-            
+
             if (missingScopes.Any())
             {
                 _logger.LogWarning($"Token is missing required scopes: {string.Join(", ", missingScopes)}");
@@ -240,13 +240,13 @@ namespace PKS.CLI.Tests.Integration.GitHub
             {
                 // Act - Configure authentication for multiple projects
                 var config1 = await _githubService.ConfigureProjectIntegrationAsync(
-                    project1Id, 
-                    "https://github.com/owner1/repo1", 
+                    project1Id,
+                    "https://github.com/owner1/repo1",
                     testToken);
 
                 var config2 = await _githubService.ConfigureProjectIntegrationAsync(
-                    project2Id, 
-                    "https://github.com/owner2/repo2", 
+                    project2Id,
+                    "https://github.com/owner2/repo2",
                     testToken);
 
                 // Assert
@@ -312,7 +312,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
             {
                 exception.Should().BeOfType<TaskCanceledException>()
                     .Or.BeOfType<HttpRequestException>();
-                
+
                 _logger.LogInformation($"Network timeout handled gracefully: {exception.GetType().Name}");
             }
         }
@@ -359,7 +359,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
         {
             // This test verifies that sensitive token information is not leaked in logs
             // We'll use an invalid token and verify the error doesn't contain the token
-            
+
             // Arrange
             var sensitiveToken = "ghp_sensitive_test_token_12345_should_not_appear_in_logs";
 
@@ -369,13 +369,13 @@ namespace PKS.CLI.Tests.Integration.GitHub
             // Assert
             result.Should().NotBeNull();
             result.IsValid.Should().BeFalse();
-            
+
             // Verify sensitive token is not in error message
             if (!string.IsNullOrEmpty(result.ErrorMessage))
             {
-                result.ErrorMessage.Should().NotContain(sensitiveToken, 
+                result.ErrorMessage.Should().NotContain(sensitiveToken,
                     "error messages should not contain sensitive token values");
-                result.ErrorMessage.Should().NotContain("ghp_sensitive_test_token", 
+                result.ErrorMessage.Should().NotContain("ghp_sensitive_test_token",
                     "error messages should not contain parts of sensitive tokens");
             }
 

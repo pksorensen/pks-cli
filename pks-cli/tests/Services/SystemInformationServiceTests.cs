@@ -131,10 +131,10 @@ public class SystemInformationServiceTests
         // Check that no sensitive variables are included
         var sensitivePatterns = new[] { "PASSWORD", "SECRET", "KEY", "TOKEN", "CREDENTIAL" };
         var allVariableNames = result.SafeEnvironmentVariables.Keys.Concat(result.DevelopmentVariables.Keys);
-        
+
         foreach (var variableName in allVariableNames)
         {
-            var isSensitive = sensitivePatterns.Any(pattern => 
+            var isSensitive = sensitivePatterns.Any(pattern =>
                 variableName.Contains(pattern, StringComparison.OrdinalIgnoreCase));
             Assert.False(isSensitive, $"Variable {variableName} appears to be sensitive and should not be included");
         }
@@ -222,7 +222,7 @@ public class SystemInformationServiceTests
         Assert.NotNull(result);
         Assert.StartsWith("{", result);
         Assert.EndsWith("}", result);
-        
+
         // Verify it's valid JSON by attempting to parse
         var parsedJson = System.Text.Json.JsonDocument.Parse(result);
         Assert.NotNull(parsedJson);
@@ -292,7 +292,7 @@ public class SystemInformationServiceTests
     {
         // This test verifies that if any individual component fails,
         // the service still returns what it can collect
-        
+
         // Act & Assert (should not throw)
         var result = await _service.GetSystemInformationAsync();
         Assert.NotNull(result);

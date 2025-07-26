@@ -129,7 +129,7 @@ namespace PKS.CLI.Tests.Commands
             var settings = new ReportCommand.Settings
             {
                 Title = "Test Report",
-                Description = "Test description", 
+                Description = "Test description",
                 Type = "bug"
             };
 
@@ -471,7 +471,7 @@ namespace PKS.CLI.Tests.Commands
             var command = CreateReportCommand();
             var settings = new ReportCommand.Settings
             {
-                Title = "Test Report", 
+                Title = "Test Report",
                 Description = "Test description",
                 Type = "bug"
             };

@@ -19,7 +19,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
         protected override void ConfigureServices(IServiceCollection services)
         {
             base.ConfigureServices(services);
-            
+
             // Configure services specifically for integration tests
             services.AddLogging(builder =>
             {
@@ -83,7 +83,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
         /// </summary>
         protected string GetTestToken()
         {
-            return Environment.GetEnvironmentVariable("GITHUB_TEST_TOKEN") 
+            return Environment.GetEnvironmentVariable("GITHUB_TEST_TOKEN")
                 ?? throw new InvalidOperationException("GITHUB_TEST_TOKEN not configured");
         }
 
@@ -92,7 +92,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
         /// </summary>
         protected string GetTestRepository()
         {
-            return Environment.GetEnvironmentVariable("GITHUB_TEST_REPOSITORY") 
+            return Environment.GetEnvironmentVariable("GITHUB_TEST_REPOSITORY")
                 ?? "https://github.com/pksorensen/pks-cli";
         }
 

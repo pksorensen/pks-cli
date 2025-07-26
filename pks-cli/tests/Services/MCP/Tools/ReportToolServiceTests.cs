@@ -210,7 +210,7 @@ public class ReportToolServiceTests
         Assert.NotNull(previewProp);
         var previewObj = previewProp.GetValue(resultObj)!;
         var previewProps = previewObj.GetType().GetProperties();
-        
+
         var titleProp = previewProps.FirstOrDefault(p => p.Name == "title");
         Assert.NotNull(titleProp);
         Assert.Equal("Test Preview", (string)titleProp.GetValue(previewObj)!);
@@ -273,7 +273,7 @@ public class ReportToolServiceTests
         Assert.NotNull(capabilitiesProp);
         var capabilitiesObj = capabilitiesProp.GetValue(resultObj)!;
         var capabilitiesProps = capabilitiesObj.GetType().GetProperties();
-        
+
         var canCreateProp = capabilitiesProps.FirstOrDefault(p => p.Name == "canCreateReports");
         Assert.NotNull(canCreateProp);
         Assert.True((bool)canCreateProp.GetValue(capabilitiesObj)!);
@@ -282,7 +282,7 @@ public class ReportToolServiceTests
         Assert.NotNull(repositoryProp);
         var repositoryObj = repositoryProp.GetValue(resultObj)!;
         var repositoryProps = repositoryObj.GetType().GetProperties();
-        
+
         var fullNameProp = repositoryProps.FirstOrDefault(p => p.Name == "fullName");
         Assert.NotNull(fullNameProp);
         Assert.Equal("pksorensen/pks-cli", (string)fullNameProp.GetValue(repositoryObj)!);

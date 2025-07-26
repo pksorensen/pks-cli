@@ -43,10 +43,10 @@ public class MockGitHubServicesTests
 
         // Assert
         Assert.NotEmpty(results);
-        
+
         // Should have at least some pending responses
         Assert.Contains(results, r => r.Error == "authorization_pending");
-        
+
         // Should have some variety in responses
         var uniqueStates = results.Select(r => r.IsAuthenticated ? "authenticated" : r.Error).Distinct().Count();
         Assert.True(uniqueStates > 1, "Mock should return varied responses");
@@ -66,9 +66,9 @@ public class MockGitHubServicesTests
         // Assert
         Assert.True(result.IsAuthenticated);
         Assert.NotEmpty(result.AccessToken!);
-        Assert.True(result.AccessToken!.StartsWith("ghp_mock_"));
+        Assert.StartsWith("ghp_mock_", result.AccessToken!);
         Assert.NotEmpty(result.Scopes);
-        
+
         // Verify progress was reported
         Assert.NotEmpty(progressReports);
         Assert.Contains(progressReports, p => p.CurrentStep == GitHubAuthStep.Complete);
@@ -268,7 +268,7 @@ public class MockGitHubServicesTests
         // Assert
         Assert.NotEmpty(result);
         Assert.True(result.Count <= 10);
-        Assert.All(result, issue => 
+        Assert.All(result, issue =>
         {
             Assert.NotEmpty(issue.Title);
             Assert.Equal("https://github.com/owner/repo", issue.RepositoryUrl);
@@ -280,13 +280,13 @@ public class MockGitHubServicesTests
     {
         // Arrange
         var service = new MockGitHubIssuesService();
-        
+
         // First create an issue
         var createRequest = new CreateIssueRequest { Title = "Original Title", Body = "Original body" };
         var createdIssue = await service.CreateIssueAsync("owner", "repo", createRequest);
-        
-        var updateRequest = new UpdateIssueRequest 
-        { 
+
+        var updateRequest = new UpdateIssueRequest
+        {
             Title = "Updated Title",
             State = "closed",
             Labels = new List<string> { "resolved" }
@@ -317,7 +317,7 @@ public class MockGitHubServicesTests
         // Assert
         Assert.Equal("closed", closedIssue.State);
         Assert.NotNull(closedIssue.ClosedAt);
-        
+
         Assert.Equal("open", reopenedIssue.State);
         Assert.Null(reopenedIssue.ClosedAt);
     }
@@ -327,25 +327,25 @@ public class MockGitHubServicesTests
     {
         // Arrange
         var service = new MockGitHubIssuesService();
-        var createRequest = new CreateIssueRequest 
-        { 
-            Title = "Test Issue", 
+        var createRequest = new CreateIssueRequest
+        {
+            Title = "Test Issue",
             Body = "Test body",
             Labels = new List<string> { "initial-label" }
         };
         var createdIssue = await service.CreateIssueAsync("owner", "repo", createRequest);
 
         // Act
-        var addedLabels = await service.AddLabelsAsync("owner", "repo", createdIssue.Number, 
+        var addedLabels = await service.AddLabelsAsync("owner", "repo", createdIssue.Number,
             new List<string> { "bug", "priority-high" });
-        
-        var remainingLabels = await service.RemoveLabelsAsync("owner", "repo", createdIssue.Number, 
+
+        var remainingLabels = await service.RemoveLabelsAsync("owner", "repo", createdIssue.Number,
             new List<string> { "initial-label" });
 
         // Assert
         Assert.Contains("bug", addedLabels);
         Assert.Contains("priority-high", addedLabels);
-        
+
         Assert.DoesNotContain("initial-label", remainingLabels);
     }
 
@@ -422,7 +422,7 @@ public class MockGitHubServicesTests
         var authService = new MockGitHubAuthenticationService();
         var apiClient = new MockGitHubApiClient();
         var issuesService = new MockGitHubIssuesService();
-        
+
         var cancellationTokenSource = new CancellationTokenSource();
         cancellationTokenSource.Cancel();
 
@@ -434,7 +434,7 @@ public class MockGitHubServicesTests
             () => apiClient.GetAsync<dynamic>("test", cancellationTokenSource.Token));
 
         await Assert.ThrowsAsync<OperationCanceledException>(
-            () => issuesService.CreateIssueAsync("owner", "repo", 
+            () => issuesService.CreateIssueAsync("owner", "repo",
                 new CreateIssueRequest { Title = "Test" }, cancellationTokenSource.Token));
     }
 }

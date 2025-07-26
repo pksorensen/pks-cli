@@ -20,7 +20,7 @@ public class ReportServiceTests
         _mockSystemInformationService = Substitute.For<ISystemInformationService>();
         _mockTelemetryService = Substitute.For<ITelemetryService>();
         _mockConfigurationService = Substitute.For<IConfigurationService>();
-        
+
         _reportService = new ReportService(
             _mockGitHubService,
             _mockSystemInformationService,

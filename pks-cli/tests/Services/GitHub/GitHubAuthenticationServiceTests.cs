@@ -213,7 +213,7 @@ public class GitHubAuthenticationServiceTests : IDisposable
     {
         // Arrange
         var userResponse = new { login = "testuser", name = "Test User" };
-        
+
         _httpMessageHandler.SetupResponse(
             HttpMethod.Get,
             $"{_config.ApiBaseUrl}/user",
@@ -436,7 +436,7 @@ public class GitHubAuthenticationServiceTests : IDisposable
         // Act & Assert
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
             () => _service.InitiateDeviceCodeFlowAsync());
-        
+
         Assert.Contains("Failed to initiate device code flow", exception.Message);
     }
 

@@ -58,7 +58,7 @@ public class GitHubIntegrationTests : IDisposable
         if (!string.IsNullOrEmpty(_testToken))
         {
             _apiClient.SetAuthenticationToken(_testToken);
-            
+
             // Store token for auth service
             var storedToken = new GitHubStoredToken
             {
@@ -68,7 +68,7 @@ public class GitHubIntegrationTests : IDisposable
                 LastValidated = DateTime.UtcNow,
                 Scopes = new[] { "repo", "user:email" }
             };
-            
+
             // Use async method properly
             Task.Run(async () => await _authService.StoreTokenAsync(storedToken)).Wait();
         }
@@ -109,7 +109,7 @@ public class GitHubIntegrationTests : IDisposable
         Assert.True(result.Remaining >= 0);
         Assert.True(result.Used >= 0);
         Assert.Equal("core", result.Resource);
-        
+
         _output.WriteLine($"Rate limit: {result.Remaining}/{result.Limit} remaining, resets at {result.ResetTime}");
     }
 
@@ -148,7 +148,7 @@ public class GitHubIntegrationTests : IDisposable
         var parts = _testRepository!.Split('/');
         var owner = parts[0];
         var repo = parts[1];
-        
+
         var createRequest = new CreateIssueRequest
         {
             Title = $"Integration Test Issue - {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}",
@@ -168,7 +168,7 @@ public class GitHubIntegrationTests : IDisposable
             Assert.Equal(createRequest.Title, createdIssue.Title);
             Assert.Equal(createRequest.Body, createdIssue.Body);
             Assert.Equal("open", createdIssue.State);
-            
+
             _output.WriteLine($"Created issue #{createdIssue.Number}: {createdIssue.Title}");
 
             // Act - Close issue
@@ -181,7 +181,7 @@ public class GitHubIntegrationTests : IDisposable
         catch (Exception ex)
         {
             _output.WriteLine($"Integration test failed: {ex.Message}");
-            
+
             // Cleanup attempt if issue was created
             if (createdIssue != null)
             {
@@ -195,7 +195,7 @@ public class GitHubIntegrationTests : IDisposable
                     _output.WriteLine($"Failed to cleanup issue: {cleanupEx.Message}");
                 }
             }
-            
+
             throw;
         }
     }
@@ -213,7 +213,7 @@ public class GitHubIntegrationTests : IDisposable
         var parts = _testRepository!.Split('/');
         var owner = parts[0];
         var repo = parts[1];
-        
+
         var filter = new GitHubIssueFilter
         {
             State = "all", // Get both open and closed
@@ -226,7 +226,7 @@ public class GitHubIntegrationTests : IDisposable
         // Assert
         Assert.NotNull(result);
         _output.WriteLine($"Retrieved {result.Count} issues from {_testRepository}");
-        
+
         foreach (var issue in result.Take(3)) // Log first 3 issues
         {
             _output.WriteLine($"  Issue #{issue.Number}: {issue.Title} ({issue.State})");
@@ -238,7 +238,7 @@ public class GitHubIntegrationTests : IDisposable
     {
         if (!_runIntegrationTests)
         {
-            _output.WriteLine("Skipping integration test - no test token configured");     
+            _output.WriteLine("Skipping integration test - no test token configured");
             return;
         }
 
@@ -256,9 +256,9 @@ public class GitHubIntegrationTests : IDisposable
         // Assert
         Assert.NotNull(result);
         Assert.True(result.TotalCount >= 0);
-        
+
         _output.WriteLine($"Search returned {result.TotalCount} total issues, showing {result.Issues.Count}");
-        
+
         foreach (var issue in result.Issues.Take(3))
         {
             _output.WriteLine($"  Found: #{issue.Number} - {issue.Title}");
@@ -286,12 +286,12 @@ public class GitHubIntegrationTests : IDisposable
         Assert.NotNull(result);
         Assert.True(result.TotalCount >= 0);
         Assert.Equal(result.OpenCount + result.ClosedCount, result.TotalCount);
-        
+
         _output.WriteLine($"Repository statistics:");
         _output.WriteLine($"  Open issues: {result.OpenCount}");
         _output.WriteLine($"  Closed issues: {result.ClosedCount}");
         _output.WriteLine($"  Total issues: {result.TotalCount}");
-        
+
         if (result.LabelDistribution.Any())
         {
             _output.WriteLine($"  Top labels: {string.Join(", ", result.LabelDistribution.Take(5).Select(kv => $"{kv.Key}({kv.Value})"))}");
@@ -337,7 +337,7 @@ public class GitHubIntegrationTests : IDisposable
         // Act & Assert
         var exception = await Assert.ThrowsAsync<GitHubApiException>(
             () => _apiClient.GetAsync<dynamic>("nonexistent/endpoint/that/does/not/exist"));
-        
+
         Assert.Equal(System.Net.HttpStatusCode.NotFound, exception.StatusCode);
         _output.WriteLine($"Correctly caught exception: {exception.Message}");
     }
@@ -363,14 +363,14 @@ public class GitHubIntegrationTests : IDisposable
             ContinueOnError = true,
             Issues = new List<CreateIssueRequest>
             {
-                new() 
-                { 
+                new()
+                {
                     Title = $"Batch Test Issue 1 - {DateTime.UtcNow:HH:mm:ss}",
                     Body = "First batch test issue",
                     Labels = new List<string> { "test", "batch" }
                 },
-                new() 
-                { 
+                new()
+                {
                     Title = $"Batch Test Issue 2 - {DateTime.UtcNow:HH:mm:ss}",
                     Body = "Second batch test issue",
                     Labels = new List<string> { "test", "batch" }
@@ -391,7 +391,7 @@ public class GitHubIntegrationTests : IDisposable
             // Assert
             Assert.True(result.SuccessfullyCreated > 0);
             Assert.Equal(2, progressReports.Count);
-            
+
             _output.WriteLine($"Batch operation completed: {result.SuccessfullyCreated}/{result.TotalRequested} successful");
             _output.WriteLine($"Total time: {result.TotalTime.TotalSeconds:F2} seconds");
 
@@ -405,7 +405,7 @@ public class GitHubIntegrationTests : IDisposable
         catch (Exception ex)
         {
             _output.WriteLine($"Batch test failed: {ex.Message}");
-            
+
             // Cleanup any created issues
             foreach (var issue in createdIssues)
             {
@@ -418,7 +418,7 @@ public class GitHubIntegrationTests : IDisposable
                     _output.WriteLine($"Failed to cleanup issue #{issue.Number}: {cleanupEx.Message}");
                 }
             }
-            
+
             throw;
         }
     }

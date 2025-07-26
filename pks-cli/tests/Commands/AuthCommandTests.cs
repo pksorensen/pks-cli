@@ -92,13 +92,13 @@ namespace PKS.CLI.Tests.Commands
 
             // Assert
             result.Should().Be(0, "command should succeed with valid token");
-            
+
             // Verify token validation was called
             _mockGitHubService.Verify(x => x.ValidateTokenAsync("ghp_validtoken123456789"), Times.Once);
-            
+
             // Verify token was stored securely
             _mockConfigurationService.Verify(x => x.SetAsync("github.token", "ghp_validtoken123456789", false, true), Times.Once);
-            
+
             AssertConsoleOutput("GitHub authentication configured successfully");
             AssertConsoleOutput("Token scopes: repo, issues, write:packages");
         }
@@ -130,7 +130,7 @@ namespace PKS.CLI.Tests.Commands
             result.Should().Be(1, "command should fail with invalid token");
             AssertConsoleOutput("Token validation failed");
             AssertConsoleOutput("Bad credentials");
-            
+
             // Verify token was not stored
             _mockConfigurationService.Verify(x => x.SetAsync("github.token", It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<bool>()), Times.Never);
         }
@@ -141,7 +141,7 @@ namespace PKS.CLI.Tests.Commands
         {
             // Arrange
             TestConsole.Input.PushTextWithEnter("ghp_interactivetoken123456789");
-            
+
             var command = CreateAuthCommand();
             var settings = new AuthCommand.Settings
             {
@@ -154,7 +154,7 @@ namespace PKS.CLI.Tests.Commands
             // Assert
             result.Should().Be(0, "command should succeed after prompting");
             AssertConsoleOutput("Enter your GitHub Personal Access Token:");
-            
+
             _mockGitHubService.Verify(x => x.ValidateTokenAsync("ghp_interactivetoken123456789"), Times.Once);
             _mockConfigurationService.Verify(x => x.SetAsync("github.token", "ghp_interactivetoken123456789", false, true), Times.Once);
         }
@@ -168,7 +168,7 @@ namespace PKS.CLI.Tests.Commands
             var deviceCodeResponse = new GitHubDeviceCodeResponse
             {
                 DeviceCode = "device_code_123",
-                UserCode = "ABCD-1234", 
+                UserCode = "ABCD-1234",
                 VerificationUri = "https://github.com/login/device",
                 ExpiresIn = 900,
                 Interval = 5
@@ -199,12 +199,12 @@ namespace PKS.CLI.Tests.Commands
 
             // Assert
             result.Should().Be(0, "device code flow should succeed");
-            
+
             AssertConsoleOutput($"Visit: {deviceCodeResponse.VerificationUri}");
             AssertConsoleOutput($"Enter code: {deviceCodeResponse.UserCode}");
             AssertConsoleOutput("Waiting for authorization...");
             AssertConsoleOutput("Device authentication successful");
-            
+
             _mockGitHubService.Verify(x => x.InitiateDeviceCodeFlowAsync(), Times.Once);
             _mockGitHubService.Verify(x => x.PollDeviceCodeTokenAsync(deviceCodeResponse.DeviceCode), Times.AtLeastOnce);
             _mockConfigurationService.Verify(x => x.SetAsync("github.token", tokenResponse.AccessToken, false, true), Times.Once);
@@ -233,7 +233,7 @@ namespace PKS.CLI.Tests.Commands
             var command = CreateAuthCommand();
             var settings = new AuthCommand.Settings
             {
-                Provider = "github", 
+                Provider = "github",
                 UseDeviceCode = true
             };
 
@@ -329,7 +329,7 @@ namespace PKS.CLI.Tests.Commands
             // Assert
             result.Should().Be(0, "token removal should succeed");
             AssertConsoleOutput("GitHub authentication removed successfully");
-            
+
             _mockConfigurationService.Verify(x => x.RemoveAsync("github.token"), Times.Once);
         }
 
@@ -436,7 +436,7 @@ namespace PKS.CLI.Tests.Commands
         {
             // Arrange
             var repositoryUrl = "https://github.com/custom-owner/custom-repo";
-            
+
             _mockGitHubService.Setup(x => x.CheckRepositoryAccessAsync(repositoryUrl))
                 .ReturnsAsync(new GitHubAccessLevel
                 {
@@ -459,10 +459,10 @@ namespace PKS.CLI.Tests.Commands
 
             // Assert
             result.Should().Be(0, "should succeed with repository configuration");
-            
+
             _mockConfigurationService.Verify(x => x.SetAsync("github.repository", repositoryUrl, It.IsAny<bool>(), It.IsAny<bool>()), Times.Once);
             _mockGitHubService.Verify(x => x.CheckRepositoryAccessAsync(repositoryUrl), Times.Once);
-            
+
             AssertConsoleOutput("Repository access verified");
             AssertConsoleOutput("write access");
         }

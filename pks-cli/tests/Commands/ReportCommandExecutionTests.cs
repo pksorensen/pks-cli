@@ -61,7 +61,7 @@ namespace PKS.CLI.Tests.Commands
         {
             _mockConfigurationService.Setup(x => x.GetAsync("github.token"))
                 .ReturnsAsync("ghp_testtoken123456789");
-            
+
             _mockConfigurationService.Setup(x => x.GetAsync("github.repository"))
                 .ReturnsAsync("https://github.com/pksorensen/pks-cli");
 
@@ -116,18 +116,18 @@ namespace PKS.CLI.Tests.Commands
 
             // Assert
             result.Should().Be(0, "command should succeed with all parameters");
-            
+
             // Verify all parameters were used correctly
             _mockGitHubService.Verify(x => x.CreateIssueAsync(
                 "custom-owner",
                 "custom-repo",
                 "Bug Report Title",
                 It.Is<string>(body => body.Contains("Detailed bug description with multiple lines") && body.Contains("## System Information")),
-                It.Is<string[]>(labels => 
-                    labels.Contains("bug") && 
-                    labels.Contains("priority:high") && 
-                    labels.Contains("critical") && 
-                    labels.Contains("urgent") && 
+                It.Is<string[]>(labels =>
+                    labels.Contains("bug") &&
+                    labels.Contains("priority:high") &&
+                    labels.Contains("critical") &&
+                    labels.Contains("urgent") &&
                     labels.Contains("regression"))
             ), Times.Once);
         }
@@ -210,7 +210,7 @@ namespace PKS.CLI.Tests.Commands
             // Arrange
             TestConsole.Input.PushTextWithEnter("Interactive Bug Report");
             TestConsole.Input.PushTextWithEnter("This is an interactive bug description");
-            
+
             var command = CreateReportCommand();
             var settings = new ReportCommand.Settings
             {
@@ -225,7 +225,7 @@ namespace PKS.CLI.Tests.Commands
             result.Should().Be(0, "command should succeed after interactive input");
             AssertConsoleOutput("Enter issue title:");
             AssertConsoleOutput("Enter issue description:");
-            
+
             _mockGitHubService.Verify(x => x.CreateIssueAsync(
                 It.IsAny<string>(),
                 It.IsAny<string>(),
@@ -253,7 +253,7 @@ namespace PKS.CLI.Tests.Commands
 
             // Assert
             result.Should().Be(0, "command should succeed");
-            
+
             // Verify progress indicators are shown
             AssertConsoleOutput("Validating GitHub authentication...");
             AssertConsoleOutput("Checking repository access...");
@@ -280,7 +280,7 @@ namespace PKS.CLI.Tests.Commands
 
             // Assert
             result.Should().Be(0, "command should succeed");
-            
+
             // Verify formatted output
             AssertConsoleOutput("Issue created successfully");
             AssertConsoleOutput("Title: Formatted Output Test");
@@ -309,12 +309,12 @@ namespace PKS.CLI.Tests.Commands
 
             // Assert
             result.Should().Be(0, "command should succeed");
-            
+
             _mockGitHubService.Verify(x => x.CreateIssueAsync(
                 It.IsAny<string>(),
                 It.IsAny<string>(),
                 "System Info Test",
-                It.Is<string>(body => 
+                It.Is<string>(body =>
                     body.Contains("## System Information") &&
                     body.Contains("PKS CLI Version:") &&
                     body.Contains("Operating System:") &&
@@ -344,7 +344,7 @@ namespace PKS.CLI.Tests.Commands
 
             // Assert
             result.Should().Be(0, "command should succeed");
-            
+
             _mockGitHubService.Verify(x => x.CreateIssueAsync(
                 It.IsAny<string>(),
                 It.IsAny<string>(),
@@ -360,10 +360,10 @@ namespace PKS.CLI.Tests.Commands
         {
             // This test would typically be handled by Spectre.Console.Cli's built-in help system
             // but we can verify that our command provides proper descriptions and examples
-            
+
             // Arrange
             var command = CreateReportCommand();
-            
+
             // The command class should have proper attributes for help generation
             var settingsType = typeof(ReportCommand.Settings);
             var titleProperty = settingsType.GetProperty(nameof(ReportCommand.Settings.Title));
@@ -374,7 +374,7 @@ namespace PKS.CLI.Tests.Commands
             titleProperty.Should().NotBeNull("Title property should exist");
             descriptionProperty.Should().NotBeNull("Description property should exist");
             typeProperty.Should().NotBeNull("Type property should exist");
-            
+
             // In a real implementation, these would have CommandArgument and CommandOption attributes
             // This test verifies that the command structure supports help generation
         }
@@ -402,7 +402,7 @@ namespace PKS.CLI.Tests.Commands
 
             // Assert
             result.Should().Be(0, "command should succeed");
-            
+
             _mockGitHubService.Verify(x => x.CreateIssueAsync(
                 It.IsAny<string>(),
                 It.IsAny<string>(),
@@ -443,7 +443,7 @@ namespace PKS.CLI.Tests.Commands
             AssertConsoleOutput("Type: bug");
             AssertConsoleOutput("Priority: high");
             AssertConsoleOutput("Tags: test");
-            
+
             // Verify no actual issue creation occurred
             _mockGitHubService.Verify(x => x.CreateIssueAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string[]>()), Times.Never);
         }

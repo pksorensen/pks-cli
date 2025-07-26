@@ -39,7 +39,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
             // Use real GitHub service for integration tests
             services.AddHttpClient<IGitHubService, GitHubService>();
             services.AddSingleton<IConfigurationService, PKS.Infrastructure.Services.ConfigurationService>();
-            
+
             // Add logging
             services.AddLogging(builder =>
             {
@@ -55,7 +55,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
         {
             // Arrange
             var testToken = Environment.GetEnvironmentVariable("GITHUB_TEST_TOKEN");
-            
+
             // Skip test if no token provided (for local development)
             if (string.IsNullOrEmpty(testToken))
             {
@@ -71,7 +71,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
             result.IsValid.Should().BeTrue("valid token should pass validation");
             result.Scopes.Should().NotBeEmpty("token should have scopes");
             result.ValidatedAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromMinutes(1));
-            
+
             _logger.LogInformation($"Token validation successful. Scopes: {string.Join(", ", result.Scopes)}");
         }
 
@@ -100,7 +100,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
         {
             // Arrange
             var testToken = Environment.GetEnvironmentVariable("GITHUB_TEST_TOKEN");
-            var testRepository = Environment.GetEnvironmentVariable("GITHUB_TEST_REPOSITORY") 
+            var testRepository = Environment.GetEnvironmentVariable("GITHUB_TEST_REPOSITORY")
                 ?? "https://github.com/pksorensen/pks-cli";
 
             // Skip test if no token provided
@@ -122,7 +122,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
             result.HasAccess.Should().BeTrue("should have access to test repository");
             result.AccessLevel.Should().NotBeNullOrEmpty("should provide access level");
             result.CheckedAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromMinutes(1));
-            
+
             _logger.LogInformation($"Repository access check successful. Access Level: {result.AccessLevel}");
         }
 
@@ -163,7 +163,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
             var testToken = Environment.GetEnvironmentVariable("GITHUB_TEST_TOKEN");
             var testRepository = Environment.GetEnvironmentVariable("GITHUB_TEST_REPOSITORY");
             var allowIssueCreation = Environment.GetEnvironmentVariable("GITHUB_ALLOW_ISSUE_CREATION") == "true";
-            
+
             // Skip test if not configured for issue creation
             if (string.IsNullOrEmpty(testToken) || string.IsNullOrEmpty(testRepository) || !allowIssueCreation)
             {
@@ -212,7 +212,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
             result.CreatedAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromMinutes(2));
 
             _logger.LogInformation($"Issue created successfully: {result.HtmlUrl}");
-            
+
             // Note: In a real scenario, we might want to close the test issue automatically
             // to avoid cluttering the repository with test issues
         }
@@ -224,7 +224,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
         {
             // Arrange
             var testToken = Environment.GetEnvironmentVariable("GITHUB_TEST_TOKEN");
-            
+
             // Skip test if no token provided
             if (string.IsNullOrEmpty(testToken))
             {
@@ -237,7 +237,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
             // the actual rate limit, but it tests the error handling path
 
             var owner = "nonexistent-owner";
-            var repo = "nonexistent-repo"; 
+            var repo = "nonexistent-repo";
             var title = "Test Rate Limit";
             var body = "This should fail due to repository access issues";
 
@@ -309,7 +309,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
         [InlineData("https://github.com/org-name/project-name", "org-name", "project-name")]
         [InlineData("https://github.com/user123/my-awesome-project", "user123", "my-awesome-project")]
         public async Task RepositoryUrlParsing_ShouldParseCorrectly_WhenValidUrlProvided(
-            string repositoryUrl, string expectedOwner, string expectedRepo)
+            string repositoryUrl, string expectedRepo)
         {
             // Arrange
             var testToken = Environment.GetEnvironmentVariable("GITHUB_TEST_TOKEN") ?? "dummy-token";
@@ -321,7 +321,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
             // Assert
             result.Should().NotBeNull();
             result.RepositoryUrl.Should().Be(repositoryUrl);
-            
+
             // The parsing is tested indirectly through the service call
             // If the URL was parsed incorrectly, the service would fail
         }

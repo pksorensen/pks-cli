@@ -22,10 +22,10 @@ public class LoggingSystemIntegrationTests
     public LoggingSystemIntegrationTests()
     {
         var services = new ServiceCollection();
-        
+
         // Register logging
         services.AddLogging(builder => builder.AddProvider(NullLoggerProvider.Instance));
-        
+
         // Register all logging services
         services.AddSingleton<ICommandTelemetryService, CommandTelemetryService>();
         services.AddSingleton<IUserInteractionService, UserInteractionService>();
@@ -34,7 +34,7 @@ public class LoggingSystemIntegrationTests
         services.AddSingleton<ICommandLoggingWrapper, CommandLoggingWrapper>();
 
         _serviceProvider = services.BuildServiceProvider();
-        
+
         _loggingOrchestrator = _serviceProvider.GetRequiredService<ILoggingOrchestrator>();
         _telemetryService = _serviceProvider.GetRequiredService<ICommandTelemetryService>();
         _interactionService = _serviceProvider.GetRequiredService<IUserInteractionService>();
@@ -82,7 +82,7 @@ public class LoggingSystemIntegrationTests
         await _loggingOrchestrator.FinalizeCommandLoggingAsync(context, true, null, "Integration test completed successfully");
 
         // Assert - Verify data was recorded across all services
-        
+
         // Check telemetry data
         var commandStats = await _telemetryService.GetCommandStatisticsAsync(commandName);
         Assert.Equal(1, commandStats.TotalExecutions);
@@ -124,7 +124,7 @@ public class LoggingSystemIntegrationTests
 
         // Act - Execute multiple commands
         var contexts = new List<CommandExecutionContext>();
-        
+
         foreach (var (commandName, args, success) in commands)
         {
             var context = await _loggingOrchestrator.InitializeCommandLoggingAsync(commandName, args, userId);
@@ -144,7 +144,7 @@ public class LoggingSystemIntegrationTests
 
         // Assert - Check aggregated statistics
         var overallStats = await _loggingOrchestrator.GetLoggingStatisticsAsync();
-        
+
         Assert.Equal(4, overallStats.CommandStats.TotalExecutions);
         Assert.Equal(3, overallStats.CommandStats.SuccessfulExecutions);
         Assert.Equal(1, overallStats.CommandStats.FailedExecutions);
@@ -222,17 +222,17 @@ public class LoggingSystemIntegrationTests
             var task = Task.Run(async () =>
             {
                 var context = await _loggingOrchestrator.InitializeCommandLoggingAsync(
-                    $"perf-command-{commandIndex % 10}", 
-                    new[] { $"--index={commandIndex}" }, 
+                    $"perf-command-{commandIndex % 10}",
+                    new[] { $"--index={commandIndex}" },
                     userId);
 
                 await _loggingOrchestrator.LogFeatureUsageAsync(context, "performance_test");
                 await _loggingOrchestrator.LogUserInteractionAsync(context, "batch_execution", "processing", "done", 100);
-                
+
                 var success = commandIndex % 20 != 0; // 5% failure rate
                 await _loggingOrchestrator.FinalizeCommandLoggingAsync(context, success);
             });
-            
+
             tasks.Add(task);
         }
 
@@ -240,12 +240,12 @@ public class LoggingSystemIntegrationTests
 
         // Assert - Verify all commands were processed
         var stats = await _loggingOrchestrator.GetLoggingStatisticsAsync();
-        
+
         Assert.Equal(commandCount, stats.CommandStats.TotalExecutions);
         Assert.Equal(95, stats.CommandStats.SuccessfulExecutions); // 95% success rate
         Assert.Equal(5, stats.CommandStats.FailedExecutions); // 5% failure rate
         Assert.Equal(0.95, stats.CommandStats.SuccessRate);
-        
+
         // Check that different command names were recorded
         Assert.True(stats.CommandStats.CommandUsageCount.Count <= 10); // At most 10 different command names
         Assert.True(stats.CommandStats.CommandUsageCount.Values.Sum() == commandCount);
@@ -257,7 +257,7 @@ public class LoggingSystemIntegrationTests
         // Arrange - Create some test data
         var userId = "report-test-user";
         var context = await _loggingOrchestrator.InitializeCommandLoggingAsync("report-test", new[] { "--format=json" }, userId);
-        
+
         await _loggingOrchestrator.LogFeatureUsageAsync(context, "report_generation");
         await _loggingOrchestrator.LogUserInteractionAsync(context, "configuration", "Select format", "json", 800);
         await _loggingOrchestrator.FinalizeCommandLoggingAsync(context, true);
@@ -325,6 +325,7 @@ public class LoggingSystemIntegrationTests
         Assert.True(actualSummary.SessionRecordsCleaned >= 0);
     }
 
+    [Fact]
     public void Dispose()
     {
         _serviceProvider?.Dispose();
