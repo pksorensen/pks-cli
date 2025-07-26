@@ -437,7 +437,7 @@ public class GitHubIssuesServiceTests
     [Theory]
     [InlineData(null)]
     [InlineData("test-user")]
-    public async Task CreateIssueAsync_WhenNotAuthenticatedButHasStoredToken_ShouldSetToken()
+    public async Task CreateIssueAsync_WhenNotAuthenticatedButHasStoredToken_ShouldSetToken(string userId)
     {
         // Arrange
         _mockApiClient.Setup(x => x.IsAuthenticated).Returns(false);
@@ -449,7 +449,7 @@ public class GitHubIssuesServiceTests
         };
 
         _mockAuthService
-            .Setup(x => x.GetStoredTokenAsync(null))
+            .Setup(x => x.GetStoredTokenAsync(userId))
             .ReturnsAsync(storedToken);
 
         var mockResponse = CreateMockIssueResponse(1, "Test Issue");

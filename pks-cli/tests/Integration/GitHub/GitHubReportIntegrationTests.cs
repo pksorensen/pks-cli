@@ -309,7 +309,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
         [InlineData("https://github.com/org-name/project-name", "org-name", "project-name")]
         [InlineData("https://github.com/user123/my-awesome-project", "user123", "my-awesome-project")]
         public async Task RepositoryUrlParsing_ShouldParseCorrectly_WhenValidUrlProvided(
-            string repositoryUrl, string expectedRepo)
+            string repositoryUrl, string expectedOwner, string expectedRepo)
         {
             // Arrange
             var testToken = Environment.GetEnvironmentVariable("GITHUB_TEST_TOKEN") ?? "dummy-token";
@@ -322,8 +322,16 @@ namespace PKS.CLI.Tests.Integration.GitHub
             result.Should().NotBeNull();
             result.RepositoryUrl.Should().Be(repositoryUrl);
 
-            // The parsing is tested indirectly through the service call
-            // If the URL was parsed incorrectly, the service would fail
+            // Verify URL parsing components are extracted correctly
+            // Note: The actual parsing logic would be in the GitHub service implementation
+            // This test validates that the URL format is accepted and the service responds appropriately
+            
+            // For demonstration, we can verify that URL parsing would extract the expected components
+            var uri = new Uri(repositoryUrl.Replace(".git", ""));
+            var pathParts = uri.AbsolutePath.Trim('/').Split('/');
+            pathParts.Should().HaveCount(2, "GitHub URLs should have owner/repo format");
+            pathParts[0].Should().Be(expectedOwner, "owner should be parsed correctly");
+            pathParts[1].Should().Be(expectedRepo, "repo should be parsed correctly");
         }
 
         [Fact]
