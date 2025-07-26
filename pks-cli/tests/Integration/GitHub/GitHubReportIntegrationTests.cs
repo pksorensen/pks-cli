@@ -325,7 +325,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
             // Verify URL parsing components are extracted correctly
             // Note: The actual parsing logic would be in the GitHub service implementation
             // This test validates that the URL format is accepted and the service responds appropriately
-            
+
             // For demonstration, we can verify that URL parsing would extract the expected components
             var uri = new Uri(repositoryUrl.Replace(".git", ""));
             var pathParts = uri.AbsolutePath.Trim('/').Split('/');

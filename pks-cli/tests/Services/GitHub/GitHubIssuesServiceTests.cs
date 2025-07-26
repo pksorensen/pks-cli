@@ -437,7 +437,7 @@ public class GitHubIssuesServiceTests
     [Theory]
     [InlineData(null)]
     [InlineData("test-user")]
-    public async Task CreateIssueAsync_WhenNotAuthenticatedButHasStoredToken_ShouldSetToken(string userId)
+    public async Task CreateIssueAsync_WhenNotAuthenticatedButHasStoredToken_ShouldSetToken(string? userId)
     {
         // Arrange
         _mockApiClient.Setup(x => x.IsAuthenticated).Returns(false);
