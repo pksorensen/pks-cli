@@ -74,7 +74,7 @@ namespace PKS.CLI.Tests.Integration.GitHub
         {
             if (ShouldSkipIntegrationTest(out var reason))
             {
-                Assert.True(false, $"Skipping test: {reason}");
+                Assert.Fail($"Skipping test: {reason}");
             }
         }
 
