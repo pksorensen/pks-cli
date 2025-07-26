@@ -1,0 +1,34 @@
+{
+  "TestConfiguration": {
+    "GitHub": {
+      "TestTokenEnvironmentVariable": "GITHUB_TEST_TOKEN",
+      "TestRepositoryEnvironmentVariable": "GITHUB_TEST_REPOSITORY", 
+      "DefaultTestRepository": "https://github.com/pksorensen/pks-cli",
+      "AllowIssueCreationEnvironmentVariable": "GITHUB_ALLOW_ISSUE_CREATION",
+      "RateLimitRetryCount": 3,
+      "RequestTimeoutMs": 30000
+    },
+    "ReportCommand": {
+      "ValidTypes": ["bug", "feature", "enhancement", "documentation"],
+      "ValidPriorities": ["low", "medium", "high", "critical"],
+      "MaxTitleLength": 256,
+      "MaxDescriptionLength": 65536,
+      "DefaultIncludeSystemInfo": true,
+      "RetryAttempts": 3,
+      "RetryDelayMs": 1000
+    },
+    "AuthCommand": {
+      "SupportedProviders": ["github"],
+      "TokenValidationTimeoutMs": 10000,
+      "DeviceCodeFlowTimeoutMs": 300000,
+      "DeviceCodePollIntervalMs": 5000,
+      "RequiredScopes": ["repo", "issues"]
+    },
+    "Integration": {
+      "SkipIfNotConfigured": true,
+      "LogLevel": "Information",
+      "TestDataCleanup": true,
+      "MaxTestDurationMs": 60000
+    }
+  }
+}
