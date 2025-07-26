@@ -61,6 +61,13 @@ else
     services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Warning));
 }
 
+// Register comprehensive logging system
+services.AddSingleton<PKS.Infrastructure.Services.Logging.ICommandTelemetryService, PKS.Infrastructure.Services.Logging.CommandTelemetryService>();
+services.AddSingleton<PKS.Infrastructure.Services.Logging.IUserInteractionService, PKS.Infrastructure.Services.Logging.UserInteractionService>();
+services.AddSingleton<PKS.Infrastructure.Services.Logging.ISessionDataService, PKS.Infrastructure.Services.Logging.SessionDataService>();
+services.AddSingleton<PKS.Infrastructure.Services.Logging.ILoggingOrchestrator, PKS.Infrastructure.Services.Logging.LoggingOrchestrator>();
+services.AddSingleton<PKS.Infrastructure.Services.Logging.ICommandLoggingWrapper, PKS.Infrastructure.Services.Logging.CommandLoggingWrapper>();
+
 // Register infrastructure services
 services.AddSingleton<IKubernetesService, KubernetesService>();
 services.AddSingleton<IConfigurationService, ConfigurationService>();
@@ -98,6 +105,7 @@ services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.PrdToolService>(
 services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.McpManagementToolService>();
 services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.GitHubToolService>();
 services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.TemplateToolService>();
+services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.ReportToolService>();
 
 // Configure tool service registration after container is built
 services.PostConfigure<PKS.CLI.Infrastructure.Services.MCP.McpConfiguration>(_ =>
@@ -118,12 +126,53 @@ services.AddHttpClient<INuGetTemplateDiscoveryService, NuGetTemplateDiscoverySer
 // Register PRD branch command
 services.AddTransient<PrdBranchCommand>();
 
+// Configure GitHub authentication
+services.AddSingleton(serviceProvider => new PKS.Infrastructure.Services.Models.GitHubAuthConfig
+{
+    ClientId = "Ov23li6wdCCwQfTdFrTJ", // PKS CLI GitHub App client ID
+    DefaultScopes = new[] { "repo", "user:email", "write:packages" },
+    DeviceCodeUrl = "https://github.com/login/device/code",
+    TokenUrl = "https://github.com/login/oauth/access_token",
+    ApiBaseUrl = "https://api.github.com",
+    UserAgent = "PKS-CLI/1.0.0 (+https://github.com/pksorensen/pks-cli)",
+    PollingIntervalSeconds = 5,
+    MaxPollingAttempts = 120
+});
+
+// Configure GitHub retry policy  
+services.AddSingleton(serviceProvider => new PKS.Infrastructure.Services.Models.GitHubRetryPolicy
+{
+    MaxRetries = 3,
+    BaseDelay = TimeSpan.FromSeconds(1),
+    MaxDelay = TimeSpan.FromSeconds(30),
+    BackoffMultiplier = 2.0
+});
+
 // Register GitHub and Project Identity services
 services.AddHttpClient<IGitHubService, GitHubService>();
 services.AddSingleton<IProjectIdentityService, ProjectIdentityService>();
 
+// Register GitHub Authentication service with HttpClient
+services.AddHttpClient<IGitHubAuthenticationService, GitHubAuthenticationService>();
+
+// Register GitHub API client and related services
+services.AddHttpClient<IGitHubApiClient, GitHubApiClient>();
+services.AddSingleton<IGitHubIssuesService, GitHubIssuesService>();
+
+// Register enhanced GitHub service that integrates authentication
+// Note: Using the existing GitHubService registration for IGitHubService
+// EnhancedGitHubService implements IGitHubService but needs the full dependency chain
+services.AddSingleton<EnhancedGitHubService>();
+
+// Register System Information service
+services.AddSingleton<ISystemInformationService, SystemInformationService>();
+
 // Register Template Packaging service
 services.AddSingleton<ITemplatePackagingService, TemplatePackagingService>();
+
+// Register Report services
+services.AddSingleton<IReportService, ReportService>();
+services.AddSingleton<ITelemetryService, TelemetryService>();
 
 // Register individual initializers as transient services
 services.AddTransient<PKS.Infrastructure.Initializers.Implementations.DotNetProjectInitializer>();
@@ -176,6 +225,19 @@ app.Configure(config =>
 
     config.AddCommand<AsciiCommand>("ascii")
         .WithDescription("Generate beautiful ASCII art for your projects");
+
+    config.AddCommand<PKS.Commands.ReportCommand>("report")
+        .WithDescription("Create GitHub issues with system information and user feedback")
+        .WithExample(new[] { "report", "Found a bug in the init command" })
+        .WithExample(new[] { "report", "--bug", "Application crashes when saving" })
+        .WithExample(new[] { "report", "--feature", "Add dark mode support" })
+        .WithExample(new[] { "report", "--dry-run", "Preview what the report looks like" });
+
+    config.AddCommand<PKS.Commands.LoggingExampleCommand>("logging-demo")
+        .WithDescription("Demonstrate the comprehensive logging system capabilities")
+        .WithExample(new[] { "logging-demo" })
+        .WithExample(new[] { "logging-demo", "--verbose", "--interactive" })
+        .WithExample(new[] { "logging-demo", "--simulate-error", "--delay", "2000" });
 
     config.AddCommand<PKS.CLI.Commands.Mcp.McpCommand>("mcp")
         .WithDescription("Run Model Context Protocol (MCP) server for AI integration")
