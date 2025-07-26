@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
 using PKS.CLI.Infrastructure.Services.MCP.Tools;
+using PKS.Infrastructure;
 using PKS.Infrastructure.Services;
 using Xunit;
 

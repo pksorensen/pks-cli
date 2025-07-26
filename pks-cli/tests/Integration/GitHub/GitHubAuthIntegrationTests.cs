@@ -1,5 +1,6 @@
 using Xunit;
 using Microsoft.Extensions.DependencyInjection;
+using PKS.Infrastructure;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using PKS.CLI.Tests.Infrastructure;

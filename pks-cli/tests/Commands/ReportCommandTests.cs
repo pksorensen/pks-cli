@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using PKS.Commands;
+using PKS.Infrastructure;
 using PKS.Infrastructure.Services;
 using Spectre.Console;
 using Spectre.Console.Cli;

@@ -1,6 +1,7 @@
 using Xunit;
 using Spectre.Console.Testing;
 using Spectre.Console.Cli;
+using PKS.Infrastructure;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using Moq;
