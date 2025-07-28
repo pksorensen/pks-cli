@@ -95,7 +95,7 @@ public class ConfigurationService : IConfigurationService
         {
             _config[key] = encrypt ? "***encrypted***" : value;
         }
-        
+
         // Save to file if this is a persistent setting
         if (global || key.StartsWith("cli."))
         {
@@ -130,7 +130,7 @@ public class ConfigurationService : IConfigurationService
             {
                 var json = await File.ReadAllTextAsync(_settingsFilePath);
                 var settings = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(json);
-                
+
                 if (settings != null)
                 {
                     lock (_lockObject)
@@ -170,7 +170,7 @@ public class ConfigurationService : IConfigurationService
             {
                 WriteIndented = true
             });
-            
+
             await File.WriteAllTextAsync(_settingsFilePath, json);
         }
         catch

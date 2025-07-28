@@ -20,9 +20,9 @@ public class ConfigurationServiceTests : IDisposable
         // Create a temporary directory for test settings
         _testDirectory = Path.Combine(Path.GetTempPath(), "pks-cli-tests", Guid.NewGuid().ToString());
         Directory.CreateDirectory(_testDirectory);
-        
+
         _testSettingsPath = Path.Combine(_testDirectory, "settings.json");
-        
+
         // Create a standard configuration service for basic testing
         _configService = new ConfigurationService();
     }
@@ -170,7 +170,7 @@ public class ConfigurationServiceTests : IDisposable
     public async Task ConfigurationService_FirstTimeWarningWorkflow_WorksInMemory()
     {
         // This test simulates the complete workflow for first-time warning
-        
+
         // Arrange
         const string warningKey = "cli.first-time-warning-acknowledged";
 
@@ -184,7 +184,7 @@ public class ConfigurationServiceTests : IDisposable
         // Act 3: Verify in-memory value
         var memoryValue = await _configService.GetAsync(warningKey);
         Assert.Equal("true", memoryValue);
-        
+
         // Act 4: Verify subsequent reads return the same value
         var subsequentValue = await _configService.GetAsync(warningKey);
         Assert.Equal("true", subsequentValue);

@@ -47,7 +47,7 @@ var isHookEventCommand = commandArgs.Length > 2 &&
 if (!isMcpStdio && !(isHooksCommand && (hasJsonFlag || isHookEventCommand)))
 {
     DisplayWelcomeBanner();
-    
+
     // Check if we should display the first-time warning
     DisplayFirstTimeWarningIfNeeded(commandArgs).GetAwaiter().GetResult();
 }
@@ -420,19 +420,19 @@ static async Task DisplayFirstTimeWarningIfNeeded(string[] commandArgs)
     {
         // Create a temporary configuration service to check the warning acknowledgment
         var configService = new ConfigurationService();
-        
+
         // Check if the warning has already been acknowledged
         if (await configService.IsFirstTimeWarningAcknowledgedAsync())
         {
             return; // User has already acknowledged the warning
         }
-        
+
         // Check if the current command should skip the warning
         if (ShouldSkipFirstTimeWarning(commandArgs))
         {
             return;
         }
-        
+
         // Display the first-time warning
         var warningPanel = new Panel(
             """
@@ -452,19 +452,19 @@ static async Task DisplayFirstTimeWarningIfNeeded(string[] commandArgs)
 
         AnsiConsole.Write(warningPanel);
         AnsiConsole.WriteLine();
-        
+
         // Ask for user acknowledgment
         var acknowledged = AnsiConsole.Confirm("Do you acknowledge and accept these terms?", false);
-        
+
         if (!acknowledged)
         {
             AnsiConsole.MarkupLine("[red]You must acknowledge the terms to use PKS CLI.[/]");
             Environment.Exit(1);
         }
-        
+
         // Save the acknowledgment
         await configService.SetFirstTimeWarningAcknowledgedAsync();
-        
+
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[green]Thank you for acknowledging the terms. Continuing with PKS CLI...[/]");
         AnsiConsole.WriteLine();
@@ -487,7 +487,7 @@ static bool ShouldSkipFirstTimeWarning(string[] commandArgs)
                           Array.IndexOf(commandArgs, a) + 1 < commandArgs.Length &&
                           commandArgs[Array.IndexOf(commandArgs, a) + 1].Equals("stdio", StringComparison.OrdinalIgnoreCase)) ||
                           !commandArgs.Any(a => a.Equals("--transport", StringComparison.OrdinalIgnoreCase) || a.Equals("-t", StringComparison.OrdinalIgnoreCase)));
-        
+
         if (isMcpStdio)
         {
             return true;
@@ -496,7 +496,7 @@ static bool ShouldSkipFirstTimeWarning(string[] commandArgs)
         // Skip for hooks commands with --json flag OR when it's a hook event command
         var isHooksCommand = commandArgs.Length > 1 &&
                              commandArgs[1].Equals("hooks", StringComparison.OrdinalIgnoreCase);
-        
+
         var hasJsonFlag = commandArgs.Any(a => a.Equals("--json", StringComparison.OrdinalIgnoreCase) ||
                                               a.Equals("-j", StringComparison.OrdinalIgnoreCase));
 
@@ -514,7 +514,7 @@ static bool ShouldSkipFirstTimeWarning(string[] commandArgs)
         // This requires reflection to get the command type from the command name
         // and check if it has the [SkipFirstTimeWarning] attribute
         // Implementation would be added here once command attribute detection is needed
-        
+
         return false;
     }
     catch

@@ -51,9 +51,9 @@ public static class ServiceMockFactory
     /// <summary>
     /// Creates a mock configuration service with first-time warning support for testing
     /// </summary>
-    public static Mock<PKS.Infrastructure.Services.IConfigurationService> CreateConfigurationServiceWithWarningSupport()
+    public static Mock<PKS.Infrastructure.IConfigurationService> CreateConfigurationServiceWithWarningSupport()
     {
-        var mock = new Mock<PKS.Infrastructure.Services.IConfigurationService>();
+        var mock = new Mock<PKS.Infrastructure.IConfigurationService>();
         var settings = new Dictionary<string, string>();
 
         // Setup configuration methods that work with existing interfaces
