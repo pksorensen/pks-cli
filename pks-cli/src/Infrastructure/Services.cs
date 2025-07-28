@@ -45,42 +45,149 @@ public interface IConfigurationService
     Task SetAsync(string key, string value, bool global = false, bool encrypt = false);
     Task<Dictionary<string, string>> GetAllAsync();
     Task DeleteAsync(string key);
+    Task LoadSettingsAsync();
+    Task SaveSettingsAsync();
+    Task<bool> IsFirstTimeWarningAcknowledgedAsync();
+    Task SetFirstTimeWarningAcknowledgedAsync();
 }
 
 public class ConfigurationService : IConfigurationService
 {
-    private readonly Dictionary<string, string> _config = new()
+    private readonly Dictionary<string, string> _config;
+    private readonly string _settingsFilePath;
+    private readonly object _lockObject = new();
+
+    public ConfigurationService()
     {
-        { "cluster.endpoint", "https://k8s.production.com" },
-        { "namespace.default", "myapp-production" },
-        { "registry.url", "registry.company.com" },
-        { "auth.token", "***encrypted***" },
-        { "deploy.replicas", "3" },
-        { "monitoring.enabled", "true" }
-    };
+        // Initialize with default values
+        _config = new Dictionary<string, string>
+        {
+            { "cluster.endpoint", "https://k8s.production.com" },
+            { "namespace.default", "myapp-production" },
+            { "registry.url", "registry.company.com" },
+            { "auth.token", "***encrypted***" },
+            { "deploy.replicas", "3" },
+            { "monitoring.enabled", "true" }
+        };
+
+        // Set up settings file path
+        var userHomeDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var pksDirectory = Path.Combine(userHomeDirectory, ".pks-cli");
+        _settingsFilePath = Path.Combine(pksDirectory, "settings.json");
+
+        // Load settings from file if it exists
+        LoadSettingsAsync().GetAwaiter().GetResult();
+    }
 
     public async Task<string?> GetAsync(string key)
     {
         await Task.Delay(50);
-        return _config.TryGetValue(key, out var value) ? value : null;
+        lock (_lockObject)
+        {
+            return _config.TryGetValue(key, out var value) ? value : null;
+        }
     }
 
     public async Task SetAsync(string key, string value, bool global = false, bool encrypt = false)
     {
         await Task.Delay(100);
-        _config[key] = encrypt ? "***encrypted***" : value;
+        lock (_lockObject)
+        {
+            _config[key] = encrypt ? "***encrypted***" : value;
+        }
+        
+        // Save to file if this is a persistent setting
+        if (global || key.StartsWith("cli."))
+        {
+            await SaveSettingsAsync();
+        }
     }
 
     public async Task<Dictionary<string, string>> GetAllAsync()
     {
         await Task.Delay(100);
-        return new Dictionary<string, string>(_config);
+        lock (_lockObject)
+        {
+            return new Dictionary<string, string>(_config);
+        }
     }
 
     public async Task DeleteAsync(string key)
     {
         await Task.Delay(50);
-        _config.Remove(key);
+        lock (_lockObject)
+        {
+            _config.Remove(key);
+        }
+        await SaveSettingsAsync();
+    }
+
+    public async Task LoadSettingsAsync()
+    {
+        try
+        {
+            if (File.Exists(_settingsFilePath))
+            {
+                var json = await File.ReadAllTextAsync(_settingsFilePath);
+                var settings = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+                
+                if (settings != null)
+                {
+                    lock (_lockObject)
+                    {
+                        foreach (var kvp in settings)
+                        {
+                            _config[kvp.Key] = kvp.Value;
+                        }
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Gracefully handle file read errors - continue with defaults
+        }
+    }
+
+    public async Task SaveSettingsAsync()
+    {
+        try
+        {
+            // Ensure directory exists
+            var directory = Path.GetDirectoryName(_settingsFilePath);
+            if (directory != null && !Directory.Exists(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            Dictionary<string, string> configToSave;
+            lock (_lockObject)
+            {
+                configToSave = new Dictionary<string, string>(_config);
+            }
+
+            var json = System.Text.Json.JsonSerializer.Serialize(configToSave, new System.Text.Json.JsonSerializerOptions
+            {
+                WriteIndented = true
+            });
+            
+            await File.WriteAllTextAsync(_settingsFilePath, json);
+        }
+        catch
+        {
+            // Gracefully handle file write errors - warning may still display
+        }
+    }
+
+    public async Task<bool> IsFirstTimeWarningAcknowledgedAsync()
+    {
+        var value = await GetAsync("cli.first-time-warning-acknowledged");
+        return bool.TryParse(value, out var result) && result;
+    }
+
+    public async Task SetFirstTimeWarningAcknowledgedAsync()
+    {
+        await SetAsync("cli.first-time-warning-acknowledged", "true");
     }
 }
 
@@ -134,3 +241,8 @@ public class DeploymentService : IDeploymentService
 // Note: IAgentFrameworkService and AgentFrameworkService are defined in separate files:
 // - /workspace/pks-cli/src/Infrastructure/Services/IAgentFrameworkService.cs
 // - /workspace/pks-cli/src/Infrastructure/Services/AgentFrameworkService.cs
+
+// First-Time Warning Service
+// Note: IFirstTimeWarningService and FirstTimeWarningService are defined in separate files:
+// - /workspace/pks-cli/src/Infrastructure/Services/IFirstTimeWarningService.cs
+// - /workspace/pks-cli/src/Infrastructure/Services/FirstTimeWarningService.cs

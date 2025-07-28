@@ -2,6 +2,7 @@ using System.ComponentModel;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PKS.CLI.Infrastructure.Services.MCP;
+using PKS.Infrastructure.Attributes;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -10,6 +11,7 @@ namespace PKS.CLI.Commands.Mcp;
 /// <summary>
 /// Command for managing the Model Context Protocol (MCP) server
 /// </summary>
+[SkipFirstTimeWarning]
 public class McpCommand : AsyncCommand<McpSettings>
 {
     private readonly IMcpHostingService _mcpHostingService;

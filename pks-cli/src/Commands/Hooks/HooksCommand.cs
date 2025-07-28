@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using PKS.Infrastructure.Attributes;
 using PKS.Infrastructure.Services;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -9,6 +10,7 @@ namespace PKS.Commands.Hooks;
 /// Command for managing Claude Code hooks integration
 /// Handles Claude Code hook events: pre-tool-use, post-tool-use, etc.
 /// </summary>
+[SkipFirstTimeWarning]
 public class HooksCommand : AsyncCommand<HooksSettings>
 {
     private readonly IHooksService _hooksService;

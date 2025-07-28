@@ -1,3 +1,4 @@
+using PKS.Infrastructure.Attributes;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -8,6 +9,7 @@ namespace PKS.Commands.Hooks;
 /// Command for handling Stop hook events from Claude Code
 /// This hook is called when Claude Code stops responding or encounters an error
 /// </summary>
+[SkipFirstTimeWarning]
 public class StopCommand : BaseHookCommand
 {
     /// <summary>

@@ -1,3 +1,4 @@
+using PKS.Infrastructure.Attributes;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -8,6 +9,7 @@ namespace PKS.Commands.Hooks;
 /// Command for handling PostToolUse hook events from Claude Code
 /// This hook is called after Claude Code executes a tool and can process the results
 /// </summary>
+[SkipFirstTimeWarning]
 public class PostToolUseCommand : BaseHookCommand
 {
     /// <summary>

@@ -153,6 +153,79 @@ Message 4: Write(single file)
 4. **Monitor Progress**: Regular status updates
 5. **Batch Operations**: Everything in parallel
 
+## 📞 AGENT COMMUNICATION & COORDINATION
+
+### Communication Protocol
+
+All agents MUST communicate via a shared `.jsonl` file: `.pks/communication.jsonl`
+
+**CRITICAL**: Every agent must:
+
+1. **Introduce Themselves** when spawned:
+```json
+{"timestamp": "2025-07-26T21:30:00Z", "from": "architect-agent", "type": "introduction", "message": "Architect Agent online, working on system design for: $ARGUMENTS", "status": "active"}
+```
+
+2. **Announce Work Progress**:
+```json
+{"timestamp": "2025-07-26T21:31:00Z", "from": "backend-dev", "type": "status", "message": "Starting API implementation", "task": "implement-apis", "progress": 10}
+```
+
+3. **Request Coordination**:
+```json
+{"timestamp": "2025-07-26T21:32:00Z", "from": "frontend-dev", "to": "architect-agent", "type": "request", "message": "Need API specification before starting UI", "waiting_for": "api-spec"}
+```
+
+4. **Report Completion**:
+```json
+{"timestamp": "2025-07-26T21:35:00Z", "from": "test-engineer", "type": "completion", "message": "Unit tests completed", "task": "write-tests", "progress": 100}
+```
+
+### Coordination Rules
+
+1. **Check communication.jsonl** before starting any major task
+2. **Write status updates** every significant step
+3. **Use exponential backoff** when waiting: 1s, 2s, 4s, 8s, 16s max
+4. **Direct messages** use "to" field for specific agents
+5. **Avoid duplicate work** by checking what others are doing
+
+### Mandatory Coordinator Agent
+
+Every swarm MUST spawn a **Coordinator Agent** with these responsibilities:
+
+- Monitor `.pks/communication.jsonl` continuously
+- Identify conflicts and dependencies
+- Redirect agents when stepping on each other
+- Ensure progress toward common objective
+- Send coordination messages when needed
+
+**Coordinator Messages**:
+```json
+{"timestamp": "2025-07-26T21:33:00Z", "from": "coordinator", "to": "all", "type": "directive", "message": "Frontend-dev wait for architect to finish API spec. Backend-dev can proceed with database layer."}
+```
+
+### Implementation Pattern
+
+```javascript
+// Every agent must start with:
+Write(".pks/communication.jsonl", JSON.stringify({
+  timestamp: new Date().toISOString(),
+  from: "agent-name",
+  type: "introduction", 
+  message: "Agent description and current task",
+  status: "active"
+}) + "\n")
+
+// Before major work:
+Read(".pks/communication.jsonl") // Check what others are doing
+
+// During work:
+// Append progress updates (use bash echo >>)
+
+// When waiting:
+// Exponential backoff: sleep 1, 2, 4, 8, 16 seconds max
+```
+
 ## 🔧 Future MCP Integration
 
 When MCP tools are implemented, this command will be updated to use:
@@ -162,7 +235,7 @@ When MCP tools are implemented, this command will be updated to use:
 - `mcp__pks__memory_usage` for coordination
 - `mcp__pks__task_orchestrate` for orchestration
 
-Until then, use Task and TodoWrite tools for all coordination.
+Until then, use Task, TodoWrite, and `.pks/communication.jsonl` for all coordination.
 
 ---
 

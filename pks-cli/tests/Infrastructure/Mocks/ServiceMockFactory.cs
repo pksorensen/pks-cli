@@ -49,6 +49,35 @@ public static class ServiceMockFactory
     }
 
     /// <summary>
+    /// Creates a mock configuration service with first-time warning support for testing
+    /// </summary>
+    public static Mock<PKS.Infrastructure.Services.IConfigurationService> CreateConfigurationServiceWithWarningSupport()
+    {
+        var mock = new Mock<PKS.Infrastructure.Services.IConfigurationService>();
+        var settings = new Dictionary<string, string>();
+
+        // Setup configuration methods that work with existing interfaces
+        mock.Setup(x => x.GetAsync(It.IsAny<string>()))
+            .ReturnsAsync((string key) => settings.TryGetValue(key, out var value) ? value : null);
+
+        mock.Setup(x => x.SetAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<bool>()))
+            .Callback<string, string, bool, bool>((key, value, global, encrypt) =>
+            {
+                settings[key] = encrypt ? "***encrypted***" : value;
+            })
+            .Returns(Task.CompletedTask);
+
+        mock.Setup(x => x.GetAllAsync())
+            .ReturnsAsync(() => new Dictionary<string, string>(settings));
+
+        mock.Setup(x => x.DeleteAsync(It.IsAny<string>()))
+            .Callback<string>(key => settings.Remove(key))
+            .Returns(Task.CompletedTask);
+
+        return mock;
+    }
+
+    /// <summary>
     /// Creates a mock IDeploymentService with default behavior
     /// </summary>
     public static Mock<PKS.CLI.Tests.Infrastructure.Mocks.IDeploymentService> CreateDeploymentService()

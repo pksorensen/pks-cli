@@ -460,6 +460,28 @@ public class TestConfigurationService : IConfigurationService
         await Task.Delay(1); // Simulate async operation
         _config.Remove(key);
     }
+
+    public async Task LoadSettingsAsync()
+    {
+        await Task.Delay(1); // Simulate async operation
+    }
+
+    public async Task SaveSettingsAsync()
+    {
+        await Task.Delay(1); // Simulate async operation
+    }
+
+    public async Task<bool> IsFirstTimeWarningAcknowledgedAsync()
+    {
+        await Task.Delay(1); // Simulate async operation
+        return _config.ContainsKey("cli.first-time-warning-acknowledged");
+    }
+
+    public async Task SetFirstTimeWarningAcknowledgedAsync()
+    {
+        await Task.Delay(1); // Simulate async operation
+        _config["cli.first-time-warning-acknowledged"] = "true";
+    }
 }
 
 /// <summary>

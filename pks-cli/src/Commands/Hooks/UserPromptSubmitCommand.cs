@@ -1,3 +1,4 @@
+using PKS.Infrastructure.Attributes;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -8,6 +9,7 @@ namespace PKS.Commands.Hooks;
 /// Command for handling UserPromptSubmit hook events from Claude Code
 /// This hook is called before Claude Code processes a user prompt
 /// </summary>
+[SkipFirstTimeWarning]
 public class UserPromptSubmitCommand : BaseHookCommand
 {
     /// <summary>

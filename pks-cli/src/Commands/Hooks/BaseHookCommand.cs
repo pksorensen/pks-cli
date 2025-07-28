@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using PKS.Infrastructure.Attributes;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -11,6 +12,7 @@ namespace PKS.Commands.Hooks;
 /// Base class for all Claude Code hook commands
 /// Provides common functionality for JSON output and silent operation
 /// </summary>
+[SkipFirstTimeWarning]
 public abstract class BaseHookCommand : AsyncCommand<HooksSettings>
 {
     protected static readonly JsonSerializerOptions JsonOptions = new()

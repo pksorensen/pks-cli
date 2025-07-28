@@ -4,6 +4,7 @@ using PKS.Infrastructure;
 using PKS.Infrastructure.Initializers.Registry;
 using PKS.Infrastructure.Initializers.Service;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Attributes;
 using PKS.Commands.Hooks;
 using PKS.CLI.Commands.Mcp;
 using PKS.CLI.Commands;
@@ -13,6 +14,7 @@ using PKS.CLI.Infrastructure.Services;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.Text;
+using System.Reflection;
 
 // Set UTF-8 encoding for proper ASCII art display
 Console.OutputEncoding = Encoding.UTF8;
@@ -45,6 +47,9 @@ var isHookEventCommand = commandArgs.Length > 2 &&
 if (!isMcpStdio && !(isHooksCommand && (hasJsonFlag || isHookEventCommand)))
 {
     DisplayWelcomeBanner();
+    
+    // Check if we should display the first-time warning
+    DisplayFirstTimeWarningIfNeeded(commandArgs).GetAwaiter().GetResult();
 }
 
 // Configure the application
@@ -73,6 +78,7 @@ services.AddSingleton<IKubernetesService, KubernetesService>();
 services.AddSingleton<IConfigurationService, ConfigurationService>();
 services.AddSingleton<IDeploymentService, DeploymentService>();
 services.AddSingleton<IHooksService, HooksService>();
+services.AddSingleton<IFirstTimeWarningService, FirstTimeWarningService>();
 // Legacy MCP services removed in Phase 3 - now using SDK-based services only
 
 // New SDK-based MCP hosting services
@@ -406,4 +412,114 @@ static void DisplayWelcomeBanner()
     AnsiConsole.WriteLine();
     AnsiConsole.MarkupLine("[dim]Type 'pks --help' to get started with your agentic development journey![/]");
     AnsiConsole.WriteLine();
+}
+
+static async Task DisplayFirstTimeWarningIfNeeded(string[] commandArgs)
+{
+    try
+    {
+        // Create a temporary configuration service to check the warning acknowledgment
+        var configService = new ConfigurationService();
+        
+        // Check if the warning has already been acknowledged
+        if (await configService.IsFirstTimeWarningAcknowledgedAsync())
+        {
+            return; // User has already acknowledged the warning
+        }
+        
+        // Check if the current command should skip the warning
+        if (ShouldSkipFirstTimeWarning(commandArgs))
+        {
+            return;
+        }
+        
+        // Display the first-time warning
+        var warningPanel = new Panel(
+            """
+            [yellow]⚠️  IMPORTANT DISCLAIMER ⚠️[/]
+
+            This CLI tool is powered by AI and generates code automatically.
+            The generated code has [red]NOT[/] been validated by humans.
+
+            [red]AI may make mistakes - use at your own risk.[/]
+
+            Please review all generated code before use and report any issues at:
+            [cyan]https://github.com/pksorensen/pks-cli[/]
+            """)
+            .Header("[red bold]First-Time Usage Warning[/]")
+            .BorderColor(Color.Red)
+            .Padding(1, 1, 1, 1);
+
+        AnsiConsole.Write(warningPanel);
+        AnsiConsole.WriteLine();
+        
+        // Ask for user acknowledgment
+        var acknowledged = AnsiConsole.Confirm("Do you acknowledge and accept these terms?", false);
+        
+        if (!acknowledged)
+        {
+            AnsiConsole.MarkupLine("[red]You must acknowledge the terms to use PKS CLI.[/]");
+            Environment.Exit(1);
+        }
+        
+        // Save the acknowledgment
+        await configService.SetFirstTimeWarningAcknowledgedAsync();
+        
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[green]Thank you for acknowledging the terms. Continuing with PKS CLI...[/]");
+        AnsiConsole.WriteLine();
+    }
+    catch
+    {
+        // Gracefully handle any errors - continue without warning if configuration fails
+        // This ensures the CLI remains functional even if file system operations fail
+    }
+}
+
+static bool ShouldSkipFirstTimeWarning(string[] commandArgs)
+{
+    try
+    {
+        // Skip for MCP stdio transport
+        var isMcpStdio = commandArgs.Length > 2 &&
+                         commandArgs.Any(a => a.Equals("mcp", StringComparison.OrdinalIgnoreCase)) &&
+                         (commandArgs.Any(a => a.Equals("--transport", StringComparison.OrdinalIgnoreCase) &&
+                          Array.IndexOf(commandArgs, a) + 1 < commandArgs.Length &&
+                          commandArgs[Array.IndexOf(commandArgs, a) + 1].Equals("stdio", StringComparison.OrdinalIgnoreCase)) ||
+                          !commandArgs.Any(a => a.Equals("--transport", StringComparison.OrdinalIgnoreCase) || a.Equals("-t", StringComparison.OrdinalIgnoreCase)));
+        
+        if (isMcpStdio)
+        {
+            return true;
+        }
+
+        // Skip for hooks commands with --json flag OR when it's a hook event command
+        var isHooksCommand = commandArgs.Length > 1 &&
+                             commandArgs[1].Equals("hooks", StringComparison.OrdinalIgnoreCase);
+        
+        var hasJsonFlag = commandArgs.Any(a => a.Equals("--json", StringComparison.OrdinalIgnoreCase) ||
+                                              a.Equals("-j", StringComparison.OrdinalIgnoreCase));
+
+        var isHookEventCommand = commandArgs.Length > 2 &&
+                                commandArgs[1].Equals("hooks", StringComparison.OrdinalIgnoreCase) &&
+                                new[] { "pre-tool-use", "post-tool-use", "user-prompt-submit", "stop" }
+                                    .Contains(commandArgs[2], StringComparer.OrdinalIgnoreCase);
+
+        if (isHooksCommand && (hasJsonFlag || isHookEventCommand))
+        {
+            return true;
+        }
+
+        // TODO: Check for SkipFirstTimeWarning attribute on command classes
+        // This requires reflection to get the command type from the command name
+        // and check if it has the [SkipFirstTimeWarning] attribute
+        // Implementation would be added here once command attribute detection is needed
+        
+        return false;
+    }
+    catch
+    {
+        // If anything fails, err on the side of not skipping the warning
+        return false;
+    }
 }
