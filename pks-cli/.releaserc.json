@@ -3,7 +3,7 @@
     "main",
     {
       "name": "release/*",
-      "prerelease": "pre"
+      "prerelease": true
     },
     {
       "name": "develop",
