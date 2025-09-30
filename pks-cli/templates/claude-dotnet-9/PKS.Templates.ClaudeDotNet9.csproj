@@ -3,25 +3,25 @@
 
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
-    
+
     <!-- Template Package Properties -->
     <PackageType>Template</PackageType>
-    <PackageId>PKS.Templates.DevContainer</PackageId>
+    <PackageId>PKS.Templates.ClaudeDotNet9</PackageId>
     <PackageVersion>1.0.0</PackageVersion>
-    <Title>PKS DevContainer Templates</Title>
+    <Title>PKS Claude .NET 9 DevContainer Template</Title>
     <Authors>PKS CLI Team</Authors>
     <Owners>pksorensen</Owners>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/pksorensen/pks-cli</PackageProjectUrl>
-    <Description>Universal development container template for PKS CLI projects. Provides a comprehensive development environment with support for .NET, Node.js, Python, and Go development.</Description>
-    <PackageSummary>DevContainer template for consistent development environments across PKS CLI projects</PackageSummary>
-    <PackageReleaseNotes>Initial release of PKS Universal DevContainer template</PackageReleaseNotes>
-    <PackageTags>pks-templates devcontainer docker template pks-cli pks-devcontainers development-environment vscode</PackageTags>
+    <Description>Claude-optimized .NET 9 development container template with Aspire support. Provides a comprehensive development environment for .NET 9 with Claude Code integration, GitHub Copilot, and Aspire tooling.</Description>
+    <PackageSummary>Claude-optimized .NET 9 DevContainer template with Aspire support for PKS CLI projects</PackageSummary>
+    <PackageReleaseNotes>Initial release of PKS Claude .NET 9 DevContainer template with Aspire integration</PackageReleaseNotes>
+    <PackageTags>pks-templates devcontainer docker template pks-cli dotnet9 aspire claude-code development-environment vscode</PackageTags>
     <RepositoryType>git</RepositoryType>
     <RepositoryUrl>https://github.com/pksorensen/pks-cli.git</RepositoryUrl>
     <RepositoryBranch>main</RepositoryBranch>
-    
+
     <!-- Template Specific Properties -->
     <IncludeContentInPack>true</IncludeContentInPack>
     <IncludeBuildOutput>false</IncludeBuildOutput>

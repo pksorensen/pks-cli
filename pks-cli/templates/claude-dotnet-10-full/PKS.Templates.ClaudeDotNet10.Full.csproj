@@ -6,18 +6,18 @@
     
     <!-- Template Package Properties -->
     <PackageType>Template</PackageType>
-    <PackageId>PKS.Templates.DevContainer</PackageId>
+    <PackageId>PKS.Templates.ClaudeDotNet10.Full</PackageId>
     <PackageVersion>1.0.0</PackageVersion>
-    <Title>PKS DevContainer Templates</Title>
+    <Title>PKS Claude .NET 10 Full-Featured DevContainer Template</Title>
     <Authors>PKS CLI Team</Authors>
     <Owners>pksorensen</Owners>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/pksorensen/pks-cli</PackageProjectUrl>
-    <Description>Universal development container template for PKS CLI projects. Provides a comprehensive development environment with support for .NET, Node.js, Python, and Go development.</Description>
-    <PackageSummary>DevContainer template for consistent development environments across PKS CLI projects</PackageSummary>
-    <PackageReleaseNotes>Initial release of PKS Universal DevContainer template</PackageReleaseNotes>
-    <PackageTags>pks-templates devcontainer docker template pks-cli pks-devcontainers development-environment vscode</PackageTags>
+    <Description>Full-featured Claude-optimized .NET 10 development container template for PKS CLI projects. Provides a comprehensive development environment with advanced AI integration, extensive tooling, and enterprise-grade features for .NET 10 development.</Description>
+    <PackageSummary>Full-featured Claude .NET 10 DevContainer template with advanced AI capabilities and comprehensive tooling</PackageSummary>
+    <PackageReleaseNotes>Initial release of PKS Claude .NET 10 Full-Featured DevContainer template</PackageReleaseNotes>
+    <PackageTags>pks-templates devcontainer docker template pks-cli dotnet10 claude-code ai-development full-featured development-environment vscode</PackageTags>
     <RepositoryType>git</RepositoryType>
     <RepositoryUrl>https://github.com/pksorensen/pks-cli.git</RepositoryUrl>
     <RepositoryBranch>main</RepositoryBranch>

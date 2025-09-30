@@ -5,6 +5,7 @@ using PKS.Infrastructure.Initializers.Registry;
 using PKS.Infrastructure.Initializers.Service;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Attributes;
+using PKS.Commands;
 using PKS.Commands.Hooks;
 using PKS.CLI.Commands.Mcp;
 using PKS.CLI.Commands;
