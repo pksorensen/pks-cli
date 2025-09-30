@@ -9,6 +9,7 @@ on:
     paths:
       - 'pks-cli/src/**'
       - 'pks-cli/templates/**'
+      - 'pks-cli/.releaserc.json'
       - '.github/workflows/semantic-release.yml'
   workflow_dispatch:
 
