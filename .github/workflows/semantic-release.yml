@@ -11,6 +11,7 @@ on:
       - 'pks-cli/src/**'
       - 'pks-cli/templates/**'
       - '.releaserc.json'
+      - 'package.json'
       - '.github/workflows/semantic-release.yml'
   workflow_dispatch:
 
