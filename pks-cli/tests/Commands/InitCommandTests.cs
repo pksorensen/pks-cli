@@ -70,28 +70,182 @@ namespace PKS.CLI.Tests.Commands
         // TODO: Rewrite all tests below to match new implementation
         // The old tests used IInitializationService which is no longer used by InitCommand
 
-        [Fact(Skip = "Needs to be rewritten for NuGet template discovery")]
+        [Fact]
         [Trait("Category", "Core")]
-        public async Task Execute_ShouldDiscoverTemplates_WhenCalled()
+        public async Task Execute_ShouldDiscoverTemplates_WithShortNames()
         {
-            // TODO: Test template discovery from NuGet
-            await Task.CompletedTask;
+            // Arrange
+            var templates = new List<NuGetDevcontainerTemplate>
+            {
+                new NuGetDevcontainerTemplate
+                {
+                    PackageId = "PKS.Templates.DevContainer",
+                    Version = "1.0.0",
+                    Title = "PKS DevContainer",
+                    Description = "Universal DevContainer",
+                    ShortNames = new[] { "pks-devcontainer" },
+                    Tags = new[] { "pks-templates", "devcontainer" }
+                },
+                new NuGetDevcontainerTemplate
+                {
+                    PackageId = "PKS.Templates.ClaudeDotNet9",
+                    Version = "1.0.0",
+                    Title = "Claude .NET 9",
+                    Description = ".NET 9 with Claude",
+                    ShortNames = new[] { "pks-claude-dotnet9" },
+                    Tags = new[] { "pks-templates", "dotnet9" }
+                },
+                new NuGetDevcontainerTemplate
+                {
+                    PackageId = "PKS.Templates.ClaudeDotNet10.Full",
+                    Version = "1.0.0",
+                    Title = "Claude .NET 10 Full",
+                    Description = "Full-featured .NET 10",
+                    ShortNames = new[] { "pks-claude-dotnet10-full" },
+                    Tags = new[] { "pks-templates", "dotnet10" }
+                }
+            };
+
+            _mockTemplateDiscovery
+                .Setup(x => x.DiscoverTemplatesAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<IEnumerable<string>>(),
+                    It.IsAny<System.Threading.CancellationToken>()))
+                .ReturnsAsync(templates);
+
+            var command = CreateMockCommand();
+            var settings = new InitCommand.Settings
+            {
+                ProjectName = "TestProject",
+                Template = "pks-claude-dotnet9", // Use shortName
+                Tag = "pks-templates"
+            };
+
+            _mockTemplateDiscovery
+                .Setup(x => x.ExtractTemplateAsync(
+                    "PKS.Templates.ClaudeDotNet9",
+                    "1.0.0",
+                    It.IsAny<string>(),
+                    It.IsAny<IEnumerable<string>>(),
+                    It.IsAny<System.Threading.CancellationToken>()))
+                .ReturnsAsync(new NuGetTemplateExtractionResult
+                {
+                    Success = true,
+                    ExtractedPath = Path.Combine(_testWorkingDirectory, "TestProject")
+                });
+
+            // Act
+            var result = await ExecuteCommandAsync(command, settings);
+
+            // Assert
+            result.Should().Be(0);
+            _mockTemplateDiscovery.Verify(
+                x => x.DiscoverTemplatesAsync(
+                    "pks-templates",
+                    null,
+                    It.IsAny<System.Threading.CancellationToken>()),
+                Times.Once);
         }
 
-        [Fact(Skip = "Needs to be rewritten for NuGet template discovery")]
+        [Fact]
         [Trait("Category", "Core")]
-        public async Task Execute_ShouldPromptForTemplateSelection_WhenNoTemplateSpecified()
+        public async Task Execute_ShouldFindTemplateByShortName()
         {
-            // TODO: Test interactive template selection
-            await Task.CompletedTask;
+            // Arrange
+            var templates = new List<NuGetDevcontainerTemplate>
+            {
+                new NuGetDevcontainerTemplate
+                {
+                    PackageId = "PKS.Templates.ClaudeDotNet10.Full",
+                    Version = "1.0.0",
+                    Title = "Claude .NET 10 Full",
+                    Description = "Full-featured .NET 10",
+                    ShortNames = new[] { "pks-claude-dotnet10-full" },
+                    Tags = new[] { "pks-templates" }
+                }
+            };
+
+            _mockTemplateDiscovery
+                .Setup(x => x.DiscoverTemplatesAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<IEnumerable<string>>(),
+                    It.IsAny<System.Threading.CancellationToken>()))
+                .ReturnsAsync(templates);
+
+            _mockTemplateDiscovery
+                .Setup(x => x.ExtractTemplateAsync(
+                    "PKS.Templates.ClaudeDotNet10.Full",
+                    "1.0.0",
+                    It.IsAny<string>(),
+                    It.IsAny<IEnumerable<string>>(),
+                    It.IsAny<System.Threading.CancellationToken>()))
+                .ReturnsAsync(new NuGetTemplateExtractionResult
+                {
+                    Success = true,
+                    ExtractedPath = Path.Combine(_testWorkingDirectory, "TestProject")
+                });
+
+            var command = CreateMockCommand();
+            var settings = new InitCommand.Settings
+            {
+                ProjectName = "TestProject",
+                Template = "pks-claude-dotnet10-full", // Use exact shortName
+                Tag = "pks-templates"
+            };
+
+            // Act
+            var result = await ExecuteCommandAsync(command, settings);
+
+            // Assert
+            result.Should().Be(0);
+            _mockTemplateDiscovery.Verify(
+                x => x.ExtractTemplateAsync(
+                    "PKS.Templates.ClaudeDotNet10.Full",
+                    "1.0.0",
+                    It.IsAny<string>(),
+                    null,
+                    It.IsAny<System.Threading.CancellationToken>()),
+                Times.Once);
         }
 
-        [Fact(Skip = "Needs to be rewritten for NuGet template discovery")]
+        [Fact]
         [Trait("Category", "Core")]
-        public async Task Execute_ShouldExtractTemplate_WhenTemplateSelected()
+        public async Task Execute_ShouldReturnError_WhenTemplateNotFoundByShortName()
         {
-            // TODO: Test template extraction
-            await Task.CompletedTask;
+            // Arrange
+            var templates = new List<NuGetDevcontainerTemplate>
+            {
+                new NuGetDevcontainerTemplate
+                {
+                    PackageId = "PKS.Templates.DevContainer",
+                    Version = "1.0.0",
+                    Title = "PKS DevContainer",
+                    ShortNames = new[] { "pks-devcontainer" },
+                    Tags = new[] { "pks-templates" }
+                }
+            };
+
+            _mockTemplateDiscovery
+                .Setup(x => x.DiscoverTemplatesAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<IEnumerable<string>>(),
+                    It.IsAny<System.Threading.CancellationToken>()))
+                .ReturnsAsync(templates);
+
+            var command = CreateMockCommand();
+            var settings = new InitCommand.Settings
+            {
+                ProjectName = "TestProject",
+                Template = "nonexistent-template",
+                Tag = "pks-templates"
+            };
+
+            // Act
+            var result = await ExecuteCommandAsync(command, settings);
+
+            // Assert
+            result.Should().Be(1); // Error code
+            TestConsole.Output.Should().Contain("not found");
         }
 
         public override void Dispose()

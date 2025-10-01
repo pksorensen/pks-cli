@@ -370,6 +370,9 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
             // Extract metadata from package properties if available
             ExtractMetadataFromPackage(template, package);
 
+            // Try to extract shortNames from the package by downloading and inspecting it
+            await TryExtractShortNamesFromRemotePackageAsync(template, source, cancellationToken);
+
             templates.Add(template);
         }
 
@@ -620,6 +623,9 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
                 return null;
             }
 
+            // Extract shortName from template.json
+            var shortNames = await ExtractShortNamesFromTemplateJsonAsync(archive, packageId);
+
             var template = new NuGetDevcontainerTemplate
             {
                 PackageId = packageId,
@@ -628,6 +634,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
                 Description = description,
                 Authors = authors,
                 Tags = tags,
+                ShortNames = shortNames,
                 ProjectUrl = projectUrl,
                 LicenseUrl = licenseUrl,
                 IconUrl = iconUrl,
@@ -637,8 +644,8 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
                 IsPrerelease = version.Contains("-", StringComparison.OrdinalIgnoreCase)
             };
 
-            _logger.LogDebug("Successfully extracted template: {PackageId} v{Version} with matching tag '{Tag}'",
-                packageId, version, tag);
+            _logger.LogDebug("Successfully extracted template: {PackageId} v{Version} with matching tag '{Tag}' and shortNames: {ShortNames}",
+                packageId, version, tag, string.Join(", ", shortNames));
 
             return template;
         }
@@ -646,6 +653,91 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
         {
             _logger.LogError(ex, "Error extracting template from {PackageFile}", nupkgFile);
             return null;
+        }
+    }
+
+    private async Task<string[]> ExtractShortNamesFromTemplateJsonAsync(ZipArchive archive, string packageId)
+    {
+        try
+        {
+            // Look for template.json in .template.config directory
+            var templateJsonEntry = archive.Entries.FirstOrDefault(e =>
+                e.FullName.Contains(".template.config/template.json", StringComparison.OrdinalIgnoreCase) ||
+                e.FullName.EndsWith("template.json", StringComparison.OrdinalIgnoreCase));
+
+            if (templateJsonEntry == null)
+            {
+                _logger.LogDebug("No template.json found in package {PackageId}", packageId);
+                return Array.Empty<string>();
+            }
+
+            using var stream = templateJsonEntry.Open();
+            using var reader = new StreamReader(stream);
+            var templateJsonContent = await reader.ReadToEndAsync();
+
+            var templateJson = JsonSerializer.Deserialize<JsonDocument>(templateJsonContent);
+            if (templateJson == null)
+            {
+                _logger.LogDebug("Failed to parse template.json in package {PackageId}", packageId);
+                return Array.Empty<string>();
+            }
+
+            // Extract shortName from template.json
+            if (templateJson.RootElement.TryGetProperty("shortName", out var shortNameElement))
+            {
+                var shortName = shortNameElement.GetString();
+                if (!string.IsNullOrEmpty(shortName))
+                {
+                    _logger.LogDebug("Found shortName '{ShortName}' in template.json for {PackageId}", shortName, packageId);
+                    return new[] { shortName };
+                }
+            }
+
+            _logger.LogDebug("No shortName property found in template.json for {PackageId}", packageId);
+            return Array.Empty<string>();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error extracting shortName from template.json for {PackageId}", packageId);
+            return Array.Empty<string>();
+        }
+    }
+
+    private async Task TryExtractShortNamesFromRemotePackageAsync(
+        NuGetDevcontainerTemplate template,
+        string source,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var sourceRepository = Repository.Factory.GetCoreV3(source);
+            var downloadResource = await sourceRepository.GetResourceAsync<DownloadResource>(cancellationToken);
+
+            var packageIdentity = new NuGet.Packaging.Core.PackageIdentity(
+                template.PackageId,
+                NuGet.Versioning.NuGetVersion.Parse(template.Version));
+
+            using var downloadResult = await downloadResource.GetDownloadResourceResultAsync(
+                packageIdentity,
+                new PackageDownloadContext(_cacheContext),
+                Path.GetTempPath(),
+                NullLogger.Instance,
+                cancellationToken);
+
+            if (downloadResult.Status == DownloadResourceResultStatus.Available && downloadResult.PackageStream != null)
+            {
+                using var archive = new ZipArchive(downloadResult.PackageStream, ZipArchiveMode.Read, leaveOpen: true);
+                var shortNames = await ExtractShortNamesFromTemplateJsonAsync(archive, template.PackageId);
+                template.ShortNames = shortNames;
+
+                _logger.LogDebug("Extracted shortNames for {PackageId}: {ShortNames}",
+                    template.PackageId, string.Join(", ", shortNames));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to extract shortNames from remote package {PackageId}, will use empty array", template.PackageId);
+            template.ShortNames = Array.Empty<string>();
         }
     }
 

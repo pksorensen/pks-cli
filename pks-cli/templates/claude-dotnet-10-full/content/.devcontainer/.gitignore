@@ -1,0 +1,16 @@
+# Environment variables (contains sensitive data like tokens and API keys)
+.env
+
+# VS Code workspace settings (user-specific)
+*.code-workspace
+
+# Local development files
+.DS_Store
+Thumbs.db
+
+# Docker volumes and caches
+.docker/
+
+# Temporary files
+*.tmp
+*.log
