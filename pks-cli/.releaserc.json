@@ -2,8 +2,8 @@
   "branches": [
     "main",
     {
-      "name": "release/*",
-      "prerelease": true
+      "name": "vnext",
+      "prerelease": "rc"
     },
     {
       "name": "develop",

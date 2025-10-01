@@ -4,7 +4,8 @@ on:
   push:
     branches:
       - main
-      - release/*
+      - vnext
+      - develop
     # Only run when there are actual changes to code
     paths:
       - 'pks-cli/src/**'
