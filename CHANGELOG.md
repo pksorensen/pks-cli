@@ -1,3 +1,9 @@
+## [1.1.0-rc.2](https://github.com/pksorensen/pks-cli/compare/v1.1.0-rc.1...v1.1.0-rc.2) (2025-10-01)
+
+### 🐛 Bug Fixes
+
+* add .env template files to devcontainer templates and update .gitignore ([1e8b5f1](https://github.com/pksorensen/pks-cli/commit/1e8b5f132eaa33a6441fbb5e5576312088275fa8))
+
 ## [1.1.0-rc.1](https://github.com/pksorensen/pks-cli/compare/v1.0.1-rc.1...v1.1.0-rc.1) (2025-10-01)
 
 ### 🚀 Features
