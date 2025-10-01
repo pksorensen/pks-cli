@@ -16,11 +16,13 @@ public interface INuGetTemplateDiscoveryService
     /// </summary>
     /// <param name="tag">Tag to search for (default: "pks-devcontainers")</param>
     /// <param name="sources">Custom NuGet sources to use</param>
+    /// <param name="includePrerelease">Include prerelease/preview packages</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>List of discovered templates</returns>
     Task<List<NuGetDevcontainerTemplate>> DiscoverTemplatesAsync(
         string tag = "pks-devcontainers",
         IEnumerable<string>? sources = null,
+        bool includePrerelease = false,
         CancellationToken cancellationToken = default);
 
     /// <summary>

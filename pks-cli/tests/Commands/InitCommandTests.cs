@@ -110,6 +110,7 @@ namespace PKS.CLI.Tests.Commands
                 .Setup(x => x.DiscoverTemplatesAsync(
                     It.IsAny<string>(),
                     It.IsAny<IEnumerable<string>>(),
+                    It.IsAny<bool>(),
                     It.IsAny<System.Threading.CancellationToken>()))
                 .ReturnsAsync(templates);
 
@@ -143,6 +144,7 @@ namespace PKS.CLI.Tests.Commands
                 x => x.DiscoverTemplatesAsync(
                     "pks-templates",
                     null,
+                    It.IsAny<bool>(),
                     It.IsAny<System.Threading.CancellationToken>()),
                 Times.Once);
         }
@@ -169,6 +171,7 @@ namespace PKS.CLI.Tests.Commands
                 .Setup(x => x.DiscoverTemplatesAsync(
                     It.IsAny<string>(),
                     It.IsAny<IEnumerable<string>>(),
+                    It.IsAny<bool>(),
                     It.IsAny<System.Threading.CancellationToken>()))
                 .ReturnsAsync(templates);
 
@@ -229,6 +232,7 @@ namespace PKS.CLI.Tests.Commands
                 .Setup(x => x.DiscoverTemplatesAsync(
                     It.IsAny<string>(),
                     It.IsAny<IEnumerable<string>>(),
+                    It.IsAny<bool>(),
                     It.IsAny<System.Threading.CancellationToken>()))
                 .ReturnsAsync(templates);
 

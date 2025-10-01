@@ -43,12 +43,13 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
     public async Task<List<NuGetDevcontainerTemplate>> DiscoverTemplatesAsync(
         string tag = "pks-devcontainers",
         IEnumerable<string>? sources = null,
+        bool includePrerelease = false,
         CancellationToken cancellationToken = default)
     {
         var sourcesToUse = sources?.ToArray() ?? DefaultSources;
         var templates = new List<NuGetDevcontainerTemplate>();
 
-        _logger.LogInformation("Discovering NuGet templates with tag '{Tag}' from {SourceCount} sources", tag, sourcesToUse.Length);
+        _logger.LogInformation("Discovering NuGet templates with tag '{Tag}' from {SourceCount} sources (Prerelease: {IncludePrerelease})", tag, sourcesToUse.Length, includePrerelease);
 
         foreach (var source in sourcesToUse)
         {
@@ -60,7 +61,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
             try
             {
                 _logger.LogDebug("Starting template discovery from source: {Source}", source);
-                var sourceTemplates = await DiscoverTemplatesFromSourceAsync(source, tag, cancellationToken);
+                var sourceTemplates = await DiscoverTemplatesFromSourceAsync(source, tag, includePrerelease, cancellationToken);
                 templates.AddRange(sourceTemplates);
 
                 _logger.LogDebug("Found {Count} templates from source {Source}", sourceTemplates.Count, source);
@@ -311,6 +312,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
     private async Task<List<NuGetDevcontainerTemplate>> DiscoverTemplatesFromSourceAsync(
         string source,
         string tag,
+        bool includePrerelease,
         CancellationToken cancellationToken)
     {
         var templates = new List<NuGetDevcontainerTemplate>();
@@ -328,7 +330,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
         _logger.LogDebug("Getting PackageSearchResource for source: {Source}", source);
         var searchResource = await sourceRepository.GetResourceAsync<PackageSearchResource>(cancellationToken);
 
-        var searchFilter = new SearchFilter(includePrerelease: false)
+        var searchFilter = new SearchFilter(includePrerelease: includePrerelease)
         {
             SupportedFrameworks = Array.Empty<string>(),
             PackageTypes = Array.Empty<string>()

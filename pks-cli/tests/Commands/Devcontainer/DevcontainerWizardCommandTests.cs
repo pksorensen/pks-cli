@@ -657,7 +657,7 @@ public class DevcontainerWizardCommandTests : TestBase
     {
         var mock = new Mock<INuGetTemplateDiscoveryService>();
 
-        mock.Setup(x => x.DiscoverTemplatesAsync(It.IsAny<string>(), It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+        mock.Setup(x => x.DiscoverTemplatesAsync(It.IsAny<string>(), It.IsAny<IEnumerable<string>>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NuGetDevcontainerTemplate>
             {
                 new() { PackageId = "PKS.Universal.DevContainer", Title = "PKS Universal DevContainer", Description = "Universal DevContainer template" },
@@ -678,7 +678,7 @@ public class DevcontainerWizardCommandTests : TestBase
     {
         var mock = new Mock<INuGetTemplateDiscoveryService>();
 
-        mock.Setup(x => x.DiscoverTemplatesAsync(It.IsAny<string>(), It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+        mock.Setup(x => x.DiscoverTemplatesAsync(It.IsAny<string>(), It.IsAny<IEnumerable<string>>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NuGetDevcontainerTemplate>());
 
         return mock;
@@ -688,7 +688,7 @@ public class DevcontainerWizardCommandTests : TestBase
     {
         var mock = new Mock<INuGetTemplateDiscoveryService>();
 
-        mock.Setup(x => x.DiscoverTemplatesAsync(It.IsAny<string>(), It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+        mock.Setup(x => x.DiscoverTemplatesAsync(It.IsAny<string>(), It.IsAny<IEnumerable<string>>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Unable to connect to the remote server"));
 
         return mock;

@@ -52,6 +52,10 @@ public class InitCommand : Command<InitCommand.Settings>
         [DefaultValue("pks-templates")]
         public string Tag { get; set; } = "pks-templates";
 
+        [CommandOption("--prerelease")]
+        [Description("Include prerelease/preview template packages")]
+        public bool IncludePrerelease { get; set; }
+
         [CommandOption("--agentic")]
         [Description("Enable agentic features and AI automation")]
         public bool EnableAgentic { get; set; }
@@ -102,6 +106,7 @@ public class InitCommand : Command<InitCommand.Settings>
                     templates = await _templateDiscovery.DiscoverTemplatesAsync(
                         tag: settings.Tag,
                         sources: sources,
+                        includePrerelease: settings.IncludePrerelease,
                         cancellationToken: CancellationToken.None);
                 });
 
