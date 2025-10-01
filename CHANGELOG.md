@@ -1,3 +1,9 @@
+## [1.1.0-rc.4](https://github.com/pksorensen/pks-cli/compare/v1.1.0-rc.3...v1.1.0-rc.4) (2025-10-01)
+
+### 🚀 Features
+
+* add --prerelease flag to init command for preview template packages ([44dbcca](https://github.com/pksorensen/pks-cli/commit/44dbcca15133d25f4a8b356b66aa1ae31e637209))
+
 ## [1.1.0-rc.3](https://github.com/pksorensen/pks-cli/compare/v1.1.0-rc.2...v1.1.0-rc.3) (2025-10-01)
 
 ### 🐛 Bug Fixes
