@@ -15,18 +15,5 @@
     "@semantic-release/release-notes-generator": "^12.1.0",
     "conventional-changelog-conventionalcommits": "^7.0.2",
     "semantic-release": "^22.0.12"
-  },
-  "release": {
-    "branches": [
-      "main",
-      {
-        "name": "release/*",
-        "prerelease": "pre"
-      },
-      {
-        "name": "develop",
-        "prerelease": "dev"
-      }
-    ]
   }
 }
