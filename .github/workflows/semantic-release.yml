@@ -6,13 +6,6 @@ on:
       - main
       - vnext
       - develop
-    # Only run when there are actual changes to code
-    paths:
-      - 'pks-cli/src/**'
-      - 'pks-cli/templates/**'
-      - '.releaserc.json'
-      - 'package.json'
-      - '.github/workflows/semantic-release.yml'
   workflow_dispatch:
 
 permissions:
