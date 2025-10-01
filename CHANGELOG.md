@@ -1,3 +1,9 @@
+## [1.0.0-rc.2](https://github.com/pksorensen/pks-cli/compare/v1.0.0-rc.1...v1.0.0-rc.2) (2025-10-01)
+
+### 🐛 Bug Fixes
+
+* update InitCommand tests to match new NuGet template discovery implementation ([05a412e](https://github.com/pksorensen/pks-cli/commit/05a412e65e83c05b7b6c60e359585016b56e7a42))
+
 ## 1.0.0-rc.1 (2025-10-01)
 
 ### ⚠ BREAKING CHANGES
