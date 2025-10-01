@@ -359,7 +359,7 @@ public static class ServiceMockFactory
         var mock = new Mock<INuGetTemplateDiscoveryService>();
 
         // Setup default successful behaviors for template discovery
-        mock.Setup(x => x.DiscoverTemplatesAsync(It.IsAny<string>(), It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+        mock.Setup(x => x.DiscoverTemplatesAsync(It.IsAny<string>(), It.IsAny<IEnumerable<string>>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NuGetDevcontainerTemplate>
             {
                 new() { Id = "dotnet-web", Title = "ASP.NET Core Web Template", Description = "Web application template", Version = "1.0.0" },

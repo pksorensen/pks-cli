@@ -1,3 +1,28 @@
+
+## [1.1.0-rc.4](https://github.com/pksorensen/pks-cli/compare/v1.1.0-rc.3...v1.1.0-rc.4) (2025-10-01)
+
+### 🚀 Features
+
+* add --prerelease flag to init command for preview template packages ([44dbcca](https://github.com/pksorensen/pks-cli/commit/44dbcca15133d25f4a8b356b66aa1ae31e637209))
+
+## [1.1.0-rc.3](https://github.com/pksorensen/pks-cli/compare/v1.1.0-rc.2...v1.1.0-rc.3) (2025-10-01)
+
+### 🐛 Bug Fixes
+
+* explicitly include .env and .gitignore files in template packages ([2f265ef](https://github.com/pksorensen/pks-cli/commit/2f265ef5f7d33eac161d4d698a5f90651774836d))
+
+## [1.1.0-rc.2](https://github.com/pksorensen/pks-cli/compare/v1.1.0-rc.1...v1.1.0-rc.2) (2025-10-01)
+
+### 🐛 Bug Fixes
+
+* add .env template files to devcontainer templates and update .gitignore ([1e8b5f1](https://github.com/pksorensen/pks-cli/commit/1e8b5f132eaa33a6441fbb5e5576312088275fa8))
+
+## [1.1.0-rc.1](https://github.com/pksorensen/pks-cli/compare/v1.0.1-rc.1...v1.1.0-rc.1) (2025-10-01)
+
+### 🚀 Features
+
+* enhance NuGet template discovery with short name extraction and update related tests ([eb37b3b](https://github.com/pksorensen/pks-cli/commit/eb37b3b2ecc3e65a2ffc57c3420a922f22b856c5))
+
 ## [1.0.1](https://github.com/pksorensen/pks-cli/compare/v1.0.0...v1.0.1) (2025-10-01)
 
 ### 🐛 Bug Fixes
@@ -8,6 +33,7 @@
 
 * **release:** 1.0.0-rc.2 [skip ci] ([d56c908](https://github.com/pksorensen/pks-cli/commit/d56c908c5e3838e9819968f8a2538db2d2be2fdd))
 * **release:** 1.0.1-rc.1 [skip ci] ([baaeb81](https://github.com/pksorensen/pks-cli/commit/baaeb81dd6751704339144d17379e4880ccd16fb))
+
 
 ## [1.0.1-rc.1](https://github.com/pksorensen/pks-cli/compare/v1.0.0...v1.0.1-rc.1) (2025-10-01)
 
