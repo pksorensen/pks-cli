@@ -1,3 +1,9 @@
+## [1.1.0-rc.1](https://github.com/pksorensen/pks-cli/compare/v1.0.1-rc.1...v1.1.0-rc.1) (2025-10-01)
+
+### 🚀 Features
+
+* enhance NuGet template discovery with short name extraction and update related tests ([eb37b3b](https://github.com/pksorensen/pks-cli/commit/eb37b3b2ecc3e65a2ffc57c3420a922f22b856c5))
+
 ## [1.0.1-rc.1](https://github.com/pksorensen/pks-cli/compare/v1.0.0...v1.0.1-rc.1) (2025-10-01)
 
 ### 🐛 Bug Fixes
