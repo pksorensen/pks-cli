@@ -1,3 +1,19 @@
+## [1.0.1-rc.1](https://github.com/pksorensen/pks-cli/compare/v1.0.0...v1.0.1-rc.1) (2025-10-01)
+
+### 🐛 Bug Fixes
+
+* update InitCommand tests to match new NuGet template discovery implementation ([05a412e](https://github.com/pksorensen/pks-cli/commit/05a412e65e83c05b7b6c60e359585016b56e7a42))
+
+### 🔧 Chores
+
+* **release:** 1.0.0-rc.2 [skip ci] ([d56c908](https://github.com/pksorensen/pks-cli/commit/d56c908c5e3838e9819968f8a2538db2d2be2fdd))
+
+## [1.0.0-rc.2](https://github.com/pksorensen/pks-cli/compare/v1.0.0-rc.1...v1.0.0-rc.2) (2025-10-01)
+
+### 🐛 Bug Fixes
+
+* update InitCommand tests to match new NuGet template discovery implementation ([05a412e](https://github.com/pksorensen/pks-cli/commit/05a412e65e83c05b7b6c60e359585016b56e7a42))
+
 ## 1.0.0 (2025-10-01)
 
 ### ⚠ BREAKING CHANGES
@@ -171,6 +187,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 * fix GitHub Actions workflows for PR validation ([2d5b24c](https://github.com/pksorensen/pks-cli/commit/2d5b24cfd908741cc12e9c98e7e5f3f603f88b00)), closes [#18](https://github.com/pksorensen/pks-cli/issues/18)
 * streamline GitHub workflows for PR success ([a923ed2](https://github.com/pksorensen/pks-cli/commit/a923ed20e01a7cd2732724c79ad726a1dd7fb194))
 * update test workflow to use core stable tests only ([1797fc5](https://github.com/pksorensen/pks-cli/commit/1797fc5aad53aaf17865806dfbcf1b85d115fb23))
+
 
 ## 1.0.0-rc.1 (2025-10-01)
 

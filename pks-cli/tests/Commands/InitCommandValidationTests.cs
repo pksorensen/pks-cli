@@ -1,5 +1,6 @@
 using Xunit;
 using PKS.Infrastructure.Initializers.Service;
+using PKS.Commands;
 using System.IO;
 using System.Reflection;
 
