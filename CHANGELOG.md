@@ -1,3 +1,9 @@
+## [1.1.0-rc.3](https://github.com/pksorensen/pks-cli/compare/v1.1.0-rc.2...v1.1.0-rc.3) (2025-10-01)
+
+### 🐛 Bug Fixes
+
+* explicitly include .env and .gitignore files in template packages ([2f265ef](https://github.com/pksorensen/pks-cli/commit/2f265ef5f7d33eac161d4d698a5f90651774836d))
+
 ## [1.1.0-rc.2](https://github.com/pksorensen/pks-cli/compare/v1.1.0-rc.1...v1.1.0-rc.2) (2025-10-01)
 
 ### 🐛 Bug Fixes
