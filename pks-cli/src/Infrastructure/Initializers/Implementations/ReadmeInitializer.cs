@@ -25,10 +25,10 @@ public class ReadmeInitializer : TemplateInitializer
         };
     }
 
-    public override async Task<bool> ShouldRunAsync(InitializationContext context)
+    public override Task<bool> ShouldRunAsync(InitializationContext context)
     {
         // Always run, but create inline content since we don't have template files
-        return true;
+        return Task.FromResult(true);
     }
 
     protected override async Task<InitializationResult> ExecuteInternalAsync(InitializationContext context)
@@ -49,7 +49,7 @@ public class ReadmeInitializer : TemplateInitializer
         // Also create a simple LICENSE file
         var licenseContent = GenerateLicenseContent(license, context);
         var licensePath = Path.Combine(context.TargetDirectory, "LICENSE");
-        
+
         await WriteFileAsync(licensePath, licenseContent, context);
         result.AffectedFiles.Add(licensePath);
 
@@ -88,7 +88,7 @@ pks agent run automation-001 ""generate service for User entity""
     ""DefaultProvider"": ""openai"",
     ""EnableMonitoring"": true
   }" : "";
-        
+
         return $@"# {context.ProjectName}
 
 {badges}
@@ -222,7 +222,7 @@ For more information about PKS CLI and agentic development, visit our [documenta
     {
         var agenticBadge = context.GetOption("agentic", false) ? "[![Agentic](https://img.shields.io/badge/🤖-Agentic-green.svg)](https://docs.pks-cli.com/agentic)" : "";
         var license = context.GetOption("license", "MIT");
-        
+
         return $@"[![.NET 8](https://img.shields.io/badge/.NET-8.0-purple.svg)](https://dotnet.microsoft.com/download/dotnet/8.0)
 [![Build Status](https://img.shields.io/github/workflow/status/your-username/{context.ProjectName.ToLowerInvariant()}/CI)](https://github.com/your-username/{context.ProjectName.ToLowerInvariant()}/actions)
 [![License](https://img.shields.io/badge/license-{license}-blue.svg)](LICENSE)
@@ -262,7 +262,7 @@ This project adheres to a [Code of Conduct](CODE_OF_CONDUCT.md). By participatin
     private string GenerateLicenseContent(string? license, InitializationContext context)
     {
         var year = DateTime.Now.Year;
-        
+
         return license?.ToUpperInvariant() switch
         {
             "MIT" => $"""

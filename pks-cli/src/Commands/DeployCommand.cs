@@ -25,10 +25,12 @@ public class DeployCommand : Command<DeployCommand.Settings>
         public int Replicas { get; set; } = 3;
     }
 
-    public override int Execute(CommandContext context, Settings settings)
+    public override int Execute(CommandContext context, Settings? settings)
     {
+        if (settings == null) throw new ArgumentNullException(nameof(settings));
+
         AnsiConsole.MarkupLine($"🚀 [bold green]Starting deployment to {settings.Environment.ToUpper()}[/]");
-        
+
         if (settings.UseAI)
         {
             AnsiConsole.MarkupLine("🤖 [cyan]AI optimization enabled - analyzing optimal deployment strategy...[/]");
@@ -131,7 +133,7 @@ public class DeployCommand : Command<DeployCommand.Settings>
     private void ShowRealTimeMonitoring()
     {
         var random = new Random();
-        
+
         AnsiConsole.Live(GenerateMetricsTable(random))
             .Start(ctx =>
             {
@@ -155,24 +157,24 @@ public class DeployCommand : Command<DeployCommand.Settings>
             .AddColumn("[green]Status[/]");
 
         table.AddRow(
-            "🌐 API Gateway", 
-            $"{random.Next(15, 45)}%", 
-            $"{random.Next(128, 256)}MB", 
-            $"{random.Next(850, 1200)}", 
+            "🌐 API Gateway",
+            $"{random.Next(15, 45)}%",
+            $"{random.Next(128, 256)}MB",
+            $"{random.Next(850, 1200)}",
             "[green]●[/] Healthy");
-            
+
         table.AddRow(
-            "💾 Database", 
-            $"{random.Next(20, 60)}%", 
-            $"{random.Next(512, 1024)}MB", 
-            $"{random.Next(200, 400)}", 
+            "💾 Database",
+            $"{random.Next(20, 60)}%",
+            $"{random.Next(512, 1024)}MB",
+            $"{random.Next(200, 400)}",
             "[green]●[/] Healthy");
-            
+
         table.AddRow(
-            "🔄 Cache", 
-            $"{random.Next(5, 25)}%", 
-            $"{random.Next(64, 128)}MB", 
-            $"{random.Next(2000, 3000)}", 
+            "🔄 Cache",
+            $"{random.Next(5, 25)}%",
+            $"{random.Next(64, 128)}MB",
+            $"{random.Next(2000, 3000)}",
             "[green]●[/] Healthy");
 
         return table;

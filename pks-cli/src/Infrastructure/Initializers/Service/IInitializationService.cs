@@ -23,6 +23,11 @@ public interface IInitializationService
     Task<ValidationResult> ValidateTargetDirectoryAsync(string targetDirectory, bool force);
 
     /// <summary>
+    /// Validates that the project name is valid for use
+    /// </summary>
+    ValidationResult ValidateProjectName(string projectName);
+
+    /// <summary>
     /// Creates an initialization context from command-line settings
     /// </summary>
     InitializationContext CreateContext(string projectName, string template, string targetDirectory, bool force, Dictionary<string, object?> options);

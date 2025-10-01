@@ -20,8 +20,10 @@ public class StatusCommand : Command<StatusCommand.Settings>
         public bool IncludeAIInsights { get; set; }
     }
 
-    public override int Execute(CommandContext context, Settings settings)
+    public override int Execute(CommandContext context, Settings? settings)
     {
+        if (settings == null) throw new ArgumentNullException(nameof(settings));
+
         if (settings.Watch)
         {
             return WatchStatus(settings);
@@ -44,12 +46,12 @@ public class StatusCommand : Command<StatusCommand.Settings>
         {
             grid.AddRow(new Markup("[bold red]🔴 PRODUCTION[/]"), CreateEnvironmentStatus("PROD", true));
         }
-        
+
         if (settings.Environment == "all" || settings.Environment == "staging")
         {
             grid.AddRow(new Markup("[bold yellow]🟡 STAGING[/]"), CreateEnvironmentStatus("STAGING", true));
         }
-        
+
         if (settings.Environment == "all" || settings.Environment == "dev")
         {
             grid.AddRow(new Markup("[bold green]🟢 DEVELOPMENT[/]"), CreateEnvironmentStatus("DEV", true));
@@ -107,7 +109,7 @@ public class StatusCommand : Command<StatusCommand.Settings>
     private Panel CreateLiveStatusDisplay(Random random)
     {
         var timestamp = DateTime.Now.ToString("HH:mm:ss");
-        
+
         var metrics = new Grid()
             .AddColumn()
             .AddColumn()
@@ -143,7 +145,7 @@ public class StatusCommand : Command<StatusCommand.Settings>
     {
         var status = healthy ? "[green]✓ Healthy[/]" : "[red]✗ Issues[/]";
         var color = healthy ? "green" : "red";
-        
+
         var content = $"""
         {status}
         [dim]Services:[/] {(healthy ? "12/12" : "10/12")} running
@@ -159,7 +161,7 @@ public class StatusCommand : Command<StatusCommand.Settings>
     private void ShowAIInsights()
     {
         AnsiConsole.WriteLine();
-        
+
         var insights = new Panel($"""
         🤖 [bold cyan]AI-Powered Insights & Recommendations[/]
         

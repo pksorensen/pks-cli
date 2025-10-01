@@ -61,7 +61,7 @@ public class InitializationService : IInitializationService
             summary.Success = false;
             summary.ErrorMessage = ex.Message;
             summary.EndTime = DateTime.Now;
-            
+
             AnsiConsole.WriteException(ex);
             return summary;
         }
@@ -70,7 +70,7 @@ public class InitializationService : IInitializationService
     public async Task<IEnumerable<TemplateInfo>> GetAvailableTemplatesAsync()
     {
         var templates = new List<TemplateInfo>();
-        
+
         // Get templates from template directory
         var templateBasePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Templates");
         if (Directory.Exists(templateBasePath))
@@ -79,7 +79,7 @@ public class InitializationService : IInitializationService
             {
                 var templateName = Path.GetFileName(templateDir);
                 var infoFile = Path.Combine(templateDir, "template.json");
-                
+
                 var template = new TemplateInfo
                 {
                     Name = templateName,
@@ -120,11 +120,11 @@ public class InitializationService : IInitializationService
         return templates.OrderBy(t => t.DisplayName);
     }
 
-    public async Task<ValidationResult> ValidateTargetDirectoryAsync(string targetDirectory, bool force)
+    public Task<ValidationResult> ValidateTargetDirectoryAsync(string targetDirectory, bool force)
     {
         if (string.IsNullOrWhiteSpace(targetDirectory))
         {
-            return ValidationResult.Invalid("Target directory cannot be empty");
+            return Task.FromResult(ValidationResult.Invalid("Target directory cannot be empty"));
         }
 
         if (Directory.Exists(targetDirectory))
@@ -132,7 +132,7 @@ public class InitializationService : IInitializationService
             var files = Directory.GetFileSystemEntries(targetDirectory);
             if (files.Length > 0 && !force)
             {
-                return ValidationResult.Invalid($"Directory '{targetDirectory}' is not empty. Use --force to overwrite.");
+                return Task.FromResult(ValidationResult.Invalid($"Directory '{targetDirectory}' is not empty. Use --force to overwrite."));
             }
         }
         else
@@ -144,8 +144,52 @@ public class InitializationService : IInitializationService
             }
             catch (Exception ex)
             {
-                return ValidationResult.Invalid($"Cannot create directory '{targetDirectory}': {ex.Message}");
+                return Task.FromResult(ValidationResult.Invalid($"Cannot create directory '{targetDirectory}': {ex.Message}"));
             }
+        }
+
+        return Task.FromResult(ValidationResult.Valid());
+    }
+
+    public ValidationResult ValidateProjectName(string projectName)
+    {
+        // Check for null or empty
+        if (string.IsNullOrWhiteSpace(projectName))
+        {
+            return ValidationResult.Invalid("Project name cannot be empty");
+        }
+
+        // Check for maximum length (typical filesystem limit)
+        if (projectName.Length > 255)
+        {
+            return ValidationResult.Invalid("Project name is too long (maximum 255 characters)");
+        }
+
+        // Check for invalid characters (cross-platform set including Windows-specific ones)
+        var invalidChars = new char[] { '/', '\\', ':', '*', '?', '<', '>', '|', '"', '\0' };
+        var foundInvalidChars = projectName.Where(c => invalidChars.Contains(c)).Distinct().ToList();
+        if (foundInvalidChars.Any())
+        {
+            return ValidationResult.Invalid($"Project name contains invalid characters: {string.Join(", ", foundInvalidChars.Select(c => $"'{c}'"))}");
+        }
+
+        // Check for reserved Windows device names
+        var reservedNames = new[] { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" };
+        if (reservedNames.Contains(projectName.ToUpperInvariant()))
+        {
+            return ValidationResult.Invalid($"'{projectName}' is a reserved system name and cannot be used");
+        }
+
+        // Check if starts or ends with dot
+        if (projectName.StartsWith('.') || projectName.EndsWith('.'))
+        {
+            return ValidationResult.Invalid("Project name cannot start or end with a dot");
+        }
+
+        // Check if starts or ends with space
+        if (projectName.StartsWith(' ') || projectName.EndsWith(' '))
+        {
+            return ValidationResult.Invalid("Project name cannot start or end with a space");
         }
 
         return ValidationResult.Valid();
@@ -168,7 +212,7 @@ public class InitializationService : IInitializationService
     private void DisplaySummary(InitializationSummary summary)
     {
         AnsiConsole.WriteLine();
-        
+
         var panel = new Panel(CreateSummaryContent(summary))
             .Border(BoxBorder.Double)
             .BorderStyle(summary.Success ? "green" : "red")

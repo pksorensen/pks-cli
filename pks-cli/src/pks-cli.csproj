@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
@@ -12,22 +13,32 @@
     <PackageId>pks-cli</PackageId>
     <PackageVersion>1.0.0</PackageVersion>
     <Authors>PKS Team</Authors>
-    <Description>The next agentic CLI for .NET developers - Professional Kubernetes Simplifier</Description>
-    <PackageTags>cli;dotnet;kubernetes;agentic;developer-tools</PackageTags>
+    <Description>The next agentic CLI for .NET developers - Poul's Killer Swarms</Description>
+    <PackageTags>cli;dotnet;agentic;developer-tools</PackageTags>
     <RepositoryUrl>https://github.com/pks-team/pks-cli</RepositoryUrl>
-    <PackageOutputPath>./bin/Release</PackageOutputPath>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Spectre.Console" Version="0.47.0" />
     <PackageReference Include="Spectre.Console.Cli" Version="0.47.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.0" />
+    <PackageReference Include="NuGet.Protocol" Version="6.8.0" />
+    <PackageReference Include="NuGet.Configuration" Version="6.8.0" />
+    <PackageReference Include="NuGet.Common" Version="6.8.0" />
+    <PackageReference Include="System.IO.Compression" Version="4.3.0" />
+    <!-- Model Context Protocol SDK -->
+    <PackageReference Include="ModelContextProtocol" Version="0.3.0-preview.3" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="0.3.0-preview.3" />
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="Templates/**/*">
+    <Content Include="../templates/**/*" Exclude="../templates/**/bin/**;../templates/**/obj/**;../templates/**/*.nupkg">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <PackagePath>Templates/</PackagePath>
+      <Link>Templates/%(RecursiveDir)%(Filename)%(Extension)</Link>
     </Content>
   </ItemGroup>
 

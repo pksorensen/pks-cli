@@ -1,0 +1,16 @@
+<Project>
+  <PropertyGroup>
+    <!-- Centralized NuGet Package Output -->
+    <PackageOutputPath>$(MSBuildThisFileDirectory)artifacts</PackageOutputPath>
+    
+    <!-- Ensure artifacts directory exists -->
+    <BeforePack>
+      $(BeforePack);
+      CreateArtifactsDirectory
+    </BeforePack>
+  </PropertyGroup>
+  
+  <Target Name="CreateArtifactsDirectory" BeforeTargets="Pack">
+    <MakeDir Directories="$(PackageOutputPath)" Condition="!Exists('$(PackageOutputPath)')" />
+  </Target>
+</Project>

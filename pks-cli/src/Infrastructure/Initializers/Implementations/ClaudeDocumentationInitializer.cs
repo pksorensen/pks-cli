@@ -13,7 +13,7 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
     public override string Description => "Creates comprehensive CLAUDE.md project documentation for AI assistants";
     public override int Order => 85; // Run after project files but before README
 
-    protected override string TemplateDirectory => "claude-docs";
+    protected override string TemplateDirectory => "claude-modular";
 
     public override IEnumerable<InitializerOption> GetOptions()
     {
@@ -31,10 +31,10 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
         };
     }
 
-    public override async Task<bool> ShouldRunAsync(InitializationContext context)
+    public override Task<bool> ShouldRunAsync(InitializationContext context)
     {
         // Always run since we generate content inline when templates don't exist
-        return true;
+        return Task.FromResult(true);
     }
 
     protected override async Task<InitializationResult> ExecuteInternalAsync(InitializationContext context)
@@ -44,18 +44,18 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
         // Check if we have specific templates for the project type
         var projectType = context.GetOption("project-type", "console");
         var specificTemplatePath = Path.Combine(TemplatePath, $"CLAUDE-{projectType}.md");
-        
+
         if (File.Exists(specificTemplatePath))
         {
             // Process only the specific template file
             var content = await File.ReadAllTextAsync(specificTemplatePath);
             var processedContent = await ProcessTemplateContentAsync(content, specificTemplatePath, "CLAUDE.md", context);
             var targetPath = Path.Combine(context.TargetDirectory, "CLAUDE.md");
-            
+
             await WriteFileAsync(targetPath, processedContent, context);
             result.AffectedFiles.Add(targetPath);
             result.Message = $"Generated CLAUDE.md documentation from {projectType} template";
-            
+
             return result;
         }
         else
@@ -74,6 +74,9 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
 
     protected override async Task<string> ProcessTemplateContentAsync(string content, string templateFile, string targetFile, InitializationContext context)
     {
+        // Process file inclusions first
+        content = await ProcessFileInclusionsAsync(content, context);
+
         // Add custom placeholder replacements for CLAUDE.md specific content
         var customPlaceholders = GetCustomPlaceholders(context);
         return ReplacePlaceholdersWithCustom(content, context, customPlaceholders);
@@ -82,7 +85,7 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
     private Dictionary<string, string> GetCustomPlaceholders(InitializationContext context)
     {
         var projectType = context.GetOption("project-type", "console");
-        var techStack = context.GetOption("tech-stack", InferTechStack(context, projectType));
+        var techStack = context.GetOption("tech-stack", InferTechStack(context, projectType ?? "console")) ?? ".NET 8 Console Application";
         var testFramework = context.GetOption("test-framework", "xUnit");
         var architecturePattern = context.GetOption("architecture-pattern", "Clean");
         var includeTdd = context.GetOption("include-tdd", false);
@@ -91,29 +94,90 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
         var includeAzure = context.GetOption("include-azure", false);
         var includeCiCd = context.GetOption("include-ci-cd", false);
 
+        // Get project identity information from context
+        var projectId = context.GetMetadata<string>("ProjectId") ?? "not-set";
+        var gitHubRepository = context.GetOption("remote-url", "Not configured");
+        var mcpEnabled = context.GetOption("mcp", false);
+        var agenticEnabled = context.GetOption("agentic", false);
+        var hooksEnabled = context.GetOption("hooks", false);
+
         return new Dictionary<string, string>
         {
             { "{{TechStack}}", techStack },
-            { "{{ProjectType}}", projectType },
-            { "{{TestFramework}}", testFramework },
-            { "{{ArchitecturePattern}}", architecturePattern },
-            { "{{BuildCommands}}", GenerateBuildCommands(context, projectType, includeDocker) },
-            { "{{TestingCommands}}", GenerateTestingCommands(context, testFramework, includeTdd) },
-            { "{{ArchitectureSection}}", GenerateArchitectureSection(context, projectType, architecturePattern) },
-            { "{{DevelopmentPatterns}}", GenerateDevelopmentPatterns(context, projectType, includeTdd) },
-            { "{{FileOrganization}}", GenerateFileOrganization(context, projectType, architecturePattern) },
-            { "{{ConfigurationSection}}", GenerateConfigurationSection(context, projectType) },
+            { "{{ProjectType}}", projectType ?? "console" },
+            { "{{TestFramework}}", testFramework ?? "xUnit" },
+            { "{{ArchitecturePattern}}", architecturePattern ?? "Clean" },
+            { "{{BuildCommands}}", GenerateBuildCommands(context, projectType ?? "console", includeDocker) },
+            { "{{TestingCommands}}", GenerateTestingCommands(context, testFramework ?? "xUnit", includeTdd) },
+            { "{{ArchitectureSection}}", GenerateArchitectureSection(context, projectType ?? "console", architecturePattern ?? "Clean") },
+            { "{{DevelopmentPatterns}}", GenerateDevelopmentPatterns(context, projectType ?? "console", includeTdd) },
+            { "{{FileOrganization}}", GenerateFileOrganization(context, projectType ?? "console", architecturePattern ?? "Clean") },
+            { "{{ConfigurationSection}}", GenerateConfigurationSection(context, projectType ?? "console") },
             { "{{DeploymentCommands}}", GenerateDeploymentCommands(context, includeDocker, includeK8s, includeAzure) },
             { "{{CiCdSection}}", includeCiCd ? GenerateCiCdSection(context) : "" },
-            { "{{DependencyList}}", GenerateDependencyList(context, projectType) },
-            { "{{KeyComponents}}", GenerateKeyComponents(context, projectType) }
+            { "{{DependencyList}}", GenerateDependencyList(context, projectType ?? "console") },
+            { "{{KeyComponents}}", GenerateKeyComponents(context, projectType ?? "console") },
+            
+            // Project Identity placeholders
+            { "{{ProjectId}}", projectId },
+            { "{{GitHubRepository}}", gitHubRepository ?? "Not configured" },
+            { "{{CreatedAt}}", DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss") + " UTC" },
+            { "{{DateTime}}", DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss") + " UTC" },
+            
+            // Integration status placeholders
+            { "{{GitHubStatus}}", gitHubRepository != "Not configured" ? $"Connected to {gitHubRepository}" : "Not configured" },
+            { "{{McpStatus}}", mcpEnabled ? "Enabled" : "Not configured" },
+            { "{{McpServerId}}", mcpEnabled ? $"pks-{projectId}" : "Not configured" },
+            { "{{McpTransport}}", mcpEnabled ? "stdio" : "N/A" },
+            { "{{AgentCount}}", agenticEnabled ? "Multiple agents registered" : "0" },
+            { "{{HooksEnabled}}", hooksEnabled ? "Yes" : "No" }
         };
+    }
+
+    private async Task<string> ProcessFileInclusionsAsync(string content, InitializationContext context)
+    {
+        // Process @FILENAME.md patterns for file inclusion
+        var includePattern = @"@([A-Z]+\.md)";
+        var matches = System.Text.RegularExpressions.Regex.Matches(content, includePattern);
+
+        foreach (System.Text.RegularExpressions.Match match in matches)
+        {
+            var fileName = match.Groups[1].Value;
+            var includePath = Path.Combine(TemplatePath, fileName);
+
+            if (File.Exists(includePath))
+            {
+                try
+                {
+                    var includeContent = await File.ReadAllTextAsync(includePath);
+
+                    // Process placeholders in the included content
+                    var customPlaceholders = GetCustomPlaceholders(context);
+                    includeContent = ReplacePlaceholdersWithCustom(includeContent, context, customPlaceholders);
+
+                    // Replace the @FILENAME.md with the actual content
+                    content = content.Replace(match.Value, includeContent);
+                }
+                catch (Exception ex)
+                {
+                    // If file inclusion fails, replace with a comment
+                    content = content.Replace(match.Value, $"<!-- Failed to include {fileName}: {ex.Message} -->");
+                }
+            }
+            else
+            {
+                // If file doesn't exist, replace with a comment
+                content = content.Replace(match.Value, $"<!-- {fileName} not found -->");
+            }
+        }
+
+        return content;
     }
 
     private string GenerateClaudeDocumentation(InitializationContext context)
     {
         var projectType = context.GetOption("project-type", "console");
-        var techStack = context.GetOption("tech-stack", InferTechStack(context, projectType));
+        var techStack = context.GetOption("tech-stack", InferTechStack(context, projectType ?? "console")) ?? ".NET 8 Console Application";
         var testFramework = context.GetOption("test-framework", "xUnit");
         var architecturePattern = context.GetOption("architecture-pattern", "Clean");
         var includeTdd = context.GetOption("include-tdd", false);
@@ -122,7 +186,7 @@ public class ClaudeDocumentationInitializer : TemplateInitializer
         var includeAzure = context.GetOption("include-azure", false);
         var includeCiCd = context.GetOption("include-ci-cd", false);
 
-        var tddSection = includeTdd ? GenerateTddSection(testFramework) : "";
+        var tddSection = includeTdd ? GenerateTddSection(testFramework ?? "xUnit") : "";
         var dockerSection = includeDocker ? GenerateDockerSection() : "";
         var k8sSection = includeK8s ? GenerateKubernetesSection() : "";
         var azureSection = includeAzure ? GenerateAzureSection() : "";
@@ -203,25 +267,25 @@ dotnet add package [PackageName] --version [Version]
 
 ### Core Structure
 - **{context.ProjectName}/** - Main source code
-{GenerateProjectStructure(projectType, architecturePattern)}
+{GenerateProjectStructure(projectType ?? "console", architecturePattern ?? "Clean")}
 
 ### Key Components
 
-{GenerateKeyComponents(context, projectType)}
+{GenerateKeyComponents(context, projectType ?? "console")}
 
-### Available {(projectType == "console" ? "Commands" : "Endpoints")}
-{GenerateAvailableFeatures(projectType)}
+### Available {((projectType ?? "console") == "console" ? "Commands" : "Endpoints")}
+{GenerateAvailableFeatures(projectType ?? "console")}
 
 ### Key Dependencies
-{GenerateDependencyList(context, projectType)}
+{GenerateDependencyList(context, projectType ?? "console")}
 
 ## Development Patterns
 
-### {architecturePattern} Architecture
-{GenerateArchitectureGuidance(architecturePattern)}
+### {architecturePattern ?? "Clean"} Architecture
+{GenerateArchitectureGuidance(architecturePattern ?? "Clean")}
 
 ### Code Organization
-{GenerateCodeOrganizationGuidance(projectType)}
+{GenerateCodeOrganizationGuidance(projectType ?? "console")}
 
 ### Error Handling
 - Use custom exceptions for business logic errors
@@ -237,18 +301,18 @@ dotnet add package [PackageName] --version [Version]
 {tddSection}
 
 ### Service Implementation
-{GenerateServiceImplementationGuidance(projectType)}
+{GenerateServiceImplementationGuidance(projectType ?? "console")}
 
 ## File Organization
 
 ```
 {context.ProjectName}/
-{GenerateFileOrganization(context, projectType, architecturePattern)}
+{GenerateFileOrganization(context, projectType ?? "console", architecturePattern ?? "Clean")}
 ```
 
 ## Configuration
 
-{GenerateConfigurationSection(context, projectType)}
+{GenerateConfigurationSection(context, projectType ?? "console")}
 
 {ciCdSection}
 
@@ -290,7 +354,7 @@ dotnet add package [PackageName] --version [Version]
     private string InferTechStack(InitializationContext context, string projectType)
     {
         var template = context.Template.ToLowerInvariant();
-        
+
         return projectType.ToLowerInvariant() switch
         {
             "web" => ".NET 8 Web Application with ASP.NET Core",
@@ -313,12 +377,12 @@ dotnet add package [PackageName] --version [Version]
   - **Infrastructure/** - Data access and external integrations
   - **Middleware/** - Custom middleware components
   - **Configuration/** - Startup and configuration classes",
-            
+
             "console" => $@"  - **Commands/** - Individual command implementations
   - **Services/** - Business logic and application services
   - **Infrastructure/** - Configuration and dependency injection
   - **Models/** - Data models and DTOs",
-            
+
             _ => $@"  - **Core/** - Domain models and business logic
   - **Infrastructure/** - Data access and external services
   - **Application/** - Use cases and application services

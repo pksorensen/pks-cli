@@ -28,10 +28,10 @@ public class InitializerRegistry : IInitializerRegistry
         _types.Add(typeof(T));
     }
 
-    public async Task<IEnumerable<IInitializer>> GetAllAsync()
+    public Task<IEnumerable<IInitializer>> GetAllAsync()
     {
         var allInitializers = new List<IInitializer>(_instances);
-        
+
         // Resolve types from DI container
         foreach (var type in _types)
         {
@@ -39,7 +39,7 @@ public class InitializerRegistry : IInitializerRegistry
             allInitializers.Add(initializer);
         }
 
-        return allInitializers.OrderBy(i => i.Order).ThenBy(i => i.Name);
+        return Task.FromResult<IEnumerable<IInitializer>>(allInitializers.OrderBy(i => i.Order).ThenBy(i => i.Name));
     }
 
     public async Task<IEnumerable<IInitializer>> GetApplicableAsync(InitializationContext context)
@@ -74,7 +74,7 @@ public class InitializerRegistry : IInitializerRegistry
     public IEnumerable<InitializerOption> GetAllOptions()
     {
         var options = new List<InitializerOption>();
-        
+
         // Get options from instance initializers
         foreach (var initializer in _instances)
         {
@@ -124,9 +124,9 @@ public class InitializerRegistry : IInitializerRegistry
             {
                 var errorResult = InitializationResult.CreateFailure($"Exception in {initializer.Name}: {ex.Message}", ex.ToString());
                 results.Add(errorResult);
-                
+
                 AnsiConsole.MarkupLine($"[red]Exception in initializer {initializer.Name}: {ex.Message}[/]");
-                
+
                 if (IsCriticalInitializer(initializer))
                 {
                     AnsiConsole.MarkupLine($"[red]Critical initializer failed. Stopping execution.[/]");
@@ -154,8 +154,8 @@ public class InitializerRegistry : IInitializerRegistry
     {
         var initializerTypes = AppDomain.CurrentDomain.GetAssemblies()
             .SelectMany(assembly => assembly.GetTypes())
-            .Where(type => typeof(IInitializer).IsAssignableFrom(type) && 
-                          !type.IsInterface && 
+            .Where(type => typeof(IInitializer).IsAssignableFrom(type) &&
+                          !type.IsInterface &&
                           !type.IsAbstract)
             .ToList();
 
@@ -174,7 +174,7 @@ public class InitializerRegistry : IInitializerRegistry
                     // Fallback to direct instantiation if no parameterless constructor
                     try
                     {
-                        var instance = (IInitializer)Activator.CreateInstance(type);
+                        var instance = Activator.CreateInstance(type) as IInitializer;
                         if (instance != null)
                         {
                             Register(instance);

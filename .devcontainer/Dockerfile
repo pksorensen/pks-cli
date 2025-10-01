@@ -1,3 +1,5 @@
+FROM mcr.microsoft.com/dotnet/sdk:10.0-preview AS dotnet
+
 FROM node:20
 
 ARG TZ
@@ -38,6 +40,18 @@ RUN apt update && apt install -y \
 # Ensure default node user has access to /usr/local/share
 RUN mkdir -p /usr/local/share/npm-global && \
   chown -R node:node /usr/local/share
+
+# Copy .NET from the official image
+# Copy .NET 10 SDK to the same dotnet directory
+COPY --from=dotnet /usr/share/dotnet/sdk /usr/share/dotnet/sdk/
+COPY --from=dotnet /usr/share/dotnet/shared /usr/share/dotnet/shared/
+COPY --from=dotnet /usr/share/dotnet/packs /usr/share/dotnet/packs/
+COPY --from=dotnet /usr/share/dotnet/templates /usr/share/dotnet/templates/
+
+# Set DOTNET environment variables
+ENV DOTNET_ROOT=/usr/share/dotnet
+ENV PATH=$PATH:/usr/share/dotnet
+
 
 ARG USERNAME=node
 

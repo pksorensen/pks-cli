@@ -12,7 +12,7 @@ public class McpConfigurationInitializer : TemplateInitializer
     public override string Name => "MCP Configuration";
     public override string Description => "Creates MCP (Model Context Protocol) configuration for AI tool integration";
     public override int Order => 75; // Run after basic project structure but before deployment
-    
+
     protected override string TemplateDirectory => "mcp";
 
     public override IEnumerable<InitializerOption> GetOptions()
@@ -28,15 +28,15 @@ public class McpConfigurationInitializer : TemplateInitializer
         };
     }
 
-    public override async Task<bool> ShouldRunAsync(InitializationContext context)
+    public override Task<bool> ShouldRunAsync(InitializationContext context)
     {
         // Run if MCP features are explicitly enabled or if using agentic template
-        return context.GetOption("mcp", false) || 
+        return Task.FromResult(context.GetOption("mcp", false) ||
                context.GetOption("enable-mcp", false) ||
-               (context.Template?.Equals("agentic", StringComparison.OrdinalIgnoreCase) == true);
+               (context.Template?.Equals("agentic", StringComparison.OrdinalIgnoreCase) == true));
     }
 
-    protected override async Task<string> ProcessTemplateContentAsync(string content, string templateFile, string targetFile, InitializationContext context)
+    protected override Task<string> ProcessTemplateContentAsync(string content, string templateFile, string targetFile, InitializationContext context)
     {
         var enableStdio = context.GetOption("enable-stdio", true);
         var enableSse = context.GetOption("enable-sse", false);
@@ -57,7 +57,7 @@ public class McpConfigurationInitializer : TemplateInitializer
             { "{{MCP.ProjectTool}}", context.ProjectName.ToLowerInvariant() + "-cli" }
         };
 
-        return ReplacePlaceholdersWithCustom(content, context, customPlaceholders);
+        return Task.FromResult(ReplacePlaceholdersWithCustom(content, context, customPlaceholders));
     }
 
     protected override async Task PostProcessTemplateAsync(InitializationContext context, InitializationResult result)
@@ -84,7 +84,7 @@ public class McpConfigurationInitializer : TemplateInitializer
 
         result.Warnings.Add("Configure environment variables for secure API keys and endpoints");
         result.Warnings.Add("Add the .mcp.json to your AI tool's configuration directory");
-        
+
         await base.PostProcessTemplateAsync(context, result);
     }
 }

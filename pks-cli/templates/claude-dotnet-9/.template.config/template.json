@@ -1,0 +1,116 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "PKS CLI Team",
+  "classifications": ["DevContainer", "Docker", ".NET 9", "Aspire", "Claude Code", "PKS CLI"],
+  "name": "PKS Claude .NET 9 DevContainer with Aspire",
+  "description": "A Claude-optimized .NET 9 development container template with Aspire support, GitHub Copilot integration, and enhanced tooling for AI-assisted development",
+  "identity": "PKS.Templates.ClaudeDotNet9.Aspire",
+  "groupIdentity": "PKS.Templates.ClaudeDotNet9",
+  "shortName": "pks-claude-dotnet9",
+  "tags": {
+    "language": "JSON",
+    "type": "item"
+  },
+  "sourceName": "PKSClaudeDotNet9",
+  "preferNameDirectory": true,
+  "placeholderFilename": "template_placeholder",
+  "symbols": {
+    "ProjectName": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "MyProject",
+      "replaces": "PKSClaudeDotNet9",
+      "description": "The name of the project"
+    },
+    "Description": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "A .NET 9 project with Claude Code and Aspire support",
+      "replaces": "PROJECT_DESCRIPTION",
+      "description": "Description of the project"
+    },
+    "TimeZone": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "Europe/Copenhagen",
+      "replaces": "TIMEZONE_VALUE",
+      "description": "Container timezone (e.g., Europe/Copenhagen, America/New_York, UTC)"
+    },
+    "EnableAspire": {
+      "type": "parameter",
+      "datatype": "bool",
+      "defaultValue": "true",
+      "description": "Install .NET Aspire tooling for cloud-native application development"
+    },
+    "EnableGitHubCopilot": {
+      "type": "parameter",
+      "datatype": "bool",
+      "defaultValue": "true",
+      "description": "Include GitHub Copilot and Copilot Chat extensions"
+    },
+    "EnableDocker": {
+      "type": "parameter",
+      "datatype": "bool",
+      "defaultValue": "true",
+      "description": "Include Docker-in-Docker support"
+    },
+    "EnablePowerShell": {
+      "type": "parameter",
+      "datatype": "bool",
+      "defaultValue": "true",
+      "description": "Include PowerShell for scripting and automation"
+    },
+    "NodeMemoryLimit": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "4096",
+      "replaces": "NODE_MEMORY_LIMIT",
+      "description": "Node.js memory limit in MB (e.g., 4096 for 4GB)"
+    },
+    "GitHubPATToken": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "",
+      "replaces": "GITHUB_PAT_VALUE",
+      "description": "Optional GitHub Personal Access Token for private repository access"
+    }
+  },
+  "sources": [
+    {
+      "modifiers": [
+        {
+          "condition": "(!EnableAspire)",
+          "exclude": [
+            "**/aspire-features/**"
+          ]
+        }
+      ]
+    }
+  ],
+  "postActions": [
+    {
+      "condition": "OS != \"Windows\"",
+      "description": "Set execute permissions for shell scripts",
+      "manualInstructions": [
+        {
+          "text": "Run 'chmod +x .devcontainer/*.sh' to make scripts executable"
+        }
+      ],
+      "actionId": "3A7C4B45-1F5D-4A30-960B-2576915CF100",
+      "args": {
+        "executable": "chmod",
+        "args": "+x .devcontainer/init-firewall.sh .devcontainer/setup.sh"
+      },
+      "continueOnError": true
+    },
+    {
+      "condition": "EnableAspire",
+      "description": "Instructions for Aspire setup",
+      "manualInstructions": [
+        {
+          "text": "Aspire will be installed automatically on container creation. Run 'dotnet workload list' to verify installation."
+        }
+      ]
+    }
+  ]
+}

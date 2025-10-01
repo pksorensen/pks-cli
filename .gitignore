@@ -377,6 +377,25 @@ FodyWeavers.xsd
 *.sln.iml
 .idea/
 
+# Test artifacts
+test-artifacts/
+TestResults/
+test-results/
+*.trx
+*.coverage
+*.coveragexml
+coverage.opencover.xml
+coverage.cobertura.xml
+coverage.info
+coverage.json
+test-output/
+
+# Test-generated files and directories that should not be in source control
+pks-cli/src/.devcontainer
+pks-cli/TestProject*
+TestProject*/
+*/TestProject*
+
 # Claude Flow generated files
 .claude/settings.local.json
 .mcp.json
@@ -402,3 +421,4 @@ claude-flow.bat
 claude-flow.ps1
 hive-mind-prompt-*.txt
 .devcontainer/.env
+

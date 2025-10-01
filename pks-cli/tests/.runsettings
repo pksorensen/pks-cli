@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <!-- Test run parameters -->
+  <RunConfiguration>
+    <ResultsDirectory>../../test-artifacts/results</ResultsDirectory>
+    <TargetFramework>net8.0</TargetFramework>
+    <!-- Test session timeout in milliseconds (2 minutes) -->
+    <TestSessionTimeout>120000</TestSessionTimeout>
+    <!-- Enable parallel execution with limited threads -->
+    <MaxCpuCount>2</MaxCpuCount>
+    <!-- Enable parallel execution within assemblies for better performance -->
+    <DisableParallelization>false</DisableParallelization>
+    <!-- Collect dumps for hanging tests -->
+    <CollectDumpOnTestSessionHang>true</CollectDumpOnTestSessionHang>
+    <!-- Individual test timeout (15 seconds - optimized) -->
+    <TestCaseTimeout>15000</TestCaseTimeout>
+    <!-- Performance optimization settings -->
+    <TreatNoTestsAsError>false</TreatNoTestsAsError>
+    <SolutionDirectory>..</SolutionDirectory>
+  </RunConfiguration>
+
+  <!-- Code coverage settings -->
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat Code Coverage">
+        <Configuration>
+          <Format>cobertura,opencover,json</Format>
+          <Exclude>[*]*.AssemblyInfo,[*]*.Program,[*]*.Startup</Exclude>
+          <Include>[PKS.CLI]*</Include>
+          <ExcludeByAttribute>Obsolete,GeneratedCode,CompilerGenerated</ExcludeByAttribute>
+          <ExcludeByFile>**/Migrations/**/*.cs</ExcludeByFile>
+          <SingleHit>false</SingleHit>
+          <UseSourceLink>true</UseSourceLink>
+          <IncludeTestAssembly>false</IncludeTestAssembly>
+          <SkipAutoProps>true</SkipAutoProps>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+
+  <!-- Logging settings -->
+  <LoggerRunSettings>
+    <Loggers>
+      <Logger friendlyName="console" enabled="True">
+        <Configuration>
+          <Verbosity>normal</Verbosity>
+        </Configuration>
+      </Logger>
+      <Logger friendlyName="trx" enabled="True">
+        <Configuration>
+          <LogFileName>PKS.CLI.Tests.trx</LogFileName>
+          <LogFileDirectory>../../test-artifacts/results</LogFileDirectory>
+        </Configuration>
+      </Logger>
+      <Logger friendlyName="html" enabled="True">
+        <Configuration>
+          <LogFileName>PKS.CLI.Tests.html</LogFileName>
+          <LogFileDirectory>../../test-artifacts/results</LogFileDirectory>
+        </Configuration>
+      </Logger>
+    </Loggers>
+  </LoggerRunSettings>
+</RunSettings>

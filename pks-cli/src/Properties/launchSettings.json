@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "pks-cli": {
+      "commandName": "Project",
+      "commandLineArgs": "mcp --transport http"
+    }
+  }
+}

@@ -57,7 +57,7 @@ public abstract class BaseInitializer : IInitializer
     /// <summary>
     /// Helper method to check if a file exists and handle force/interactive modes
     /// </summary>
-    protected async Task<bool> ShouldOverwriteFileAsync(string filePath, InitializationContext context)
+    protected bool ShouldOverwriteFile(string filePath, InitializationContext context)
     {
         if (!File.Exists(filePath))
         {
@@ -100,7 +100,7 @@ public abstract class BaseInitializer : IInitializer
             EnsureDirectoryExists(directory);
         }
 
-        if (await ShouldOverwriteFileAsync(filePath, context))
+        if (ShouldOverwriteFile(filePath, context))
         {
             await File.WriteAllTextAsync(filePath, content);
         }
@@ -122,7 +122,7 @@ public abstract class BaseInitializer : IInitializer
             EnsureDirectoryExists(directory);
         }
 
-        if (await ShouldOverwriteFileAsync(destinationPath, context))
+        if (ShouldOverwriteFile(destinationPath, context))
         {
             File.Copy(sourcePath, destinationPath, overwrite: true);
             return true;

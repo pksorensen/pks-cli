@@ -1,0 +1,132 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "PKS CLI Team",
+  "classifications": ["DevContainer", "Docker", "Development Environment", "PKS CLI", "Claude", ".NET 10", "AI Development", "Full Featured"],
+  "name": "PKS Claude .NET 10 Full-Featured DevContainer",
+  "description": "A full-featured Claude-optimized .NET 10 development container template with advanced AI integration, comprehensive tooling, and enterprise-grade capabilities",
+  "identity": "PKS.Templates.ClaudeDotNet10.Full",
+  "groupIdentity": "PKS.Templates.ClaudeDotNet10",
+  "shortName": "pks-claude-dotnet10-full",
+  "tags": {
+    "language": "JSON",
+    "type": "item"
+  },
+  "sourceName": "PKSClaudeDotNet10Full",
+  "preferNameDirectory": true,
+  "placeholderFilename": "template_placeholder",
+  "symbols": {
+    "ProjectName": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "MyProject",
+      "replaces": "PKSClaudeDotNet10Full",
+      "description": "The name of the project"
+    },
+    "Description": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "A full-featured Claude-optimized .NET 10 project with advanced AI capabilities",
+      "replaces": "PROJECT_DESCRIPTION",
+      "description": "Description of the project"
+    },
+    "EnableDotNet": {
+      "type": "parameter",
+      "datatype": "bool",
+      "defaultValue": "true",
+      "description": "Include .NET development tools and runtime"
+    },
+    "EnableNodeJS": {
+      "type": "parameter",
+      "datatype": "bool",
+      "defaultValue": "false",
+      "description": "Include Node.js development tools and runtime"
+    },
+    "EnablePython": {
+      "type": "parameter",
+      "datatype": "bool",
+      "defaultValue": "false",
+      "description": "Include Python development tools and runtime"
+    },
+    "EnableGo": {
+      "type": "parameter",
+      "datatype": "bool",
+      "defaultValue": "false",
+      "description": "Include Go development tools and runtime"
+    },
+    "EnableDocker": {
+      "type": "parameter",
+      "datatype": "bool",
+      "defaultValue": "true",
+      "description": "Include Docker-in-Docker support"
+    },
+    "VSCodeExtensions": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "ms-dotnettools.csharp,ms-vscode.vscode-json",
+      "description": "Comma-separated list of VS Code extensions to install"
+    }
+  },
+  "sources": [
+    {
+      "modifiers": [
+        {
+          "condition": "(!EnableDotNet)",
+          "exclude": [
+            "**/dotnet-features/**",
+            "**/*.csproj",
+            "**/Program.cs"
+          ]
+        },
+        {
+          "condition": "(!EnableNodeJS)",
+          "exclude": [
+            "**/nodejs-features/**",
+            "**/package.json",
+            "**/tsconfig.json"
+          ]
+        },
+        {
+          "condition": "(!EnablePython)",
+          "exclude": [
+            "**/python-features/**",
+            "**/requirements.txt",
+            "**/pyproject.toml"
+          ]
+        },
+        {
+          "condition": "(!EnableGo)",
+          "exclude": [
+            "**/go-features/**",
+            "**/go.mod",
+            "**/main.go"
+          ]
+        },
+        {
+          "condition": "(!EnableDocker)",
+          "exclude": [
+            "**/docker-features/**",
+            "**/Dockerfile",
+            "**/docker-compose.yml"
+          ]
+        }
+      ]
+    }
+  ],
+  "postActions": [
+    {
+      "condition": "OS == \"Windows\"",
+      "description": "Set execute permissions for shell scripts",
+      "manualInstructions": [
+        {
+          "text": "Run 'chmod +x .devcontainer/post-create.sh' if using WSL or Git Bash"
+        }
+      ],
+      "actionId": "3A7C4B45-1F5D-4A30-960B-2576915CF100",
+      "args": {
+        "executable": "chmod",
+        "args": "+x .devcontainer/post-create.sh"
+      },
+      "continueOnError": true
+    }
+  ]
+}

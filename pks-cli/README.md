@@ -1,10 +1,46 @@
-# PKS CLI - Professional Kubernetes Simplifier
+# PKS CLI - The Agentic Development Platform
 
-🤖 **The Next Agentic CLI for .NET Developers**
+🤖 **The Next-Generation CLI for .NET Developers - Version 1.0.0**
 
-PKS CLI is a revolutionary command-line tool that brings AI-powered development assistance to .NET developers. Built with [Spectre.Console](https://spectreconsole.net/), it provides a beautiful, interactive terminal experience while integrating cutting-edge agentic capabilities.
+PKS CLI is a comprehensive agentic development platform that revolutionizes how .NET developers create, manage, and deploy applications. Built with [Spectre.Console](https://spectreconsole.net/), it combines beautiful terminal UI with AI-powered development assistance, GitHub integration, and comprehensive project management capabilities.
 
-## ✨ Features
+## ✨ Core Features
+
+### 🔧 Project Identity & Management
+- **Unique Project IDs** - Every project gets a unique identifier for tracking
+- **Cross-Component Integration** - Seamless integration between all PKS CLI tools
+- **Configuration Persistence** - Project settings stored in `.pks` folder
+- **Project Validation** - Comprehensive project health checks
+
+### 🐙 GitHub Integration
+- **Repository Management** - Create and configure GitHub repositories
+- **Personal Access Token Management** - Secure, encrypted token storage
+- **Issue Management** - Automated issue creation and tracking
+- **Workflow Integration** - Support for GitHub Actions and CI/CD
+
+### 🌐 Model Context Protocol (MCP)
+- **Project-Specific MCP Servers** - Each project gets its own MCP server
+- **Tool Exposure** - PKS CLI commands exposed as MCP tools
+- **Resource Management** - Project resources accessible through MCP
+- **AI Assistant Integration** - Seamless integration with Claude and other AI assistants
+
+### 🤖 Agent Framework
+- **Specialized Agents** - Development, testing, DevOps, documentation agents
+- **Agent Lifecycle Management** - Create, start, stop, and monitor agents
+- **Swarm Coordination** - Orchestrated multi-agent workflows
+- **Human-AI Collaboration** - Perfect balance of automation and human oversight
+
+### 🪝 Hooks System
+- **Smart Dispatcher** - Intelligent hook execution based on context
+- **Extensible Hooks** - Pre/post build, deploy, and custom hooks
+- **Event-Driven Architecture** - React to project events automatically
+- **Configuration Management** - Flexible hook configuration and management
+
+### 📋 PRD Tools
+- **Requirements Generation** - AI-powered requirements document creation
+- **User Story Management** - Automated user story generation
+- **Project Documentation** - Comprehensive project documentation tools
+- **Template System** - Customizable document templates
 
 ### 🎨 Beautiful Terminal UI
 - **Stunning ASCII Art** - Eye-catching welcome banners and logos
@@ -12,151 +48,384 @@ PKS CLI is a revolutionary command-line tool that brings AI-powered development 
 - **Color-Coded Output** - Intuitive color schemes for different information types
 - **Professional Aesthetics** - Modern terminal experience that rivals web applications
 
-### 🤖 Agentic Intelligence
-- **AI Development Agents** - Spawn specialized agents for different development tasks
-- **Intelligent Automation** - Smart workflows that learn from your patterns
-- **Code Analysis & Optimization** - AI-powered insights and recommendations
-- **Predictive Assistance** - Proactive suggestions based on project context
+## 🚀 Command Reference
 
-### 🚀 Core Commands
-
-#### `pks init` - Project Initialization
+### Project Initialization
 ```bash
-pks init my-project --template api --agentic
-```
-- Initialize new projects with intelligent templates
-- Auto-configure agentic capabilities
-- Set up modern .NET project structure
+# Basic project creation
+pks init MyProject
 
-#### `pks agent` - AI Agent Management
-```bash
-pks agent create --name CodeMaster --type developer
-pks agent list
-pks agent status
-```
-- Create and manage AI development agents
-- Monitor agent learning progress and activity
-- Assign specialized roles (developer, tester, architect, devops)
+# Interactive mode
+pks init
 
-#### `pks deploy` - Intelligent Deployment
-```bash
-pks deploy --environment prod --ai-optimize --watch
-```
-- AI-optimized deployment strategies
-- Real-time deployment monitoring
-- Automated health checks and rollback
+# Full-featured agentic project
+pks init MyProject --agentic --mcp --hooks --prd --github
 
-#### `pks status` - System Monitoring
-```bash
-pks status --watch --ai-insights
-```
-- Real-time system status monitoring
-- AI-powered performance insights
-- Anomaly detection and recommendations
+# Create GitHub repository during init
+pks init MyProject --github --create-repo --private-repo
 
-#### `pks ascii` - ASCII Art Generation
-```bash
-pks ascii "Hello World" --style banner --gradient --animate
+# Specific templates
+pks init MyApi --template api --agentic
+pks init MyAgent --template agent --mcp
+pks init MyWeb --template web --description "My web application"
 ```
-- Generate beautiful ASCII art for your projects
-- Multiple styles (banner, block, digital, starwars)
-- Gradient colors and animations
-- Perfect for CLI welcome messages
+
+### Agent Management
+```bash
+# List all agents
+pks agent --list
+
+# Create specialized agents
+pks agent --create "dev-agent" --type development
+pks agent --create "test-agent" --type testing
+pks agent --create "devops-agent" --type devops
+
+# Agent lifecycle
+pks agent --start [agent-id]
+pks agent --stop [agent-id]
+pks agent --status [agent-id]
+pks agent --remove [agent-id]
+```
+
+### MCP Server Management
+```bash
+# Start MCP server for project
+pks mcp --start --project-id [project-id]
+
+# Different transport modes
+pks mcp --start --transport stdio
+pks mcp --start --transport sse --port 8080
+
+# Server management
+pks mcp --status
+pks mcp --logs
+pks mcp --restart
+pks mcp --stop
+```
+
+### GitHub Integration
+```bash
+# Create repository
+pks github --create-repo MyRepo --private
+
+# Check repository access
+pks github --check-access
+
+# Create issues
+pks github --create-issue "Bug report" "Description of the bug"
+
+# Configure integration
+pks config github.token <your-token>
+```
+
+### Hooks Management
+```bash
+# List available hooks
+pks hooks --list
+
+# Execute specific hooks
+pks hooks --execute pre-build
+pks hooks --execute post-deploy
+
+# Configure hooks
+pks hooks --enable pre-build
+pks hooks --configure post-deploy --script "custom-deploy.sh"
+```
+
+### PRD Tools
+```bash
+# Create PRD documents
+pks prd --create
+
+# Generate requirements
+pks prd --generate-requirements
+
+# Generate user stories
+pks prd --generate-user-stories
+
+# Validate PRD content
+pks prd --validate
+```
+
+### System Status & Deployment
+```bash
+# Project status
+pks status
+
+# Deploy to environments
+pks deploy --environment staging
+pks deploy --environment production --replicas 3
+
+# Configuration management
+pks config --list
+pks config --set key value
+pks config --get github.token
+```
 
 ## 🛠️ Installation
 
-### As a .NET Global Tool
+### Prerequisites
+- .NET 8.0 SDK or later
+- Git (for GitHub integration)
+- Optional: Docker (for container features)
 
+### One-Command Installation (Recommended)
 ```bash
-# Install globally
-dotnet tool install -g pks-cli
+# Clone and install in one step
+git clone https://github.com/pksorensen/pks-cli
+cd pks-cli
+./install.sh
 
-# Use anywhere
+# Start using immediately
 pks --help
+pks init MyFirstProject
 ```
 
-### From Source
+The `install.sh` script automatically:
+- ✅ Validates .NET 8+ installation
+- 🔨 Builds the complete solution (CLI + Templates)
+- 📦 Creates NuGet packages
+- 🌍 Installs as a global .NET tool
+- ✔️ Verifies installation success
 
+### Advanced Installation Options
 ```bash
-# Clone and build
-git clone https://github.com/pks-team/pks-cli
-cd pks-cli/src
-dotnet build
-dotnet tool install -g --add-source ./bin/Release pks-cli
+# Force reinstall (if already installed)
+FORCE_INSTALL=true ./install.sh
+
+# Install debug version for development
+CONFIGURATION=Debug ./install.sh
+
+# Get help and see all options
+./install.sh --help
+```
+
+### Manual Development Setup
+For PKS CLI contributors and advanced users:
+```bash
+# Build and test during development
+dotnet build PKS.CLI.sln
+dotnet test
+
+# Run commands locally without installing
+cd src
+dotnet run -- init MyTestProject --template console
+
+# Manual installation with full control
+cd src
+dotnet build --configuration Release
+dotnet pack --configuration Release
+dotnet tool install -g --add-source ./bin/Release pks-cli --force
+```
+
+### Docker Installation
+```bash
+# Pull and run the latest Docker image
+docker pull registry.kjeldager.io/si14agents/cli:latest
+docker run --rm -it registry.kjeldager.io/si14agents/cli:latest --help
+
+# Or use convenience scripts (Linux/macOS)
+./scripts/docker-run.sh --help
+
+# Windows users
+.\scripts\docker-run.ps1 --help
+# or
+scripts\docker-run.bat --help
+```
+
+See [DOCKER.md](DOCKER.md) for complete Docker usage guide including Windows-specific instructions.
+
+### From NuGet (Coming Soon)
+```bash
+# Future: Install from NuGet registry
+dotnet tool install -g pks-cli
+```
+
+## 🚀 Quick Start
+
+### 1. Create Your First Project
+```bash
+# Initialize a new API project with all features
+pks init MyAwesomeAPI --template api --agentic --mcp --github --hooks
+
+# Follow the interactive prompts for GitHub integration
+# Your project will be created with full PKS CLI integration
+```
+
+### 2. Start the MCP Server
+```bash
+# Start MCP server for AI integration
+cd MyAwesomeAPI
+pks mcp --start
+
+# The server will expose PKS tools to AI assistants
+```
+
+### 3. Create Development Agents
+```bash
+# Create specialized agents for your project
+pks agent --create "backend-dev" --type development
+pks agent --create "api-tester" --type testing
+pks agent --create "deployment" --type devops
+```
+
+### 4. Configure GitHub Integration
+```bash
+# Set up GitHub personal access token
+pks config github.token <your-github-token>
+
+# Create issues and manage your repository
+pks github --create-issue "Implement user authentication" "Add JWT-based auth system"
 ```
 
 ## 🏗️ Architecture
 
-PKS CLI is built with modern .NET patterns:
+### Core Architecture
+PKS CLI is built with enterprise-grade .NET patterns:
 
+- **Modular Initializer System** - Extensible project initialization
+- **Project Identity Service** - Unique project tracking and management
+- **GitHub Integration Service** - Secure repository and API management
+- **MCP Server Integration** - AI assistant communication protocol
+- **Agent Framework** - Multi-agent coordination and management
+- **Hooks System** - Event-driven automation and workflows
+
+### Technology Stack
+- **.NET 8** - Latest framework with performance optimizations
 - **Spectre.Console** - Rich terminal UI framework
 - **Dependency Injection** - Microsoft.Extensions.DependencyInjection
-- **Command Pattern** - Clean, extensible command structure
-- **Async/Await** - Non-blocking operations throughout
-- **.NET 8** - Latest framework features and performance
+- **HTTP Client** - Modern HTTP client for GitHub API integration
+- **JSON Serialization** - System.Text.Json for configuration
+- **File System Abstractions** - Cross-platform file operations
+
+### Integration Points
+- **GitHub API** - Repository management, issues, workflows
+- **Model Context Protocol (MCP)** - AI assistant integration
+- **Docker** - Container support and deployment
+- **Kubernetes** - Orchestration and scaling
+- **Azure** - Cloud deployment and services
 
 ## 🎯 Use Cases
 
 ### For Individual Developers
-- **Project Scaffolding** - Quick setup of .NET projects with best practices
-- **Development Assistance** - AI agents that help with coding tasks
-- **Deployment Automation** - Simplified Kubernetes deployments
-- **Performance Monitoring** - Real-time insights into application health
+- **Agentic Project Setup** - AI-powered project initialization with GitHub integration
+- **Development Agents** - Specialized agents for coding, testing, and documentation
+- **MCP Integration** - Seamless AI assistant integration for enhanced productivity
+- **Intelligent Hooks** - Automated workflows triggered by development events
 
 ### For Development Teams
-- **Standardized Workflows** - Consistent development processes across team
-- **AI-Powered Code Review** - Automated quality checks and suggestions
-- **Deployment Orchestration** - Coordinated releases with zero downtime
-- **Team Productivity Analytics** - Insights into development efficiency
+- **Project Identity Management** - Centralized project tracking and coordination
+- **GitHub Workflow Integration** - Automated repository management and issue tracking
+- **Agent Swarm Coordination** - Multi-agent development workflows
+- **PRD-Driven Development** - Requirements-first development methodology
 
 ### For Enterprise
-- **Scalable Architecture** - Plugin system for custom enterprise needs
-- **Security Integration** - Built-in security scanning and compliance
-- **Multi-Environment Management** - Unified control across dev/staging/prod
-- **Cost Optimization** - AI recommendations for resource efficiency
+- **Secure Token Management** - Encrypted storage of sensitive credentials
+- **Cross-Platform Compatibility** - Works seamlessly across Windows, macOS, and Linux
+- **Modular Architecture** - Extensible initializer and agent systems
+- **Comprehensive Documentation** - Auto-generated Claude-friendly documentation
 
-## 🚀 Future Roadmap
+## 🚀 Version 1.0.0 Release Notes
 
-### Phase 1: Core Foundation ✅
-- [x] Beautiful terminal UI with Spectre.Console
-- [x] Basic command structure and ASCII art
-- [x] Project initialization and templates
-- [x] Agent management framework
+### ✅ Core Features Implemented
+- **Project Identity Service** - Unique project tracking with .pks configuration
+- **GitHub Integration** - Complete repository management and API integration
+- **MCP Server** - Project-specific Model Context Protocol servers
+- **Agent Framework** - Multi-agent coordination and lifecycle management
+- **Hooks System** - Event-driven automation and smart dispatching
+- **PRD Tools** - Requirements and user story generation
+- **Modular CLAUDE.md** - File inclusion system for AI assistant documentation
 
-### Phase 2: AI Integration 🔄
+### ✅ Technical Achievements
+- **Comprehensive DI System** - Full dependency injection throughout
+- **Async/Await Patterns** - Non-blocking operations for better performance
+- **Error Handling** - Robust error handling and recovery mechanisms
+- **Configuration Management** - Hierarchical configuration with encryption
+- **Cross-Component Integration** - Seamless integration between all components
+
+### ✅ Developer Experience
+- **Rich Terminal UI** - Beautiful Spectre.Console-based interface
+- **Interactive Initialization** - Smart prompts and validation
+- **Comprehensive Logging** - Detailed operation logging and debugging
+- **Template System** - Flexible template-based and code-based generation
+
+## 🔮 Future Roadmap
+
+### Version 1.1: Enhanced AI Integration
+- [ ] Advanced agent personalities and specializations
 - [ ] Natural language command parsing
-- [ ] Code generation agents
-- [ ] Automated testing agents
-- [ ] Performance optimization AI
+- [ ] Code generation and review agents
+- [ ] Performance optimization recommendations
 
-### Phase 3: Advanced Features 📋
-- [ ] IDE integrations (VS Code, Visual Studio)
-- [ ] CI/CD pipeline integration
-- [ ] Cloud provider connectors
-- [ ] Team collaboration features
+### Version 1.2: Enterprise Features
+- [ ] Team collaboration tools
+- [ ] Advanced security scanning
+- [ ] Multi-repository management
+- [ ] Enterprise authentication integration
 
-### Phase 4: Ecosystem 🌟
+### Version 1.3: Cloud Integration
+- [ ] Azure DevOps integration
+- [ ] AWS CodeCommit support
+- [ ] Cloud deployment automation
+- [ ] Cost optimization analytics
+
+### Version 2.0: Ecosystem Platform
 - [ ] Plugin marketplace
-- [ ] Community agents sharing
-- [ ] Enterprise connectors
+- [ ] Community agent sharing
+- [ ] Visual Studio Code extension
 - [ ] Advanced analytics dashboard
 
 ## 🤝 Contributing
 
-We welcome contributions from the .NET community!
+We welcome contributions from the .NET community! PKS CLI is built with enterprise-grade architecture and welcomes contributors at all levels.
 
 ### Development Setup
 ```bash
-git clone https://github.com/pks-team/pks-cli
-cd pks-cli
+git clone https://github.com/pksorensen/pks-cli
+cd pks-cli/src
 dotnet restore
 dotnet build
 ```
 
+### Project Structure
+```
+pks-cli/
+├── src/                          # Main source code
+│   ├── Commands/                 # Command implementations
+│   ├── Infrastructure/           # Core services and DI
+│   │   ├── Initializers/        # Project initialization system
+│   │   └── Services/            # Business logic services
+│   ├── Templates/               # Template files for generation
+│   └── Program.cs               # Application entry point
+├── tests/                        # Test projects
+├── test-artifacts/               # Test output (git ignored)
+│   ├── coverage/                # Code coverage reports
+│   ├── logs/                    # Test execution logs
+│   ├── results/                 # Test result files
+│   └── temp/                    # Temporary test files
+├── docs/                         # Documentation
+├── install.sh                   # Installation script
+├── clean-test-artifacts.sh      # Test cleanup script (Unix)
+└── clean-test-artifacts.ps1     # Test cleanup script (Windows)
+```
+
 ### Running Tests
 ```bash
+# Run all tests
 dotnet test
+
+# Run with coverage
+dotnet test --collect:"XPlat Code Coverage"
+
+# Run with custom settings
+dotnet test --settings tests/.runsettings
+
+# Clean test artifacts
+./clean-test-artifacts.sh  # Unix/Linux/macOS
+./clean-test-artifacts.ps1 # Windows PowerShell
 ```
+
+All test outputs (results, coverage reports, logs) are stored in the `test-artifacts/` directory to keep the repository clean.
 
 ### Code Style
 - Follow standard .NET conventions
