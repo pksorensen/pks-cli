@@ -1,5 +1,6 @@
 {
   "name": "PROJECT_DESCRIPTION",
+  "initializeCommand": "if [ ! -f .devcontainer/.env ]; then cat > .devcontainer/.env << 'EOF'\n# Development Container Environment Variables\n# This file contains environment variables for the development container\n\n# GitHub Personal Access Token (PAT)\n# Required for GitHub CLI authentication and API access\n# Generate a token at: https://github.com/settings/tokens\n# Recommended scopes: repo, read:org, workflow\ngithub_pat_token=<insert_your_github_pat_here>\n\n# Add your custom environment variables here\n# Example:\n# MY_API_KEY=your_api_key_here\n# DATABASE_URL=postgresql://user:pass@localhost:5432/dbname\nEOF\nfi",
   "build": {
     "dockerfile": "Dockerfile",
     "args": {
