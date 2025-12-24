@@ -1,3 +1,9 @@
+## [1.2.0-rc.3](https://github.com/pksorensen/pks-cli/compare/v1.2.0-rc.2...v1.2.0-rc.3) (2025-12-24)
+
+### 🐛 Bug Fixes
+
+* Correct version parsing in template discovery to use NuGetVersion ([6ce4e17](https://github.com/pksorensen/pks-cli/commit/6ce4e17848abf0cff71fa03443f8eefc5e689d7b))
+
 ## [1.2.0-rc.2](https://github.com/pksorensen/pks-cli/compare/v1.2.0-rc.1...v1.2.0-rc.2) (2025-12-24)
 
 ### 🚀 Features
