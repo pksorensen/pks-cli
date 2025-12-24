@@ -3,6 +3,7 @@ using NuGet.Common;
 using NuGet.Configuration;
 using NuGet.Protocol;
 using NuGet.Protocol.Core.Types;
+using NuGet.Versioning;
 using PKS.Infrastructure.Services.Models;
 using System.IO.Compression;
 using System.Text.Json;
@@ -82,7 +83,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
         // Remove duplicates based on PackageId, keeping the highest version
         var uniqueTemplates = templates
             .GroupBy(t => t.PackageId)
-            .Select(g => g.OrderByDescending(t => Version.Parse(t.Version)).First())
+            .Select(g => g.OrderByDescending(t => NuGetVersion.Parse(t.Version)).First())
             .ToList();
 
         _logger.LogInformation("Discovered {TotalCount} templates ({UniqueCount} unique packages)", templates.Count, uniqueTemplates.Count);
