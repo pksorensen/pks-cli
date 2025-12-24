@@ -1,2 +1,2 @@
-# Ignore .env file to prevent committing secrets
-.env
+# Template .env file is included in the template
+# Users should update it with their actual credentials after installation
