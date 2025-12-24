@@ -1,3 +1,9 @@
+## [1.1.0-rc.7](https://github.com/pksorensen/pks-cli/compare/v1.1.0-rc.6...v1.1.0-rc.7) (2025-12-24)
+
+### 🚀 Features
+
+- Add PKS Fullstack DevContainer template with comprehensive setup ([5c4bf23](https://github.com/pksorensen/pks-cli/commit/5c4bf23abd95aa83f35c797192ecc7f3dc43bb0f))
+
 ## [1.1.0](https://github.com/pksorensen/pks-cli/compare/v1.0.1...v1.1.0) (2025-10-01)
 
 ### 🚀 Features
