@@ -1,3 +1,9 @@
+## [1.2.0-rc.2](https://github.com/pksorensen/pks-cli/compare/v1.2.0-rc.1...v1.2.0-rc.2) (2025-12-24)
+
+### 🚀 Features
+
+* Enhance semantic release process with detailed release summary generation ([78103d3](https://github.com/pksorensen/pks-cli/commit/78103d3d18b0feae7ed8d521aae424fd170c0962))
+
 # Changelog
 
 All notable changes to this project will be documented in this file.
