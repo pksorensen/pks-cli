@@ -1,3 +1,20 @@
+## [1.2.0-rc.1](https://github.com/pksorensen/pks-cli/compare/v1.1.0...v1.2.0-rc.1) (2025-12-24)
+
+### 🚀 Features
+
+* add initializeCommand to set up environment variables in devcontainer templates ([4d20fc4](https://github.com/pksorensen/pks-cli/commit/4d20fc4f35b9e4dbba3594a6ad571eb7900aa995))
+* Add PKS Fullstack DevContainer template with comprehensive setup ([5c4bf23](https://github.com/pksorensen/pks-cli/commit/5c4bf23abd95aa83f35c797192ecc7f3dc43bb0f))
+
+### 🐛 Bug Fixes
+
+* added updated devcontainer ([ca13552](https://github.com/pksorensen/pks-cli/commit/ca135528d7f7f8af28f5d3284f9710a0b1e119c4))
+
+### 🔧 Chores
+
+* **release:** 1.1.0-rc.5 [skip ci] ([973edee](https://github.com/pksorensen/pks-cli/commit/973edee27799ab55004230e6aa788153043721d9))
+* **release:** 1.1.0-rc.6 [skip ci] ([014c2dc](https://github.com/pksorensen/pks-cli/commit/014c2dc0a50c1c597b4ff2b9d876f57b2e48eba3))
+* **release:** 1.1.0-rc.7 [skip ci] ([54387b6](https://github.com/pksorensen/pks-cli/commit/54387b665d15c90013604cd7ee066d0945cd55e4))
+
 ## [1.1.0-rc.7](https://github.com/pksorensen/pks-cli/compare/v1.1.0-rc.6...v1.1.0-rc.7) (2025-12-24)
 
 ### 🚀 Features
