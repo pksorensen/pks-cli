@@ -1,3 +1,9 @@
+## [1.1.0-rc.6](https://github.com/pksorensen/pks-cli/compare/v1.1.0-rc.5...v1.1.0-rc.6) (2025-12-24)
+
+### 🐛 Bug Fixes
+
+* added updated devcontainer ([ca13552](https://github.com/pksorensen/pks-cli/commit/ca135528d7f7f8af28f5d3284f9710a0b1e119c4))
+
 ## [1.1.0-rc.5](https://github.com/pksorensen/pks-cli/compare/v1.1.0-rc.4...v1.1.0-rc.5) (2025-11-08)
 
 ### 🚀 Features
