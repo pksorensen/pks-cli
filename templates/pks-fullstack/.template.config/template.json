@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "PKS CLI Team",
+  "classifications": ["DevContainer", "Docker", "Development Environment", "PKS CLI", "Fullstack", "Node.js", ".NET", "AI Development"],
+  "name": "PKS Fullstack DevContainer",
+  "description": "A fullstack development container with Node.js 20, .NET 8+10, Playwright, DevTunnel, Git Credential Manager, Aspire CLI, Claude Code, and security firewall",
+  "identity": "PKS.Templates.PksFullstack",
+  "groupIdentity": "PKS.Templates.PksFullstack",
+  "shortName": "pks-fullstack",
+  "tags": {
+    "language": "JSON",
+    "type": "item"
+  },
+  "sourceName": "PKSFullstack",
+  "preferNameDirectory": true,
+  "placeholderFilename": "template_placeholder",
+  "symbols": {
+    "ProjectName": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "MyProject",
+      "replaces": "PKSFullstack",
+      "description": "The name of the project"
+    },
+    "Description": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "A fullstack development project with Node.js and .NET",
+      "replaces": "PROJECT_DESCRIPTION",
+      "description": "Description of the project"
+    },
+    "Timezone": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "Europe/Copenhagen",
+      "replaces": "TIMEZONE_VALUE",
+      "description": "Timezone for the container"
+    },
+    "BaseImageTag": {
+      "type": "parameter",
+      "datatype": "string",
+      "defaultValue": "latest",
+      "replaces": "BASE_IMAGE_TAG",
+      "description": "Tag for the base image (e.g., latest, 1.0.0)"
+    }
+  },
+  "postActions": [
+    {
+      "description": "Set execute permissions for shell scripts",
+      "manualInstructions": [
+        {
+          "text": "Run 'chmod +x .devcontainer/init-firewall.sh' if needed"
+        }
+      ],
+      "actionId": "3A7C4B45-1F5D-4A30-960B-2576915CF100",
+      "args": {
+        "executable": "chmod",
+        "args": "+x .devcontainer/init-firewall.sh"
+      },
+      "continueOnError": true
+    }
+  ]
+}

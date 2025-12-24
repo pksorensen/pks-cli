@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "PKS CLI Base Images configuration for GitHub Container Registry",
+  "images": [
+    {
+      "name": "pks-fullstack-base",
+      "displayName": "PKS Fullstack Development Base",
+      "description": "Base image for fullstack development with Node.js 20, .NET 8+10, Playwright, DevTunnel CLI, Git Credential Manager, Aspire CLI, and Claude Code",
+      "dockerfile": "pks-fullstack-base/Dockerfile",
+      "registry": "ghcr.io/pksorensen",
+      "tags": ["latest", "1.0.0"],
+      "platforms": ["linux/amd64"],
+      "buildArgs": {
+        "TZ": "UTC",
+        "CLAUDE_CODE_VERSION": "latest",
+        "GIT_DELTA_VERSION": "0.18.2",
+        "ZSH_IN_DOCKER_VERSION": "1.2.0",
+        "GCM_VERSION": "2.6.0"
+      }
+    }
+  ]
+}
