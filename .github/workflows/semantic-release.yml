@@ -201,3 +201,109 @@ jobs:
         else
           echo "⚠️ NUGET_API_KEY not set or no packages found, skipping NuGet publish"
         fi
+
+    - name: Generate Release Summary
+      if: always()
+      run: |
+        echo "# 📦 Semantic Release Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        # Get branch information
+        BRANCH_NAME=${GITHUB_REF#refs/heads/}
+        echo "**Branch:** \`$BRANCH_NAME\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        # Check if a release was created
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+        if [ -n "$LATEST_TAG" ]; then
+          VERSION=${LATEST_TAG#v}
+
+          # Determine release type
+          if [[ $LATEST_TAG == *"-rc."* ]] || [[ $LATEST_TAG == *"-dev."* ]]; then
+            RELEASE_TYPE="Pre-release"
+            EMOJI="🔶"
+          else
+            RELEASE_TYPE="Stable Release"
+            EMOJI="✅"
+          fi
+
+          echo "## $EMOJI $RELEASE_TYPE Created" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Version: \`$VERSION\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Add release notes preview
+          echo "<details>" >> $GITHUB_STEP_SUMMARY
+          echo "<summary>📝 Release Notes Preview</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          git tag -l --format='%(contents)' "$LATEST_TAG" | head -n 20 >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # List packages created
+          if [ -d "packages" ] && [ "$(ls -A packages/*.nupkg 2>/dev/null)" ]; then
+            echo "### 📦 Packages Created" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            for package in packages/*.nupkg; do
+              if [ -f "$package" ]; then
+                PACKAGE_NAME=$(basename "$package")
+                PACKAGE_SIZE=$(ls -lh "$package" | awk '{print $5}')
+                echo "- ✅ \`$PACKAGE_NAME\` ($PACKAGE_SIZE)" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Add links
+          echo "### 🔗 Quick Links" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- [View Release on GitHub](https://github.com/${{ github.repository }}/releases/tag/$LATEST_TAG)" >> $GITHUB_STEP_SUMMARY
+          echo "- [View on NuGet.org](https://www.nuget.org/packages/pks-cli/$VERSION)" >> $GITHUB_STEP_SUMMARY
+          echo "- [Compare Changes](https://github.com/${{ github.repository }}/compare/$LATEST_TAG)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Installation command
+          echo "### 💻 Installation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [[ $LATEST_TAG == *"-rc."* ]] || [[ $LATEST_TAG == *"-dev."* ]]; then
+            echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+            echo "dotnet tool install --global pks-cli --version $VERSION --prerelease" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+            echo "dotnet tool install --global pks-cli --version $VERSION" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Changelog status
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Changelog Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [[ $LATEST_TAG == *"-rc."* ]] || [[ $LATEST_TAG == *"-dev."* ]]; then
+            echo "ℹ️ CHANGELOG.md was **not updated** for this pre-release" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "The changelog will be updated when this is released as a stable version." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ CHANGELOG.md has been **updated** with this release" >> $GITHUB_STEP_SUMMARY
+          fi
+
+        else
+          echo "## ℹ️ No Release Created" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "No new version was released. This can happen when:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- No commits since last release contain \`feat:\`, \`fix:\`, or breaking changes" >> $GITHUB_STEP_SUMMARY
+          echo "- All commits use types that don't trigger releases (e.g., \`chore:\`, \`docs:\`, \`style:\`)" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit messages don't follow conventional commit format" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Show recent commits
+          echo "### Recent Commits" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          git log --oneline -5 >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        fi
