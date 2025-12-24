@@ -34,8 +34,6 @@
   <ItemGroup>
     <Content Include="content/**/*" Pack="true" PackagePath="content/" />
     <Content Include=".template.config/**/*" Pack="true" PackagePath="content/.template.config/" />
-    <Content Include="content/.devcontainer/.env" Pack="true" PackagePath="content/.devcontainer/" />
-    <Content Include="content/.devcontainer/.gitignore" Pack="true" PackagePath="content/.devcontainer/" />
   </ItemGroup>
 
   <ItemGroup>

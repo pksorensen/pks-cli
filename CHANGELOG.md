@@ -1,3 +1,9 @@
+## [1.2.0-rc.5](https://github.com/pksorensen/pks-cli/compare/v1.2.0-rc.4...v1.2.0-rc.5) (2025-12-24)
+
+### 🐛 Bug Fixes
+
+* Include .env template files in all template packages ([d793177](https://github.com/pksorensen/pks-cli/commit/d793177003cee03ad4d79dd38e9c134069647b21))
+
 ## [1.2.0-rc.4](https://github.com/pksorensen/pks-cli/compare/v1.2.0-rc.3...v1.2.0-rc.4) (2025-12-24)
 
 ### 🚀 Features
