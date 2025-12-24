@@ -65,7 +65,7 @@ jobs:
       id: current_version
       run: |
         # Extract version from main project file
-        VERSION=$(grep -oP '(?<=<Version>)[^<]+' pks-cli/src/pks-cli.csproj || echo "0.0.0")
+        VERSION=$(grep -oP '(?<=<Version>)[^<]+' src/pks-cli.csproj || echo "0.0.0")
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Current version: $VERSION"
         
@@ -100,11 +100,11 @@ jobs:
         fi
         
         # Build only the main CLI project and templates, skip tests for now
-        dotnet restore pks-cli/src/pks-cli.csproj
-        dotnet build pks-cli/src/pks-cli.csproj --configuration Release
+        dotnet restore src/pks-cli.csproj
+        dotnet build src/pks-cli.csproj --configuration Release
         
         # Build and pack template projects
-        find pks-cli/templates -name "*.csproj" -type f | while read -r template; do
+        find templates -name "*.csproj" -type f | while read -r template; do
           echo "Building template: $template"
           dotnet build "$template" --configuration Release
         done
@@ -134,14 +134,14 @@ jobs:
           mkdir -p packages
           
           # Pack CLI project with the correct version
-          dotnet pack pks-cli/src/pks-cli.csproj \
+          dotnet pack src/pks-cli.csproj \
             --configuration Release \
             --output ./packages \
             --no-build \
             -p:PackageVersion=$VERSION
             
           # Pack template projects with the correct version
-          find pks-cli/templates -name "*.csproj" -type f | while read -r template; do
+          find templates -name "*.csproj" -type f | while read -r template; do
             echo "Packing template: $template with version $VERSION"
             dotnet pack "$template" \
               --configuration Release \

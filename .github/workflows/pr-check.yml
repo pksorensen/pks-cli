@@ -34,11 +34,9 @@ jobs:
           ${{ runner.os }}-nuget-
     
     - name: Restore dependencies
-      working-directory: ./pks-cli
       run: dotnet restore
-      
+
     - name: Check formatting
-      working-directory: ./pks-cli
       run: |
         echo "🔍 Checking code formatting..."
         dotnet format pks-cli.sln --verify-no-changes --verbosity diagnostic || {
@@ -46,16 +44,14 @@ jobs:
           exit 1
         }
         echo "✅ Code formatting check passed"
-      
+
     - name: Build
-      working-directory: ./pks-cli
       run: |
         echo "🔨 Building with warnings as errors (excluding nullable warnings)..."
         dotnet build pks-cli.sln --configuration Release --warnaserror --nowarn:CS8618,CS8602,CS8604,CS8619,CS8625,CS8601,CS8765,CS1998,CS0219
         echo "✅ Build completed with no critical warnings"
-      
+
     - name: Run Core Tests Only
-      working-directory: ./pks-cli
       run: |
         echo "🧪 Running stable core tests..."
         cd tests
@@ -68,7 +64,7 @@ jobs:
         echo "✅ Core tests completed successfully"
       
     - name: Test Hooks Integration
-      working-directory: ./pks-cli/src/bin/Release/net8.0
+      working-directory: ./src/bin/Release/net8.0
       run: |
         echo "🪝 Testing hooks commands..."
         
@@ -97,7 +93,7 @@ jobs:
         echo "✅ All hook commands are registered and callable"
     
     - name: Validate Hooks Initialization
-      working-directory: ./pks-cli/src/bin/Release/net8.0
+      working-directory: ./src/bin/Release/net8.0
       run: |
         echo "🪝 Testing hooks initialization..."
         
@@ -136,7 +132,7 @@ jobs:
       if: always()
       with:
         name: test-results
-        path: pks-cli/test-artifacts/results/*
+        path: test-artifacts/results/*
         retention-days: 30
     
     - name: PR Summary
