@@ -772,10 +772,12 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
     {
         _logger.LogDebug("Running devcontainer up for workspace: {WorkspaceFolder}", workspaceFolder);
 
+        // Run devcontainer up from the workspace directory to ensure proper path resolution
         var output = await RunCommandAsync(
             "devcontainer",
             $"up --workspace-folder \"{workspaceFolder}\"",
-            timeoutSeconds: 300); // 5 minute timeout
+            timeoutSeconds: 300, // 5 minute timeout
+            workingDirectory: workspaceFolder);
 
         // Parse JSON output
         try
@@ -858,19 +860,43 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
     /// <summary>
     /// Runs a command and returns its output
     /// </summary>
-    private async Task<string> RunCommandAsync(string fileName, string arguments, int timeoutSeconds = 120)
+    private async Task<string> RunCommandAsync(string fileName, string arguments, int timeoutSeconds = 120, string? workingDirectory = null)
     {
+        // On Windows, wrap npm/node commands in cmd.exe for proper PATH resolution
+        // This ensures npm global binaries like 'devcontainer' are found
+        string actualFileName = fileName;
+        string actualArguments = arguments;
+
+        if (OperatingSystem.IsWindows() &&
+            (fileName.Equals("devcontainer", StringComparison.OrdinalIgnoreCase) ||
+             fileName.Equals("code", StringComparison.OrdinalIgnoreCase) ||
+             fileName.Equals("code-insiders", StringComparison.OrdinalIgnoreCase)))
+        {
+            actualFileName = "cmd.exe";
+            actualArguments = $"/c {fileName} {arguments}";
+            _logger.LogDebug("Windows: Wrapping command in cmd.exe: {Command}", actualArguments);
+        }
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = actualFileName,
+            Arguments = actualArguments,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        // Set working directory if specified
+        if (!string.IsNullOrEmpty(workingDirectory))
+        {
+            startInfo.WorkingDirectory = workingDirectory;
+            _logger.LogDebug("Setting working directory: {WorkingDirectory}", workingDirectory);
+        }
+
         using var process = new Process
         {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = fileName,
-                Arguments = arguments,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            }
+            StartInfo = startInfo
         };
 
         var outputBuilder = new StringBuilder();
