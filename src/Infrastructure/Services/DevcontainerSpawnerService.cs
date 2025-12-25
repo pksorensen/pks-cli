@@ -270,16 +270,81 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
         {
             _logger.LogDebug("Checking for devcontainer CLI...");
 
-            var output = await RunCommandAsync("devcontainer", "--version");
-            var isInstalled = !string.IsNullOrEmpty(output) && !output.Contains("not found");
+            // Try different approaches to detect devcontainer CLI
+            // On Windows, we need to be more flexible with shell execution
 
-            _logger.LogDebug("devcontainer CLI check result: {IsInstalled}", isInstalled);
+            // Approach 1: Direct execution
+            try
+            {
+                var output = await RunCommandAsync("devcontainer", "--version");
+                if (!string.IsNullOrEmpty(output))
+                {
+                    _logger.LogDebug("devcontainer CLI found (direct): {Output}", output);
+                    return true;
+                }
+            }
+            catch (Exception ex1)
+            {
+                _logger.LogDebug(ex1, "Direct devcontainer CLI check failed, trying shell execution");
+            }
 
-            return isInstalled;
+            // Approach 2: Shell execution (Windows PowerShell/CMD)
+            if (OperatingSystem.IsWindows())
+            {
+                try
+                {
+                    using var process = new Process
+                    {
+                        StartInfo = new ProcessStartInfo
+                        {
+                            FileName = "cmd.exe",
+                            Arguments = "/c devcontainer --version",
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        }
+                    };
+
+                    process.Start();
+                    var output = await process.StandardOutput.ReadToEndAsync();
+                    var error = await process.StandardError.ReadToEndAsync();
+                    await process.WaitForExitAsync();
+
+                    if (!string.IsNullOrEmpty(output) && (output.Contains("devcontainer") || output.Contains("@devcontainers")))
+                    {
+                        _logger.LogDebug("devcontainer CLI found (shell): {Output}", output);
+                        return true;
+                    }
+                }
+                catch (Exception ex2)
+                {
+                    _logger.LogDebug(ex2, "Shell devcontainer CLI check failed");
+                }
+            }
+
+            // Approach 3: Check if it's in PATH using 'where' (Windows) or 'which' (Unix)
+            try
+            {
+                var whereCommand = OperatingSystem.IsWindows() ? "where" : "which";
+                var output = await RunCommandAsync(whereCommand, "devcontainer");
+                if (!string.IsNullOrEmpty(output))
+                {
+                    _logger.LogDebug("devcontainer CLI found in PATH: {Output}", output);
+                    return true;
+                }
+            }
+            catch (Exception ex3)
+            {
+                _logger.LogDebug(ex3, "PATH check for devcontainer CLI failed");
+            }
+
+            _logger.LogDebug("devcontainer CLI not found");
+            return false;
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "devcontainer CLI check failed");
+            _logger.LogDebug(ex, "devcontainer CLI check failed completely");
             return false;
         }
     }
