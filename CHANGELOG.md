@@ -1,3 +1,9 @@
+## [1.2.0-rc.7](https://github.com/pksorensen/pks-cli/compare/v1.2.0-rc.6...v1.2.0-rc.7) (2025-12-25)
+
+### 🚀 Features
+
+* Enhance devcontainer CLI detection with multiple approaches ([ae80a9d](https://github.com/pksorensen/pks-cli/commit/ae80a9d11f5f37db7bd10d6abc9a83a248104d42))
+
 ## [1.2.0-rc.6](https://github.com/pksorensen/pks-cli/compare/v1.2.0-rc.5...v1.2.0-rc.6) (2025-12-25)
 
 ### 🚀 Features
