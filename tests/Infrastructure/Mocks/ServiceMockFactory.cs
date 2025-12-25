@@ -527,4 +527,84 @@ public static class ServiceMockFactory
 
         return mock;
     }
+
+    /// <summary>
+    /// Creates a mock IDevcontainerSpawnerService with default behavior
+    /// </summary>
+    public static Mock<PKS.Infrastructure.Services.IDevcontainerSpawnerService> CreateDevcontainerSpawnerService()
+    {
+        var mock = new Mock<IDevcontainerSpawnerService>();
+
+        // Setup CheckDockerAvailabilityAsync
+        mock.Setup(x => x.CheckDockerAvailabilityAsync())
+            .ReturnsAsync(new DockerAvailabilityResult
+            {
+                IsAvailable = true,
+                IsRunning = true,
+                Version = "24.0.0",
+                Message = "Docker is running"
+            });
+
+        // Setup IsDevcontainerCliInstalledAsync
+        mock.Setup(x => x.IsDevcontainerCliInstalledAsync())
+            .ReturnsAsync(true);
+
+        // Setup CheckVsCodeInstallationAsync
+        mock.Setup(x => x.CheckVsCodeInstallationAsync())
+            .ReturnsAsync(new VsCodeInstallationInfo
+            {
+                IsInstalled = true,
+                ExecutablePath = "code",
+                Version = "1.85.0",
+                Edition = VsCodeEdition.Stable
+            });
+
+        // Setup GenerateVolumeName
+        mock.Setup(x => x.GenerateVolumeName(It.IsAny<string>()))
+            .Returns((string projectName) => $"devcontainer-{projectName.ToLowerInvariant()}-abc12345");
+
+        // Setup SpawnLocalAsync
+        mock.Setup(x => x.SpawnLocalAsync(It.IsAny<DevcontainerSpawnOptions>()))
+            .ReturnsAsync((DevcontainerSpawnOptions options) => new DevcontainerSpawnResult
+            {
+                Success = true,
+                Message = "Devcontainer spawned successfully",
+                ContainerId = $"container-{Guid.NewGuid():N[..12]}",
+                VolumeName = $"devcontainer-{options.ProjectName.ToLowerInvariant()}-{Guid.NewGuid():N[..8]}",
+                VsCodeUri = $"vscode-remote://dev-container+abc123/workspaces/{options.ProjectName}",
+                CompletedStep = DevcontainerSpawnStep.Completed,
+                Duration = TimeSpan.FromSeconds(30)
+            });
+
+        // Setup CleanupFailedSpawnAsync
+        mock.Setup(x => x.CleanupFailedSpawnAsync(It.IsAny<string>(), It.IsAny<string>()))
+            .Returns(Task.CompletedTask);
+
+        // Setup FindExistingContainerAsync
+        mock.Setup(x => x.FindExistingContainerAsync(It.IsAny<string>()))
+            .ReturnsAsync((string projectPath) => null);
+
+        // Setup ListManagedVolumesAsync
+        mock.Setup(x => x.ListManagedVolumesAsync())
+            .ReturnsAsync(new List<DevcontainerVolumeInfo>
+            {
+                new DevcontainerVolumeInfo
+                {
+                    Name = "devcontainer-test-abc12345",
+                    ProjectName = "test",
+                    Created = DateTime.UtcNow.AddDays(-1),
+                    Labels = new Dictionary<string, string>
+                    {
+                        { "pks.managed", "true" },
+                        { "devcontainer.project", "test" }
+                    }
+                }
+            });
+
+        // Setup SpawnRemoteAsync - throws NotImplementedException
+        mock.Setup(x => x.SpawnRemoteAsync(It.IsAny<DevcontainerSpawnOptions>(), It.IsAny<RemoteHostConfig>()))
+            .ThrowsAsync(new NotImplementedException("Remote spawning will be implemented in Phase 2"));
+
+        return mock;
+    }
 }

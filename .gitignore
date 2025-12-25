@@ -391,6 +391,7 @@ coverage.json
 test-output/
 
 # Test-generated files and directories that should not be in source control
+tmp/
 pks-cli/src/.devcontainer
 pks-cli/TestProject*
 TestProject*/

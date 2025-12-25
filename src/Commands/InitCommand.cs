@@ -3,6 +3,7 @@ using Spectre.Console.Cli;
 using System.ComponentModel;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace PKS.Commands;
 
@@ -12,15 +13,18 @@ namespace PKS.Commands;
 public class InitCommand : Command<InitCommand.Settings>
 {
     private readonly INuGetTemplateDiscoveryService _templateDiscovery;
+    private readonly IServiceProvider _serviceProvider;
     private readonly IAnsiConsole _console;
     private readonly string? _workingDirectory;
 
     public InitCommand(
         INuGetTemplateDiscoveryService templateDiscovery,
+        IServiceProvider serviceProvider,
         IAnsiConsole? console = null,
         string? workingDirectory = null)
     {
         _templateDiscovery = templateDiscovery;
+        _serviceProvider = serviceProvider;
         _console = console ?? AnsiConsole.Console;
         _workingDirectory = workingDirectory;
     }
@@ -63,6 +67,22 @@ public class InitCommand : Command<InitCommand.Settings>
         [CommandOption("--mcp")]
         [Description("Enable Model Context Protocol (MCP) integration")]
         public bool EnableMcp { get; set; }
+
+        [CommandOption("--spawn-devcontainer")]
+        [Description("Automatically spawn devcontainer after initialization")]
+        public bool SpawnDevcontainer { get; set; }
+
+        [CommandOption("--no-devcontainer-prompt")]
+        [Description("Skip the prompt to spawn devcontainer")]
+        public bool NoDevcontainerPrompt { get; set; }
+
+        [CommandOption("--volume-name <NAME>")]
+        [Description("Custom volume name for devcontainer")]
+        public string? VolumeName { get; set; }
+
+        [CommandOption("--no-launch-vscode")]
+        [Description("Don't automatically launch VS Code")]
+        public bool NoLaunchVsCode { get; set; }
     }
 
     public override int Execute(CommandContext context, Settings? settings)
@@ -220,6 +240,37 @@ public class InitCommand : Command<InitCommand.Settings>
 
             _console.Write(panel);
 
+            // Check if devcontainer exists and offer to spawn
+            var devcontainerPath = Path.Combine(targetDirectory, ".devcontainer");
+            var hasDevcontainer = Directory.Exists(devcontainerPath) &&
+                                  File.Exists(Path.Combine(devcontainerPath, "devcontainer.json"));
+
+            if (hasDevcontainer && !settings.NoDevcontainerPrompt)
+            {
+                var spawnerService = _serviceProvider.GetRequiredService<IDevcontainerSpawnerService>();
+
+                bool shouldSpawn = settings.SpawnDevcontainer;
+
+                if (!shouldSpawn)
+                {
+                    _console.WriteLine();
+                    shouldSpawn = _console.Confirm(
+                        "[cyan]Would you like to spawn the devcontainer now?[/] " +
+                        "[dim](Opens in Docker volume with VS Code)[/]",
+                        defaultValue: true); // USER PREFERENCE: Default to Yes
+                }
+
+                if (shouldSpawn)
+                {
+                    await SpawnDevcontainerWorkflowAsync(
+                        spawnerService,
+                        settings.ProjectName,
+                        targetDirectory,
+                        settings.VolumeName,
+                        !settings.NoLaunchVsCode);
+                }
+            }
+
             return 0;
         }
         catch (Exception ex)
@@ -263,5 +314,140 @@ public class InitCommand : Command<InitCommand.Settings>
             return "✨";
 
         return "📦";
+    }
+
+    private async Task SpawnDevcontainerWorkflowAsync(
+        IDevcontainerSpawnerService spawnerService,
+        string projectName,
+        string projectPath,
+        string? customVolumeName,
+        bool launchVsCode)
+    {
+        try
+        {
+            _console.WriteLine();
+            _console.MarkupLine("[cyan]Preparing to spawn devcontainer...[/]");
+
+            // 1. Pre-flight checks
+            DockerAvailabilityResult? dockerCheck = null;
+            bool? cliInstalled = null;
+
+            await _console.Status()
+                .Spinner(Spinner.Known.Dots)
+                .StartAsync("[cyan]Checking Docker and devcontainer CLI...[/]", async ctx =>
+                {
+                    dockerCheck = await spawnerService.CheckDockerAvailabilityAsync();
+                    if (!dockerCheck.IsAvailable)
+                    {
+                        return;
+                    }
+
+                    cliInstalled = await spawnerService.IsDevcontainerCliInstalledAsync();
+                });
+
+            if (dockerCheck != null && !dockerCheck.IsAvailable)
+            {
+                _console.MarkupLine($"[red]❌ Docker Not Available[/]");
+                _console.MarkupLine($"[yellow]{dockerCheck.Message}[/]");
+                _console.MarkupLine("[dim]To spawn devcontainer later, run: pks devcontainer spawn[/]");
+                return;
+            }
+
+            if (cliInstalled == false)
+            {
+                _console.MarkupLine("[red]❌ devcontainer CLI Not Found[/]");
+                _console.MarkupLine("[yellow]Install: npm install -g @devcontainers/cli[/]");
+                _console.MarkupLine("[dim]To spawn devcontainer later, run: pks devcontainer spawn[/]");
+                return;
+            }
+
+            // 2. Generate and confirm volume name (USER PREFERENCE: Always show, allow edit)
+            string confirmedVolumeName;
+            if (!string.IsNullOrEmpty(customVolumeName))
+            {
+                // Volume name provided via command-line, use it directly
+                confirmedVolumeName = customVolumeName;
+                _console.MarkupLine($"[cyan]Docker volume name:[/] {confirmedVolumeName}");
+            }
+            else
+            {
+                // Interactive prompt for volume name
+                var volumeName = spawnerService.GenerateVolumeName(projectName);
+                _console.WriteLine();
+                confirmedVolumeName = _console.Prompt(
+                    new TextPrompt<string>("[cyan]Docker volume name:[/]")
+                        .DefaultValue(volumeName)
+                        .AllowEmpty());
+
+                if (string.IsNullOrWhiteSpace(confirmedVolumeName))
+                    confirmedVolumeName = volumeName;
+            }
+
+            // 3. Spawn devcontainer with progress tracking
+            DevcontainerSpawnResult? result = null;
+            await _console.Status()
+                .Spinner(Spinner.Known.Dots)
+                .StartAsync("[cyan]Spawning devcontainer...[/]", async ctx =>
+                {
+                    var options = new DevcontainerSpawnOptions
+                    {
+                        ProjectName = projectName,
+                        ProjectPath = projectPath,
+                        DevcontainerPath = Path.Combine(projectPath, ".devcontainer"),
+                        VolumeName = confirmedVolumeName,
+                        CopySourceFiles = true, // USER PREFERENCE: Copy full project
+                        LaunchVsCode = launchVsCode,
+                        ReuseExisting = true
+                    };
+
+                    result = await spawnerService.SpawnLocalAsync(options);
+                });
+
+            // 4. Display result
+            _console.WriteLine();
+            if (result != null && result.Success)
+            {
+                var successPanel = new Panel($"""
+                    ✓ [green]Devcontainer spawned successfully![/]
+
+                    [cyan1]Container ID:[/] {result.ContainerId?[..12]}
+                    [cyan1]Volume Name:[/] {result.VolumeName}
+                    [cyan1]Workspace:[/] /workspaces/{projectName}
+
+                    {(launchVsCode ? "[dim]VS Code is opening...[/]" : "[dim]Connect manually with VS Code Dev Containers extension[/]")}
+
+                    [bold]🚀 Devcontainer ready for development![/]
+                    """)
+                    .Border(BoxBorder.Rounded)
+                    .BorderStyle("green")
+                    .Header(" [bold green]✓ Devcontainer Ready[/] ");
+
+                _console.Write(successPanel);
+            }
+            else if (result != null)
+            {
+                _console.MarkupLine($"[red]❌ Failed to spawn devcontainer[/]");
+                _console.MarkupLine($"[yellow]{result.Message}[/]");
+
+                if (result.Errors.Any())
+                {
+                    _console.MarkupLine("[dim]Errors:[/]");
+                    foreach (var error in result.Errors)
+                        _console.MarkupLine($"  [red]• {error}[/]");
+                }
+
+                _console.WriteLine();
+                _console.MarkupLine("[dim]To retry, run: pks devcontainer spawn[/]");
+
+                // Note: Cleanup already handled by service (USER PREFERENCE: Auto-cleanup)
+            }
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[red]❌ Unexpected error during devcontainer spawn[/]");
+            _console.WriteException(ex);
+            _console.WriteLine();
+            _console.MarkupLine("[dim]To retry, run: pks devcontainer spawn[/]");
+        }
     }
 }

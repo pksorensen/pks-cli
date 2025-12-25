@@ -128,6 +128,17 @@ services.AddSingleton<IDevcontainerFeatureRegistry, DevcontainerFeatureRegistry>
 services.AddSingleton<IDevcontainerTemplateService, DevcontainerTemplateService>();
 services.AddSingleton<IDevcontainerFileGenerator, DevcontainerFileGenerator>();
 services.AddSingleton<IVsCodeExtensionService, VsCodeExtensionService>();
+
+// Register devcontainer spawner service
+services.AddSingleton<IDevcontainerSpawnerService, DevcontainerSpawnerService>();
+
+// Register Docker client (Docker.DotNet)
+services.AddSingleton<Docker.DotNet.IDockerClient>(sp =>
+{
+    var config = new Docker.DotNet.DockerClientConfiguration();
+    return config.CreateClient();
+});
+
 services.AddHttpClient<INuGetTemplateDiscoveryService, NuGetTemplateDiscoveryService>();
 
 // Register PRD branch command
@@ -282,6 +293,28 @@ app.Configure(config =>
             .WithExample(new[] { "devcontainer", "validate" })
             .WithExample(new[] { "devcontainer", "validate", ".devcontainer/devcontainer.json", "--strict" })
             .WithExample(new[] { "devcontainer", "validate", "--check-features", "--check-extensions" });
+
+        devcontainer.AddCommand<PKS.Commands.Devcontainer.DevcontainerSpawnCommand>("spawn")
+            .WithDescription("Spawn a devcontainer in a Docker volume for development")
+            .WithExample(new[] { "devcontainer", "spawn" })
+            .WithExample(new[] { "devcontainer", "spawn", "/path/to/project" })
+            .WithExample(new[] { "devcontainer", "spawn", "--volume-name", "my-project-vol" })
+            .WithExample(new[] { "devcontainer", "spawn", "--no-launch-vscode" })
+            .WithExample(new[] { "devcontainer", "spawn", "--force" });
+
+        devcontainer.AddCommand<PKS.Commands.Devcontainer.DevcontainerContainersCommand>("containers")
+            .WithDescription("List managed devcontainer containers")
+            .WithExample(new[] { "devcontainer", "containers" })
+            .WithExample(new[] { "devcontainer", "containers", "--all" })
+            .WithExample(new[] { "devcontainer", "containers", "--format", "json" })
+            .WithExample(new[] { "devcontainer", "containers", "-a", "--format", "json" });
+
+        devcontainer.AddCommand<PKS.Commands.Devcontainer.DevcontainerConnectCommand>("connect")
+            .WithDescription("Connect to an existing devcontainer via VS Code")
+            .WithExample(new[] { "devcontainer", "connect" })
+            .WithExample(new[] { "devcontainer", "connect", "<container-id>" })
+            .WithExample(new[] { "devcontainer", "connect", "--no-launch-vscode" })
+            .WithExample(new[] { "devcontainer", "connect", "<container-id>", "--no-launch-vscode" });
 
         devcontainer.AddBranch<PKS.Commands.Devcontainer.DevcontainerListSettings>("list", list =>
         {

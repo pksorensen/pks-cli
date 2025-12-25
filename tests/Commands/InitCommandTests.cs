@@ -58,7 +58,12 @@ namespace PKS.CLI.Tests.Commands
 
         private InitCommand CreateMockCommand()
         {
-            return new InitCommand(_mockTemplateDiscovery.Object, TestConsole, _testWorkingDirectory);
+            var mockServiceProvider = new Mock<IServiceProvider>();
+            // Setup GetRequiredService to return mock spawner service if needed
+            mockServiceProvider.Setup(sp => sp.GetService(typeof(IDevcontainerSpawnerService)))
+                .Returns(Mock.Of<IDevcontainerSpawnerService>());
+
+            return new InitCommand(_mockTemplateDiscovery.Object, mockServiceProvider.Object, TestConsole, _testWorkingDirectory);
         }
 
         private async Task<int> ExecuteCommandAsync(InitCommand command, InitCommand.Settings settings)

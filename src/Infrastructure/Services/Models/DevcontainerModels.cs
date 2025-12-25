@@ -379,3 +379,352 @@ public class DevcontainerRuntimeInfo
     public string Status { get; set; } = string.Empty;
     public Dictionary<string, object> Metadata { get; set; } = new();
 }
+
+/// <summary>
+/// Options for spawning a devcontainer
+/// </summary>
+public class DevcontainerSpawnOptions
+{
+    /// <summary>
+    /// Name of the project
+    /// </summary>
+    public string ProjectName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Full path to the project directory
+    /// </summary>
+    public string ProjectPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Full path to the .devcontainer folder
+    /// </summary>
+    public string DevcontainerPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Optional override for volume name (generated if not provided)
+    /// </summary>
+    public string? VolumeName { get; set; }
+
+    /// <summary>
+    /// Whether to copy source files into the volume (default: true)
+    /// </summary>
+    public bool CopySourceFiles { get; set; } = true;
+
+    /// <summary>
+    /// Whether to automatically launch VS Code (default: true)
+    /// </summary>
+    public bool LaunchVsCode { get; set; } = true;
+
+    /// <summary>
+    /// Whether to reuse existing container if found (default: true)
+    /// </summary>
+    public bool ReuseExisting { get; set; } = true;
+
+    /// <summary>
+    /// Spawn mode (Local or Remote)
+    /// </summary>
+    public SpawnMode Mode { get; set; } = SpawnMode.Local;
+}
+
+/// <summary>
+/// Result of a devcontainer spawn operation
+/// </summary>
+public class DevcontainerSpawnResult
+{
+    /// <summary>
+    /// Whether the spawn was successful
+    /// </summary>
+    public bool Success { get; set; }
+
+    /// <summary>
+    /// User-friendly message about the result
+    /// </summary>
+    public string Message { get; set; } = string.Empty;
+
+    /// <summary>
+    /// ID of the spawned container
+    /// </summary>
+    public string? ContainerId { get; set; }
+
+    /// <summary>
+    /// Name of the Docker volume used
+    /// </summary>
+    public string? VolumeName { get; set; }
+
+    /// <summary>
+    /// VS Code URI for connecting to the container
+    /// </summary>
+    public string? VsCodeUri { get; set; }
+
+    /// <summary>
+    /// List of errors encountered
+    /// </summary>
+    public List<string> Errors { get; set; } = new();
+
+    /// <summary>
+    /// List of warnings encountered
+    /// </summary>
+    public List<string> Warnings { get; set; } = new();
+
+    /// <summary>
+    /// Duration of the spawn operation
+    /// </summary>
+    public TimeSpan Duration { get; set; }
+
+    /// <summary>
+    /// Last completed step in the spawn workflow
+    /// </summary>
+    public DevcontainerSpawnStep CompletedStep { get; set; }
+}
+
+/// <summary>
+/// Steps in the devcontainer spawn workflow
+/// </summary>
+public enum DevcontainerSpawnStep
+{
+    None = 0,
+    DockerCheck = 1,
+    DevcontainerCliCheck = 2,
+    VolumeCreation = 3,
+    FileCopy = 4,
+    BootstrapCreation = 5,
+    DevcontainerUp = 6,
+    VsCodeLaunch = 7,
+    Completed = 8
+}
+
+/// <summary>
+/// Mode for spawning devcontainers
+/// </summary>
+public enum SpawnMode
+{
+    /// <summary>
+    /// Spawn locally on the current machine
+    /// </summary>
+    Local = 0,
+
+    /// <summary>
+    /// Spawn on a remote host (Phase 2)
+    /// </summary>
+    Remote = 1
+}
+
+/// <summary>
+/// Result of Docker availability check
+/// </summary>
+public class DockerAvailabilityResult
+{
+    /// <summary>
+    /// Whether Docker is available
+    /// </summary>
+    public bool IsAvailable { get; set; }
+
+    /// <summary>
+    /// Message about Docker availability
+    /// </summary>
+    public string Message { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Docker version if available
+    /// </summary>
+    public string? Version { get; set; }
+
+    /// <summary>
+    /// Whether Docker daemon is running
+    /// </summary>
+    public bool IsRunning { get; set; }
+}
+
+/// <summary>
+/// Information about VS Code installation
+/// </summary>
+public class VsCodeInstallationInfo
+{
+    /// <summary>
+    /// Whether VS Code is installed
+    /// </summary>
+    public bool IsInstalled { get; set; }
+
+    /// <summary>
+    /// Full path to VS Code executable
+    /// </summary>
+    public string? ExecutablePath { get; set; }
+
+    /// <summary>
+    /// VS Code version
+    /// </summary>
+    public string? Version { get; set; }
+
+    /// <summary>
+    /// Edition of VS Code (Stable or Insiders)
+    /// </summary>
+    public VsCodeEdition Edition { get; set; }
+}
+
+/// <summary>
+/// VS Code edition types
+/// </summary>
+public enum VsCodeEdition
+{
+    Stable = 0,
+    Insiders = 1
+}
+
+/// <summary>
+/// Result from devcontainer CLI up command
+/// </summary>
+public class DevcontainerUpResult
+{
+    /// <summary>
+    /// Outcome of the up command
+    /// </summary>
+    [JsonPropertyName("outcome")]
+    public string Outcome { get; set; } = string.Empty;
+
+    /// <summary>
+    /// ID of the created container
+    /// </summary>
+    [JsonPropertyName("containerId")]
+    public string ContainerId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Remote user in the container
+    /// </summary>
+    [JsonPropertyName("remoteUser")]
+    public string RemoteUser { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Remote workspace folder in the container
+    /// </summary>
+    [JsonPropertyName("remoteWorkspaceFolder")]
+    public string RemoteWorkspaceFolder { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Information about an existing devcontainer
+/// </summary>
+public class ExistingDevcontainerInfo
+{
+    /// <summary>
+    /// Container ID
+    /// </summary>
+    public string ContainerId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Volume name used by the container
+    /// </summary>
+    public string VolumeName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// When the container was created
+    /// </summary>
+    public DateTime Created { get; set; }
+
+    /// <summary>
+    /// Whether the container is currently running
+    /// </summary>
+    public bool IsRunning { get; set; }
+}
+
+/// <summary>
+/// Information about a devcontainer Docker volume
+/// </summary>
+public class DevcontainerVolumeInfo
+{
+    /// <summary>
+    /// Volume name
+    /// </summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Project name associated with the volume
+    /// </summary>
+    public string ProjectName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// When the volume was created
+    /// </summary>
+    public DateTime Created { get; set; }
+
+    /// <summary>
+    /// Size of the volume in bytes (if available)
+    /// </summary>
+    public long? SizeBytes { get; set; }
+
+    /// <summary>
+    /// Docker labels on the volume
+    /// </summary>
+    public Dictionary<string, string> Labels { get; set; } = new();
+}
+
+/// <summary>
+/// Information about a managed devcontainer
+/// </summary>
+public class DevcontainerContainerInfo
+{
+    /// <summary>
+    /// Container ID
+    /// </summary>
+    public string ContainerId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Container name
+    /// </summary>
+    public string ContainerName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Project name associated with the container
+    /// </summary>
+    public string ProjectName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Volume name used by the container
+    /// </summary>
+    public string VolumeName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Container status (e.g., "running", "stopped", "paused", "exited")
+    /// </summary>
+    public string Status { get; set; } = string.Empty;
+
+    /// <summary>
+    /// When the container was created
+    /// </summary>
+    public DateTime CreatedDate { get; set; }
+
+    /// <summary>
+    /// Docker labels on the container
+    /// </summary>
+    public Dictionary<string, string> Labels { get; set; } = new();
+
+    /// <summary>
+    /// Remote workspace folder path inside the container
+    /// </summary>
+    public string WorkspaceFolder { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Configuration for spawning on a remote host (Phase 2)
+/// </summary>
+public class RemoteHostConfig
+{
+    /// <summary>
+    /// Remote host address
+    /// </summary>
+    public string Host { get; set; } = string.Empty;
+
+    /// <summary>
+    /// SSH username
+    /// </summary>
+    public string Username { get; set; } = string.Empty;
+
+    /// <summary>
+    /// SSH port (default: 22)
+    /// </summary>
+    public int Port { get; set; } = 22;
+
+    /// <summary>
+    /// Path to SSH private key file
+    /// </summary>
+    public string? KeyPath { get; set; }
+}
