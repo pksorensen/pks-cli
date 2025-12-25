@@ -1,3 +1,9 @@
+## [1.2.0-rc.8](https://github.com/pksorensen/pks-cli/compare/v1.2.0-rc.7...v1.2.0-rc.8) (2025-12-25)
+
+### 🚀 Features
+
+* Enhance command execution with working directory support and Windows compatibility ([1634ea8](https://github.com/pksorensen/pks-cli/commit/1634ea896c5b185cba9fa3bf69428e295c3b09d0))
+
 ## [1.2.0-rc.7](https://github.com/pksorensen/pks-cli/compare/v1.2.0-rc.6...v1.2.0-rc.7) (2025-12-25)
 
 ### 🚀 Features
