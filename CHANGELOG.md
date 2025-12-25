@@ -1,3 +1,9 @@
+## [1.2.0-rc.6](https://github.com/pksorensen/pks-cli/compare/v1.2.0-rc.5...v1.2.0-rc.6) (2025-12-25)
+
+### 🚀 Features
+
+* Add devcontainer spawning functionality and related services ([16f9905](https://github.com/pksorensen/pks-cli/commit/16f9905846dc8b095a5e569ca2b65124de450c63))
+
 ## [1.2.0-rc.5](https://github.com/pksorensen/pks-cli/compare/v1.2.0-rc.4...v1.2.0-rc.5) (2025-12-24)
 
 ### 🐛 Bug Fixes
