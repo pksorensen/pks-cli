@@ -140,6 +140,22 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "released=true" >> $GITHUB_OUTPUT
 
+          # Extract numeric version for AssemblyVersion (e.g., 1.0.0-rc.1 -> 1.0.0.1)
+          # AssemblyVersion requires format: major.minor.build.revision (numeric only)
+          if [[ $VERSION =~ ^([0-9]+\.[0-9]+\.[0-9]+)(-[a-z]+\.([0-9]+))?$ ]]; then
+            NUMERIC_VERSION="${BASH_REMATCH[1]}"
+            if [ -n "${BASH_REMATCH[3]}" ]; then
+              NUMERIC_VERSION="${NUMERIC_VERSION}.${BASH_REMATCH[3]}"
+            else
+              NUMERIC_VERSION="${NUMERIC_VERSION}.0"
+            fi
+          else
+            NUMERIC_VERSION="$VERSION"
+          fi
+
+          echo "Numeric version for assembly: $NUMERIC_VERSION"
+          echo "Full version for package: $VERSION"
+
           # Create packages directory
           mkdir -p packages
 
@@ -158,9 +174,9 @@ jobs:
             --output ./packages \
             --no-restore \
             -p:PackageVersion=$VERSION \
-            -p:Version=$VERSION \
-            -p:AssemblyVersion=$VERSION \
-            -p:FileVersion=$VERSION \
+            -p:Version=$NUMERIC_VERSION \
+            -p:AssemblyVersion=$NUMERIC_VERSION \
+            -p:FileVersion=$NUMERIC_VERSION \
             -p:InformationalVersion=$VERSION \
             -p:PackageId=${{ inputs.package_id }}
 
