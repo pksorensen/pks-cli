@@ -1,3 +1,9 @@
+## [1.2.0-rc.9](https://github.com/pksorensen/pks-cli/compare/v1.2.0-rc.8...v1.2.0-rc.9) (2025-12-26)
+
+### 🚀 Features
+
+* Implement bootstrap container strategy for cross-platform devcontainer support ([f072597](https://github.com/pksorensen/pks-cli/commit/f072597f0eeed59cd201b7803a9b401fe656ea89))
+
 ## [1.2.0-rc.8](https://github.com/pksorensen/pks-cli/compare/v1.2.0-rc.7...v1.2.0-rc.8) (2025-12-25)
 
 ### 🚀 Features
