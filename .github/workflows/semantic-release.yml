@@ -73,15 +73,15 @@ jobs:
           TEMPLATE_DETAILS=$(echo "$ALL_TEMPLATES" | jq -c ".include[] | select(.template == \"$template_name\")")
 
           if [ -n "$TEMPLATE_DETAILS" ]; then
-            # Add to matrix
-            MATRIX_JSON=$(echo "$MATRIX_JSON" | jq ".include += [$TEMPLATE_DETAILS]")
+            # Add to matrix (use -c for compact output)
+            MATRIX_JSON=$(echo "$MATRIX_JSON" | jq -c ".include += [$TEMPLATE_DETAILS]")
             echo "  ✅ Added $template_name to release matrix"
           fi
         done
 
         echo "has-templates=$HAS_TEMPLATES" >> $GITHUB_OUTPUT
         echo "template-matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
-        echo "📋 Template matrix: $MATRIX_JSON"
+        echo "📋 Template matrix (compact): $MATRIX_JSON"
 
     - name: Generate Detection Summary
       run: |
