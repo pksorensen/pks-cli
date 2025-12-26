@@ -231,11 +231,8 @@ jobs:
 
         # Check template releases
         for TEMPLATE in devcontainer claude-dotnet-9 claude-dotnet-10-full pks-fullstack; do
-          TEMPLATE_OUTPUT="TEMPLATE_${TEMPLATE//-/_}"
-          TEMPLATE_CHANGED=$(echo "${{ needs.detect-changes.outputs.devcontainer }}" | jq -r '.["'$TEMPLATE'"] // "false"')
-
-          if [[ "${{ needs.detect-changes.outputs[format('{0}', TEMPLATE)] }}" == "true" ]] 2>/dev/null || \
-             [[ "${{ needs.detect-changes.outputs.devcontainer }}" == "true" && "$TEMPLATE" == "devcontainer" ]] || \
+          # Check if this specific template has changes
+          if [[ "${{ needs.detect-changes.outputs.devcontainer }}" == "true" && "$TEMPLATE" == "devcontainer" ]] || \
              [[ "${{ needs.detect-changes.outputs.claude-dotnet-9 }}" == "true" && "$TEMPLATE" == "claude-dotnet-9" ]] || \
              [[ "${{ needs.detect-changes.outputs.claude-dotnet-10-full }}" == "true" && "$TEMPLATE" == "claude-dotnet-10-full" ]] || \
              [[ "${{ needs.detect-changes.outputs.pks-fullstack }}" == "true" && "$TEMPLATE" == "pks-fullstack" ]]; then
