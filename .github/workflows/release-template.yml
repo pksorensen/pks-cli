@@ -112,11 +112,16 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         echo "🚀 Running semantic release for ${{ inputs.template }} template..."
-        if [ ! -f "${{ inputs.config_file }}" ]; then
-          echo "❌ Error: Config file not found: ${{ inputs.config_file }}"
+        CONFIG_FILE="${{ inputs.config_file }}"
+        # Ensure the path starts with ./ for semantic-release
+        if [[ ! "$CONFIG_FILE" == ./* ]]; then
+          CONFIG_FILE="./$CONFIG_FILE"
+        fi
+        if [ ! -f "$CONFIG_FILE" ]; then
+          echo "❌ Error: Config file not found: $CONFIG_FILE"
           exit 1
         fi
-        npx semantic-release --extends "${{ inputs.config_file }}"
+        npx semantic-release --extends "$CONFIG_FILE"
 
     - name: Create NuGet package
       id: pack

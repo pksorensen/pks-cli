@@ -75,7 +75,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         echo "🚀 Running semantic release for CLI..."
-        npx semantic-release --extends .releaserc.cli.json
+        npx semantic-release --extends ./.releaserc.cli.json
 
     - name: Create NuGet package
       id: pack
