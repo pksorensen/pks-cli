@@ -454,7 +454,9 @@ static void DisplayWelcomeBanner()
 
     // Display version information
     var version = GetVersion();
+    var runtimeVersion = Environment.Version.ToString();
     AnsiConsole.MarkupLine($"[cyan]Version {version}[/]");
+    AnsiConsole.MarkupLine($"[dim].NET Runtime {runtimeVersion}[/]");
     AnsiConsole.WriteLine();
     AnsiConsole.MarkupLine("[dim]Type 'pks --help' to get started with your agentic development journey![/]");
     AnsiConsole.WriteLine();
