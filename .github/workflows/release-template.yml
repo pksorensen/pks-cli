@@ -69,7 +69,7 @@ jobs:
 
     - name: Install semantic-release
       run: |
-        npm install -g \
+        npm install \
           semantic-release \
           @semantic-release/commit-analyzer \
           @semantic-release/release-notes-generator \
