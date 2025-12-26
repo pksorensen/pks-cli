@@ -37,6 +37,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        fetch-tags: true
         token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Make detect-changes.sh executable
@@ -180,6 +181,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        fetch-tags: true
         token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Generate Comprehensive Summary
