@@ -165,7 +165,7 @@ pks config --get github.token
 ## 🛠️ Installation
 
 ### Prerequisites
-- .NET 8.0 SDK or later
+- .NET 10.0 SDK or later
 - Git (for GitHub integration)
 - Optional: Docker (for container features)
 
@@ -182,7 +182,7 @@ pks init MyFirstProject
 ```
 
 The `install.sh` script automatically:
-- ✅ Validates .NET 8+ installation
+- ✅ Validates .NET 10+ installation
 - 🔨 Builds the complete solution (CLI + Templates)
 - 📦 Creates NuGet packages
 - 🌍 Installs as a global .NET tool
@@ -291,7 +291,7 @@ PKS CLI is built with enterprise-grade .NET patterns:
 - **Hooks System** - Event-driven automation and workflows
 
 ### Technology Stack
-- **.NET 8** - Latest framework with performance optimizations
+- **.NET 10** - Latest framework with performance optimizations
 - **Spectre.Console** - Rich terminal UI framework
 - **Dependency Injection** - Microsoft.Extensions.DependencyInjection
 - **HTTP Client** - Modern HTTP client for GitHub API integration

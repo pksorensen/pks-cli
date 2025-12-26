@@ -226,7 +226,7 @@ var app = new CommandApp(registrar);
 app.Configure(config =>
 {
     config.SetApplicationName("pks");
-    config.SetApplicationVersion("1.0.0");
+    config.SetApplicationVersion(GetVersion());
 
     // Add commands
     config.AddCommand<InitCommand>("init")
@@ -410,6 +410,15 @@ app.Configure(config =>
 
 return await app.RunAsync(args);
 
+static string GetVersion()
+{
+    var assembly = Assembly.GetExecutingAssembly();
+    var version = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+                  ?? assembly.GetName().Version?.ToString()
+                  ?? "unknown";
+    return version;
+}
+
 static void DisplayWelcomeBanner()
 {
     var banner = """
@@ -443,6 +452,9 @@ static void DisplayWelcomeBanner()
         AnsiConsole.MarkupLine($"[{color}]{lines[i]}[/]");
     }
 
+    // Display version information
+    var version = GetVersion();
+    AnsiConsole.MarkupLine($"[cyan]Version {version}[/]");
     AnsiConsole.WriteLine();
     AnsiConsole.MarkupLine("[dim]Type 'pks --help' to get started with your agentic development journey![/]");
     AnsiConsole.WriteLine();

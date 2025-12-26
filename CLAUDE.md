@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-PKS CLI is a .NET 8 console application built with Spectre.Console that provides an agentic CLI tool for .NET developers. It combines beautiful terminal UI with AI-powered development assistance and Kubernetes deployment capabilities.
+PKS CLI is a .NET 10 console application built with Spectre.Console that provides an agentic CLI tool for .NET developers. It combines beautiful terminal UI with AI-powered development assistance and Kubernetes deployment capabilities.
 
 **Repository**: https://github.com/pksorensen/pks-cli
 
@@ -74,7 +74,7 @@ CONFIGURATION=Debug ./install.sh    # Use Debug configuration
 ```
 
 **What the script does:**
-1. ✅ Validates .NET 8+ is installed
+1. ✅ Validates .NET 10+ is installed
 2. 🔨 Builds the entire solution (CLI + Templates)
 3. 📦 Creates NuGet packages for distribution
 4. 🌍 Installs PKS CLI as a global .NET tool
@@ -177,7 +177,7 @@ pks init AnotherTest --template api
 FORCE_INSTALL=true ./install.sh
 
 # Check .NET version
-dotnet --version  # Should be 8.0 or higher
+dotnet --version  # Should be 10.0 or higher
 
 # Verify PATH includes .NET tools
 echo $PATH | grep -o '[^:]*\.dotnet[^:]*'
@@ -229,7 +229,7 @@ CONFIGURATION=Debug ./install.sh  # Debug build
 **Before** (complex):
 ```bash
 ./build.sh        # Build only
-./package.sh      # Package only  
+./package.sh      # Package only
 ./deploy.sh       # Deploy only
 ./install.sh      # Install only
 ```
@@ -240,7 +240,7 @@ CONFIGURATION=Debug ./install.sh  # Debug build
 ```
 
 The single script intelligently handles:
-- Dependency validation (.NET 8+)
+- Dependency validation (.NET 10+)
 - Solution building (CLI + Templates)
 - Package creation (NuGet packages)
 - Global tool installation
@@ -297,7 +297,7 @@ The application uses Spectre.Console.Cli's command pattern with:
 
 - **Spectre.Console** (v0.47.0) - Rich terminal UI framework
 - **Spectre.Console.Cli** (v0.47.0) - Command-line interface framework
-- **Microsoft.Extensions.DependencyInjection** (v8.0.0) - DI container
+- **Microsoft.Extensions.DependencyInjection** (v10.0.0) - DI container
 
 ## Development Patterns
 
@@ -381,7 +381,7 @@ The application is designed to be packaged as a .NET Global Tool with:
 
 - Tool command name: `pks`
 - Package ID: `pks-cli`
-- Target framework: .NET 8.0
+- Target framework: .NET 10.0
 - Output configured for global tool packaging
 
 ## Initializer System

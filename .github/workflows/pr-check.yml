@@ -5,7 +5,7 @@ on:
     branches: [ main, develop, release/* ]
 
 env:
-  DOTNET_VERSION: '8.0.x'
+  DOTNET_VERSION: '10.0.x'
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
   DOTNET_NOLOGO: true
 
@@ -64,7 +64,7 @@ jobs:
         echo "✅ Core tests completed successfully"
       
     - name: Test Hooks Integration
-      working-directory: ./src/bin/Release/net8.0
+      working-directory: ./src/bin/Release/net10.0
       run: |
         echo "🪝 Testing hooks commands..."
         
@@ -93,7 +93,7 @@ jobs:
         echo "✅ All hook commands are registered and callable"
     
     - name: Validate Hooks Initialization
-      working-directory: ./src/bin/Release/net8.0
+      working-directory: ./src/bin/Release/net10.0
       run: |
         echo "🪝 Testing hooks initialization..."
         

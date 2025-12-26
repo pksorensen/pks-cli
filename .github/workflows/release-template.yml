@@ -27,7 +27,7 @@ permissions:
   packages: write
 
 env:
-  DOTNET_VERSION: '8.0.x'
+  DOTNET_VERSION: '10.0.x'
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
   DOTNET_NOLOGO: true
   GIT_AUTHOR_NAME: "github-actions[bot]"
