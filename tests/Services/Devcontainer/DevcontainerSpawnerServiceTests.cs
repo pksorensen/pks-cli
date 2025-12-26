@@ -341,10 +341,13 @@ public class DevcontainerSpawnerServiceTests : TestBase
         result.CompletedStep.Should().BeOneOf(
             DevcontainerSpawnStep.DockerCheck,
             DevcontainerSpawnStep.DevcontainerCliCheck,
+            DevcontainerSpawnStep.BootstrapImageCheck,
             DevcontainerSpawnStep.VolumeCreation,
-            DevcontainerSpawnStep.FileCopy,
-            DevcontainerSpawnStep.BootstrapCreation,
+            DevcontainerSpawnStep.BootstrapContainerStart,
+            DevcontainerSpawnStep.FileCopyToBootstrap,
             DevcontainerSpawnStep.DevcontainerUp,
+            DevcontainerSpawnStep.BootstrapCleanup,
+            DevcontainerSpawnStep.VsCodeLaunch,
             DevcontainerSpawnStep.Completed);
     }
 

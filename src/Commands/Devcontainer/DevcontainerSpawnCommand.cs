@@ -39,6 +39,10 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         [CommandOption("--no-copy-source")]
         [Description("Don't copy source files (only .devcontainer configuration)")]
         public bool NoCopySource { get; set; }
+
+        [CommandOption("--no-bootstrap")]
+        [Description("Use direct execution instead of bootstrap container (advanced)")]
+        public bool NoBootstrap { get; set; }
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -174,7 +178,8 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
                     VolumeName = confirmedVolumeName,
                     CopySourceFiles = !settings.NoCopySource,
                     LaunchVsCode = !settings.NoLaunchVsCode,
-                    ReuseExisting = !settings.Force
+                    ReuseExisting = !settings.Force,
+                    UseBootstrapContainer = !settings.NoBootstrap
                 };
 
                 result = await _spawnerService.SpawnLocalAsync(options);

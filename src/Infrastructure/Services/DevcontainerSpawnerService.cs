@@ -46,6 +46,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
 
         string? volumeName = null;
         string? bootstrapPath = null;
+        BootstrapContainerInfo? bootstrapContainer = null;
 
         try
         {
@@ -126,49 +127,139 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
             result.VolumeName = volumeName;
             _logger.LogInformation("Created volume: {VolumeName}", volumeName);
 
-            // Step 4: Copy files to volume
-            if (options.CopySourceFiles)
-            {
-                _logger.LogInformation("Copying source files to volume...");
-                result.CompletedStep = DevcontainerSpawnStep.FileCopy;
+            DevcontainerUpResult upResult;
 
-                await CopyToVolumeAsync(
-                    options.ProjectPath,
-                    volumeName,
+            // Choose workflow based on bootstrap container option
+            if (options.UseBootstrapContainer)
+            {
+                // Bootstrap container workflow - cross-platform bash support
+                _logger.LogInformation("Using bootstrap container workflow for cross-platform compatibility");
+
+                // Step 4: Ensure bootstrap image exists
+                _logger.LogInformation("Ensuring bootstrap image...");
+                result.CompletedStep = DevcontainerSpawnStep.BootstrapImageCheck;
+
+                var imageResult = await EnsureBootstrapImageAsync();
+                if (!imageResult.Success)
+                {
+                    result.Success = false;
+                    result.Message = $"Failed to ensure bootstrap image: {imageResult.Message}";
+                    result.Errors.Add(imageResult.Message);
+                    await CleanupFailedSpawnAsync(volumeName, null);
+                    return result;
+                }
+
+                if (imageResult.WasBuilt)
+                {
+                    _logger.LogInformation("Bootstrap image built in {Duration}s", imageResult.BuildDuration.TotalSeconds);
+                }
+
+                // Step 5: Start bootstrap container
+                _logger.LogInformation("Starting bootstrap container...");
+                result.CompletedStep = DevcontainerSpawnStep.BootstrapContainerStart;
+
+                var bootstrapConfig = new BootstrapContainerConfig
+                {
+                    ProjectName = options.ProjectName,
+                    VolumeName = volumeName,
+                    WorkspacePath = $"/workspaces/{options.ProjectName}",
+                    ImageName = "pks-devcontainer-bootstrap",
+                    ImageTag = "latest",
+                    ContainerNamePrefix = "pks-bootstrap",
+                    MountDockerSocket = true,
+                    Labels = new Dictionary<string, string>
+                    {
+                        { "pks.managed", "true" },
+                        { "pks.bootstrap", "true" }
+                    }
+                };
+
+                bootstrapContainer = await StartBootstrapContainerAsync(bootstrapConfig);
+                _logger.LogInformation("Bootstrap container started: {ContainerId}", bootstrapContainer.ContainerId);
+
+                // Step 6: Copy files to volume via bootstrap container
+                if (options.CopySourceFiles)
+                {
+                    _logger.LogInformation("Copying source files to volume via bootstrap container...");
+                    result.CompletedStep = DevcontainerSpawnStep.FileCopyToBootstrap;
+
+                    await CopyFilesToBootstrapVolumeAsync(
+                        bootstrapContainer.ContainerId,
+                        options.ProjectPath,
+                        $"/workspaces/{options.ProjectName}");
+
+                    _logger.LogInformation("Files copied to volume");
+                }
+
+                // Step 7: Run devcontainer up inside bootstrap container
+                _logger.LogInformation("Running devcontainer up in bootstrap container...");
+                result.CompletedStep = DevcontainerSpawnStep.DevcontainerUp;
+
+                upResult = await RunDevcontainerUpInBootstrapAsync(
+                    bootstrapContainer.ContainerId,
                     $"/workspaces/{options.ProjectName}");
 
-                _logger.LogInformation("Files copied to volume");
+                if (upResult.Outcome != "success")
+                {
+                    result.Success = false;
+                    result.Message = $"devcontainer up failed: {upResult.Outcome}";
+                    result.Errors.Add($"devcontainer CLI returned outcome: {upResult.Outcome}");
+                    await CleanupFailedSpawnAsync(volumeName, null);
+                    return result;
+                }
+
+                _logger.LogInformation("Container created: {ContainerId}", upResult.ContainerId);
             }
-
-            // Step 5: Create bootstrap workspace
-            _logger.LogInformation("Creating bootstrap workspace...");
-            result.CompletedStep = DevcontainerSpawnStep.BootstrapCreation;
-
-            bootstrapPath = await CreateBootstrapWorkspaceAsync(
-                options.ProjectName,
-                volumeName,
-                options.DevcontainerPath);
-
-            _logger.LogInformation("Bootstrap workspace created at: {BootstrapPath}", bootstrapPath);
-
-            // Step 6: Run devcontainer up
-            _logger.LogInformation("Running devcontainer up...");
-            result.CompletedStep = DevcontainerSpawnStep.DevcontainerUp;
-
-            var upResult = await RunDevcontainerUpAsync(bootstrapPath);
-            if (upResult.Outcome != "success")
+            else
             {
-                result.Success = false;
-                result.Message = $"devcontainer up failed: {upResult.Outcome}";
-                result.Errors.Add($"devcontainer CLI returned outcome: {upResult.Outcome}");
-                await CleanupFailedSpawnAsync(volumeName, bootstrapPath);
-                return result;
+                // Legacy direct workflow (fallback for --no-bootstrap)
+                _logger.LogInformation("Using legacy direct workflow (--no-bootstrap)");
+
+                // Step 4: Copy files to volume
+                if (options.CopySourceFiles)
+                {
+                    _logger.LogInformation("Copying source files to volume...");
+                    result.CompletedStep = DevcontainerSpawnStep.FileCopyToBootstrap;
+
+                    await CopyToVolumeAsync(
+                        options.ProjectPath,
+                        volumeName,
+                        $"/workspaces/{options.ProjectName}");
+
+                    _logger.LogInformation("Files copied to volume");
+                }
+
+                // Step 5: Create bootstrap workspace
+                _logger.LogInformation("Creating bootstrap workspace...");
+                result.CompletedStep = DevcontainerSpawnStep.BootstrapContainerStart;
+
+                bootstrapPath = await CreateBootstrapWorkspaceAsync(
+                    options.ProjectName,
+                    volumeName,
+                    options.DevcontainerPath);
+
+                _logger.LogInformation("Bootstrap workspace created at: {BootstrapPath}", bootstrapPath);
+
+                // Step 6: Run devcontainer up
+                _logger.LogInformation("Running devcontainer up...");
+                result.CompletedStep = DevcontainerSpawnStep.DevcontainerUp;
+
+                upResult = await RunDevcontainerUpAsync(bootstrapPath);
+                if (upResult.Outcome != "success")
+                {
+                    result.Success = false;
+                    result.Message = $"devcontainer up failed: {upResult.Outcome}";
+                    result.Errors.Add($"devcontainer CLI returned outcome: {upResult.Outcome}");
+                    await CleanupFailedSpawnAsync(volumeName, bootstrapPath);
+                    return result;
+                }
+
+                _logger.LogInformation("Container created: {ContainerId}", upResult.ContainerId);
             }
 
             result.ContainerId = upResult.ContainerId;
-            _logger.LogInformation("Container created: {ContainerId}", upResult.ContainerId);
 
-            // Step 7: Launch VS Code
+            // Step 8: Launch VS Code
             if (options.LaunchVsCode)
             {
                 _logger.LogInformation("Launching VS Code...");
@@ -177,9 +268,19 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                 var vsCodeInfo = await CheckVsCodeInstallationAsync();
                 if (vsCodeInfo.IsInstalled && vsCodeInfo.ExecutablePath != null)
                 {
-                    var uri = ConstructVsCodeUri(bootstrapPath, upResult.RemoteWorkspaceFolder);
-                    result.VsCodeUri = uri;
+                    string uri;
+                    if (options.UseBootstrapContainer)
+                    {
+                        // For bootstrap workflow, use container ID directly
+                        uri = await GetContainerVsCodeUriAsync(upResult.ContainerId, upResult.RemoteWorkspaceFolder);
+                    }
+                    else
+                    {
+                        // For legacy workflow, use bootstrap path
+                        uri = ConstructVsCodeUri(bootstrapPath!, upResult.RemoteWorkspaceFolder);
+                    }
 
+                    result.VsCodeUri = uri;
                     await LaunchVsCodeAsync(uri, vsCodeInfo.ExecutablePath);
                     _logger.LogInformation("VS Code launched with URI: {Uri}", uri);
                 }
@@ -203,6 +304,29 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
         {
             _logger.LogError(ex, "Devcontainer spawn failed at step {Step}", result.CompletedStep);
 
+            // Capture bootstrap container logs if using bootstrap workflow
+            if (bootstrapContainer != null)
+            {
+                try
+                {
+                    _logger.LogInformation("Capturing bootstrap container logs...");
+                    var logsResult = await ExecuteInBootstrapAsync(
+                        bootstrapContainer.ContainerId,
+                        "cat /var/log/* 2>/dev/null || echo 'No logs found'",
+                        timeoutSeconds: 10);
+
+                    if (logsResult.Success && !string.IsNullOrWhiteSpace(logsResult.Output))
+                    {
+                        _logger.LogDebug("Bootstrap container logs: {Logs}", logsResult.Output);
+                        result.Errors.Add($"Bootstrap logs: {logsResult.Output}");
+                    }
+                }
+                catch (Exception logEx)
+                {
+                    _logger.LogWarning(logEx, "Failed to capture bootstrap container logs");
+                }
+            }
+
             // Cleanup on failure
             if (volumeName != null)
             {
@@ -215,6 +339,15 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
             result.Duration = DateTime.UtcNow - startTime;
 
             return result;
+        }
+        finally
+        {
+            // Always cleanup bootstrap container if it was created
+            if (bootstrapContainer != null)
+            {
+                _logger.LogInformation("Cleaning up bootstrap container...");
+                await StopBootstrapContainerAsync(bootstrapContainer.ContainerId);
+            }
         }
     }
 
@@ -437,13 +570,19 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
     }
 
     /// <inheritdoc/>
-    public async Task CleanupFailedSpawnAsync(string volumeName, string? bootstrapPath = null)
+    public async Task CleanupFailedSpawnAsync(string volumeName, string? bootstrapPath = null, string? bootstrapContainerId = null)
     {
-        _logger.LogInformation("Cleaning up failed spawn (volume: {VolumeName}, bootstrap: {BootstrapPath})",
-            volumeName, bootstrapPath ?? "none");
+        _logger.LogInformation("Cleaning up failed spawn (volume: {VolumeName}, bootstrap: {BootstrapPath}, container: {ContainerId})",
+            volumeName, bootstrapPath ?? "none", bootstrapContainerId ?? "none");
 
         try
         {
+            // Cleanup bootstrap container first
+            if (!string.IsNullOrEmpty(bootstrapContainerId))
+            {
+                await StopBootstrapContainerAsync(bootstrapContainerId, remove: true);
+            }
+
             // Remove Docker volume
             if (!string.IsNullOrEmpty(volumeName))
             {
@@ -477,6 +616,146 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error during cleanup");
+        }
+    }
+
+    /// <summary>
+    /// Ensures the PKS bootstrap image is available, building it if necessary
+    /// </summary>
+    /// <param name="imageName">Name of the bootstrap image (default: pks-devcontainer-bootstrap)</param>
+    /// <param name="imageTag">Tag for the bootstrap image (default: latest)</param>
+    /// <returns>Result containing success status and image ID</returns>
+    private async Task<BootstrapImageResult> EnsureBootstrapImageAsync(
+        string imageName = "pks-devcontainer-bootstrap",
+        string imageTag = "latest")
+    {
+        var startTime = DateTime.UtcNow;
+        var fullImageName = $"{imageName}:{imageTag}";
+
+        try
+        {
+            _logger.LogDebug("Checking for bootstrap image: {ImageName}", fullImageName);
+
+            // Step 1: Check if image already exists
+            var images = await _dockerClient.Images.ListImagesAsync(new ImagesListParameters
+            {
+                Filters = new Dictionary<string, IDictionary<string, bool>>
+                {
+                    ["reference"] = new Dictionary<string, bool>
+                    {
+                        [fullImageName] = true
+                    }
+                }
+            });
+
+            if (images.Count > 0)
+            {
+                var existingImage = images[0];
+                _logger.LogInformation("Bootstrap image already exists: {ImageId}", existingImage.ID);
+
+                return new BootstrapImageResult
+                {
+                    Success = true,
+                    ImageId = existingImage.ID,
+                    ImageName = fullImageName,
+                    WasBuilt = false,
+                    BuildDuration = TimeSpan.Zero,
+                    Message = "Bootstrap image already exists"
+                };
+            }
+
+            _logger.LogInformation("Bootstrap image not found, building from embedded Dockerfile...");
+
+            // Step 2: Read embedded Dockerfile from assembly resources
+            var assembly = typeof(DevcontainerSpawnerService).Assembly;
+            var resourceName = "PKS.Infrastructure.Services.Resources.bootstrap.Dockerfile";
+
+            string dockerfileContent;
+            using (var stream = assembly.GetManifestResourceStream(resourceName))
+            {
+                if (stream == null)
+                {
+                    _logger.LogError("Embedded Dockerfile not found: {ResourceName}", resourceName);
+                    return new BootstrapImageResult
+                    {
+                        Success = false,
+                        Message = $"Embedded Dockerfile not found: {resourceName}"
+                    };
+                }
+
+                using var reader = new StreamReader(stream);
+                dockerfileContent = await reader.ReadToEndAsync();
+            }
+
+            _logger.LogDebug("Successfully read embedded Dockerfile ({Length} bytes)", dockerfileContent.Length);
+
+            // Step 3: Create temporary build context directory
+            var tempBuildContext = Path.Combine(
+                Path.GetTempPath(),
+                $"pks-bootstrap-build-{Guid.NewGuid().ToString("N")[..8]}");
+
+            Directory.CreateDirectory(tempBuildContext);
+            _logger.LogDebug("Created temporary build context: {TempPath}", tempBuildContext);
+
+            try
+            {
+                // Step 4: Write Dockerfile to temp directory
+                var dockerfilePath = Path.Combine(tempBuildContext, "Dockerfile");
+                await File.WriteAllTextAsync(dockerfilePath, dockerfileContent);
+                _logger.LogDebug("Wrote Dockerfile to: {DockerfilePath}", dockerfilePath);
+
+                // Step 5: Build the image using docker build
+                _logger.LogInformation("Building bootstrap image: {ImageName}", fullImageName);
+
+                var buildArgs = $"build -t {fullImageName} \"{tempBuildContext}\"";
+                var buildOutput = await RunDockerCommandAsync(buildArgs);
+
+                _logger.LogDebug("Docker build output: {Output}", buildOutput);
+
+                // Step 6: Get the image ID using docker inspect
+                var inspectOutput = await RunDockerCommandAsync($"inspect --format={{{{.Id}}}} {fullImageName}");
+                var imageId = inspectOutput.Trim();
+
+                _logger.LogInformation("Bootstrap image built successfully: {ImageId}", imageId);
+
+                var duration = DateTime.UtcNow - startTime;
+
+                return new BootstrapImageResult
+                {
+                    Success = true,
+                    ImageId = imageId,
+                    ImageName = fullImageName,
+                    WasBuilt = true,
+                    BuildDuration = duration,
+                    Message = $"Bootstrap image built successfully in {duration.TotalSeconds:F1}s"
+                };
+            }
+            finally
+            {
+                // Step 7: Cleanup temp directory
+                try
+                {
+                    if (Directory.Exists(tempBuildContext))
+                    {
+                        Directory.Delete(tempBuildContext, recursive: true);
+                        _logger.LogDebug("Cleaned up temporary build context: {TempPath}", tempBuildContext);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to cleanup temporary build context: {TempPath}", tempBuildContext);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to ensure bootstrap image: {ImageName}", fullImageName);
+
+            return new BootstrapImageResult
+            {
+                Success = false,
+                Message = $"Failed to ensure bootstrap image: {ex.Message}"
+            };
         }
     }
 
@@ -862,19 +1141,33 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
     /// </summary>
     private async Task<string> RunCommandAsync(string fileName, string arguments, int timeoutSeconds = 120, string? workingDirectory = null)
     {
-        // On Windows, wrap npm/node commands in cmd.exe for proper PATH resolution
-        // This ensures npm global binaries like 'devcontainer' are found
+        // On Windows, we need different handling for different commands:
+        // - devcontainer: Run directly - its .cmd wrapper handles bash/Git Bash
+        // - code/code-insiders: Wrap in cmd.exe for PATH resolution
         string actualFileName = fileName;
         string actualArguments = arguments;
 
-        if (OperatingSystem.IsWindows() &&
-            (fileName.Equals("devcontainer", StringComparison.OrdinalIgnoreCase) ||
-             fileName.Equals("code", StringComparison.OrdinalIgnoreCase) ||
-             fileName.Equals("code-insiders", StringComparison.OrdinalIgnoreCase)))
+        if (OperatingSystem.IsWindows())
         {
-            actualFileName = "cmd.exe";
-            actualArguments = $"/c {fileName} {arguments}";
-            _logger.LogDebug("Windows: Wrapping command in cmd.exe: {Command}", actualArguments);
+            // For VS Code, wrap in cmd.exe
+            if (fileName.Equals("code", StringComparison.OrdinalIgnoreCase) ||
+                fileName.Equals("code-insiders", StringComparison.OrdinalIgnoreCase))
+            {
+                actualFileName = "cmd.exe";
+                actualArguments = $"/c {fileName} {arguments}";
+                _logger.LogDebug("Windows: Wrapping VS Code command in cmd.exe: {Command}", actualArguments);
+            }
+            // For devcontainer, run directly - the .cmd wrapper handles shell resolution
+            // This allows initializeCommand to use Git Bash or WSL for bash scripts
+            else if (fileName.Equals("devcontainer", StringComparison.OrdinalIgnoreCase))
+            {
+                // Add .cmd extension if not present for direct execution
+                actualFileName = fileName.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)
+                    ? fileName
+                    : $"{fileName}.cmd";
+                actualArguments = arguments;
+                _logger.LogDebug("Windows: Running devcontainer directly: {Command} {Args}", actualFileName, actualArguments);
+            }
         }
 
         var startInfo = new ProcessStartInfo
@@ -947,6 +1240,371 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
         }
 
         return output;
+    }
+
+    /// <summary>
+    /// Starts a bootstrap container with volume mount and Docker socket access
+    /// </summary>
+    /// <param name="config">Bootstrap container configuration</param>
+    /// <returns>Information about the started bootstrap container</returns>
+    private async Task<BootstrapContainerInfo> StartBootstrapContainerAsync(BootstrapContainerConfig config)
+    {
+        _logger.LogDebug("Starting bootstrap container for project: {ProjectName}", config.ProjectName);
+
+        var containerName = $"{config.ContainerNamePrefix}-{config.ProjectName}-{Guid.NewGuid().ToString("N")[..8]}";
+        var imageName = $"{config.ImageName}:{config.ImageTag}";
+
+        // Determine Docker socket path based on platform
+        string dockerSocketPath;
+        string dockerSocketMount;
+
+        if (OperatingSystem.IsWindows())
+        {
+            // Windows uses named pipe
+            dockerSocketPath = "//./pipe/docker_engine";
+            dockerSocketMount = "//./pipe/docker_engine://./pipe/docker_engine";
+        }
+        else
+        {
+            // Unix systems use socket file
+            dockerSocketPath = "/var/run/docker.sock";
+            dockerSocketMount = "/var/run/docker.sock:/var/run/docker.sock";
+        }
+
+        _logger.LogDebug("Using Docker socket: {SocketPath}", dockerSocketPath);
+
+        // Build labels dictionary
+        var labels = new Dictionary<string, string>(config.Labels)
+        {
+            ["devcontainer.project"] = config.ProjectName,
+            ["devcontainer.volume"] = config.VolumeName
+        };
+
+        // Create container configuration
+        var createParams = new CreateContainerParameters
+        {
+            Image = imageName,
+            Name = containerName,
+            Labels = labels,
+            WorkingDir = config.WorkspacePath,
+            Cmd = new[] { "sleep", "infinity" },
+            HostConfig = new HostConfig
+            {
+                Binds = new List<string>
+                {
+                    $"{config.VolumeName}:{config.WorkspacePath}"
+                }
+            }
+        };
+
+        // Add Docker socket mount if enabled
+        if (config.MountDockerSocket)
+        {
+            createParams.HostConfig.Binds.Add(dockerSocketMount);
+            _logger.LogDebug("Docker socket mounted in bootstrap container");
+        }
+
+        _logger.LogDebug("Creating bootstrap container: {ContainerName}", containerName);
+
+        // Create the container
+        var response = await _dockerClient.Containers.CreateContainerAsync(createParams);
+
+        _logger.LogDebug("Starting bootstrap container: {ContainerId}", response.ID);
+
+        // Start the container
+        await _dockerClient.Containers.StartContainerAsync(
+            response.ID,
+            new ContainerStartParameters());
+
+        _logger.LogInformation("Bootstrap container started: {ContainerId}", response.ID);
+
+        return new BootstrapContainerInfo
+        {
+            ContainerId = response.ID,
+            ContainerName = containerName,
+            StartedAt = DateTime.UtcNow,
+            VolumeName = config.VolumeName,
+            ProjectName = config.ProjectName
+        };
+    }
+
+    /// <summary>
+    /// Executes a command inside the bootstrap container
+    /// </summary>
+    /// <param name="containerId">ID of the bootstrap container</param>
+    /// <param name="command">Command to execute</param>
+    /// <param name="workingDir">Working directory for command execution</param>
+    /// <param name="timeoutSeconds">Timeout in seconds (default: 120)</param>
+    /// <returns>Result of the command execution including output and exit code</returns>
+    private async Task<BootstrapExecutionResult> ExecuteInBootstrapAsync(
+        string containerId,
+        string command,
+        string? workingDir = null,
+        int timeoutSeconds = 120)
+    {
+        var startTime = DateTime.UtcNow;
+        _logger.LogDebug("Executing command in bootstrap container {ContainerId}: {Command}", containerId, command);
+
+        try
+        {
+            // Create exec instance
+            var execCreateParams = new ContainerExecCreateParameters
+            {
+                Cmd = new[] { "/bin/sh", "-c", command },
+                AttachStdout = true,
+                AttachStderr = true,
+                WorkingDir = workingDir
+            };
+
+            var execCreateResponse = await _dockerClient.Exec.ExecCreateContainerAsync(containerId, execCreateParams);
+            _logger.LogDebug("Exec created: {ExecId}", execCreateResponse.ID);
+
+            // Start exec and attach to streams
+            var stream = await _dockerClient.Exec.StartAndAttachContainerExecAsync(
+                execCreateResponse.ID,
+                tty: false);
+
+            // Read output with timeout
+            var outputBuilder = new StringBuilder();
+            var errorBuilder = new StringBuilder();
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+
+            try
+            {
+                await ReadOutputToEndAsync(stream, outputBuilder, errorBuilder, cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("Command execution timed out after {Timeout} seconds", timeoutSeconds);
+                return new BootstrapExecutionResult
+                {
+                    Success = false,
+                    Output = outputBuilder.ToString(),
+                    Error = $"Command timed out after {timeoutSeconds} seconds",
+                    ExitCode = -1,
+                    Duration = DateTime.UtcNow - startTime
+                };
+            }
+
+            // Inspect exec to get exit code
+            var execInspect = await _dockerClient.Exec.InspectContainerExecAsync(execCreateResponse.ID);
+
+            var output = outputBuilder.ToString();
+            var error = errorBuilder.ToString();
+            var exitCode = (int)execInspect.ExitCode;
+
+            _logger.LogDebug("Command completed with exit code: {ExitCode}", exitCode);
+
+            return new BootstrapExecutionResult
+            {
+                Success = exitCode == 0,
+                Output = output,
+                Error = error,
+                ExitCode = exitCode,
+                Duration = DateTime.UtcNow - startTime
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error executing command in bootstrap container");
+            return new BootstrapExecutionResult
+            {
+                Success = false,
+                Output = string.Empty,
+                Error = $"Execution failed: {ex.Message}",
+                ExitCode = -1,
+                Duration = DateTime.UtcNow - startTime
+            };
+        }
+    }
+
+    /// <summary>
+    /// Reads multiplexed stream output to completion
+    /// </summary>
+    private async Task ReadOutputToEndAsync(
+        MultiplexedStream stream,
+        StringBuilder outputBuilder,
+        StringBuilder errorBuilder,
+        CancellationToken cancellationToken)
+    {
+        var buffer = new byte[4096];
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var result = await stream.ReadOutputAsync(buffer, 0, buffer.Length, cancellationToken);
+
+            if (result.EOF)
+            {
+                break;
+            }
+
+            if (result.Count > 0)
+            {
+                var text = Encoding.UTF8.GetString(buffer, 0, result.Count);
+
+                if (result.Target == MultiplexedStream.TargetStream.StandardOut)
+                {
+                    outputBuilder.Append(text);
+                }
+                else if (result.Target == MultiplexedStream.TargetStream.StandardError)
+                {
+                    errorBuilder.Append(text);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Copies files to volume via bootstrap container
+    /// </summary>
+    /// <param name="bootstrapContainerId">ID of the bootstrap container</param>
+    /// <param name="sourcePath">Source path on host machine</param>
+    /// <param name="destPath">Destination path in volume (mounted in bootstrap)</param>
+    private async Task CopyFilesToBootstrapVolumeAsync(string bootstrapContainerId, string sourcePath, string destPath)
+    {
+        _logger.LogDebug("Copying files to bootstrap volume: {SourcePath} -> {DestPath}", sourcePath, destPath);
+
+        // Create destination directory in bootstrap container
+        var mkdirCommand = $"mkdir -p {destPath}";
+        var mkdirResult = await ExecuteInBootstrapAsync(bootstrapContainerId, mkdirCommand);
+
+        if (!mkdirResult.Success)
+        {
+            throw new InvalidOperationException(
+                $"Failed to create destination directory in bootstrap container: {mkdirResult.Error}");
+        }
+
+        _logger.LogDebug("Created destination directory: {DestPath}", destPath);
+
+        // Use docker cp to copy files to bootstrap container
+        await RunDockerCommandAsync($"cp \"{sourcePath}/.\" {bootstrapContainerId}:{destPath}");
+
+        _logger.LogDebug("Files copied to bootstrap container");
+
+        // Verify copy with ls -la
+        var verifyCommand = $"ls -la {destPath}";
+        var verifyResult = await ExecuteInBootstrapAsync(bootstrapContainerId, verifyCommand);
+
+        if (verifyResult.Success)
+        {
+            _logger.LogInformation("Files copied successfully to bootstrap volume. Contents: {Output}",
+                verifyResult.Output);
+        }
+        else
+        {
+            _logger.LogWarning("Could not verify file copy: {Error}", verifyResult.Error);
+        }
+    }
+
+    /// <summary>
+    /// Runs devcontainer up command inside bootstrap container
+    /// </summary>
+    /// <param name="bootstrapContainerId">ID of the bootstrap container</param>
+    /// <param name="workspaceFolder">Workspace folder path inside bootstrap container</param>
+    /// <returns>Parsed result from devcontainer CLI</returns>
+    private async Task<DevcontainerUpResult> RunDevcontainerUpInBootstrapAsync(
+        string bootstrapContainerId,
+        string workspaceFolder)
+    {
+        _logger.LogDebug("Running devcontainer up in bootstrap container: {WorkspaceFolder}", workspaceFolder);
+
+        // Build command: devcontainer up --workspace-folder {workspaceFolder}
+        var devcontainerCommand = $"devcontainer up --workspace-folder {workspaceFolder}";
+
+        // Execute using ExecuteInBootstrapAsync with 600 second timeout
+        var result = await ExecuteInBootstrapAsync(
+            bootstrapContainerId,
+            devcontainerCommand,
+            workingDir: null,
+            timeoutSeconds: 600);
+
+        if (!result.Success)
+        {
+            throw new InvalidOperationException(
+                $"devcontainer up failed in bootstrap container: {result.Error}");
+        }
+
+        _logger.LogDebug("devcontainer up output: {Output}", result.Output);
+
+        // Parse JSON output from last line that starts with {
+        var lines = result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var jsonLine = lines.LastOrDefault(line => line.TrimStart().StartsWith("{"));
+
+        if (string.IsNullOrEmpty(jsonLine))
+        {
+            throw new InvalidOperationException(
+                "Could not find JSON output from devcontainer up command");
+        }
+
+        _logger.LogDebug("Parsing JSON line: {JsonLine}", jsonLine);
+
+        // Deserialize to DevcontainerUpResult
+        try
+        {
+            var upResult = JsonSerializer.Deserialize<DevcontainerUpResult>(jsonLine);
+
+            if (upResult == null)
+            {
+                throw new InvalidOperationException("Failed to deserialize devcontainer up result");
+            }
+
+            _logger.LogInformation("devcontainer up completed with outcome: {Outcome}, containerId: {ContainerId}",
+                upResult.Outcome, upResult.ContainerId);
+
+            return upResult;
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogError(ex, "Failed to parse devcontainer up JSON output: {JsonLine}", jsonLine);
+            throw new InvalidOperationException(
+                $"Failed to parse devcontainer up output: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Stops and optionally removes the bootstrap container
+    /// </summary>
+    /// <param name="containerId">ID of the bootstrap container to stop</param>
+    /// <param name="remove">Whether to remove the container after stopping (default: true)</param>
+    private async Task StopBootstrapContainerAsync(string containerId, bool remove = true)
+    {
+        try
+        {
+            _logger.LogDebug("Stopping bootstrap container: {ContainerId}", containerId);
+
+            // Stop container with timeout
+            await _dockerClient.Containers.StopContainerAsync(
+                containerId,
+                new ContainerStopParameters
+                {
+                    WaitBeforeKillSeconds = 10
+                });
+
+            if (remove)
+            {
+                _logger.LogDebug("Removing bootstrap container: {ContainerId}", containerId);
+
+                // Remove container
+                await _dockerClient.Containers.RemoveContainerAsync(
+                    containerId,
+                    new ContainerRemoveParameters
+                    {
+                        Force = true
+                    });
+
+                _logger.LogInformation("Bootstrap container stopped and removed: {ContainerId}", containerId);
+            }
+            else
+            {
+                _logger.LogInformation("Bootstrap container stopped: {ContainerId}", containerId);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Best-effort cleanup - don't throw exceptions
+            _logger.LogWarning(ex, "Failed to stop/remove bootstrap container: {ContainerId}", containerId);
+        }
     }
 
     #endregion

@@ -424,6 +424,16 @@ public class DevcontainerSpawnOptions
     /// Spawn mode (Local or Remote)
     /// </summary>
     public SpawnMode Mode { get; set; } = SpawnMode.Local;
+
+    /// <summary>
+    /// Use bootstrap container approach (default: true)
+    /// </summary>
+    public bool UseBootstrapContainer { get; set; } = true;
+
+    /// <summary>
+    /// Custom bootstrap configuration (optional)
+    /// </summary>
+    public BootstrapContainerConfig? BootstrapConfig { get; set; }
 }
 
 /// <summary>
@@ -475,6 +485,16 @@ public class DevcontainerSpawnResult
     /// Last completed step in the spawn workflow
     /// </summary>
     public DevcontainerSpawnStep CompletedStep { get; set; }
+
+    /// <summary>
+    /// Bootstrap container ID (if used)
+    /// </summary>
+    public string? BootstrapContainerId { get; set; }
+
+    /// <summary>
+    /// Bootstrap container logs (for debugging failures)
+    /// </summary>
+    public string? BootstrapLogs { get; set; }
 }
 
 /// <summary>
@@ -485,12 +505,14 @@ public enum DevcontainerSpawnStep
     None = 0,
     DockerCheck = 1,
     DevcontainerCliCheck = 2,
-    VolumeCreation = 3,
-    FileCopy = 4,
-    BootstrapCreation = 5,
-    DevcontainerUp = 6,
-    VsCodeLaunch = 7,
-    Completed = 8
+    BootstrapImageCheck = 3,
+    VolumeCreation = 4,
+    BootstrapContainerStart = 5,
+    FileCopyToBootstrap = 6,
+    DevcontainerUp = 7,
+    BootstrapCleanup = 8,
+    VsCodeLaunch = 9,
+    Completed = 10
 }
 
 /// <summary>
@@ -727,4 +749,61 @@ public class RemoteHostConfig
     /// Path to SSH private key file
     /// </summary>
     public string? KeyPath { get; set; }
+}
+
+/// <summary>
+/// Configuration for bootstrap container execution
+/// </summary>
+public class BootstrapContainerConfig
+{
+    public string ImageName { get; set; } = "pks-devcontainer-bootstrap";
+    public string ImageTag { get; set; } = "latest";
+    public string ContainerNamePrefix { get; set; } = "pks-bootstrap";
+    public string VolumeName { get; set; } = string.Empty;
+    public string ProjectName { get; set; } = string.Empty;
+    public string WorkspacePath { get; set; } = string.Empty;
+    public bool MountDockerSocket { get; set; } = true;
+    public int TimeoutSeconds { get; set; } = 600;
+    public Dictionary<string, string> Labels { get; set; } = new()
+    {
+        { "pks.managed", "true" },
+        { "pks.bootstrap", "true" }
+    };
+}
+
+/// <summary>
+/// Information about a running bootstrap container
+/// </summary>
+public class BootstrapContainerInfo
+{
+    public string ContainerId { get; set; } = string.Empty;
+    public string ContainerName { get; set; } = string.Empty;
+    public DateTime StartedAt { get; set; }
+    public string VolumeName { get; set; } = string.Empty;
+    public string ProjectName { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Result of executing a command in bootstrap container
+/// </summary>
+public class BootstrapExecutionResult
+{
+    public bool Success { get; set; }
+    public string Output { get; set; } = string.Empty;
+    public string Error { get; set; } = string.Empty;
+    public int ExitCode { get; set; }
+    public TimeSpan Duration { get; set; }
+}
+
+/// <summary>
+/// Result of ensuring bootstrap image is available
+/// </summary>
+public class BootstrapImageResult
+{
+    public bool Success { get; set; }
+    public string ImageId { get; set; } = string.Empty;
+    public string ImageName { get; set; } = string.Empty;
+    public bool WasBuilt { get; set; }
+    public TimeSpan BuildDuration { get; set; }
+    public string Message { get; set; } = string.Empty;
 }

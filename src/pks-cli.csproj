@@ -44,4 +44,8 @@
     </Content>
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Infrastructure\Resources\bootstrap.Dockerfile" />
+  </ItemGroup>
+
 </Project>

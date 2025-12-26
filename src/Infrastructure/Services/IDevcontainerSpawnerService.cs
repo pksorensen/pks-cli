@@ -44,7 +44,8 @@ public interface IDevcontainerSpawnerService
     /// </summary>
     /// <param name="volumeName">Name of the volume to remove</param>
     /// <param name="bootstrapPath">Optional path to bootstrap script to delete</param>
-    Task CleanupFailedSpawnAsync(string volumeName, string? bootstrapPath = null);
+    /// <param name="bootstrapContainerId">Optional bootstrap container ID to stop and remove</param>
+    Task CleanupFailedSpawnAsync(string volumeName, string? bootstrapPath = null, string? bootstrapContainerId = null);
 
     /// <summary>
     /// Finds existing devcontainer for a project path

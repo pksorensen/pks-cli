@@ -577,7 +577,7 @@ public static class ServiceMockFactory
             });
 
         // Setup CleanupFailedSpawnAsync
-        mock.Setup(x => x.CleanupFailedSpawnAsync(It.IsAny<string>(), It.IsAny<string>()))
+        mock.Setup(x => x.CleanupFailedSpawnAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .Returns(Task.CompletedTask);
 
         // Setup FindExistingContainerAsync
