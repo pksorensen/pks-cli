@@ -1,0 +1,265 @@
+name: Release Template
+
+on:
+  workflow_call:
+    inputs:
+      template:
+        description: 'Template name (e.g., devcontainer, claude-dotnet-9)'
+        required: true
+        type: string
+      template_path:
+        description: 'Path to template directory (e.g., templates/devcontainer)'
+        required: true
+        type: string
+      package_id:
+        description: 'NuGet package ID (e.g., pks-cli.templates.devcontainer)'
+        required: true
+        type: string
+      config_file:
+        description: 'Path to .releaserc config file (e.g., .releaserc.template-devcontainer.json)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  packages: write
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_NOLOGO: true
+  GIT_AUTHOR_NAME: "github-actions[bot]"
+  GIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
+  GIT_COMMITTER_NAME: "github-actions[bot]"
+  GIT_COMMITTER_EMAIL: "github-actions[bot]@users.noreply.github.com"
+
+jobs:
+  release-template:
+    name: Release ${{ inputs.template }} Template
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.npm
+          ~/.nuget/packages
+        key: ${{ runner.os }}-template-${{ inputs.template }}-deps-${{ hashFiles('**/package-lock.json', format('{0}/*.csproj', inputs.template_path)) }}
+        restore-keys: |
+          ${{ runner.os }}-template-${{ inputs.template }}-deps-
+
+    - name: Install semantic-release
+      run: |
+        npm install -g \
+          semantic-release \
+          @semantic-release/changelog \
+          @semantic-release/git \
+          @semantic-release/github \
+          @semantic-release/exec \
+          conventional-changelog-conventionalcommits
+
+    - name: Restore dependencies
+      run: |
+        echo "📦 Restoring dependencies for ${{ inputs.template }} template..."
+        # Find the .csproj file in the template directory
+        CSPROJ_FILE=$(find "${{ inputs.template_path }}" -maxdepth 1 -name "*.csproj" | head -n 1)
+
+        if [ -z "$CSPROJ_FILE" ]; then
+          echo "❌ Error: No .csproj file found in ${{ inputs.template_path }}"
+          exit 1
+        fi
+
+        echo "Found project file: $CSPROJ_FILE"
+        dotnet restore "$CSPROJ_FILE"
+
+    - name: Build template project
+      run: |
+        echo "🔨 Building ${{ inputs.template }} template..."
+        # Find the .csproj file in the template directory
+        CSPROJ_FILE=$(find "${{ inputs.template_path }}" -maxdepth 1 -name "*.csproj" | head -n 1)
+
+        if [ -z "$CSPROJ_FILE" ]; then
+          echo "❌ Error: No .csproj file found in ${{ inputs.template_path }}"
+          exit 1
+        fi
+
+        echo "Building project: $CSPROJ_FILE"
+        dotnet build "$CSPROJ_FILE" --configuration Release --no-restore
+        echo "✅ Build completed successfully"
+
+    - name: Run semantic-release
+      id: semantic
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "🚀 Running semantic release for ${{ inputs.template }} template..."
+        if [ ! -f "${{ inputs.config_file }}" ]; then
+          echo "❌ Error: Config file not found: ${{ inputs.config_file }}"
+          exit 1
+        fi
+        npx semantic-release --extends "${{ inputs.config_file }}"
+
+    - name: Create NuGet package
+      id: pack
+      run: |
+        # Get the latest tag for this template (which semantic-release may have just created)
+        # Template tags follow pattern: template-name-v1.0.0
+        TAG_PREFIX="${{ inputs.template }}-v"
+        LATEST_TAG=$(git tag --sort=-version:refname | grep "^${TAG_PREFIX}" | head -n 1 || echo "")
+
+        if [ -n "$LATEST_TAG" ]; then
+          # Extract version from tag (e.g., devcontainer-v1.0.0 -> 1.0.0)
+          VERSION=${LATEST_TAG#${TAG_PREFIX}}
+          echo "📦 Creating ${{ inputs.template }} package with version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "released=true" >> $GITHUB_OUTPUT
+
+          # Create packages directory
+          mkdir -p packages
+
+          # Find the .csproj file
+          CSPROJ_FILE=$(find "${{ inputs.template_path }}" -maxdepth 1 -name "*.csproj" | head -n 1)
+
+          if [ -z "$CSPROJ_FILE" ]; then
+            echo "❌ Error: No .csproj file found in ${{ inputs.template_path }}"
+            exit 1
+          fi
+
+          # Pack template project with the correct version
+          dotnet pack "$CSPROJ_FILE" \
+            --configuration Release \
+            --output ./packages \
+            --no-build \
+            -p:PackageVersion=$VERSION \
+            -p:PackageId=${{ inputs.package_id }}
+
+          echo "✅ Package created successfully"
+          ls -lh packages/
+        else
+          echo "ℹ️ No release tag found for ${{ inputs.template }}, skipping package creation"
+          echo "released=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Publish to NuGet.org
+      if: steps.pack.outputs.released == 'true'
+      env:
+        NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+      run: |
+        if [ -n "$NUGET_API_KEY" ]; then
+          VERSION=${{ steps.pack.outputs.version }}
+
+          if [[ $VERSION == *"-rc."* ]] || [[ $VERSION == *"-dev."* ]]; then
+            echo "📦 Publishing ${{ inputs.template }} PRE-RELEASE template (v$VERSION) to NuGet.org..."
+          else
+            echo "📦 Publishing ${{ inputs.template }} RELEASE template (v$VERSION) to NuGet.org..."
+          fi
+
+          for package in packages/*.nupkg; do
+            if [ -f "$package" ]; then
+              echo "Publishing $(basename $package)"
+              dotnet nuget push "$package" \
+                --api-key "$NUGET_API_KEY" \
+                --source https://api.nuget.org/v3/index.json \
+                --skip-duplicate || echo "⚠️ Failed to publish $package (may already exist)"
+            fi
+          done
+
+          echo "✅ NuGet publish completed"
+        else
+          echo "⚠️ NUGET_API_KEY not set, skipping NuGet publish"
+        fi
+
+    - name: Upload package as artifact
+      if: steps.pack.outputs.released == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: template-${{ inputs.template }}-package-${{ steps.pack.outputs.version }}
+        path: packages/*.nupkg
+        retention-days: 30
+
+    - name: Generate Release Summary
+      if: always()
+      run: |
+        echo "# 📦 ${{ inputs.template }} Template Release Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        # Check if a release was created
+        TAG_PREFIX="${{ inputs.template }}-v"
+        LATEST_TAG=$(git tag --sort=-version:refname | grep "^${TAG_PREFIX}" | head -n 1 || echo "")
+
+        if [ -n "$LATEST_TAG" ]; then
+          VERSION=${LATEST_TAG#${TAG_PREFIX}}
+
+          # Determine release type
+          if [[ $VERSION == *"-rc."* ]] || [[ $VERSION == *"-dev."* ]]; then
+            RELEASE_TYPE="Pre-release"
+            EMOJI="🔶"
+          else
+            RELEASE_TYPE="Stable Release"
+            EMOJI="✅"
+          fi
+
+          echo "## $EMOJI Template $RELEASE_TYPE Created" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Template:** \`${{ inputs.template }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** \`$VERSION\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Package ID:** \`${{ inputs.package_id }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # List package created
+          if [ -d "packages" ] && [ "$(ls -A packages/*.nupkg 2>/dev/null)" ]; then
+            echo "### 📦 Package Created" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            for package in packages/*.nupkg; do
+              if [ -f "$package" ]; then
+                PACKAGE_NAME=$(basename "$package")
+                PACKAGE_SIZE=$(ls -lh "$package" | awk '{print $5}')
+                echo "- ✅ \`$PACKAGE_NAME\` ($PACKAGE_SIZE)" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Add links
+          echo "### 🔗 Quick Links" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- [View Release on GitHub](https://github.com/${{ github.repository }}/releases/tag/$LATEST_TAG)" >> $GITHUB_STEP_SUMMARY
+          echo "- [View on NuGet.org](https://www.nuget.org/packages/${{ inputs.package_id }}/$VERSION)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Installation command
+          echo "### 💻 Installation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [[ $VERSION == *"-rc."* ]] || [[ $VERSION == *"-dev."* ]]; then
+            echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+            echo "dotnet new install ${{ inputs.package_id }}::$VERSION --force" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+            echo "dotnet new install ${{ inputs.package_id }}::$VERSION" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi
+        else
+          echo "## ℹ️ No ${{ inputs.template }} Template Release Created" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "No new version was released for the ${{ inputs.template }} template package." >> $GITHUB_STEP_SUMMARY
+        fi

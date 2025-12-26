@@ -1,0 +1,187 @@
+{
+  "tagFormat": "v${version}",
+  "branches": [
+    "main",
+    {
+      "name": "vnext",
+      "prerelease": "rc"
+    },
+    {
+      "name": "develop",
+      "prerelease": "dev"
+    }
+  ],
+  "plugins": [
+    [
+      "@semantic-release/commit-analyzer",
+      {
+        "preset": "conventionalcommits",
+        "releaseRules": [
+          {
+            "type": "feat",
+            "release": "minor"
+          },
+          {
+            "type": "fix",
+            "release": "patch"
+          },
+          {
+            "type": "perf",
+            "release": "patch"
+          },
+          {
+            "type": "revert",
+            "release": "patch"
+          },
+          {
+            "type": "docs",
+            "scope": "README",
+            "release": "patch"
+          },
+          {
+            "type": "style",
+            "release": false
+          },
+          {
+            "type": "chore",
+            "release": false
+          },
+          {
+            "type": "refactor",
+            "release": false
+          },
+          {
+            "type": "test",
+            "release": false
+          },
+          {
+            "type": "build",
+            "release": false
+          },
+          {
+            "type": "ci",
+            "release": false
+          },
+          {
+            "breaking": true,
+            "release": "major"
+          },
+          {
+            "revert": true,
+            "release": "patch"
+          }
+        ],
+        "parserOpts": {
+          "noteKeywords": [
+            "BREAKING CHANGE",
+            "BREAKING CHANGES",
+            "BREAKING"
+          ]
+        }
+      }
+    ],
+    [
+      "@semantic-release/release-notes-generator",
+      {
+        "preset": "conventionalcommits",
+        "presetConfig": {
+          "types": [
+            {
+              "type": "feat",
+              "section": "🚀 Features",
+              "hidden": false
+            },
+            {
+              "type": "fix",
+              "section": "🐛 Bug Fixes",
+              "hidden": false
+            },
+            {
+              "type": "perf",
+              "section": "⚡ Performance Improvements",
+              "hidden": false
+            },
+            {
+              "type": "revert",
+              "section": "⏪ Reverts",
+              "hidden": false
+            },
+            {
+              "type": "docs",
+              "section": "📚 Documentation",
+              "hidden": false
+            },
+            {
+              "type": "style",
+              "section": "💄 Styles",
+              "hidden": false
+            },
+            {
+              "type": "chore",
+              "section": "🔧 Chores",
+              "hidden": false
+            },
+            {
+              "type": "refactor",
+              "section": "♻️ Code Refactoring",
+              "hidden": false
+            },
+            {
+              "type": "test",
+              "section": "✅ Tests",
+              "hidden": false
+            },
+            {
+              "type": "build",
+              "section": "📦 Build System",
+              "hidden": false
+            },
+            {
+              "type": "ci",
+              "section": "👷 CI/CD",
+              "hidden": false
+            }
+          ]
+        }
+      }
+    ],
+    [
+      "@semantic-release/exec",
+      {
+        "verifyConditionsCmd": "if [[ '${branch.prerelease}' != 'false' ]] && [[ '${branch.prerelease}' != '' ]]; then cp src/CHANGELOG.md src/CHANGELOG.md.backup 2>/dev/null || true; fi",
+        "prepareCmd": "echo '${nextRelease.version}' > .version && if [[ '${nextRelease.channel}' == '' ]]; then ./scripts/update-version.sh ${nextRelease.version} cli; else echo 'Skipping version update for pre-release ${nextRelease.version}'; fi"
+      }
+    ],
+    [
+      "@semantic-release/changelog",
+      {
+        "changelogFile": "src/CHANGELOG.md"
+      }
+    ],
+    [
+      "@semantic-release/exec",
+      {
+        "prepareCmd": "if [[ '${nextRelease.channel}' != '' ]] && [ -f src/CHANGELOG.md.backup ]; then mv src/CHANGELOG.md.backup src/CHANGELOG.md; echo 'Restored CHANGELOG.md for pre-release'; fi"
+      }
+    ],
+    [
+      "@semantic-release/git",
+      {
+        "assets": [
+          "src/CHANGELOG.md",
+          "src/**/*.csproj",
+          "CHANGELOG.md"
+        ],
+        "message": "chore(release:cli): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}",
+        "successCmd": "if [[ '${nextRelease.channel}' != '' ]]; then echo 'Skipping git commit for pre-release'; exit 1; fi"
+      }
+    ],
+    [
+      "@semantic-release/github",
+      {
+        "successComment": false,
+        "failComment": false
+      }
+    ]
+  ]
+}

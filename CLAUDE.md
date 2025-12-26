@@ -584,3 +584,160 @@ When using the `/triage` command or performing GitHub-related operations, always
 - `owner:pksorensen repo:pks-cli` for more specific queries
 
 This prevents unnecessary API calls to other repositories and keeps the focus on the PKS CLI project.
+
+## Per-Template Semantic Releases
+
+PKS CLI uses an advanced per-template semantic release system that enables independent versioning and releases for each package component.
+
+### Architecture Overview
+
+The release system consists of:
+- **1 CLI package**: `pks-cli` (main tool)
+- **4 Template packages**:
+  - `PKS.Templates.DevContainer`
+  - `PKS.Templates.ClaudeDotNet9`
+  - `PKS.Templates.ClaudeDotNet10.Full`
+  - `PKS.Templates.PksFullstack`
+
+Each package maintains its own version history and releases independently based on changes.
+
+### How It Works
+
+**Change Detection** (`scripts/detect-changes.sh`)
+- Detects which packages have changes since their last release
+- Uses git diff to compare against package-specific tags
+- Outputs JSON indicating which packages need releases
+
+**Package-Specific Tags**
+- CLI: `v1.0.0`, `v1.1.0`, `v2.0.0-rc.1`
+- DevContainer: `devcontainer-v1.0.0`, `devcontainer-v1.1.0`
+- Claude .NET 9: `claude-dotnet-9-v1.0.0`, `claude-dotnet-9-v2.0.0`
+- Claude .NET 10 Full: `claude-dotnet-10-full-v1.0.0`
+- PKS Fullstack: `pks-fullstack-v1.0.0`
+
+**Parallel Execution**
+- Changed packages release in parallel for efficiency
+- Each package gets its own GitHub release
+- Independent NuGet package publishing
+
+### Workflow Structure
+
+```mermaid
+graph TD
+    A[Push to main/vnext/develop] --> B[Detect Changes]
+    B --> C{Which packages changed?}
+    C -->|CLI| D[Release CLI]
+    C -->|Templates| E[Release Templates in Parallel]
+    D --> F[Generate Summary]
+    E --> F
+    F --> G[All Releases Complete]
+```
+
+### Commit Message Scoping
+
+Use conventional commit scopes to target specific packages:
+
+```bash
+# CLI changes
+feat(cli): add new command
+fix(cli): resolve bug in init command
+
+# Template changes
+feat(devcontainer): add Python support
+fix(claude-dotnet-9): correct Aspire configuration
+docs(pks-fullstack): update README
+
+# Cross-package changes (releases all affected)
+feat: add new template parameter system
+fix!: breaking change to template.json schema
+```
+
+### Release Configurations
+
+Each package has its own semantic-release configuration:
+- `.releaserc.cli.json` - CLI releases
+- `.releaserc.templates.devcontainer.json` - DevContainer template
+- `.releaserc.templates.claude-dotnet-9.json` - Claude .NET 9 template
+- `.releaserc.templates.claude-dotnet-10-full.json` - Claude .NET 10 Full template
+- `.releaserc.templates.pks-fullstack.json` - PKS Fullstack template
+
+### Changelogs
+
+Each package maintains its own changelog:
+- CLI: `src/CHANGELOG.md`
+- DevContainer: `templates/devcontainer/CHANGELOG.md`
+- Claude .NET 9: `templates/claude-dotnet-9/CHANGELOG.md`
+- Claude .NET 10 Full: `templates/claude-dotnet-10-full/CHANGELOG.md`
+- PKS Fullstack: `templates/pks-fullstack/CHANGELOG.md`
+
+### Scripts
+
+**Change Detection**: `scripts/detect-changes.sh`
+- Detects which packages have changes
+- Returns JSON: `{"cli": true, "devcontainer": false, ...}`
+
+**Version Update**: `scripts/update-version.sh <version> <scope>`
+- Updates version in .csproj files
+- Scopes: `cli`, `devcontainer`, `claude-dotnet-9`, `claude-dotnet-10-full`, `pks-fullstack`, `all`
+- Example: `./scripts/update-version.sh 1.2.0 cli`
+
+**Get Version**: `scripts/get-package-version.sh <scope>`
+- Retrieves current version from .csproj
+- Example: `./scripts/get-package-version.sh devcontainer`
+
+### Workflows
+
+**Main Orchestrator**: `.github/workflows/semantic-release.yml`
+- Detects changes
+- Orchestrates parallel releases
+- Generates comprehensive summary
+
+**CLI Release**: `.github/workflows/release-cli.yml`
+- Reusable workflow for CLI releases
+- Creates packages and publishes to NuGet.org
+
+**Template Release**: `.github/workflows/release-template.yml`
+- Reusable workflow for template releases
+- Dynamically handles any template package
+
+### Benefits
+
+1. **Independent Versioning**: Templates evolve at their own pace
+2. **Efficient Releases**: Only changed packages are released
+3. **Clear Traceability**: Tags and changelogs per package
+4. **Backward Compatible**: Existing releases unaffected
+5. **Scalable**: Easy to add new templates
+6. **Parallel Execution**: Faster release cycles
+
+### Testing Release Changes
+
+Before pushing release-related changes:
+
+```bash
+# Test change detection locally
+./scripts/detect-changes.sh
+
+# Test version update for specific package
+./scripts/update-version.sh 1.0.1 devcontainer --dry-run
+
+# Check current versions
+./scripts/get-package-version.sh cli
+./scripts/get-package-version.sh devcontainer
+```
+
+### Creating Initial Baseline Tags
+
+For new templates, create initial baseline tags:
+
+```bash
+# Create tags for current version (1.0.0)
+git tag devcontainer-v1.0.0
+git tag claude-dotnet-9-v1.0.0
+git tag claude-dotnet-10-full-v1.0.0
+git tag pks-fullstack-v1.0.0
+
+# Push tags to remote
+git push origin --tags
+```
+
+This establishes the baseline for future change detection.

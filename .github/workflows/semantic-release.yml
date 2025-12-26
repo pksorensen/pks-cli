@@ -20,290 +20,332 @@ env:
   DOTNET_NOLOGO: true
 
 jobs:
-  release:
-    name: Semantic Release
+  detect-changes:
+    name: Detect Changes
     runs-on: ubuntu-latest
-    
+    outputs:
+      cli: ${{ steps.changes.outputs.cli }}
+      devcontainer: ${{ steps.changes.outputs.devcontainer }}
+      claude-dotnet-9: ${{ steps.changes.outputs.claude-dotnet-9 }}
+      claude-dotnet-10-full: ${{ steps.changes.outputs.claude-dotnet-10-full }}
+      pks-fullstack: ${{ steps.changes.outputs.pks-fullstack }}
+      has-templates: ${{ steps.changes.outputs.has-templates }}
+      template-matrix: ${{ steps.changes.outputs.template-matrix }}
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
         token: ${{ secrets.GITHUB_TOKEN }}
-        
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-        
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
-        
-    - name: Cache dependencies
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.npm
-          ~/.nuget/packages
-        key: ${{ runner.os }}-deps-${{ hashFiles('**/package-lock.json', '**/*.csproj') }}
-        restore-keys: |
-          ${{ runner.os }}-deps-
-          
-    - name: Install semantic-release
+
+    - name: Make detect-changes.sh executable
+      run: chmod +x scripts/detect-changes.sh
+
+    - name: Detect changes
+      id: changes
       run: |
-        npm install -g \
-          semantic-release \
-          @semantic-release/changelog \
-          @semantic-release/git \
-          @semantic-release/github \
-          @semantic-release/exec \
-          conventional-changelog-conventionalcommits
-          
-    - name: Get current version and branch info
-      id: current_version
-      run: |
-        # Extract version from main project file
-        VERSION=$(grep -oP '(?<=<Version>)[^<]+' src/pks-cli.csproj || echo "0.0.0")
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "Current version: $VERSION"
-        
-        # Determine if this is a release branch
-        BRANCH_NAME=${GITHUB_REF#refs/heads/}
-        echo "branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
-        echo "Current branch: $BRANCH_NAME"
-        
-        if [[ $BRANCH_NAME == release/* ]]; then
-          # Extract target version from branch name (e.g., release/1.0.0 -> 1.0.0)
-          TARGET_VERSION=${BRANCH_NAME#release/}
-          echo "target_version=$TARGET_VERSION" >> $GITHUB_OUTPUT
-          echo "Target version for pre-releases: $TARGET_VERSION"
-          echo "is_release_branch=true" >> $GITHUB_OUTPUT
-        else
-          echo "is_release_branch=false" >> $GITHUB_OUTPUT
-        fi
-        
-    - name: Build and package .NET projects
-      run: |
-        echo "🔨 Building .NET projects..."
-        
-        # Determine if this is a pre-release branch
-        BRANCH_NAME=${GITHUB_REF#refs/heads/}
-        if [[ $BRANCH_NAME == release/* ]]; then
-          echo "📦 Pre-release branch detected: $BRANCH_NAME"
-          # For pre-release, we'll set version after semantic-release determines it
-          IS_PRERELEASE=true
-        else
-          echo "🚀 Main branch detected: $BRANCH_NAME"
-          IS_PRERELEASE=false
-        fi
-        
-        # Build only the main CLI project and templates, skip tests for now
-        dotnet restore src/pks-cli.csproj
-        dotnet build src/pks-cli.csproj --configuration Release
-        
-        # Build and pack template projects
-        find templates -name "*.csproj" -type f | while read -r template; do
-          echo "Building template: $template"
-          dotnet build "$template" --configuration Release
-        done
-        
-        echo "Build completed, packages will be created after semantic-release determines version"
-        
-    - name: Run semantic-release
-      id: semantic
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        echo "🚀 Running semantic release..."
-        npx semantic-release
-        
-    - name: Create packages with correct version
-      if: success()
-      run: |
-        # Get the latest tag (which semantic-release just created)
-        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-        
-        if [ -n "$LATEST_TAG" ]; then
-          # Remove 'v' prefix to get the version
-          VERSION=${LATEST_TAG#v}
-          echo "📦 Creating packages with version: $VERSION"
-          
-          # Create packages directory
-          mkdir -p packages
-          
-          # Pack CLI project with the correct version
-          dotnet pack src/pks-cli.csproj \
-            --configuration Release \
-            --output ./packages \
-            --no-build \
-            -p:PackageVersion=$VERSION
-            
-          # Pack template projects with the correct version
-          find templates -name "*.csproj" -type f | while read -r template; do
-            echo "Packing template: $template with version $VERSION"
-            dotnet pack "$template" \
-              --configuration Release \
-              --output ./packages \
-              --no-build \
-              -p:PackageVersion=$VERSION
-          done
-          
-          echo "✅ Packages created successfully with version $VERSION"
-          ls -la packages/
-        else
-          echo "❌ No release tag found, skipping package creation"
-        fi
-        
-    - name: Upload packages to release
-      if: success()
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        # Check if any release was created by looking for tags
-        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-        
-        if [ -n "$LATEST_TAG" ] && [ -d "packages" ] && [ "$(ls -A packages/*.nupkg 2>/dev/null)" ]; then
-          echo "📦 Uploading packages to release $LATEST_TAG"
-          
-          # Upload packages to the release
-          for package in packages/*.nupkg; do
-            if [ -f "$package" ]; then
-              echo "Uploading $(basename $package) to release $LATEST_TAG"
-              gh release upload "$LATEST_TAG" "$package" --clobber || echo "Failed to upload $package"
-            fi
-          done
-        else
-          echo "ℹ️ No release tag found or no packages to upload"
-        fi
-        
-    - name: Publish to NuGet
-      if: success()
-      env:
-        NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
-      run: |
-        if [ -n "$NUGET_API_KEY" ] && [ -d "packages" ] && [ "$(ls -A packages/*.nupkg 2>/dev/null)" ]; then
-          BRANCH_NAME=${GITHUB_REF#refs/heads/}
-          
-          if [[ $BRANCH_NAME == release/* ]]; then
-            echo "📦 Publishing PRE-RELEASE packages to NuGet..."
-          else
-            echo "📦 Publishing RELEASE packages to NuGet..."
-          fi
-          
-          for package in packages/*.nupkg; do
-            if [ -f "$package" ]; then
-              echo "Publishing $(basename $package)"
-              dotnet nuget push "$package" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate || echo "Failed to publish $package"
-            fi
-          done
-        else
-          echo "⚠️ NUGET_API_KEY not set or no packages found, skipping NuGet publish"
+        echo "Running change detection..."
+
+        # Run the change detection script
+        CHANGE_JSON=$(scripts/detect-changes.sh)
+
+        echo "Change detection result: $CHANGE_JSON"
+
+        # Parse JSON and set outputs for each package
+        CLI_CHANGED=$(echo "$CHANGE_JSON" | jq -r '.cli')
+        DEVCONTAINER_CHANGED=$(echo "$CHANGE_JSON" | jq -r '.devcontainer')
+        CLAUDE_DOTNET_9_CHANGED=$(echo "$CHANGE_JSON" | jq -r '."claude-dotnet-9"')
+        CLAUDE_DOTNET_10_FULL_CHANGED=$(echo "$CHANGE_JSON" | jq -r '."claude-dotnet-10-full"')
+        PKS_FULLSTACK_CHANGED=$(echo "$CHANGE_JSON" | jq -r '."pks-fullstack"')
+
+        echo "cli=$CLI_CHANGED" >> $GITHUB_OUTPUT
+        echo "devcontainer=$DEVCONTAINER_CHANGED" >> $GITHUB_OUTPUT
+        echo "claude-dotnet-9=$CLAUDE_DOTNET_9_CHANGED" >> $GITHUB_OUTPUT
+        echo "claude-dotnet-10-full=$CLAUDE_DOTNET_10_FULL_CHANGED" >> $GITHUB_OUTPUT
+        echo "pks-fullstack=$PKS_FULLSTACK_CHANGED" >> $GITHUB_OUTPUT
+
+        # Check if any templates have changes
+        HAS_TEMPLATES=false
+        if [[ "$DEVCONTAINER_CHANGED" == "true" ]] || \
+           [[ "$CLAUDE_DOTNET_9_CHANGED" == "true" ]] || \
+           [[ "$CLAUDE_DOTNET_10_FULL_CHANGED" == "true" ]] || \
+           [[ "$PKS_FULLSTACK_CHANGED" == "true" ]]; then
+          HAS_TEMPLATES=true
         fi
 
-    - name: Generate Release Summary
-      if: always()
+        echo "has-templates=$HAS_TEMPLATES" >> $GITHUB_OUTPUT
+
+        # Build matrix for templates that have changes
+        MATRIX_JSON='{"include":['
+        FIRST=true
+
+        if [[ "$DEVCONTAINER_CHANGED" == "true" ]]; then
+          MATRIX_JSON="${MATRIX_JSON}{\"template\":\"devcontainer\",\"template_path\":\"templates/devcontainer\",\"package_id\":\"PKS.Templates.DevContainer\",\"config_file\":\".releaserc.templates.devcontainer.json\"}"
+          FIRST=false
+        fi
+
+        if [[ "$CLAUDE_DOTNET_9_CHANGED" == "true" ]]; then
+          if [[ "$FIRST" == "false" ]]; then MATRIX_JSON="${MATRIX_JSON},"; fi
+          MATRIX_JSON="${MATRIX_JSON}{\"template\":\"claude-dotnet-9\",\"template_path\":\"templates/claude-dotnet-9\",\"package_id\":\"PKS.Templates.ClaudeDotNet9\",\"config_file\":\".releaserc.templates.claude-dotnet-9.json\"}"
+          FIRST=false
+        fi
+
+        if [[ "$CLAUDE_DOTNET_10_FULL_CHANGED" == "true" ]]; then
+          if [[ "$FIRST" == "false" ]]; then MATRIX_JSON="${MATRIX_JSON},"; fi
+          MATRIX_JSON="${MATRIX_JSON}{\"template\":\"claude-dotnet-10-full\",\"template_path\":\"templates/claude-dotnet-10-full\",\"package_id\":\"PKS.Templates.ClaudeDotNet10.Full\",\"config_file\":\".releaserc.templates.claude-dotnet-10-full.json\"}"
+          FIRST=false
+        fi
+
+        if [[ "$PKS_FULLSTACK_CHANGED" == "true" ]]; then
+          if [[ "$FIRST" == "false" ]]; then MATRIX_JSON="${MATRIX_JSON},"; fi
+          MATRIX_JSON="${MATRIX_JSON}{\"template\":\"pks-fullstack\",\"template_path\":\"templates/pks-fullstack\",\"package_id\":\"PKS.Templates.PksFullstack\",\"config_file\":\".releaserc.templates.pks-fullstack.json\"}"
+          FIRST=false
+        fi
+
+        MATRIX_JSON="${MATRIX_JSON}]}"
+
+        echo "template-matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
+        echo "Template matrix: $MATRIX_JSON"
+
+    - name: Generate Detection Summary
+      run: |
+        echo "# 🔍 Change Detection Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Branch:** \`${GITHUB_REF#refs/heads/}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## Package Changes" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        if [[ "${{ steps.changes.outputs.cli }}" == "true" ]]; then
+          echo "- ✅ **CLI**: Changes detected" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- ⏭️ **CLI**: No changes" >> $GITHUB_STEP_SUMMARY
+        fi
+
+        if [[ "${{ steps.changes.outputs.devcontainer }}" == "true" ]]; then
+          echo "- ✅ **devcontainer**: Changes detected" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- ⏭️ **devcontainer**: No changes" >> $GITHUB_STEP_SUMMARY
+        fi
+
+        if [[ "${{ steps.changes.outputs.claude-dotnet-9 }}" == "true" ]]; then
+          echo "- ✅ **claude-dotnet-9**: Changes detected" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- ⏭️ **claude-dotnet-9**: No changes" >> $GITHUB_STEP_SUMMARY
+        fi
+
+        if [[ "${{ steps.changes.outputs.claude-dotnet-10-full }}" == "true" ]]; then
+          echo "- ✅ **claude-dotnet-10-full**: Changes detected" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- ⏭️ **claude-dotnet-10-full**: No changes" >> $GITHUB_STEP_SUMMARY
+        fi
+
+        if [[ "${{ steps.changes.outputs.pks-fullstack }}" == "true" ]]; then
+          echo "- ✅ **pks-fullstack**: Changes detected" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- ⏭️ **pks-fullstack**: No changes" >> $GITHUB_STEP_SUMMARY
+        fi
+
+  release-cli:
+    name: Release CLI
+    needs: detect-changes
+    if: needs.detect-changes.outputs.cli == 'true'
+    uses: ./.github/workflows/release-cli.yml
+    secrets: inherit
+
+  release-templates:
+    name: Release Templates
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has-templates == 'true'
+    strategy:
+      matrix: ${{ fromJson(needs.detect-changes.outputs.template-matrix) }}
+      fail-fast: false
+    uses: ./.github/workflows/release-template.yml
+    with:
+      template: ${{ matrix.template }}
+      template_path: ${{ matrix.template_path }}
+      package_id: ${{ matrix.package_id }}
+      config_file: ${{ matrix.config_file }}
+    secrets: inherit
+
+  summary:
+    name: Release Summary
+    needs: [detect-changes, release-cli, release-templates]
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Generate Comprehensive Summary
       run: |
         echo "# 📦 Semantic Release Summary" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-
-        # Get branch information
-        BRANCH_NAME=${GITHUB_REF#refs/heads/}
-        echo "**Branch:** \`$BRANCH_NAME\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Branch:** \`${GITHUB_REF#refs/heads/}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Workflow:** \`${{ github.workflow }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Run Number:** \`${{ github.run_number }}\`" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
 
-        # Check if a release was created
-        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+        # Job status summary
+        echo "## Job Status" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Change Detection | ${{ needs.detect-changes.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| CLI Release | ${{ needs.release-cli.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Template Releases | ${{ needs.release-templates.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
 
-        if [ -n "$LATEST_TAG" ]; then
-          VERSION=${LATEST_TAG#v}
+        # Check what was released
+        echo "## Releases Created" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
 
-          # Determine release type
-          if [[ $LATEST_TAG == *"-rc."* ]] || [[ $LATEST_TAG == *"-dev."* ]]; then
-            RELEASE_TYPE="Pre-release"
-            EMOJI="🔶"
+        RELEASES_CREATED=false
+
+        # Check CLI release
+        if [[ "${{ needs.detect-changes.outputs.cli }}" == "true" ]]; then
+          CLI_TAG=$(git tag -l "v*" --sort=-version:refname | head -n 1 || echo "")
+          if [[ -n "$CLI_TAG" ]]; then
+            CLI_VERSION=${CLI_TAG#v}
+            echo "### ✅ CLI - v$CLI_VERSION" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **Package:** \`pks-cli\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Version:** \`$CLI_VERSION\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Tag:** \`$CLI_TAG\`" >> $GITHUB_STEP_SUMMARY
+            echo "- [View Release](https://github.com/${{ github.repository }}/releases/tag/$CLI_TAG)" >> $GITHUB_STEP_SUMMARY
+            echo "- [View on NuGet](https://www.nuget.org/packages/pks-cli/$CLI_VERSION)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            RELEASES_CREATED=true
           else
-            RELEASE_TYPE="Stable Release"
-            EMOJI="✅"
+            echo "### ⚠️ CLI" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Changes detected but no release created (no releasable commits)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+        fi
+
+        # Check template releases
+        for TEMPLATE in devcontainer claude-dotnet-9 claude-dotnet-10-full pks-fullstack; do
+          TEMPLATE_OUTPUT="TEMPLATE_${TEMPLATE//-/_}"
+          TEMPLATE_CHANGED=$(echo "${{ needs.detect-changes.outputs.devcontainer }}" | jq -r '.["'$TEMPLATE'"] // "false"')
+
+          if [[ "${{ needs.detect-changes.outputs[format('{0}', TEMPLATE)] }}" == "true" ]] 2>/dev/null || \
+             [[ "${{ needs.detect-changes.outputs.devcontainer }}" == "true" && "$TEMPLATE" == "devcontainer" ]] || \
+             [[ "${{ needs.detect-changes.outputs.claude-dotnet-9 }}" == "true" && "$TEMPLATE" == "claude-dotnet-9" ]] || \
+             [[ "${{ needs.detect-changes.outputs.claude-dotnet-10-full }}" == "true" && "$TEMPLATE" == "claude-dotnet-10-full" ]] || \
+             [[ "${{ needs.detect-changes.outputs.pks-fullstack }}" == "true" && "$TEMPLATE" == "pks-fullstack" ]]; then
+
+            TEMPLATE_TAG=$(git tag -l "${TEMPLATE}-v*" --sort=-version:refname | head -n 1 || echo "")
+            if [[ -n "$TEMPLATE_TAG" ]]; then
+              TEMPLATE_VERSION=${TEMPLATE_TAG#${TEMPLATE}-v}
+
+              # Map template name to package ID
+              case "$TEMPLATE" in
+                "devcontainer")
+                  PACKAGE_ID="PKS.Templates.DevContainer"
+                  ;;
+                "claude-dotnet-9")
+                  PACKAGE_ID="PKS.Templates.ClaudeDotNet9"
+                  ;;
+                "claude-dotnet-10-full")
+                  PACKAGE_ID="PKS.Templates.ClaudeDotNet10.Full"
+                  ;;
+                "pks-fullstack")
+                  PACKAGE_ID="PKS.Templates.PksFullstack"
+                  ;;
+              esac
+
+              echo "### ✅ Template: $TEMPLATE - v$TEMPLATE_VERSION" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "- **Package:** \`$PACKAGE_ID\`" >> $GITHUB_STEP_SUMMARY
+              echo "- **Version:** \`$TEMPLATE_VERSION\`" >> $GITHUB_STEP_SUMMARY
+              echo "- **Tag:** \`$TEMPLATE_TAG\`" >> $GITHUB_STEP_SUMMARY
+              echo "- [View Release](https://github.com/${{ github.repository }}/releases/tag/$TEMPLATE_TAG)" >> $GITHUB_STEP_SUMMARY
+              echo "- [View on NuGet](https://www.nuget.org/packages/$PACKAGE_ID/$TEMPLATE_VERSION)" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              RELEASES_CREATED=true
+            fi
+          fi
+        done
+
+        if [[ "$RELEASES_CREATED" == "false" ]]; then
+          echo "### ℹ️ No Releases Created" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "No new versions were released. This can happen when:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- No packages had changes since their last release" >> $GITHUB_STEP_SUMMARY
+          echo "- Changes detected but no commits follow conventional commit format" >> $GITHUB_STEP_SUMMARY
+          echo "- All commits use non-release types (\`chore:\`, \`docs:\`, \`style:\`)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+        fi
+
+        # Installation instructions
+        if [[ "$RELEASES_CREATED" == "true" ]]; then
+          echo "## 💻 Installation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ needs.detect-changes.outputs.cli }}" == "true" ]]; then
+            CLI_TAG=$(git tag -l "v*" --sort=-version:refname | head -n 1 || echo "")
+            if [[ -n "$CLI_TAG" ]]; then
+              CLI_VERSION=${CLI_TAG#v}
+              echo "### CLI Tool" >> $GITHUB_STEP_SUMMARY
+              echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+              if [[ "$CLI_VERSION" == *"-rc."* ]] || [[ "$CLI_VERSION" == *"-dev."* ]]; then
+                echo "dotnet tool install --global pks-cli --version $CLI_VERSION --prerelease" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "dotnet tool install --global pks-cli --version $CLI_VERSION" >> $GITHUB_STEP_SUMMARY
+              fi
+              echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
           fi
 
-          echo "## $EMOJI $RELEASE_TYPE Created" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Version: \`$VERSION\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ needs.detect-changes.outputs.has-templates }}" == "true" ]]; then
+            echo "### Templates" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
 
-          # Add release notes preview
-          echo "<details>" >> $GITHUB_STEP_SUMMARY
-          echo "<summary>📝 Release Notes Preview</summary>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          git tag -l --format='%(contents)' "$LATEST_TAG" | head -n 20 >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "</details>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+            for TEMPLATE in devcontainer claude-dotnet-9 claude-dotnet-10-full pks-fullstack; do
+              if [[ "${{ needs.detect-changes.outputs.devcontainer }}" == "true" && "$TEMPLATE" == "devcontainer" ]] || \
+                 [[ "${{ needs.detect-changes.outputs.claude-dotnet-9 }}" == "true" && "$TEMPLATE" == "claude-dotnet-9" ]] || \
+                 [[ "${{ needs.detect-changes.outputs.claude-dotnet-10-full }}" == "true" && "$TEMPLATE" == "claude-dotnet-10-full" ]] || \
+                 [[ "${{ needs.detect-changes.outputs.pks-fullstack }}" == "true" && "$TEMPLATE" == "pks-fullstack" ]]; then
 
-          # List packages created
-          if [ -d "packages" ] && [ "$(ls -A packages/*.nupkg 2>/dev/null)" ]; then
-            echo "### 📦 Packages Created" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            for package in packages/*.nupkg; do
-              if [ -f "$package" ]; then
-                PACKAGE_NAME=$(basename "$package")
-                PACKAGE_SIZE=$(ls -lh "$package" | awk '{print $5}')
-                echo "- ✅ \`$PACKAGE_NAME\` ($PACKAGE_SIZE)" >> $GITHUB_STEP_SUMMARY
+                TEMPLATE_TAG=$(git tag -l "${TEMPLATE}-v*" --sort=-version:refname | head -n 1 || echo "")
+                if [[ -n "$TEMPLATE_TAG" ]]; then
+                  TEMPLATE_VERSION=${TEMPLATE_TAG#${TEMPLATE}-v}
+
+                  case "$TEMPLATE" in
+                    "devcontainer")
+                      PACKAGE_ID="PKS.Templates.DevContainer"
+                      ;;
+                    "claude-dotnet-9")
+                      PACKAGE_ID="PKS.Templates.ClaudeDotNet9"
+                      ;;
+                    "claude-dotnet-10-full")
+                      PACKAGE_ID="PKS.Templates.ClaudeDotNet10.Full"
+                      ;;
+                    "pks-fullstack")
+                      PACKAGE_ID="PKS.Templates.PksFullstack"
+                      ;;
+                  esac
+
+                  echo "# Install $TEMPLATE template" >> $GITHUB_STEP_SUMMARY
+                  if [[ "$TEMPLATE_VERSION" == *"-rc."* ]] || [[ "$TEMPLATE_VERSION" == *"-dev."* ]]; then
+                    echo "dotnet new install $PACKAGE_ID::$TEMPLATE_VERSION --force" >> $GITHUB_STEP_SUMMARY
+                  else
+                    echo "dotnet new install $PACKAGE_ID::$TEMPLATE_VERSION" >> $GITHUB_STEP_SUMMARY
+                  fi
+                  echo "" >> $GITHUB_STEP_SUMMARY
+                fi
               fi
             done
+
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
           fi
-
-          # Add links
-          echo "### 🔗 Quick Links" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- [View Release on GitHub](https://github.com/${{ github.repository }}/releases/tag/$LATEST_TAG)" >> $GITHUB_STEP_SUMMARY
-          echo "- [View on NuGet.org](https://www.nuget.org/packages/pks-cli/$VERSION)" >> $GITHUB_STEP_SUMMARY
-          echo "- [Compare Changes](https://github.com/${{ github.repository }}/compare/$LATEST_TAG)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          # Installation command
-          echo "### 💻 Installation" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [[ $LATEST_TAG == *"-rc."* ]] || [[ $LATEST_TAG == *"-dev."* ]]; then
-            echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-            echo "dotnet tool install --global pks-cli --version $VERSION --prerelease" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-            echo "dotnet tool install --global pks-cli --version $VERSION" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          # Changelog status
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📋 Changelog Status" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [[ $LATEST_TAG == *"-rc."* ]] || [[ $LATEST_TAG == *"-dev."* ]]; then
-            echo "ℹ️ CHANGELOG.md was **not updated** for this pre-release" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "The changelog will be updated when this is released as a stable version." >> $GITHUB_STEP_SUMMARY
-          else
-            echo "✅ CHANGELOG.md has been **updated** with this release" >> $GITHUB_STEP_SUMMARY
-          fi
-
-        else
-          echo "## ℹ️ No Release Created" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "No new version was released. This can happen when:" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- No commits since last release contain \`feat:\`, \`fix:\`, or breaking changes" >> $GITHUB_STEP_SUMMARY
-          echo "- All commits use types that don't trigger releases (e.g., \`chore:\`, \`docs:\`, \`style:\`)" >> $GITHUB_STEP_SUMMARY
-          echo "- Commit messages don't follow conventional commit format" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          # Show recent commits
-          echo "### Recent Commits" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          git log --oneline -5 >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
         fi

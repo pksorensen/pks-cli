@@ -3,7 +3,7 @@
 
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
-    
+
     <!-- Template Package Properties -->
     <PackageType>Template</PackageType>
     <PackageId>PKS.Templates.DevContainer</PackageId>
