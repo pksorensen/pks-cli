@@ -172,7 +172,6 @@
           "templates/claude-dotnet-10-full/*.csproj"
         ],
         "message": "chore(release:claude-dotnet-10-full): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}",
-        "successCmd": "if [[ '${nextRelease.channel}' != '' ]]; then echo 'Skipping git commit for pre-release'; exit 1; fi"
       }
     ],
     [

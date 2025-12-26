@@ -172,8 +172,7 @@
           "src/**/*.csproj",
           "CHANGELOG.md"
         ],
-        "message": "chore(release:cli): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}",
-        "successCmd": "if [[ '${nextRelease.channel}' != '' ]]; then echo 'Skipping git commit for pre-release'; exit 1; fi"
+        "message": "chore(release:cli): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
       }
     ],
     [
