@@ -655,11 +655,11 @@ fix!: breaking change to template.json schema
 ### Release Configurations
 
 Each package has its own semantic-release configuration:
-- `.releaserc.cli.json` - CLI releases
-- `.releaserc.templates.devcontainer.json` - DevContainer template
-- `.releaserc.templates.claude-dotnet-9.json` - Claude .NET 9 template
-- `.releaserc.templates.claude-dotnet-10-full.json` - Claude .NET 10 Full template
-- `.releaserc.templates.pks-fullstack.json` - PKS Fullstack template
+- `.releaserc.cli.json` - CLI releases (at repository root)
+- `templates/devcontainer/.releaserc.json` - DevContainer template
+- `templates/claude-dotnet-9/.releaserc.json` - Claude .NET 9 template
+- `templates/claude-dotnet-10-full/.releaserc.json` - Claude .NET 10 Full template
+- `templates/pks-fullstack/.releaserc.json` - PKS Fullstack template
 
 ### Changelogs
 

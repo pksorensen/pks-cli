@@ -82,25 +82,25 @@ jobs:
         FIRST=true
 
         if [[ "$DEVCONTAINER_CHANGED" == "true" ]]; then
-          MATRIX_JSON="${MATRIX_JSON}{\"template\":\"devcontainer\",\"template_path\":\"templates/devcontainer\",\"package_id\":\"PKS.Templates.DevContainer\",\"config_file\":\".releaserc.templates.devcontainer.json\"}"
+          MATRIX_JSON="${MATRIX_JSON}{\"template\":\"devcontainer\",\"template_path\":\"templates/devcontainer\",\"package_id\":\"PKS.Templates.DevContainer\",\"config_file\":\"templates/devcontainer/.releaserc.json\"}"
           FIRST=false
         fi
 
         if [[ "$CLAUDE_DOTNET_9_CHANGED" == "true" ]]; then
           if [[ "$FIRST" == "false" ]]; then MATRIX_JSON="${MATRIX_JSON},"; fi
-          MATRIX_JSON="${MATRIX_JSON}{\"template\":\"claude-dotnet-9\",\"template_path\":\"templates/claude-dotnet-9\",\"package_id\":\"PKS.Templates.ClaudeDotNet9\",\"config_file\":\".releaserc.templates.claude-dotnet-9.json\"}"
+          MATRIX_JSON="${MATRIX_JSON}{\"template\":\"claude-dotnet-9\",\"template_path\":\"templates/claude-dotnet-9\",\"package_id\":\"PKS.Templates.ClaudeDotNet9\",\"config_file\":\"templates/claude-dotnet-9/.releaserc.json\"}"
           FIRST=false
         fi
 
         if [[ "$CLAUDE_DOTNET_10_FULL_CHANGED" == "true" ]]; then
           if [[ "$FIRST" == "false" ]]; then MATRIX_JSON="${MATRIX_JSON},"; fi
-          MATRIX_JSON="${MATRIX_JSON}{\"template\":\"claude-dotnet-10-full\",\"template_path\":\"templates/claude-dotnet-10-full\",\"package_id\":\"PKS.Templates.ClaudeDotNet10.Full\",\"config_file\":\".releaserc.templates.claude-dotnet-10-full.json\"}"
+          MATRIX_JSON="${MATRIX_JSON}{\"template\":\"claude-dotnet-10-full\",\"template_path\":\"templates/claude-dotnet-10-full\",\"package_id\":\"PKS.Templates.ClaudeDotNet10.Full\",\"config_file\":\"templates/claude-dotnet-10-full/.releaserc.json\"}"
           FIRST=false
         fi
 
         if [[ "$PKS_FULLSTACK_CHANGED" == "true" ]]; then
           if [[ "$FIRST" == "false" ]]; then MATRIX_JSON="${MATRIX_JSON},"; fi
-          MATRIX_JSON="${MATRIX_JSON}{\"template\":\"pks-fullstack\",\"template_path\":\"templates/pks-fullstack\",\"package_id\":\"PKS.Templates.PksFullstack\",\"config_file\":\".releaserc.templates.pks-fullstack.json\"}"
+          MATRIX_JSON="${MATRIX_JSON}{\"template\":\"pks-fullstack\",\"template_path\":\"templates/pks-fullstack\",\"package_id\":\"PKS.Templates.PksFullstack\",\"config_file\":\"templates/pks-fullstack/.releaserc.json\"}"
           FIRST=false
         fi
 
