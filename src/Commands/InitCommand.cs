@@ -427,13 +427,13 @@ public class InitCommand : Command<InitCommand.Settings>
             else if (result != null)
             {
                 _console.MarkupLine($"[red]❌ Failed to spawn devcontainer[/]");
-                _console.MarkupLine($"[yellow]{result.Message}[/]");
+                _console.MarkupLine($"[yellow]{result.Message.EscapeMarkup()}[/]");
 
                 if (result.Errors.Any())
                 {
                     _console.MarkupLine("[dim]Errors:[/]");
                     foreach (var error in result.Errors)
-                        _console.MarkupLine($"  [red]• {error}[/]");
+                        _console.MarkupLine($"  [red]• {error.EscapeMarkup()}[/]");
                 }
 
                 _console.WriteLine();

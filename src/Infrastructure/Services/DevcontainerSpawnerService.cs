@@ -197,7 +197,8 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
 
                 upResult = await RunDevcontainerUpInBootstrapAsync(
                     bootstrapContainer.ContainerId,
-                    $"/workspaces/{options.ProjectName}");
+                    $"/workspaces/{options.ProjectName}",
+                    volumeName);
 
                 if (upResult.Outcome != "success")
                 {
@@ -1502,15 +1503,29 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
     /// </summary>
     /// <param name="bootstrapContainerId">ID of the bootstrap container</param>
     /// <param name="workspaceFolder">Workspace folder path inside bootstrap container</param>
+    /// <param name="volumeName">Docker volume name containing the workspace</param>
     /// <returns>Parsed result from devcontainer CLI</returns>
     private async Task<DevcontainerUpResult> RunDevcontainerUpInBootstrapAsync(
         string bootstrapContainerId,
-        string workspaceFolder)
+        string workspaceFolder,
+        string volumeName)
     {
         _logger.LogDebug("Running devcontainer up in bootstrap container: {WorkspaceFolder}", workspaceFolder);
 
-        // Build command: devcontainer up --workspace-folder {workspaceFolder}
-        var devcontainerCommand = $"devcontainer up --workspace-folder {workspaceFolder}";
+        // Create override config that clears workspaceMount to prevent bind mount attempts
+        // Only clear workspaceMount, keep other properties intact
+        var overrideConfigPath = "/tmp/pks-devcontainer-override.json";
+        var overrideConfig = "{\"workspaceMount\":\"\"}";
+        var createOverrideResult = await ExecuteInBootstrapAsync(
+            bootstrapContainerId,
+            $"echo '{overrideConfig}' > {overrideConfigPath}",
+            workingDir: null,
+            timeoutSeconds: 10);
+
+        // Build command with volume mount and workspace folder
+        // Key: --override-config clears workspaceMount from devcontainer.json
+        // This prevents devcontainer CLI from trying to bind mount the workspace
+        var devcontainerCommand = $"devcontainer up --workspace-folder {workspaceFolder} --config {workspaceFolder}/.devcontainer/devcontainer.json --override-config {overrideConfigPath} --mount type=volume,source={volumeName},target=/workspaces,external=true --update-remote-user-uid-default off";
 
         // Execute using ExecuteInBootstrapAsync with 600 second timeout
         var result = await ExecuteInBootstrapAsync(

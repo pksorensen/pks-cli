@@ -32,12 +32,12 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
 
     protected void DisplayError(string message)
     {
-        Console.MarkupLine($"[red]✗ {message}[/]");
+        Console.MarkupLine($"[red]✗ {message.EscapeMarkup()}[/]");
     }
 
     protected void DisplayWarning(string message)
     {
-        Console.MarkupLine($"[yellow]⚠ {message}[/]");
+        Console.MarkupLine($"[yellow]⚠ {message.EscapeMarkup()}[/]");
     }
 
     protected void DisplayInfo(string message)
