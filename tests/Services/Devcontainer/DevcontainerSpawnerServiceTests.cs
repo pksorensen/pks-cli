@@ -363,4 +363,55 @@ public class DevcontainerSpawnerServiceTests : TestBase
         await Assert.ThrowsAsync<NotImplementedException>(
             () => service.SpawnRemoteAsync(options, remoteHost));
     }
+
+    [Fact]
+    public void BootstrapDockerfile_EmbeddedResource_ShouldExistAndBeReadable()
+    {
+        // Arrange
+        var assembly = typeof(DevcontainerSpawnerService).Assembly;
+        var resourceName = "PKS.Infrastructure.Resources.bootstrap.Dockerfile";
+
+        // Act - Try to load the embedded resource
+        using var stream = assembly.GetManifestResourceStream(resourceName);
+
+        // Assert - Resource should exist
+        stream.Should().NotBeNull($"embedded resource '{resourceName}' should exist in assembly");
+
+        // Assert - Resource should be readable and contain valid Dockerfile content
+        using var reader = new StreamReader(stream!);
+        var content = reader.ReadToEnd();
+
+        content.Should().NotBeNullOrEmpty("Dockerfile content should not be empty");
+        content.Should().Contain("FROM", "Dockerfile should contain FROM instruction");
+        content.Should().Contain("mcr.microsoft.com/devcontainers/base", "Dockerfile should use devcontainers base image");
+        content.Should().Contain("@devcontainers/cli", "Dockerfile should install devcontainer CLI");
+        content.Should().Contain("bash", "Dockerfile should include bash for shell support");
+        content.Should().Contain("docker-cli", "Dockerfile should include docker-cli for DinD");
+    }
+
+    [Fact]
+    public void BootstrapDockerfile_ResourcePath_ShouldMatchFileLocation()
+    {
+        // This test ensures the embedded resource name matches the actual file structure
+        // File location: src/Infrastructure/Resources/bootstrap.Dockerfile
+        // Expected resource name: PKS.Infrastructure.Resources.bootstrap.Dockerfile
+        // (NOT PKS.Infrastructure.Services.Resources.bootstrap.Dockerfile)
+
+        var assembly = typeof(DevcontainerSpawnerService).Assembly;
+        var correctResourceName = "PKS.Infrastructure.Resources.bootstrap.Dockerfile";
+        var incorrectResourceName = "PKS.Infrastructure.Services.Resources.bootstrap.Dockerfile";
+
+        // Act
+        using var correctStream = assembly.GetManifestResourceStream(correctResourceName);
+        using var incorrectStream = assembly.GetManifestResourceStream(incorrectResourceName);
+
+        // Assert
+        correctStream.Should().NotBeNull(
+            $"Resource should be accessible at '{correctResourceName}' " +
+            "matching file location Infrastructure/Resources/bootstrap.Dockerfile");
+
+        incorrectStream.Should().BeNull(
+            $"Resource should NOT exist at '{incorrectResourceName}' " +
+            "because the file is not in Infrastructure/Services/Resources/");
+    }
 }

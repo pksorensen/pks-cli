@@ -668,7 +668,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
 
             // Step 2: Read embedded Dockerfile from assembly resources
             var assembly = typeof(DevcontainerSpawnerService).Assembly;
-            var resourceName = "PKS.Infrastructure.Services.Resources.bootstrap.Dockerfile";
+            var resourceName = "PKS.Infrastructure.Resources.bootstrap.Dockerfile";
 
             string dockerfileContent;
             using (var stream = assembly.GetManifestResourceStream(resourceName))
