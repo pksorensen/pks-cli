@@ -82,8 +82,9 @@ jobs:
     - name: Create NuGet package
       id: pack
       run: |
-        # Get the latest tag (which semantic-release may have just created)
-        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+        # Get the latest CLI tag (which semantic-release may have just created)
+        # Only match tags starting with 'v' (CLI tags), not template tags
+        LATEST_TAG=$(git tag --sort=-version:refname | grep "^v" | head -n 1 || echo "")
 
         if [ -n "$LATEST_TAG" ]; then
           # Remove 'v' prefix to get the version
@@ -158,8 +159,9 @@ jobs:
         echo "# 📦 CLI Release Summary" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
 
-        # Check if a release was created
-        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+        # Check if a CLI release was created
+        # Only match tags starting with 'v' (CLI tags), not template tags
+        LATEST_TAG=$(git tag --sort=-version:refname | grep "^v" | head -n 1 || echo "")
 
         if [ -n "$LATEST_TAG" ]; then
           VERSION=${LATEST_TAG#v}
