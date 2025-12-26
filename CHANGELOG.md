@@ -1,3 +1,9 @@
+## [1.2.0-rc.10](https://github.com/pksorensen/pks-cli/compare/v1.2.0-rc.9...v1.2.0-rc.10) (2025-12-26)
+
+### 🐛 Bug Fixes
+
+* Correct resource path for embedded Dockerfile in DevcontainerSpawnerService ([69fac98](https://github.com/pksorensen/pks-cli/commit/69fac987c9eb782c89225fad6a5d97a3fe276ba2))
+
 ## [1.2.0-rc.9](https://github.com/pksorensen/pks-cli/compare/v1.2.0-rc.8...v1.2.0-rc.9) (2025-12-26)
 
 ### 🚀 Features
