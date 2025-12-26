@@ -152,11 +152,16 @@ jobs:
           fi
 
           # Pack template project with the correct version
+          # Note: Not using --no-build to ensure version properties are embedded in assemblies
           dotnet pack "$CSPROJ_FILE" \
             --configuration Release \
             --output ./packages \
-            --no-build \
+            --no-restore \
             -p:PackageVersion=$VERSION \
+            -p:Version=$VERSION \
+            -p:AssemblyVersion=$VERSION \
+            -p:FileVersion=$VERSION \
+            -p:InformationalVersion=$VERSION \
             -p:PackageId=${{ inputs.package_id }}
 
           echo "✅ Package created successfully"

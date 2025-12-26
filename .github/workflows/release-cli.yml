@@ -96,11 +96,16 @@ jobs:
           mkdir -p packages
 
           # Pack CLI project with the correct version
+          # Note: Not using --no-build to ensure version properties are embedded in assemblies
           dotnet pack src/pks-cli.csproj \
             --configuration Release \
             --output ./packages \
-            --no-build \
-            -p:PackageVersion=$VERSION
+            --no-restore \
+            -p:PackageVersion=$VERSION \
+            -p:Version=$VERSION \
+            -p:AssemblyVersion=$VERSION \
+            -p:FileVersion=$VERSION \
+            -p:InformationalVersion=$VERSION
 
           echo "✅ Package created successfully"
           ls -lh packages/
