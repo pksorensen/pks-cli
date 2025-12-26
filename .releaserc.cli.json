@@ -148,8 +148,8 @@
     [
       "@semantic-release/exec",
       {
-        "verifyConditionsCmd": "if [[ '${branch.prerelease}' != 'false' ]] && [[ '${branch.prerelease}' != '' ]]; then cp src/CHANGELOG.md src/CHANGELOG.md.backup 2>/dev/null || true; fi",
-        "prepareCmd": "echo '${nextRelease.version}' > .version && if [[ '${nextRelease.channel}' == '' ]]; then ./scripts/update-version.sh ${nextRelease.version} cli; else echo 'Skipping version update for pre-release ${nextRelease.version}'; fi"
+        "verifyConditionsCmd": "if [ '${branch.prerelease}' != 'false' ] && [ '${branch.prerelease}' != '' ]; then cp src/CHANGELOG.md src/CHANGELOG.md.backup 2>/dev/null || true; fi",
+        "prepareCmd": "echo '${nextRelease.version}' > .version && if [ '${nextRelease.channel}' = '' ]; then ./scripts/update-version.sh ${nextRelease.version} cli; else echo 'Skipping version update for pre-release ${nextRelease.version}'; fi"
       }
     ],
     [
@@ -161,7 +161,7 @@
     [
       "@semantic-release/exec",
       {
-        "prepareCmd": "if [[ '${nextRelease.channel}' != '' ]] && [ -f src/CHANGELOG.md.backup ]; then mv src/CHANGELOG.md.backup src/CHANGELOG.md; echo 'Restored CHANGELOG.md for pre-release'; fi"
+        "prepareCmd": "if [ '${nextRelease.channel}' != '' ] && [ -f src/CHANGELOG.md.backup ]; then mv src/CHANGELOG.md.backup src/CHANGELOG.md; echo 'Restored CHANGELOG.md for pre-release'; fi"
       }
     ],
     [
