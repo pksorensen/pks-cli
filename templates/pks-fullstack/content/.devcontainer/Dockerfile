@@ -1,7 +1,13 @@
 # PKS Fullstack DevContainer
 # Uses pre-built base image for fast container setup
 # Base image contains: Node.js 20, .NET 8+10, Playwright, DevTunnel, GCM, Aspire CLI, Claude Code
-FROM ghcr.io/pksorensen/pks-fullstack-base:BASE_IMAGE_TAG
+
+# Build argument for base image tag - can be overridden in devcontainer.json or at build time
+# Available tags: latest, 1.0.0, 1.1.0, etc.
+# See: https://github.com/pksorensen/pks-cli/pkgs/container/pks-fullstack-base
+ARG BASE_IMAGE_TAG=latest
+
+FROM ghcr.io/pksorensen/pks-fullstack-base:${BASE_IMAGE_TAG}
 
 # ============================================================================
 # Firewall Configuration
