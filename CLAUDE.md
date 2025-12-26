@@ -654,12 +654,16 @@ fix!: breaking change to template.json schema
 
 ### Release Configurations
 
-Each package has its own semantic-release configuration:
+The repository uses two semantic-release configurations:
 - `.releaserc.cli.json` - CLI releases (at repository root)
-- `templates/devcontainer/.releaserc.json` - DevContainer template
-- `templates/claude-dotnet-9/.releaserc.json` - Claude .NET 9 template
-- `templates/claude-dotnet-10-full/.releaserc.json` - Claude .NET 10 Full template
-- `templates/pks-fullstack/.releaserc.json` - PKS Fullstack template
+- `.releaserc.template.js` - Shared configuration for all template releases
+
+**Shared Template Configuration**:
+All template packages use a single JavaScript configuration file (`.releaserc.template.js`) that dynamically generates release settings based on environment variables:
+- `TEMPLATE_NAME` - Template identifier (e.g., `devcontainer`, `pks-fullstack`)
+- `TEMPLATE_PATH` - Path to template directory (e.g., `templates/devcontainer`)
+
+This approach eliminates duplicate configuration files and ensures consistency across all templates. The workflow passes template-specific values as environment variables when invoking semantic-release.
 
 ### Changelogs
 
@@ -672,9 +676,18 @@ Each package maintains its own changelog:
 
 ### Scripts
 
+**Template Discovery**: `scripts/discover-templates.sh`
+- Automatically discovers all template packages in `templates/` directory
+- Identifies templates by presence of `.csproj` files
+- Extracts package metadata (name, path, PackageId)
+- Returns JSON matrix for use in GitHub Actions
+- **Zero configuration** - new templates are discovered automatically
+
 **Change Detection**: `scripts/detect-changes.sh`
-- Detects which packages have changes
+- Dynamically detects which packages have changes since last release
+- Uses `discover-templates.sh` for automatic template discovery
 - Returns JSON: `{"cli": true, "devcontainer": false, ...}`
+- Automatically includes newly added templates
 
 **Version Update**: `scripts/update-version.sh <version> <scope>`
 - Updates version in .csproj files
@@ -688,9 +701,11 @@ Each package maintains its own changelog:
 ### Workflows
 
 **Main Orchestrator**: `.github/workflows/semantic-release.yml`
-- Detects changes
+- Detects changes using dynamic template discovery
+- Automatically builds release matrix for changed templates
 - Orchestrates parallel releases
 - Generates comprehensive summary
+- **Zero configuration** - new templates are included automatically
 
 **CLI Release**: `.github/workflows/release-cli.yml`
 - Reusable workflow for CLI releases
@@ -698,7 +713,8 @@ Each package maintains its own changelog:
 
 **Template Release**: `.github/workflows/release-template.yml`
 - Reusable workflow for template releases
-- Dynamically handles any template package
+- Dynamically handles any template package using environment variables
+- Works with shared `.releaserc.template.js` configuration
 
 ### Benefits
 
@@ -708,13 +724,62 @@ Each package maintains its own changelog:
 4. **Backward Compatible**: Existing releases unaffected
 5. **Scalable**: Easy to add new templates
 6. **Parallel Execution**: Faster release cycles
+7. **Zero Configuration**: New templates are automatically discovered
+
+### Adding New Templates
+
+Adding a new template package requires **zero workflow configuration**. The system automatically discovers and releases new templates.
+
+**Steps to add a new template:**
+
+1. **Create template directory** in `templates/`:
+   ```bash
+   mkdir templates/my-new-template
+   ```
+
+2. **Add .csproj file** with PackageId:
+   ```xml
+   <Project Sdk="Microsoft.NET.Sdk">
+     <PropertyGroup>
+       <PackageId>PKS.Templates.MyNewTemplate</PackageId>
+       <Version>1.0.0</Version>
+       <!-- other properties -->
+     </PropertyGroup>
+   </Project>
+   ```
+
+3. **Add template content** in `content/` subdirectory:
+   ```bash
+   mkdir -p templates/my-new-template/content
+   # Add your template files here
+   ```
+
+4. **Commit and push** - That's it! The release system will:
+   - Automatically discover the new template
+   - Detect changes when you commit
+   - Build and release the package
+   - Create tags like `my-new-template-v1.0.0`
+   - Publish to NuGet.org
+
+**What gets discovered automatically:**
+- Template name (from directory name)
+- Template path (e.g., `templates/my-new-template`)
+- Package ID (from `.csproj` `<PackageId>` element)
+- Shared release configuration (`.releaserc.template.js`)
+
+**Templates NOT included in releases:**
+- Directories without `.csproj` files (like `templates/claude-docs/`, `templates/mcp/`)
+- These are content-only templates used by the CLI directly
 
 ### Testing Release Changes
 
 Before pushing release-related changes:
 
 ```bash
-# Test change detection locally
+# Test template discovery
+./scripts/discover-templates.sh
+
+# Test change detection locally (uses discovery automatically)
 ./scripts/detect-changes.sh
 
 # Test version update for specific package

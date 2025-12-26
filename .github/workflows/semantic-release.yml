@@ -25,10 +25,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       cli: ${{ steps.changes.outputs.cli }}
-      devcontainer: ${{ steps.changes.outputs.devcontainer }}
-      claude-dotnet-9: ${{ steps.changes.outputs.claude-dotnet-9 }}
-      claude-dotnet-10-full: ${{ steps.changes.outputs.claude-dotnet-10-full }}
-      pks-fullstack: ${{ steps.changes.outputs.pks-fullstack }}
       has-templates: ${{ steps.changes.outputs.has-templates }}
       template-matrix: ${{ steps.changes.outputs.template-matrix }}
 
@@ -40,74 +36,52 @@ jobs:
         fetch-tags: true
         token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Make detect-changes.sh executable
-      run: chmod +x scripts/detect-changes.sh
+    - name: Make scripts executable
+      run: |
+        chmod +x scripts/detect-changes.sh
+        chmod +x scripts/discover-templates.sh
 
     - name: Detect changes
       id: changes
       run: |
-        echo "Running change detection..."
+        echo "🔍 Running change detection..."
 
-        # Run the change detection script
+        # Run the change detection script (now with dynamic template discovery)
         CHANGE_JSON=$(scripts/detect-changes.sh)
 
-        echo "Change detection result: $CHANGE_JSON"
+        echo "📊 Change detection result: $CHANGE_JSON"
 
-        # Parse JSON and set outputs for each package
+        # Parse CLI changes
         CLI_CHANGED=$(echo "$CHANGE_JSON" | jq -r '.cli')
-        DEVCONTAINER_CHANGED=$(echo "$CHANGE_JSON" | jq -r '.devcontainer')
-        CLAUDE_DOTNET_9_CHANGED=$(echo "$CHANGE_JSON" | jq -r '."claude-dotnet-9"')
-        CLAUDE_DOTNET_10_FULL_CHANGED=$(echo "$CHANGE_JSON" | jq -r '."claude-dotnet-10-full"')
-        PKS_FULLSTACK_CHANGED=$(echo "$CHANGE_JSON" | jq -r '."pks-fullstack"')
-
         echo "cli=$CLI_CHANGED" >> $GITHUB_OUTPUT
-        echo "devcontainer=$DEVCONTAINER_CHANGED" >> $GITHUB_OUTPUT
-        echo "claude-dotnet-9=$CLAUDE_DOTNET_9_CHANGED" >> $GITHUB_OUTPUT
-        echo "claude-dotnet-10-full=$CLAUDE_DOTNET_10_FULL_CHANGED" >> $GITHUB_OUTPUT
-        echo "pks-fullstack=$PKS_FULLSTACK_CHANGED" >> $GITHUB_OUTPUT
 
-        # Check if any templates have changes
-        HAS_TEMPLATES=false
-        if [[ "$DEVCONTAINER_CHANGED" == "true" ]] || \
-           [[ "$CLAUDE_DOTNET_9_CHANGED" == "true" ]] || \
-           [[ "$CLAUDE_DOTNET_10_FULL_CHANGED" == "true" ]] || \
-           [[ "$PKS_FULLSTACK_CHANGED" == "true" ]]; then
-          HAS_TEMPLATES=true
-        fi
-
-        echo "has-templates=$HAS_TEMPLATES" >> $GITHUB_OUTPUT
+        # Discover all available templates
+        echo "🔎 Discovering template packages..."
+        ALL_TEMPLATES=$(scripts/discover-templates.sh | jq -c '.')
+        echo "📦 Available templates: $ALL_TEMPLATES"
 
         # Build matrix for templates that have changes
-        MATRIX_JSON='{"include":['
-        FIRST=true
+        echo "🏗️  Building release matrix..."
+        MATRIX_JSON='{"include":[]}'
 
-        if [[ "$DEVCONTAINER_CHANGED" == "true" ]]; then
-          MATRIX_JSON="${MATRIX_JSON}{\"template\":\"devcontainer\",\"template_path\":\"templates/devcontainer\",\"package_id\":\"PKS.Templates.DevContainer\",\"config_file\":\"templates/devcontainer/.releaserc.json\"}"
-          FIRST=false
-        fi
+        # Extract changed templates and build matrix
+        HAS_TEMPLATES=false
+        for template_name in $(echo "$CHANGE_JSON" | jq -r 'to_entries[] | select(.key != "cli" and .value == true) | .key'); do
+          HAS_TEMPLATES=true
 
-        if [[ "$CLAUDE_DOTNET_9_CHANGED" == "true" ]]; then
-          if [[ "$FIRST" == "false" ]]; then MATRIX_JSON="${MATRIX_JSON},"; fi
-          MATRIX_JSON="${MATRIX_JSON}{\"template\":\"claude-dotnet-9\",\"template_path\":\"templates/claude-dotnet-9\",\"package_id\":\"PKS.Templates.ClaudeDotNet9\",\"config_file\":\"templates/claude-dotnet-9/.releaserc.json\"}"
-          FIRST=false
-        fi
+          # Find template details from discovery
+          TEMPLATE_DETAILS=$(echo "$ALL_TEMPLATES" | jq -c ".include[] | select(.template == \"$template_name\")")
 
-        if [[ "$CLAUDE_DOTNET_10_FULL_CHANGED" == "true" ]]; then
-          if [[ "$FIRST" == "false" ]]; then MATRIX_JSON="${MATRIX_JSON},"; fi
-          MATRIX_JSON="${MATRIX_JSON}{\"template\":\"claude-dotnet-10-full\",\"template_path\":\"templates/claude-dotnet-10-full\",\"package_id\":\"PKS.Templates.ClaudeDotNet10.Full\",\"config_file\":\"templates/claude-dotnet-10-full/.releaserc.json\"}"
-          FIRST=false
-        fi
+          if [ -n "$TEMPLATE_DETAILS" ]; then
+            # Add to matrix
+            MATRIX_JSON=$(echo "$MATRIX_JSON" | jq ".include += [$TEMPLATE_DETAILS]")
+            echo "  ✅ Added $template_name to release matrix"
+          fi
+        done
 
-        if [[ "$PKS_FULLSTACK_CHANGED" == "true" ]]; then
-          if [[ "$FIRST" == "false" ]]; then MATRIX_JSON="${MATRIX_JSON},"; fi
-          MATRIX_JSON="${MATRIX_JSON}{\"template\":\"pks-fullstack\",\"template_path\":\"templates/pks-fullstack\",\"package_id\":\"PKS.Templates.PksFullstack\",\"config_file\":\"templates/pks-fullstack/.releaserc.json\"}"
-          FIRST=false
-        fi
-
-        MATRIX_JSON="${MATRIX_JSON}]}"
-
+        echo "has-templates=$HAS_TEMPLATES" >> $GITHUB_OUTPUT
         echo "template-matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
-        echo "Template matrix: $MATRIX_JSON"
+        echo "📋 Template matrix: $MATRIX_JSON"
 
     - name: Generate Detection Summary
       run: |
@@ -118,34 +92,34 @@ jobs:
         echo "## Package Changes" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
 
-        if [[ "${{ steps.changes.outputs.cli }}" == "true" ]]; then
+        # Run detection again to get the results for display
+        CHANGE_JSON=$(scripts/detect-changes.sh)
+
+        # Display CLI status
+        CLI_CHANGED=$(echo "$CHANGE_JSON" | jq -r '.cli')
+        if [[ "$CLI_CHANGED" == "true" ]]; then
           echo "- ✅ **CLI**: Changes detected" >> $GITHUB_STEP_SUMMARY
         else
           echo "- ⏭️ **CLI**: No changes" >> $GITHUB_STEP_SUMMARY
         fi
 
-        if [[ "${{ steps.changes.outputs.devcontainer }}" == "true" ]]; then
-          echo "- ✅ **devcontainer**: Changes detected" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "- ⏭️ **devcontainer**: No changes" >> $GITHUB_STEP_SUMMARY
-        fi
+        # Dynamically display template changes
+        for package in $(echo "$CHANGE_JSON" | jq -r 'keys[]' | grep -v "^cli$"); do
+          CHANGED=$(echo "$CHANGE_JSON" | jq -r ".[\"$package\"]")
+          if [[ "$CHANGED" == "true" ]]; then
+            echo "- ✅ **$package**: Changes detected" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ⏭️ **$package**: No changes" >> $GITHUB_STEP_SUMMARY
+          fi
+        done
 
-        if [[ "${{ steps.changes.outputs.claude-dotnet-9 }}" == "true" ]]; then
-          echo "- ✅ **claude-dotnet-9**: Changes detected" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "- ⏭️ **claude-dotnet-9**: No changes" >> $GITHUB_STEP_SUMMARY
-        fi
-
-        if [[ "${{ steps.changes.outputs.claude-dotnet-10-full }}" == "true" ]]; then
-          echo "- ✅ **claude-dotnet-10-full**: Changes detected" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "- ⏭️ **claude-dotnet-10-full**: No changes" >> $GITHUB_STEP_SUMMARY
-        fi
-
-        if [[ "${{ steps.changes.outputs.pks-fullstack }}" == "true" ]]; then
-          echo "- ✅ **pks-fullstack**: Changes detected" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "- ⏭️ **pks-fullstack**: No changes" >> $GITHUB_STEP_SUMMARY
+        # Add matrix preview if templates will be released
+        if [[ "${{ steps.changes.outputs.has-templates }}" == "true" ]]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📦 Templates to Release" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          MATRIX='${{ steps.changes.outputs.template-matrix }}'
+          echo "$MATRIX" | jq -r '.include[] | "- **\(.template)** (\(.package_id))"' >> $GITHUB_STEP_SUMMARY
         fi
 
   release-cli:

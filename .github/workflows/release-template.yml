@@ -113,6 +113,8 @@ jobs:
       id: semantic
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TEMPLATE_NAME: ${{ inputs.template }}
+        TEMPLATE_PATH: ${{ inputs.template_path }}
       run: |
         echo "🚀 Running semantic release for ${{ inputs.template }} template..."
         CONFIG_FILE="${{ inputs.config_file }}"

@@ -13,22 +13,31 @@ readonly YELLOW='\033[1;33m'
 readonly CYAN='\033[0;36m'
 readonly NC='\033[0m' # No Color
 
-# Package definitions
+# Discover template packages dynamically
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEMPLATES_DISCOVERY_OUTPUT=$("$SCRIPT_DIR/discover-templates.sh" 2>/dev/null)
+
+# Initialize package definitions with CLI (always present)
 declare -A PACKAGES=(
     ["cli"]="v*"
-    ["devcontainer"]="devcontainer-v*"
-    ["claude-dotnet-9"]="claude-dotnet-9-v*"
-    ["claude-dotnet-10-full"]="claude-dotnet-10-full-v*"
-    ["pks-fullstack"]="pks-fullstack-v*"
 )
 
 declare -A PACKAGE_PATHS=(
     ["cli"]="src/** scripts/** .github/workflows/** *.sln *.md install.sh"
-    ["devcontainer"]="templates/devcontainer/**"
-    ["claude-dotnet-9"]="templates/claude-dotnet-9/**"
-    ["claude-dotnet-10-full"]="templates/claude-dotnet-10-full/**"
-    ["pks-fullstack"]="templates/pks-fullstack/**"
 )
+
+# Dynamically add discovered templates to package definitions
+if [ -n "$TEMPLATES_DISCOVERY_OUTPUT" ]; then
+    while IFS= read -r template_info; do
+        template_name=$(echo "$template_info" | jq -r '.template')
+        template_path=$(echo "$template_info" | jq -r '.template_path')
+
+        if [ -n "$template_name" ] && [ "$template_name" != "null" ]; then
+            PACKAGES["$template_name"]="${template_name}-v*"
+            PACKAGE_PATHS["$template_name"]="${template_path}/**"
+        fi
+    done < <(echo "$TEMPLATES_DISCOVERY_OUTPUT" | jq -c '.include[]')
+fi
 
 # Function to get the latest tag for a package
 get_latest_tag() {
