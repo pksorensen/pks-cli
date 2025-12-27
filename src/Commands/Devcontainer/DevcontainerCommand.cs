@@ -164,6 +164,22 @@ public abstract class DevcontainerCommand<T> : Command<T> where T : Devcontainer
             });
     }
 
+    protected async Task WithSpinnerAsync(string message, Func<StatusContext, Task> operation)
+    {
+        await Console.Status()
+            .SpinnerStyle(Style.Parse("cyan"))
+            .Spinner(Spinner.Known.Dots)
+            .StartAsync(message, operation);
+    }
+
+    protected async Task<TResult> WithSpinnerAsync<TResult>(string message, Func<StatusContext, Task<TResult>> operation)
+    {
+        return await Console.Status()
+            .SpinnerStyle(Style.Parse("cyan"))
+            .Spinner(Spinner.Known.Dots)
+            .StartAsync(message, operation);
+    }
+
     protected void DisplayFeatureTable(IEnumerable<(string Id, string Name, string Description, string Category)> features)
     {
         var table = new Table()

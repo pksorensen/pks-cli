@@ -11,8 +11,9 @@ public interface IDevcontainerSpawnerService
     /// Spawns a devcontainer locally using Docker volumes
     /// </summary>
     /// <param name="options">Spawn configuration options</param>
+    /// <param name="onProgress">Optional callback invoked with progress status messages</param>
     /// <returns>Result of the spawn operation including container ID and status</returns>
-    Task<DevcontainerSpawnResult> SpawnLocalAsync(DevcontainerSpawnOptions options);
+    Task<DevcontainerSpawnResult> SpawnLocalAsync(DevcontainerSpawnOptions options, Action<string>? onProgress = null);
 
     /// <summary>
     /// Checks if Docker is available and running

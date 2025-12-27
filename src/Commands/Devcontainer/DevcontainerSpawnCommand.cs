@@ -176,7 +176,7 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
 
             // 7. Spawn devcontainer
             DevcontainerSpawnResult? result = null;
-            await WithSpinnerAsync("Spawning devcontainer...", async () =>
+            await WithSpinnerAsync("Spawning devcontainer...", async (ctx) =>
             {
                 var options = new DevcontainerSpawnOptions
                 {
@@ -192,7 +192,9 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
                     DockerConfigPath = settings.DockerConfigPath
                 };
 
-                result = await _spawnerService.SpawnLocalAsync(options);
+                result = await _spawnerService.SpawnLocalAsync(
+                    options,
+                    onProgress: message => ctx.Status(message));
             });
 
             // 8. Display result

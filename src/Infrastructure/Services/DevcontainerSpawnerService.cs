@@ -36,7 +36,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
     }
 
     /// <inheritdoc/>
-    public async Task<DevcontainerSpawnResult> SpawnLocalAsync(DevcontainerSpawnOptions options)
+    public async Task<DevcontainerSpawnResult> SpawnLocalAsync(DevcontainerSpawnOptions options, Action<string>? onProgress = null)
     {
         var startTime = DateTime.UtcNow;
         var result = new DevcontainerSpawnResult
@@ -53,6 +53,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
             _logger.LogInformation("Starting devcontainer spawn for project: {ProjectName}", options.ProjectName);
 
             // Step 1: Pre-flight checks - Docker availability
+            onProgress?.Invoke("Checking Docker availability...");
             _logger.LogInformation("Checking Docker availability...");
             result.CompletedStep = DevcontainerSpawnStep.DockerCheck;
 
@@ -68,6 +69,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
             _logger.LogInformation("Docker is available (version: {Version})", dockerCheck.Version);
 
             // Step 2: Check devcontainer CLI
+            onProgress?.Invoke("Checking devcontainer CLI...");
             _logger.LogInformation("Checking devcontainer CLI...");
             result.CompletedStep = DevcontainerSpawnStep.DevcontainerCliCheck;
 
@@ -112,6 +114,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
             }
 
             // Step 3: Create Docker volume
+            onProgress?.Invoke("Creating Docker volume...");
             _logger.LogInformation("Creating Docker volume...");
             result.CompletedStep = DevcontainerSpawnStep.VolumeCreation;
 
@@ -136,6 +139,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                 _logger.LogInformation("Using bootstrap container workflow for cross-platform compatibility");
 
                 // Step 4: Ensure bootstrap image exists
+                onProgress?.Invoke("Ensuring bootstrap image exists...");
                 _logger.LogInformation("Ensuring bootstrap image...");
                 result.CompletedStep = DevcontainerSpawnStep.BootstrapImageCheck;
 
@@ -155,6 +159,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                 }
 
                 // Step 5: Start bootstrap container
+                onProgress?.Invoke("Starting bootstrap container...");
                 _logger.LogInformation("Starting bootstrap container...");
                 result.CompletedStep = DevcontainerSpawnStep.BootstrapContainerStart;
 
@@ -180,6 +185,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                 // Step 6: Copy files to volume via bootstrap container
                 if (options.CopySourceFiles)
                 {
+                    onProgress?.Invoke("Copying source files to volume...");
                     _logger.LogInformation("Copying source files to volume via bootstrap container...");
                     result.CompletedStep = DevcontainerSpawnStep.FileCopyToBootstrap;
 
@@ -192,6 +198,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                 }
 
                 // Step 7: Run devcontainer up inside bootstrap container
+                onProgress?.Invoke("Running devcontainer up (this may take several minutes)...");
                 _logger.LogInformation("Running devcontainer up in bootstrap container...");
                 result.CompletedStep = DevcontainerSpawnStep.DevcontainerUp;
 
@@ -223,6 +230,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                 // Step 4: Copy files to volume
                 if (options.CopySourceFiles)
                 {
+                    onProgress?.Invoke("Copying source files to volume...");
                     _logger.LogInformation("Copying source files to volume...");
                     result.CompletedStep = DevcontainerSpawnStep.FileCopyToBootstrap;
 
@@ -235,6 +243,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                 }
 
                 // Step 5: Create bootstrap workspace
+                onProgress?.Invoke("Creating bootstrap workspace...");
                 _logger.LogInformation("Creating bootstrap workspace...");
                 result.CompletedStep = DevcontainerSpawnStep.BootstrapContainerStart;
 
@@ -246,6 +255,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                 _logger.LogInformation("Bootstrap workspace created at: {BootstrapPath}", bootstrapPath);
 
                 // Step 6: Run devcontainer up
+                onProgress?.Invoke("Running devcontainer up (this may take several minutes)...");
                 _logger.LogInformation("Running devcontainer up...");
                 result.CompletedStep = DevcontainerSpawnStep.DevcontainerUp;
 
@@ -267,6 +277,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
             // Step 8: Launch VS Code
             if (options.LaunchVsCode)
             {
+                onProgress?.Invoke("Launching VS Code...");
                 _logger.LogInformation("Launching VS Code...");
                 result.CompletedStep = DevcontainerSpawnStep.VsCodeLaunch;
 
