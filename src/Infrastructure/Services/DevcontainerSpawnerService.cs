@@ -1286,24 +1286,31 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
         var containerName = $"{config.ContainerNamePrefix}-{config.ProjectName}-{Guid.NewGuid().ToString("N")[..8]}";
         var imageName = $"{config.ImageName}:{config.ImageTag}";
 
-        // Determine Docker socket path based on platform
-        string dockerSocketPath;
+        // Determine Docker socket mount based on Docker backend, not just host OS
+        // Linux containers always need /var/run/docker.sock, even on Windows with WSL2 backend
         string dockerSocketMount;
 
-        if (OperatingSystem.IsWindows())
+        // Check Docker info to determine backend
+        var dockerInfo = await _dockerClient.System.GetSystemInfoAsync();
+        var isLinuxContainers = dockerInfo.OSType?.Equals("linux", StringComparison.OrdinalIgnoreCase) == true;
+
+        _logger.LogDebug("Docker backend - OS: {OS}, OSType: {OSType}",
+            dockerInfo.OperatingSystem, dockerInfo.OSType);
+
+        if (OperatingSystem.IsWindows() && !isLinuxContainers)
         {
-            // Windows uses named pipe
-            dockerSocketPath = "//./pipe/docker_engine";
+            // Windows native containers (Hyper-V) use named pipe
             dockerSocketMount = "//./pipe/docker_engine://./pipe/docker_engine";
+            _logger.LogDebug("Using Windows named pipe for native Windows containers");
         }
         else
         {
-            // Unix systems use socket file
-            dockerSocketPath = "/var/run/docker.sock";
+            // Linux containers (native Linux or Docker Desktop with WSL2) use Unix socket
             dockerSocketMount = "/var/run/docker.sock:/var/run/docker.sock";
+            _logger.LogDebug("Using Unix socket for Linux containers (WSL2 or native Linux)");
         }
 
-        _logger.LogDebug("Using Docker socket: {SocketPath}", dockerSocketPath);
+        _logger.LogInformation("Docker socket mount: {SocketMount}", dockerSocketMount);
 
         // Build labels dictionary
         var labels = new Dictionary<string, string>(config.Labels)
