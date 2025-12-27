@@ -1901,13 +1901,17 @@ DOCKER_CONFIG_EOF
     /// <param name="volumeName">Docker volume name containing the workspace</param>
     /// <param name="buildArgs">Docker build arguments</param>
     /// <param name="buildLogPath">Path to write build output (optional)</param>
+    /// <param name="forwardDockerConfig">Whether to forward Docker credentials</param>
+    /// <param name="dockerConfigPath">Custom Docker config path</param>
     /// <returns>Parsed result from devcontainer CLI</returns>
     private async Task<DevcontainerUpResult> RunDevcontainerUpInBootstrapAsync(
         string bootstrapContainerId,
         string workspaceFolder,
         string volumeName,
         Dictionary<string, string>? buildArgs = null,
-        string? buildLogPath = null)
+        string? buildLogPath = null,
+        bool forwardDockerConfig = false,
+        string? dockerConfigPath = null)
     {
         _logger.LogDebug("Running devcontainer up in bootstrap container: {WorkspaceFolder}", workspaceFolder);
 
@@ -1931,6 +1935,19 @@ DOCKER_CONFIG_EOF
         // This is what VS Code does - it creates an override config for volume-based workflows
         var overrideConfigPath = $"/tmp/devcontainer-override-{Guid.NewGuid()}.json";
         await CreateOverrideConfigAsync(bootstrapContainerId, workspaceFolder, overrideConfigPath);
+
+        // Ensure Docker config exists before devcontainer up
+        // This prevents postStartCommand errors and enables private registry access when requested
+        if (forwardDockerConfig)
+        {
+            _logger.LogInformation("Forwarding Docker credentials...");
+            await ForwardDockerCredentialsAsync(bootstrapContainerId, workspaceFolder, dockerConfigPath);
+        }
+        else
+        {
+            _logger.LogDebug("Creating default empty Docker config...");
+            await CreateDefaultDockerConfigAsync(bootstrapContainerId, workspaceFolder);
+        }
 
         // Build command WITHOUT --workspace-folder to prevent bind mount creation
         // The devcontainer CLI infers workspace from --config path
