@@ -414,4 +414,166 @@ public class DevcontainerSpawnerServiceTests : TestBase
             $"Resource should NOT exist at '{incorrectResourceName}' " +
             "because the file is not in Infrastructure/Services/Resources/");
     }
+
+    [Fact]
+    public void BootstrapExecutionResult_CombinedOutput_WithBothOutputAndError_ShouldFormatCorrectly()
+    {
+        // Arrange
+        var result = new BootstrapExecutionResult
+        {
+            Output = "This is stdout\nLine 2 of stdout",
+            Error = "This is stderr\nLine 2 of stderr",
+            ExitCode = 1,
+            Duration = TimeSpan.FromSeconds(2.5)
+        };
+
+        // Act
+        var combined = result.CombinedOutput;
+
+        // Assert
+        combined.Should().Contain("=== STDOUT ===");
+        combined.Should().Contain("This is stdout");
+        combined.Should().Contain("=== STDERR ===");
+        combined.Should().Contain("This is stderr");
+        combined.Should().NotContain("\n\n\n"); // Should not have excessive newlines
+    }
+
+    [Fact]
+    public void BootstrapExecutionResult_CombinedOutput_WithOnlyStdout_ShouldNotIncludeStderrSection()
+    {
+        // Arrange
+        var result = new BootstrapExecutionResult
+        {
+            Output = "Only stdout content",
+            Error = string.Empty,
+            ExitCode = 0
+        };
+
+        // Act
+        var combined = result.CombinedOutput;
+
+        // Assert
+        combined.Should().Contain("=== STDOUT ===");
+        combined.Should().Contain("Only stdout content");
+        combined.Should().NotContain("=== STDERR ===");
+    }
+
+    [Fact]
+    public void BootstrapExecutionResult_CombinedOutput_WithOnlyStderr_ShouldNotIncludeStdoutSection()
+    {
+        // Arrange
+        var result = new BootstrapExecutionResult
+        {
+            Output = string.Empty,
+            Error = "Only stderr content",
+            ExitCode = 1
+        };
+
+        // Act
+        var combined = result.CombinedOutput;
+
+        // Assert
+        combined.Should().NotContain("=== STDOUT ===");
+        combined.Should().Contain("=== STDERR ===");
+        combined.Should().Contain("Only stderr content");
+    }
+
+    [Fact]
+    public void BootstrapExecutionResult_CombinedOutput_WithNoOutput_ShouldReturnEmpty()
+    {
+        // Arrange
+        var result = new BootstrapExecutionResult
+        {
+            Output = string.Empty,
+            Error = string.Empty,
+            ExitCode = 0
+        };
+
+        // Act
+        var combined = result.CombinedOutput;
+
+        // Assert
+        combined.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void BootstrapExecutionResult_FormattedDiagnostics_ShouldIncludeExitCodeAndDuration()
+    {
+        // Arrange
+        var result = new BootstrapExecutionResult
+        {
+            Output = "Test output",
+            Error = "Test error",
+            ExitCode = 42,
+            Duration = TimeSpan.FromSeconds(3.14159)
+        };
+
+        // Act
+        var diagnostics = result.FormattedDiagnostics();
+
+        // Assert
+        diagnostics.Should().Contain("Exit Code: 42");
+        diagnostics.Should().Contain("Duration: 3.14s");
+        diagnostics.Should().Contain("=== STDOUT ===");
+        diagnostics.Should().Contain("Test output");
+        diagnostics.Should().Contain("=== STDERR ===");
+        diagnostics.Should().Contain("Test error");
+    }
+
+    [Fact]
+    public void BootstrapExecutionResult_FormattedDiagnostics_WithNoOutput_ShouldIndicateNoOutput()
+    {
+        // Arrange
+        var result = new BootstrapExecutionResult
+        {
+            Output = string.Empty,
+            Error = string.Empty,
+            ExitCode = 0,
+            Duration = TimeSpan.FromSeconds(1)
+        };
+
+        // Act
+        var diagnostics = result.FormattedDiagnostics();
+
+        // Assert
+        diagnostics.Should().Contain("Exit Code: 0");
+        diagnostics.Should().Contain("Duration: 1.00s");
+        diagnostics.Should().Contain("(No output captured)");
+    }
+
+    [Fact]
+    public void DevcontainerSpawnResult_ShouldHaveCliOutputProperties()
+    {
+        // Arrange & Act
+        var result = new DevcontainerSpawnResult
+        {
+            Success = false,
+            Message = "devcontainer up failed",
+            DevcontainerCliOutput = "devcontainer CLI stdout content",
+            DevcontainerCliStderr = "devcontainer CLI stderr content"
+        };
+
+        // Assert
+        result.DevcontainerCliOutput.Should().Be("devcontainer CLI stdout content");
+        result.DevcontainerCliStderr.Should().Be("devcontainer CLI stderr content");
+    }
+
+    [Fact]
+    public void DevcontainerSpawnResult_BootstrapLogs_ShouldBeMarkedAsObsolete()
+    {
+        // This test verifies that BootstrapLogs property is marked as obsolete
+        // to guide developers to use the new DevcontainerCliOutput and DevcontainerCliStderr properties
+
+        // Arrange
+        var propertyInfo = typeof(DevcontainerSpawnResult).GetProperty("BootstrapLogs");
+
+        // Act
+        var obsoleteAttribute = propertyInfo?.GetCustomAttributes(typeof(ObsoleteAttribute), false).FirstOrDefault();
+
+        // Assert
+        obsoleteAttribute.Should().NotBeNull("BootstrapLogs should be marked with [Obsolete] attribute");
+        var attribute = obsoleteAttribute as ObsoleteAttribute;
+        attribute!.Message.Should().Contain("DevcontainerCliOutput");
+        attribute.Message.Should().Contain("DevcontainerCliStderr");
+    }
 }

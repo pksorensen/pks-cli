@@ -162,7 +162,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                 {
                     ProjectName = options.ProjectName,
                     VolumeName = volumeName,
-                    WorkspacePath = $"/workspaces/{options.ProjectName}",
+                    WorkspacePath = "/workspaces",  // Mount at parent directory, not project subdirectory
                     ImageName = "pks-devcontainer-bootstrap",
                     ImageTag = "latest",
                     ContainerNamePrefix = "pks-bootstrap",
@@ -198,7 +198,11 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                 upResult = await RunDevcontainerUpInBootstrapAsync(
                     bootstrapContainer.ContainerId,
                     $"/workspaces/{options.ProjectName}",
-                    volumeName);
+                    volumeName,
+                    options.BuildArgs,
+                    options.BuildLogPath,
+                    options.ForwardDockerConfig,
+                    options.DockerConfigPath);
 
                 if (upResult.Outcome != "success")
                 {
@@ -305,27 +309,39 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
         {
             _logger.LogError(ex, "Devcontainer spawn failed at step {Step}", result.CompletedStep);
 
-            // Capture bootstrap container logs if using bootstrap workflow
-            if (bootstrapContainer != null)
-            {
-                try
-                {
-                    _logger.LogInformation("Capturing bootstrap container logs...");
-                    var logsResult = await ExecuteInBootstrapAsync(
-                        bootstrapContainer.ContainerId,
-                        "cat /var/log/* 2>/dev/null || echo 'No logs found'",
-                        timeoutSeconds: 10);
+            // Extract CLI output from exception message if available
+            // The exception message from RunDevcontainerUpInBootstrapAsync contains both stdout and stderr
+            var exceptionMessage = ex.Message;
 
-                    if (logsResult.Success && !string.IsNullOrWhiteSpace(logsResult.Output))
-                    {
-                        _logger.LogDebug("Bootstrap container logs: {Logs}", logsResult.Output);
-                        result.Errors.Add($"Bootstrap logs: {logsResult.Output}");
-                    }
-                }
-                catch (Exception logEx)
+            // Parse stdout and stderr from the exception message
+            if (exceptionMessage.Contains("STDOUT:") || exceptionMessage.Contains("STDERR:"))
+            {
+                // Extract stdout
+                var stdoutMatch = System.Text.RegularExpressions.Regex.Match(
+                    exceptionMessage,
+                    @"STDOUT:\r?\n(.*?)(?=\r?\n\r?\nSTDERR:|\Z)",
+                    System.Text.RegularExpressions.RegexOptions.Singleline);
+
+                if (stdoutMatch.Success && stdoutMatch.Groups.Count > 1)
                 {
-                    _logger.LogWarning(logEx, "Failed to capture bootstrap container logs");
+                    result.DevcontainerCliOutput = stdoutMatch.Groups[1].Value.Trim();
                 }
+
+                // Extract stderr
+                var stderrMatch = System.Text.RegularExpressions.Regex.Match(
+                    exceptionMessage,
+                    @"STDERR:\r?\n(.*)",
+                    System.Text.RegularExpressions.RegexOptions.Singleline);
+
+                if (stderrMatch.Success && stderrMatch.Groups.Count > 1)
+                {
+                    result.DevcontainerCliStderr = stderrMatch.Groups[1].Value.Trim();
+                }
+
+                _logger.LogDebug("Extracted devcontainer CLI output from exception. " +
+                    "Stdout length: {StdoutLength}, Stderr length: {StderrLength}",
+                    result.DevcontainerCliOutput?.Length ?? 0,
+                    result.DevcontainerCliStderr?.Length ?? 0);
             }
 
             // Cleanup on failure
@@ -957,17 +973,32 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
         {
             _logger.LogDebug("Creating temporary container for file copy: {TempContainer}", tempContainerName);
 
-            // Create temporary Alpine container with volume mounted
-            await RunDockerCommandAsync(
-                $"container create --name {tempContainerName} -v {volumeName}:{containerPath} alpine:latest");
+            // Create and start container with volume mounted (use tail -f to keep it running)
+            var volumeMountPath = "/workspaces";
+            var containerId = await RunDockerCommandAsync(
+                $"run -d --name {tempContainerName} -v {volumeName}:{volumeMountPath} alpine:latest tail -f /dev/null");
 
-            // Copy files, excluding common development artifacts
-            _logger.LogDebug("Copying files from {LocalPath} to volume {VolumeName}", localPath, volumeName);
+            _logger.LogDebug("Started temporary container: {ContainerId}", containerId.Trim());
 
-            // Use docker cp to copy files
-            await RunDockerCommandAsync($"cp \"{localPath}/.\" {tempContainerName}:{containerPath}");
+            // Create the target directory structure
+            _logger.LogDebug("Creating directory structure: {ContainerPath}", containerPath);
+            await RunDockerCommandAsync($"exec {tempContainerName} mkdir -p {containerPath}");
 
-            _logger.LogInformation("Files copied to volume successfully");
+            // Copy files using tar (more reliable than docker cp for directory contents)
+            _logger.LogDebug("Copying files from {LocalPath} to {ContainerPath} in volume {VolumeName}",
+                localPath, containerPath, volumeName);
+
+            // Use tar to copy files: tar creates archive from source, pipes to docker exec tar to extract at destination
+            // Escape quotes in paths to avoid nested quote issues when passing to bash -c
+            var escapedLocalPath = localPath.Replace("\"", "\\\"");
+            var tarCommand = $"tar -C \"{escapedLocalPath}\" -cf - . | docker exec -i {tempContainerName} tar -C {containerPath} -xf -";
+            _logger.LogDebug("Executing tar command: {TarCommand}", tarCommand);
+            await RunCommandAsync("/bin/bash", $"-c \"{tarCommand}\"", timeoutSeconds: 60);
+
+            // Stop the container
+            await RunDockerCommandAsync($"container stop {tempContainerName}");
+
+            _logger.LogInformation("Files copied to volume successfully at {ContainerPath}", containerPath);
         }
         finally
         {
@@ -1499,45 +1530,486 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
     }
 
     /// <summary>
+    /// Merges build arguments into the devcontainer.json file
+    /// </summary>
+    /// <param name="bootstrapContainerId">ID of the bootstrap container</param>
+    /// <param name="workspaceFolder">Workspace folder path inside bootstrap container</param>
+    /// <param name="buildArgs">Build arguments to merge</param>
+    private async Task MergeBuildArgsIntoDevcontainerJsonAsync(
+        string bootstrapContainerId,
+        string workspaceFolder,
+        Dictionary<string, string> buildArgs)
+    {
+        _logger.LogDebug("Merging {Count} build arguments into devcontainer.json", buildArgs.Count);
+
+        var devcontainerJsonPath = $"{workspaceFolder}/.devcontainer/devcontainer.json";
+
+        // Read the existing devcontainer.json
+        var readResult = await ExecuteInBootstrapAsync(
+            bootstrapContainerId,
+            $"cat {devcontainerJsonPath}",
+            workingDir: null,
+            timeoutSeconds: 10);
+
+        if (!readResult.Success)
+        {
+            _logger.LogWarning("Could not read devcontainer.json, build args will not be merged: {Error}",
+                readResult.Error);
+            return;
+        }
+
+        try
+        {
+            // Parse JSON
+            var jsonDoc = JsonDocument.Parse(readResult.Output);
+            var root = jsonDoc.RootElement;
+
+            // Create a mutable dictionary to build the new JSON
+            var newJson = new Dictionary<string, object>();
+
+            // Copy all existing properties
+            foreach (var property in root.EnumerateObject())
+            {
+                newJson[property.Name] = JsonSerializer.Deserialize<object>(property.Value.GetRawText())!;
+            }
+
+            // Merge build args into build.args section
+            if (newJson.TryGetValue("build", out var buildObj) && buildObj is JsonElement buildElement)
+            {
+                var buildDict = JsonSerializer.Deserialize<Dictionary<string, object>>(buildElement.GetRawText())!;
+
+                // Get or create args section
+                Dictionary<string, object> argsDict;
+                if (buildDict.TryGetValue("args", out var argsObj) && argsObj is JsonElement argsElement)
+                {
+                    argsDict = JsonSerializer.Deserialize<Dictionary<string, object>>(argsElement.GetRawText())!;
+                }
+                else
+                {
+                    argsDict = new Dictionary<string, object>();
+                }
+
+                // Merge in the build args
+                foreach (var kvp in buildArgs)
+                {
+                    argsDict[kvp.Key] = kvp.Value;
+                    _logger.LogDebug("Merged build arg: {Key}={Value}", kvp.Key, kvp.Value);
+                }
+
+                buildDict["args"] = argsDict;
+                newJson["build"] = buildDict;
+            }
+            else
+            {
+                // Create build section if it doesn't exist
+                newJson["build"] = new Dictionary<string, object>
+                {
+                    ["args"] = buildArgs.ToDictionary(kvp => kvp.Key, kvp => (object)kvp.Value)
+                };
+            }
+
+            // Serialize back to JSON
+            var options = new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+            };
+            var modifiedJson = JsonSerializer.Serialize(newJson, options);
+
+            // Write back to file using a heredoc to avoid escaping issues
+            var writeCommand = $@"cat > {devcontainerJsonPath} <<'DEVCONTAINER_EOF'
+{modifiedJson}
+DEVCONTAINER_EOF";
+
+            var writeResult = await ExecuteInBootstrapAsync(
+                bootstrapContainerId,
+                writeCommand,
+                workingDir: null,
+                timeoutSeconds: 10);
+
+            if (!writeResult.Success)
+            {
+                _logger.LogWarning("Failed to write modified devcontainer.json: {Error}", writeResult.Error);
+            }
+            else
+            {
+                _logger.LogDebug("Successfully merged build args into devcontainer.json");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to merge build args into devcontainer.json");
+        }
+    }
+
+    /// <summary>
+    /// Creates an override config file to fix workspace mount issues
+    /// Similar to what VS Code does for volume-based workflows
+    /// </summary>
+    /// <param name="bootstrapContainerId">ID of the bootstrap container</param>
+    /// <param name="workspaceFolder">Workspace folder path</param>
+    /// <param name="overrideConfigPath">Path where override config will be created</param>
+    private async Task CreateOverrideConfigAsync(
+        string bootstrapContainerId,
+        string workspaceFolder,
+        string overrideConfigPath)
+    {
+        _logger.LogDebug("Creating override config to fix workspace mount issues");
+
+        var devcontainerJsonPath = $"{workspaceFolder}/.devcontainer/devcontainer.json";
+
+        // Read the original devcontainer.json
+        var readResult = await ExecuteInBootstrapAsync(
+            bootstrapContainerId,
+            $"cat {devcontainerJsonPath}",
+            workingDir: null,
+            timeoutSeconds: 10);
+
+        if (!readResult.Success)
+        {
+            _logger.LogWarning("Could not read devcontainer.json for override: {Error}", readResult.Error);
+            return;
+        }
+
+        try
+        {
+            // Parse the JSON
+            var jsonDoc = JsonDocument.Parse(readResult.Output);
+            var root = jsonDoc.RootElement;
+
+            // Create a mutable dictionary with all properties
+            var overrideConfig = new Dictionary<string, object>();
+
+            // Copy all properties except workspace mount/folder
+            foreach (var property in root.EnumerateObject())
+            {
+                // Skip properties that cause bind mount issues
+                if (property.Name == "workspaceMount" || property.Name == "workspaceFolder")
+                {
+                    continue;
+                }
+
+                overrideConfig[property.Name] = JsonSerializer.Deserialize<object>(property.Value.GetRawText())!;
+            }
+
+            // Serialize the override config
+            var options = new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+            };
+            var overrideJson = JsonSerializer.Serialize(overrideConfig, options);
+
+            // Write override config to bootstrap container
+            var writeCommand = $@"cat > {overrideConfigPath} <<'OVERRIDE_EOF'
+{overrideJson}
+OVERRIDE_EOF";
+
+            var writeResult = await ExecuteInBootstrapAsync(
+                bootstrapContainerId,
+                writeCommand,
+                workingDir: null,
+                timeoutSeconds: 10);
+
+            if (!writeResult.Success)
+            {
+                _logger.LogWarning("Failed to write override config: {Error}", writeResult.Error);
+            }
+            else
+            {
+                _logger.LogDebug("Created override config at: {Path}", overrideConfigPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to create override config");
+        }
+    }
+
+    /// <summary>
+    /// Creates a default empty Docker configuration in the bootstrap container
+    /// This prevents Docker authentication errors while not requiring credentials
+    /// The config will be inherited by the devcontainer when it starts
+    /// </summary>
+    /// <param name="bootstrapContainerId">ID of the bootstrap container</param>
+    /// <param name="workspaceFolder">Workspace folder path for determining the target user</param>
+    private async Task CreateDefaultDockerConfigAsync(
+        string bootstrapContainerId,
+        string workspaceFolder)
+    {
+        _logger.LogDebug("Creating default empty Docker config in bootstrap container");
+
+        try
+        {
+            // Extract remote user from devcontainer.json
+            var remoteUser = await GetRemoteUserFromDevcontainerAsync(bootstrapContainerId, workspaceFolder);
+
+            // Create .docker directory with proper permissions for the remote user
+            var createDirCommand = $@"
+                mkdir -p /workspaces/workspace/.docker && \
+                echo '{{}}' > /workspaces/workspace/.docker/config.json && \
+                chmod 700 /workspaces/workspace/.docker && \
+                chmod 600 /workspaces/workspace/.docker/config.json
+            ";
+
+            var result = await ExecuteInBootstrapAsync(
+                bootstrapContainerId,
+                createDirCommand,
+                workingDir: null,
+                timeoutSeconds: 10);
+
+            if (!result.Success)
+            {
+                _logger.LogWarning(
+                    "Failed to create default Docker config: {Error}. " +
+                    "This may cause Docker authentication warnings but should not prevent container operation.",
+                    result.Error);
+            }
+            else
+            {
+                _logger.LogInformation("Default Docker config created successfully");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to create default Docker config");
+        }
+    }
+
+    /// <summary>
+    /// Gets the remote user from devcontainer.json
+    /// </summary>
+    private async Task<string> GetRemoteUserFromDevcontainerAsync(
+        string bootstrapContainerId,
+        string workspaceFolder)
+    {
+        try
+        {
+            var devcontainerJsonPath = $"{workspaceFolder}/.devcontainer/devcontainer.json";
+            var readResult = await ExecuteInBootstrapAsync(
+                bootstrapContainerId,
+                $"cat {devcontainerJsonPath}",
+                workingDir: null,
+                timeoutSeconds: 10);
+
+            if (readResult.Success)
+            {
+                var jsonDoc = JsonDocument.Parse(readResult.Output);
+                if (jsonDoc.RootElement.TryGetProperty("remoteUser", out var remoteUserProp))
+                {
+                    return remoteUserProp.GetString() ?? "node";
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to read remoteUser from devcontainer.json, using default 'node'");
+        }
+
+        return "node"; // Default
+    }
+
+    /// <summary>
+    /// Forwards Docker credentials from host to devcontainer
+    /// Supports multiple strategies for credential forwarding
+    /// </summary>
+    /// <param name="bootstrapContainerId">ID of the bootstrap container</param>
+    /// <param name="workspaceFolder">Workspace folder path</param>
+    /// <param name="customConfigPath">Optional custom config path</param>
+    private async Task ForwardDockerCredentialsAsync(
+        string bootstrapContainerId,
+        string workspaceFolder,
+        string? customConfigPath = null)
+    {
+        _logger.LogInformation("Forwarding Docker credentials to devcontainer...");
+
+        try
+        {
+            // 1. Locate host Docker config
+            var hostConfigPath = customConfigPath ?? GetDefaultDockerConfigPath();
+
+            if (!File.Exists(hostConfigPath))
+            {
+                _logger.LogWarning(
+                    "Host Docker config not found at {Path}. " +
+                    "Creating empty config instead. " +
+                    "Run 'docker login' on host to enable credential forwarding.",
+                    hostConfigPath);
+
+                await CreateDefaultDockerConfigAsync(bootstrapContainerId, workspaceFolder);
+                return;
+            }
+
+            _logger.LogDebug("Reading host Docker config from: {Path}", hostConfigPath);
+
+            // 2. Read and validate host config
+            var configContent = await File.ReadAllTextAsync(hostConfigPath);
+
+            if (string.IsNullOrWhiteSpace(configContent) || configContent.Trim() == "{}")
+            {
+                _logger.LogInformation("Host Docker config is empty, creating default config");
+                await CreateDefaultDockerConfigAsync(bootstrapContainerId, workspaceFolder);
+                return;
+            }
+
+            // 3. Write config to bootstrap container's workspace
+            var writeConfigCommand = $@"
+                mkdir -p /workspaces/workspace/.docker && \
+                cat > /workspaces/workspace/.docker/config.json <<'DOCKER_CONFIG_EOF'
+{configContent}
+DOCKER_CONFIG_EOF
+                chmod 700 /workspaces/workspace/.docker && \
+                chmod 600 /workspaces/workspace/.docker/config.json
+            ";
+
+            var writeResult = await ExecuteInBootstrapAsync(
+                bootstrapContainerId,
+                writeConfigCommand,
+                workingDir: null,
+                timeoutSeconds: 10);
+
+            if (!writeResult.Success)
+            {
+                _logger.LogError("Failed to write Docker config: {Error}", writeResult.Error);
+                await CreateDefaultDockerConfigAsync(bootstrapContainerId, workspaceFolder);
+                return;
+            }
+
+            _logger.LogInformation("Docker credentials forwarded successfully");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to forward Docker credentials, falling back to empty config");
+            await CreateDefaultDockerConfigAsync(bootstrapContainerId, workspaceFolder);
+        }
+    }
+
+    /// <summary>
+    /// Gets the default Docker config path based on platform
+    /// </summary>
+    private string GetDefaultDockerConfigPath()
+    {
+        var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return Path.Combine(homeDir, ".docker", "config.json");
+    }
+
+    /// <summary>
     /// Runs devcontainer up command inside bootstrap container
     /// </summary>
     /// <param name="bootstrapContainerId">ID of the bootstrap container</param>
     /// <param name="workspaceFolder">Workspace folder path inside bootstrap container</param>
     /// <param name="volumeName">Docker volume name containing the workspace</param>
+    /// <param name="buildArgs">Docker build arguments</param>
+    /// <param name="buildLogPath">Path to write build output (optional)</param>
     /// <returns>Parsed result from devcontainer CLI</returns>
     private async Task<DevcontainerUpResult> RunDevcontainerUpInBootstrapAsync(
         string bootstrapContainerId,
         string workspaceFolder,
-        string volumeName)
+        string volumeName,
+        Dictionary<string, string>? buildArgs = null,
+        string? buildLogPath = null)
     {
         _logger.LogDebug("Running devcontainer up in bootstrap container: {WorkspaceFolder}", workspaceFolder);
 
-        // Create override config that clears workspaceMount to prevent bind mount attempts
-        // Only clear workspaceMount, keep other properties intact
-        var overrideConfigPath = "/tmp/pks-devcontainer-override.json";
-        var overrideConfig = "{\"workspaceMount\":\"\"}";
-        var createOverrideResult = await ExecuteInBootstrapAsync(
-            bootstrapContainerId,
-            $"echo '{overrideConfig}' > {overrideConfigPath}",
-            workingDir: null,
-            timeoutSeconds: 10);
+        // Inform user about log file if specified
+        if (!string.IsNullOrEmpty(buildLogPath))
+        {
+            var absoluteLogPath = Path.GetFullPath(buildLogPath);
+            _logger.LogInformation("Build output will be written to: {LogPath}", absoluteLogPath);
+            Console.WriteLine($"📝 Build log: {absoluteLogPath}");
+            Console.WriteLine("   You can monitor progress with: tail -f " + absoluteLogPath);
+            Console.WriteLine();
+        }
 
-        // Build command with volume mount and workspace folder
-        // Key: --override-config clears workspaceMount from devcontainer.json
-        // This prevents devcontainer CLI from trying to bind mount the workspace
-        var devcontainerCommand = $"devcontainer up --workspace-folder {workspaceFolder} --config {workspaceFolder}/.devcontainer/devcontainer.json --override-config {overrideConfigPath} --mount type=volume,source={volumeName},target=/workspaces,external=true --update-remote-user-uid-default off";
+        // Modify devcontainer.json to include build args if provided
+        if (buildArgs != null && buildArgs.Count > 0)
+        {
+            await MergeBuildArgsIntoDevcontainerJsonAsync(bootstrapContainerId, workspaceFolder, buildArgs);
+        }
+
+        // Create override config to remove workspaceMount (which causes bind mount issues)
+        // This is what VS Code does - it creates an override config for volume-based workflows
+        var overrideConfigPath = $"/tmp/devcontainer-override-{Guid.NewGuid()}.json";
+        await CreateOverrideConfigAsync(bootstrapContainerId, workspaceFolder, overrideConfigPath);
+
+        // Build command WITHOUT --workspace-folder to prevent bind mount creation
+        // The devcontainer CLI infers workspace from --config path
+        // Provide explicit volume mount which should be used instead of bind mount
+        var projectName = Path.GetFileName(workspaceFolder);
+        var devcontainerCommand = $"devcontainer up --config {workspaceFolder}/.devcontainer/devcontainer.json --override-config {overrideConfigPath} --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName} --mount type=volume,source={volumeName},target=/workspaces,external=true --update-remote-user-uid-default off";
 
         // Execute using ExecuteInBootstrapAsync with 600 second timeout
+        // Set working directory so initializeCommand can access relative paths
         var result = await ExecuteInBootstrapAsync(
             bootstrapContainerId,
             devcontainerCommand,
-            workingDir: null,
+            workingDir: workspaceFolder,
             timeoutSeconds: 600);
+
+        // Write output to log file if specified
+        if (!string.IsNullOrEmpty(buildLogPath))
+        {
+            try
+            {
+                var absoluteLogPath = Path.GetFullPath(buildLogPath);
+
+                // Create log directory if it doesn't exist
+                var logDir = Path.GetDirectoryName(absoluteLogPath);
+                if (!string.IsNullOrEmpty(logDir) && !Directory.Exists(logDir))
+                {
+                    Directory.CreateDirectory(logDir);
+                }
+
+                // Write both stdout and stderr to the log file
+                var logContent = new StringBuilder();
+                logContent.AppendLine($"=== Devcontainer Build Log ===");
+                logContent.AppendLine($"Timestamp: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                logContent.AppendLine($"Workspace: {workspaceFolder}");
+                logContent.AppendLine($"Volume: {volumeName}");
+                logContent.AppendLine();
+                logContent.AppendLine("=== STDOUT ===");
+                logContent.AppendLine(result.Output ?? "(no output)");
+                logContent.AppendLine();
+                logContent.AppendLine("=== STDERR ===");
+                logContent.AppendLine(result.Error ?? "(no errors)");
+                logContent.AppendLine();
+                logContent.AppendLine($"=== Exit Code: {result.ExitCode} ===");
+
+                await File.WriteAllTextAsync(absoluteLogPath, logContent.ToString());
+                _logger.LogInformation("Build log written to: {LogPath}", absoluteLogPath);
+                Console.WriteLine($"✅ Build log saved to: {absoluteLogPath}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to write build log to: {LogPath}", buildLogPath);
+            }
+        }
 
         if (!result.Success)
         {
-            throw new InvalidOperationException(
-                $"devcontainer up failed in bootstrap container: {result.Error}");
+            // Log full diagnostics before throwing
+            _logger.LogError("devcontainer up failed. Full diagnostics:{NewLine}{Diagnostics}",
+                Environment.NewLine, result.FormattedDiagnostics());
+
+            // Include both stdout and stderr in exception message for better debugging
+            var errorMessage = new StringBuilder();
+            errorMessage.AppendLine("devcontainer up failed in bootstrap container");
+            errorMessage.AppendLine();
+
+            if (!string.IsNullOrWhiteSpace(result.Output))
+            {
+                errorMessage.AppendLine("STDOUT:");
+                errorMessage.AppendLine(result.Output);
+                errorMessage.AppendLine();
+            }
+
+            if (!string.IsNullOrWhiteSpace(result.Error))
+            {
+                errorMessage.AppendLine("STDERR:");
+                errorMessage.AppendLine(result.Error);
+            }
+
+            throw new InvalidOperationException(errorMessage.ToString().TrimEnd());
         }
 
         _logger.LogDebug("devcontainer up output: {Output}", result.Output);

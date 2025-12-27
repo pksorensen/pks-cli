@@ -43,6 +43,14 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         [CommandOption("--no-bootstrap")]
         [Description("Use direct execution instead of bootstrap container (advanced)")]
         public bool NoBootstrap { get; set; }
+
+        [CommandOption("--forward-docker-config")]
+        [Description("Forward Docker credentials from host to devcontainer (enables private image pulls)")]
+        public bool ForwardDockerConfig { get; set; }
+
+        [CommandOption("--docker-config-path <PATH>")]
+        [Description("Path to Docker config.json to forward (defaults to ~/.docker/config.json)")]
+        public string? DockerConfigPath { get; set; }
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -179,7 +187,9 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
                     CopySourceFiles = !settings.NoCopySource,
                     LaunchVsCode = !settings.NoLaunchVsCode,
                     ReuseExisting = !settings.Force,
-                    UseBootstrapContainer = !settings.NoBootstrap
+                    UseBootstrapContainer = !settings.NoBootstrap,
+                    ForwardDockerConfig = settings.ForwardDockerConfig,
+                    DockerConfigPath = settings.DockerConfigPath
                 };
 
                 result = await _spawnerService.SpawnLocalAsync(options);
@@ -211,6 +221,26 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
             {
                 DisplayError("Failed to spawn devcontainer");
                 DisplayWarning(result.Message);
+
+                // Display detailed CLI output if available
+                if (!string.IsNullOrWhiteSpace(result.DevcontainerCliOutput) ||
+                    !string.IsNullOrWhiteSpace(result.DevcontainerCliStderr))
+                {
+                    Console.WriteLine();
+                    var cliOutputPanel = new Panel(new Markup(
+                        "[bold yellow]devcontainer CLI Output:[/]\n\n" +
+                        (string.IsNullOrWhiteSpace(result.DevcontainerCliOutput)
+                            ? ""
+                            : $"[bold cyan]STDOUT:[/]\n{result.DevcontainerCliOutput.EscapeMarkup()}\n\n") +
+                        (string.IsNullOrWhiteSpace(result.DevcontainerCliStderr)
+                            ? ""
+                            : $"[bold red]STDERR:[/]\n{result.DevcontainerCliStderr.EscapeMarkup()}")))
+                        .Border(BoxBorder.Rounded)
+                        .BorderStyle("red")
+                        .Header(" [bold red]Diagnostics[/] ");
+
+                    Console.Write(cliOutputPanel);
+                }
 
                 if (result.Errors.Any())
                 {

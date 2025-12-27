@@ -434,6 +434,29 @@ public class DevcontainerSpawnOptions
     /// Custom bootstrap configuration (optional)
     /// </summary>
     public BootstrapContainerConfig? BootstrapConfig { get; set; }
+
+    /// <summary>
+    /// Docker build arguments to pass to devcontainer build (optional)
+    /// Format: KEY=VALUE pairs
+    /// </summary>
+    public Dictionary<string, string>? BuildArgs { get; set; }
+
+    /// <summary>
+    /// Path to write devcontainer build output (optional)
+    /// If specified, build output will be written to this file instead of console
+    /// </summary>
+    public string? BuildLogPath { get; set; }
+
+    /// <summary>
+    /// Whether to forward Docker credentials from host to devcontainer (default: false)
+    /// When enabled, host's Docker config will be copied to devcontainer for authenticated registry access
+    /// </summary>
+    public bool ForwardDockerConfig { get; set; } = false;
+
+    /// <summary>
+    /// Custom path to Docker config.json (optional, defaults to ~/.docker/config.json)
+    /// </summary>
+    public string? DockerConfigPath { get; set; }
 }
 
 /// <summary>
@@ -494,7 +517,18 @@ public class DevcontainerSpawnResult
     /// <summary>
     /// Bootstrap container logs (for debugging failures)
     /// </summary>
+    [Obsolete("Use DevcontainerCliOutput and DevcontainerCliStderr for more detailed error information")]
     public string? BootstrapLogs { get; set; }
+
+    /// <summary>
+    /// Full stdout output from devcontainer CLI (for detailed error diagnostics)
+    /// </summary>
+    public string? DevcontainerCliOutput { get; set; }
+
+    /// <summary>
+    /// Full stderr output from devcontainer CLI (for detailed error diagnostics)
+    /// </summary>
+    public string? DevcontainerCliStderr { get; set; }
 }
 
 /// <summary>
@@ -793,6 +827,55 @@ public class BootstrapExecutionResult
     public string Error { get; set; } = string.Empty;
     public int ExitCode { get; set; }
     public TimeSpan Duration { get; set; }
+
+    /// <summary>
+    /// Combined output from stdout and stderr with clear labeling
+    /// </summary>
+    public string CombinedOutput
+    {
+        get
+        {
+            var parts = new List<string>();
+
+            if (!string.IsNullOrWhiteSpace(Output))
+            {
+                parts.Add("=== STDOUT ===");
+                parts.Add(Output.TrimEnd());
+            }
+
+            if (!string.IsNullOrWhiteSpace(Error))
+            {
+                parts.Add("=== STDERR ===");
+                parts.Add(Error.TrimEnd());
+            }
+
+            return parts.Count > 0 ? string.Join(Environment.NewLine, parts) : string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Formatted diagnostics including exit code, duration, and output
+    /// </summary>
+    public string FormattedDiagnostics()
+    {
+        var lines = new List<string>
+        {
+            $"Exit Code: {ExitCode}",
+            $"Duration: {Duration.TotalSeconds:F2}s",
+            string.Empty
+        };
+
+        if (!string.IsNullOrWhiteSpace(Output) || !string.IsNullOrWhiteSpace(Error))
+        {
+            lines.Add(CombinedOutput);
+        }
+        else
+        {
+            lines.Add("(No output captured)");
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
 }
 
 /// <summary>

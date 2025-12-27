@@ -83,6 +83,18 @@ public class InitCommand : Command<InitCommand.Settings>
         [CommandOption("--no-launch-vscode")]
         [Description("Don't automatically launch VS Code")]
         public bool NoLaunchVsCode { get; set; }
+
+        [CommandOption("--build-arg <ARG>")]
+        [Description("Docker build argument in KEY=VALUE format (can be specified multiple times)")]
+        public string[]? BuildArgs { get; set; }
+
+        [CommandOption("--prompt-build-args")]
+        [Description("Interactively prompt for Docker build arguments with defaults from devcontainer.json")]
+        public bool PromptBuildArgs { get; set; }
+
+        [CommandOption("--build-log <PATH>")]
+        [Description("Write devcontainer build output to a log file instead of console")]
+        public string? BuildLogPath { get; set; }
     }
 
     public override int Execute(CommandContext context, Settings? settings)
@@ -149,7 +161,7 @@ public class InitCommand : Command<InitCommand.Settings>
                         .MoreChoicesText("[grey](Move up and down to reveal more templates)[/]")
                         .AddChoices(templates)
                         .UseConverter(template =>
-                            $"{GetTemplateIcon(template)} {template.Title} [dim]({template.PackageId})[/]"));
+                            $"{GetTemplateIcon(template)} {template.Title} [dim]({template.PackageId}) v{template.Version}[/]"));
             }
             else
             {
@@ -165,6 +177,7 @@ public class InitCommand : Command<InitCommand.Settings>
                     var table = new Table();
                     table.AddColumn("Short Name");
                     table.AddColumn("Package ID");
+                    table.AddColumn("Version");
                     table.AddColumn("Description");
 
                     foreach (var t in templates)
@@ -172,6 +185,7 @@ public class InitCommand : Command<InitCommand.Settings>
                         table.AddRow(
                             t.ShortNames.Length > 0 ? string.Join(", ", t.ShortNames) : "[dim]N/A[/]",
                             t.PackageId,
+                            $"[dim]v{t.Version}[/]",
                             t.Description ?? "[dim]No description[/]");
                     }
 
@@ -264,10 +278,8 @@ public class InitCommand : Command<InitCommand.Settings>
                 {
                     await SpawnDevcontainerWorkflowAsync(
                         spawnerService,
-                        settings.ProjectName,
-                        targetDirectory,
-                        settings.VolumeName,
-                        !settings.NoLaunchVsCode);
+                        settings,
+                        targetDirectory);
                 }
             }
 
@@ -318,10 +330,8 @@ public class InitCommand : Command<InitCommand.Settings>
 
     private async Task SpawnDevcontainerWorkflowAsync(
         IDevcontainerSpawnerService spawnerService,
-        string projectName,
-        string projectPath,
-        string? customVolumeName,
-        bool launchVsCode)
+        Settings settings,
+        string projectPath)
     {
         try
         {
@@ -363,16 +373,16 @@ public class InitCommand : Command<InitCommand.Settings>
 
             // 2. Generate and confirm volume name (USER PREFERENCE: Always show, allow edit)
             string confirmedVolumeName;
-            if (!string.IsNullOrEmpty(customVolumeName))
+            if (!string.IsNullOrEmpty(settings.VolumeName))
             {
                 // Volume name provided via command-line, use it directly
-                confirmedVolumeName = customVolumeName;
+                confirmedVolumeName = settings.VolumeName;
                 _console.MarkupLine($"[cyan]Docker volume name:[/] {confirmedVolumeName}");
             }
             else
             {
                 // Interactive prompt for volume name
-                var volumeName = spawnerService.GenerateVolumeName(projectName);
+                var volumeName = spawnerService.GenerateVolumeName(settings.ProjectName!);
                 _console.WriteLine();
                 confirmedVolumeName = _console.Prompt(
                     new TextPrompt<string>("[cyan]Docker volume name:[/]")
@@ -383,7 +393,44 @@ public class InitCommand : Command<InitCommand.Settings>
                     confirmedVolumeName = volumeName;
             }
 
-            // 3. Spawn devcontainer with progress tracking
+            // 3. Handle build arguments
+            Dictionary<string, string>? buildArgs = null;
+
+            // Parse build args from command line if provided
+            if (settings.BuildArgs != null && settings.BuildArgs.Length > 0)
+            {
+                buildArgs = new Dictionary<string, string>();
+                foreach (var arg in settings.BuildArgs)
+                {
+                    var parts = arg.Split('=', 2);
+                    if (parts.Length == 2)
+                    {
+                        buildArgs[parts[0].Trim()] = parts[1].Trim();
+                    }
+                    else
+                    {
+                        _console.MarkupLine($"[yellow]⚠️  Invalid build arg format: {arg} (expected KEY=VALUE)[/]");
+                    }
+                }
+            }
+
+            // Prompt for build args if requested
+            if (settings.PromptBuildArgs)
+            {
+                buildArgs = await PromptForBuildArgsAsync(projectPath, buildArgs);
+            }
+
+            if (buildArgs != null && buildArgs.Count > 0)
+            {
+                _console.WriteLine();
+                _console.MarkupLine("[cyan]Build arguments:[/]");
+                foreach (var kvp in buildArgs)
+                {
+                    _console.MarkupLine($"  [dim]{kvp.Key}=[/]{kvp.Value}");
+                }
+            }
+
+            // 4. Spawn devcontainer with progress tracking
             DevcontainerSpawnResult? result = null;
             await _console.Status()
                 .Spinner(Spinner.Known.Dots)
@@ -391,19 +438,21 @@ public class InitCommand : Command<InitCommand.Settings>
                 {
                     var options = new DevcontainerSpawnOptions
                     {
-                        ProjectName = projectName,
+                        ProjectName = settings.ProjectName!,
                         ProjectPath = projectPath,
                         DevcontainerPath = Path.Combine(projectPath, ".devcontainer"),
                         VolumeName = confirmedVolumeName,
                         CopySourceFiles = true, // USER PREFERENCE: Copy full project
-                        LaunchVsCode = launchVsCode,
-                        ReuseExisting = true
+                        LaunchVsCode = !settings.NoLaunchVsCode,
+                        ReuseExisting = true,
+                        BuildArgs = buildArgs,
+                        BuildLogPath = settings.BuildLogPath
                     };
 
                     result = await spawnerService.SpawnLocalAsync(options);
                 });
 
-            // 4. Display result
+            // 5. Display result
             _console.WriteLine();
             if (result != null && result.Success)
             {
@@ -412,9 +461,9 @@ public class InitCommand : Command<InitCommand.Settings>
 
                     [cyan1]Container ID:[/] {result.ContainerId?[..12]}
                     [cyan1]Volume Name:[/] {result.VolumeName}
-                    [cyan1]Workspace:[/] /workspaces/{projectName}
+                    [cyan1]Workspace:[/] /workspaces/{settings.ProjectName}
 
-                    {(launchVsCode ? "[dim]VS Code is opening...[/]" : "[dim]Connect manually with VS Code Dev Containers extension[/]")}
+                    {(!settings.NoLaunchVsCode ? "[dim]VS Code is opening...[/]" : "[dim]Connect manually with VS Code Dev Containers extension[/]")}
 
                     [bold]🚀 Devcontainer ready for development![/]
                     """)
@@ -449,5 +498,67 @@ public class InitCommand : Command<InitCommand.Settings>
             _console.WriteLine();
             _console.MarkupLine("[dim]To retry, run: pks devcontainer spawn[/]");
         }
+    }
+
+    private async Task<Dictionary<string, string>> PromptForBuildArgsAsync(
+        string projectPath,
+        Dictionary<string, string>? existingArgs)
+    {
+        var buildArgs = existingArgs ?? new Dictionary<string, string>();
+        var devcontainerJsonPath = Path.Combine(projectPath, ".devcontainer", "devcontainer.json");
+
+        if (!File.Exists(devcontainerJsonPath))
+        {
+            _console.MarkupLine("[yellow]⚠️  devcontainer.json not found, skipping build arg prompts[/]");
+            return buildArgs;
+        }
+
+        try
+        {
+            var jsonContent = await File.ReadAllTextAsync(devcontainerJsonPath);
+            var devcontainerConfig = System.Text.Json.JsonDocument.Parse(jsonContent);
+
+            // Try to find build.args in the JSON
+            if (devcontainerConfig.RootElement.TryGetProperty("build", out var buildElement) &&
+                buildElement.TryGetProperty("args", out var argsElement))
+            {
+                _console.WriteLine();
+                _console.MarkupLine("[cyan]Build arguments from devcontainer.json:[/]");
+
+                foreach (var arg in argsElement.EnumerateObject())
+                {
+                    var argName = arg.Name;
+                    var defaultValue = arg.Value.GetString() ?? "";
+
+                    // Skip if already provided via command line
+                    if (buildArgs.ContainsKey(argName))
+                    {
+                        _console.MarkupLine($"  [dim]{argName}=[/]{buildArgs[argName]} [dim](from command line)[/]");
+                        continue;
+                    }
+
+                    // Prompt for value with default
+                    var prompt = new TextPrompt<string>($"  [cyan]{argName}:[/]")
+                        .DefaultValue(defaultValue)
+                        .AllowEmpty();
+
+                    var value = _console.Prompt(prompt);
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        buildArgs[argName] = value;
+                    }
+                }
+            }
+            else
+            {
+                _console.MarkupLine("[yellow]⚠️  No build args found in devcontainer.json[/]");
+            }
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[yellow]⚠️  Failed to parse devcontainer.json: {ex.Message}[/]");
+        }
+
+        return buildArgs;
     }
 }
