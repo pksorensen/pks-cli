@@ -51,6 +51,10 @@ public class InitCommand : Command<InitCommand.Settings>
         [Description("Custom NuGet source/feed to search for templates")]
         public string? NuGetSource { get; set; }
 
+        [CommandOption("--local-template-path <PATH>")]
+        [Description("Path to a local template directory (bypasses NuGet for testing)")]
+        public string? LocalTemplatePath { get; set; }
+
         [CommandOption("--tag <TAG>")]
         [Description("NuGet tag to filter templates (default: pks-templates)")]
         [DefaultValue("pks-templates")]
@@ -124,35 +128,68 @@ public class InitCommand : Command<InitCommand.Settings>
 
         try
         {
-            // Discover available templates from NuGet
+            // Discover available templates from NuGet or local path
             List<NuGetDevcontainerTemplate> templates = new();
+            bool useLocalTemplate = !string.IsNullOrEmpty(settings.LocalTemplatePath);
+            string? localTemplateContentPath = null;
 
-            await _console.Status()
-                .Spinner(Spinner.Known.Dots)
-                .StartAsync("[cyan]Discovering available templates...[/]", async ctx =>
-                {
-                    var sources = string.IsNullOrEmpty(settings.NuGetSource)
-                        ? null
-                        : new[] { settings.NuGetSource };
-
-                    templates = await _templateDiscovery.DiscoverTemplatesAsync(
-                        tag: settings.Tag,
-                        sources: sources,
-                        includePrerelease: settings.IncludePrerelease,
-                        cancellationToken: CancellationToken.None);
-                });
-
-            if (!templates.Any())
+            if (useLocalTemplate)
             {
-                _console.MarkupLine($"[yellow]⚠️  No templates found with tag '{settings.Tag}'.[/]");
-                _console.MarkupLine("[dim]Try running: pks template list --all[/]");
-                return 1;
+                // Validate local template path
+                if (!Directory.Exists(settings.LocalTemplatePath))
+                {
+                    _console.MarkupLine($"[red]❌ Local template path '{settings.LocalTemplatePath}' does not exist.[/]");
+                    return 1;
+                }
+
+                // Load local template
+                _console.MarkupLine($"[cyan]📂 Loading template from local path:[/] {settings.LocalTemplatePath}");
+                var localTemplate = await LoadLocalTemplateAsync(settings.LocalTemplatePath!);
+
+                if (localTemplate == null)
+                {
+                    _console.MarkupLine($"[red]❌ Failed to load local template. Ensure .template.config/template.json exists.[/]");
+                    return 1;
+                }
+
+                templates.Add(localTemplate);
+                localTemplateContentPath = Path.Combine(settings.LocalTemplatePath!, "content");
+            }
+            else
+            {
+                // Discover from NuGet
+                await _console.Status()
+                    .Spinner(Spinner.Known.Dots)
+                    .StartAsync("[cyan]Discovering available templates...[/]", async ctx =>
+                    {
+                        var sources = string.IsNullOrEmpty(settings.NuGetSource)
+                            ? null
+                            : new[] { settings.NuGetSource };
+
+                        templates = await _templateDiscovery.DiscoverTemplatesAsync(
+                            tag: settings.Tag,
+                            sources: sources,
+                            includePrerelease: settings.IncludePrerelease,
+                            cancellationToken: CancellationToken.None);
+                    });
+
+                if (!templates.Any())
+                {
+                    _console.MarkupLine($"[yellow]⚠️  No templates found with tag '{settings.Tag}'.[/]");
+                    _console.MarkupLine("[dim]Try running: pks template list --all[/]");
+                    return 1;
+                }
             }
 
             // Interactive template selection if not provided
             NuGetDevcontainerTemplate selectedTemplate;
 
-            if (string.IsNullOrEmpty(settings.Template))
+            if (useLocalTemplate)
+            {
+                // When using local template, there's only one template so select it directly
+                selectedTemplate = templates.First();
+            }
+            else if (string.IsNullOrEmpty(settings.Template))
             {
                 selectedTemplate = _console.Prompt(
                     new SelectionPrompt<NuGetDevcontainerTemplate>()
@@ -218,17 +255,35 @@ public class InitCommand : Command<InitCommand.Settings>
 
             NuGetTemplateExtractionResult extractionResult;
 
-            await _console.Status()
-                .Spinner(Spinner.Known.Star2)
-                .SpinnerStyle(Style.Parse("green bold"))
-                .StartAsync($"Extracting template to '{settings.ProjectName}'...", async ctx =>
-                {
-                    extractionResult = await _templateDiscovery.ExtractTemplateAsync(
-                        selectedTemplate.PackageId,
-                        selectedTemplate.Version,
-                        targetDirectory,
-                        cancellationToken: CancellationToken.None);
-                });
+            if (useLocalTemplate && localTemplateContentPath != null)
+            {
+                // Copy from local template
+                await _console.Status()
+                    .Spinner(Spinner.Known.Star2)
+                    .SpinnerStyle(Style.Parse("green bold"))
+                    .StartAsync($"Copying template to '{settings.ProjectName}'...", async ctx =>
+                    {
+                        extractionResult = await CopyLocalTemplateAsync(
+                            localTemplateContentPath,
+                            targetDirectory,
+                            selectedTemplate);
+                    });
+            }
+            else
+            {
+                // Extract from NuGet
+                await _console.Status()
+                    .Spinner(Spinner.Known.Star2)
+                    .SpinnerStyle(Style.Parse("green bold"))
+                    .StartAsync($"Extracting template to '{settings.ProjectName}'...", async ctx =>
+                    {
+                        extractionResult = await _templateDiscovery.ExtractTemplateAsync(
+                            selectedTemplate.PackageId,
+                            selectedTemplate.Version,
+                            targetDirectory,
+                            cancellationToken: CancellationToken.None);
+                    });
+            }
 
             // Display success message
             var panel = new Panel($"""
@@ -560,5 +615,137 @@ public class InitCommand : Command<InitCommand.Settings>
         }
 
         return buildArgs;
+    }
+
+    private async Task<NuGetDevcontainerTemplate?> LoadLocalTemplateAsync(string templatePath)
+    {
+        try
+        {
+            var templateJsonPath = Path.Combine(templatePath, ".template.config", "template.json");
+
+            if (!File.Exists(templateJsonPath))
+            {
+                return null;
+            }
+
+            var jsonContent = await File.ReadAllTextAsync(templateJsonPath);
+            var templateConfig = System.Text.Json.JsonDocument.Parse(jsonContent);
+
+            var root = templateConfig.RootElement;
+
+            // Extract basic template info
+            var name = root.TryGetProperty("name", out var nameElement)
+                ? nameElement.GetString() ?? "Local Template"
+                : "Local Template";
+
+            var description = root.TryGetProperty("description", out var descElement)
+                ? descElement.GetString() ?? "A local development template"
+                : "A local development template";
+
+            var shortName = root.TryGetProperty("shortName", out var shortNameElement)
+                ? shortNameElement.GetString() ?? "local"
+                : "local";
+
+            var identity = root.TryGetProperty("identity", out var identityElement)
+                ? identityElement.GetString() ?? "Local.Template"
+                : "Local.Template";
+
+            var author = root.TryGetProperty("author", out var authorElement)
+                ? authorElement.GetString() ?? "Local"
+                : "Local";
+
+            // Extract classifications/tags
+            var classifications = new List<string>();
+            if (root.TryGetProperty("classifications", out var classificationsElement) &&
+                classificationsElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var item in classificationsElement.EnumerateArray())
+                {
+                    if (item.GetString() is string classification)
+                    {
+                        classifications.Add(classification);
+                    }
+                }
+            }
+
+            return new NuGetDevcontainerTemplate
+            {
+                Id = identity,
+                PackageId = identity,
+                Version = "local",
+                Title = name,
+                Description = description,
+                Authors = author,
+                Tags = classifications.ToArray(),
+                ShortNames = new[] { shortName },
+                InstallPath = templatePath,
+                Source = "local"
+            };
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[yellow]⚠️  Failed to load local template: {ex.Message}[/]");
+            return null;
+        }
+    }
+
+    private async Task<NuGetTemplateExtractionResult> CopyLocalTemplateAsync(
+        string sourceContentPath,
+        string targetDirectory,
+        NuGetDevcontainerTemplate template)
+    {
+        var result = new NuGetTemplateExtractionResult
+        {
+            Success = false,
+            ExtractedPath = targetDirectory
+        };
+
+        try
+        {
+            var startTime = DateTime.UtcNow;
+
+            // Create target directory
+            Directory.CreateDirectory(targetDirectory);
+
+            // Copy all files from source to target
+            await CopyDirectoryRecursiveAsync(sourceContentPath, targetDirectory, result.ExtractedFiles);
+
+            result.Success = true;
+            result.ExtractionTime = DateTime.UtcNow - startTime;
+            result.Message = $"Copied {result.ExtractedFiles.Count} files from local template";
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            result.Success = false;
+            result.ErrorMessage = $"Failed to copy local template: {ex.Message}";
+            return result;
+        }
+    }
+
+    private async Task CopyDirectoryRecursiveAsync(string sourceDir, string targetDir, List<string> copiedFiles)
+    {
+        // Create target directory
+        Directory.CreateDirectory(targetDir);
+
+        // Copy all files
+        foreach (var file in Directory.GetFiles(sourceDir))
+        {
+            var fileName = Path.GetFileName(file);
+            var targetFile = Path.Combine(targetDir, fileName);
+
+            File.Copy(file, targetFile, true);
+            copiedFiles.Add(targetFile);
+        }
+
+        // Copy all subdirectories recursively
+        foreach (var directory in Directory.GetDirectories(sourceDir))
+        {
+            var dirName = Path.GetFileName(directory);
+            var targetSubDir = Path.Combine(targetDir, dirName);
+
+            await CopyDirectoryRecursiveAsync(directory, targetSubDir, copiedFiles);
+        }
     }
 }

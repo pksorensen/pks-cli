@@ -1661,64 +1661,79 @@ DEVCONTAINER_EOF";
     }
 
     /// <summary>
-    /// Creates an override config file to fix workspace mount issues
-    /// Similar to what VS Code does for volume-based workflows
+    /// Removes workspaceMount and workspaceFolder properties from devcontainer.json in place
+    /// These properties cause bind mount issues in volume-based workflows
+    /// The --mount CLI flag handles the volume mounting instead
     /// </summary>
     /// <param name="bootstrapContainerId">ID of the bootstrap container</param>
     /// <param name="workspaceFolder">Workspace folder path</param>
-    /// <param name="overrideConfigPath">Path where override config will be created</param>
-    private async Task CreateOverrideConfigAsync(
+    /// <summary>
+    /// Creates an override config file using JsonElement to preserve JSON structure
+    /// This approach aims to preserve feature metadata processing while overriding workspace properties
+    /// </summary>
+    private async Task<string?> CreateOverrideConfigWithJsonElementAsync(
         string bootstrapContainerId,
-        string workspaceFolder,
-        string overrideConfigPath)
+        string workspaceFolder)
     {
-        _logger.LogDebug("Creating override config to fix workspace mount issues");
+        _logger.LogDebug("Creating override config using JsonElement approach");
 
         var devcontainerJsonPath = $"{workspaceFolder}/.devcontainer/devcontainer.json";
 
-        // Read the original devcontainer.json
-        var readResult = await ExecuteInBootstrapAsync(
-            bootstrapContainerId,
-            $"cat {devcontainerJsonPath}",
-            workingDir: null,
-            timeoutSeconds: 10);
-
-        if (!readResult.Success)
-        {
-            _logger.LogWarning("Could not read devcontainer.json for override: {Error}", readResult.Error);
-            return;
-        }
-
         try
         {
+            // Read the original devcontainer.json
+            var readResult = await ExecuteInBootstrapAsync(
+                bootstrapContainerId,
+                $"cat {devcontainerJsonPath}",
+                workingDir: null,
+                timeoutSeconds: 10);
+
+            if (!readResult.Success)
+            {
+                _logger.LogWarning("Could not read devcontainer.json: {Error}", readResult.Error);
+                return null;
+            }
+
             // Parse the JSON
-            var jsonDoc = JsonDocument.Parse(readResult.Output);
+            using var jsonDoc = JsonDocument.Parse(readResult.Output);
             var root = jsonDoc.RootElement;
 
-            // Create a mutable dictionary with all properties
-            var overrideConfig = new Dictionary<string, object>();
+            // Use Utf8JsonWriter to construct JSON preserving element structure
+            using var stream = new MemoryStream();
+            using var writer = new Utf8JsonWriter(stream, new JsonWriterOptions
+            {
+                Indented = true,
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+            });
 
-            // Copy all properties except workspace mount/folder
+            writer.WriteStartObject();
+
             foreach (var property in root.EnumerateObject())
             {
                 // Skip properties that cause bind mount issues
                 if (property.Name == "workspaceMount" || property.Name == "workspaceFolder")
                 {
+                    _logger.LogDebug("Skipping property in override config: {PropertyName}", property.Name);
                     continue;
                 }
 
-                overrideConfig[property.Name] = JsonSerializer.Deserialize<object>(property.Value.GetRawText())!;
+                // Write property name and value using JsonElement (preserves structure)
+                writer.WritePropertyName(property.Name);
+                property.Value.WriteTo(writer);
             }
 
-            // Serialize the override config
-            var options = new JsonSerializerOptions
-            {
-                WriteIndented = true,
-                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-            };
-            var overrideJson = JsonSerializer.Serialize(overrideConfig, options);
+            writer.WriteEndObject();
+            await writer.FlushAsync();
 
-            // Write override config to bootstrap container
+            var overrideJson = System.Text.Encoding.UTF8.GetString(stream.ToArray());
+
+            // Log the override config for debugging
+            _logger.LogInformation("=== OVERRIDE CONFIG CONTENTS ===");
+            _logger.LogInformation(overrideJson);
+            _logger.LogInformation("=== END OVERRIDE CONFIG ===");
+
+            // Write override config to a temporary file in the bootstrap container
+            var overrideConfigPath = $"{workspaceFolder}/.devcontainer/override-config.json";
             var writeCommand = $@"cat > {overrideConfigPath} <<'OVERRIDE_EOF'
 {overrideJson}
 OVERRIDE_EOF";
@@ -1732,15 +1747,105 @@ OVERRIDE_EOF";
             if (!writeResult.Success)
             {
                 _logger.LogWarning("Failed to write override config: {Error}", writeResult.Error);
+                return null;
             }
-            else
+
+            _logger.LogInformation("Created override config at: {Path}", overrideConfigPath);
+
+            // Also copy to host for inspection
+            var hostCopyPath = "/tmp/pks-override-config-debug.json";
+            try
             {
-                _logger.LogDebug("Created override config at: {Path}", overrideConfigPath);
+                File.WriteAllText(hostCopyPath, overrideJson);
+                _logger.LogInformation("Override config also saved to host at: {HostPath}", hostCopyPath);
             }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to copy override config to host");
+            }
+
+            return overrideConfigPath;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to create override config");
+            return null;
+        }
+    }
+
+    private async Task RemoveWorkspaceMountPropertiesAsync(
+        string bootstrapContainerId,
+        string workspaceFolder)
+    {
+        _logger.LogDebug("Removing workspaceMount and workspaceFolder from devcontainer.json");
+
+        var devcontainerJsonPath = $"{workspaceFolder}/.devcontainer/devcontainer.json";
+
+        try
+        {
+            // Read the original devcontainer.json
+            var readResult = await ExecuteInBootstrapAsync(
+                bootstrapContainerId,
+                $"cat {devcontainerJsonPath}",
+                workingDir: null,
+                timeoutSeconds: 10);
+
+            if (!readResult.Success)
+            {
+                _logger.LogWarning("Could not read devcontainer.json: {Error}", readResult.Error);
+                return;
+            }
+
+            // Parse the JSON
+            var jsonDoc = JsonDocument.Parse(readResult.Output);
+            var root = jsonDoc.RootElement;
+
+            // Create a mutable dictionary with all properties except workspaceMount/workspaceFolder
+            var modifiedConfig = new Dictionary<string, object>();
+
+            foreach (var property in root.EnumerateObject())
+            {
+                // Skip properties that cause bind mount issues
+                if (property.Name == "workspaceMount" || property.Name == "workspaceFolder")
+                {
+                    _logger.LogDebug("Removing property: {PropertyName}", property.Name);
+                    continue;
+                }
+
+                modifiedConfig[property.Name] = JsonSerializer.Deserialize<object>(property.Value.GetRawText())!;
+            }
+
+            // Serialize back to JSON
+            var options = new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+            };
+            var modifiedJson = JsonSerializer.Serialize(modifiedConfig, options);
+
+            // Write back to devcontainer.json
+            var writeCommand = $@"cat > {devcontainerJsonPath} <<'DEVCONTAINER_EOF'
+{modifiedJson}
+DEVCONTAINER_EOF";
+
+            var writeResult = await ExecuteInBootstrapAsync(
+                bootstrapContainerId,
+                writeCommand,
+                workingDir: null,
+                timeoutSeconds: 10);
+
+            if (!writeResult.Success)
+            {
+                _logger.LogWarning("Failed to write modified devcontainer.json: {Error}", writeResult.Error);
+            }
+            else
+            {
+                _logger.LogDebug("Modified devcontainer.json to remove workspace mount properties");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to modify devcontainer.json");
         }
     }
 
@@ -1949,10 +2054,15 @@ DOCKER_CONFIG_EOF
             await MergeBuildArgsIntoDevcontainerJsonAsync(bootstrapContainerId, workspaceFolder, buildArgs);
         }
 
-        // Create override config to remove workspaceMount (which causes bind mount issues)
-        // This is what VS Code does - it creates an override config for volume-based workflows
-        var overrideConfigPath = $"/tmp/devcontainer-override-{Guid.NewGuid()}.json";
-        await CreateOverrideConfigAsync(bootstrapContainerId, workspaceFolder, overrideConfigPath);
+        // Create override config using JsonElement to preserve structure
+        // This approach aims to preserve feature metadata processing while overriding workspace properties
+        var overrideConfigPath = await CreateOverrideConfigWithJsonElementAsync(bootstrapContainerId, workspaceFolder);
+
+        if (overrideConfigPath == null)
+        {
+            _logger.LogWarning("Failed to create override config, falling back to in-place modification");
+            await RemoveWorkspaceMountPropertiesAsync(bootstrapContainerId, workspaceFolder);
+        }
 
         // Ensure Docker config exists before devcontainer up
         // This prevents postStartCommand errors and enables private registry access when requested
@@ -1967,19 +2077,36 @@ DOCKER_CONFIG_EOF
             await CreateDefaultDockerConfigAsync(bootstrapContainerId, workspaceFolder);
         }
 
-        // Build command WITHOUT --workspace-folder to prevent bind mount creation
-        // The devcontainer CLI infers workspace from --config path
-        // Provide explicit volume mount which should be used instead of bind mount
+        // Build command using --override-config (if successfully created)
+        // Based on source code analysis: override config completely replaces base config
+        // Must contain ALL properties including features for feature metadata processing to work
+        // VS Code pattern: passes --workspace-folder, --config, AND --override-config together
         var projectName = Path.GetFileName(workspaceFolder);
-        var devcontainerCommand = $"devcontainer up --config {workspaceFolder}/.devcontainer/devcontainer.json --override-config {overrideConfigPath} --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName} --mount type=volume,source={volumeName},target=/workspaces,external=true --update-remote-user-uid-default off";
 
-        // Execute using ExecuteInBootstrapAsync with 600 second timeout
+        string devcontainerCommand;
+        if (overrideConfigPath != null)
+        {
+            // Use override config approach WITHOUT --workspace-folder
+            // The override config has workspaceMount/workspaceFolder removed, and we use --mount for the volume
+            // This avoids the bind mount issue while preserving feature metadata processing
+            _logger.LogInformation("Using override config approach with file: {OverrideConfig}", overrideConfigPath);
+            devcontainerCommand = $"devcontainer up --config {workspaceFolder}/.devcontainer/devcontainer.json --override-config {overrideConfigPath} --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName} --mount type=volume,source={volumeName},target=/workspaces,external=true --update-remote-user-uid-default off --include-configuration --include-merged-configuration";
+        }
+        else
+        {
+            // Fallback: use workspace-folder without override-config
+            _logger.LogWarning("Using fallback approach without override config");
+            devcontainerCommand = $"devcontainer up --workspace-folder {workspaceFolder} --config {workspaceFolder}/.devcontainer/devcontainer.json --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName} --mount type=volume,source={volumeName},target=/workspaces,external=true --update-remote-user-uid-default off --mount-workspace-git-root false --include-configuration --include-merged-configuration";
+        }
+
+        // Execute using ExecuteInBootstrapAsync with 1800 second timeout (30 minutes)
+        // Increased timeout to allow for full Dockerfile builds from scratch
         // Set working directory so initializeCommand can access relative paths
         var result = await ExecuteInBootstrapAsync(
             bootstrapContainerId,
             devcontainerCommand,
             workingDir: workspaceFolder,
-            timeoutSeconds: 600);
+            timeoutSeconds: 1800);
 
         // Write output to log file if specified
         if (!string.IsNullOrEmpty(buildLogPath))
