@@ -5,6 +5,13 @@ All notable changes to the npm distribution of PKS CLI will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0-rc.4](https://github.com/pksorensen/pks-cli/compare/npm-v1.0.0-rc.3...npm-v1.0.0-rc.4) (2026-01-07)
+
+
+### Bug Fixes
+
+* Update macOS versions in build workflow and add debug outputs in release workflow ([886f658](https://github.com/pksorensen/pks-cli/commit/886f658b4a9aeff0b4ed80c2bb4989c7398e4dfb))
+
 ## [1.0.0-rc.3](https://github.com/pksorensen/pks-cli/compare/npm-v1.0.0-rc.2...npm-v1.0.0-rc.3) (2026-01-07)
 
 
