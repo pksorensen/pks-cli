@@ -131,6 +131,7 @@ services.AddSingleton<IVsCodeExtensionService, VsCodeExtensionService>();
 
 // Register devcontainer spawner service
 services.AddSingleton<IDevcontainerSpawnerService, DevcontainerSpawnerService>();
+services.AddSingleton<IConfigurationHashService, ConfigurationHashService>();
 
 // Register Docker client (Docker.DotNet)
 services.AddSingleton<Docker.DotNet.IDockerClient>(sp =>

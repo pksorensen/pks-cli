@@ -18,20 +18,24 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
     private readonly ILogger<DevcontainerSpawnerService> _logger;
     private readonly IDockerClient _dockerClient;
     private readonly IAnsiConsole? _console;
+    private readonly IConfigurationHashService _configHashService;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DevcontainerSpawnerService"/> class
     /// </summary>
     /// <param name="logger">Logger for diagnostic output</param>
     /// <param name="dockerClient">Docker client for container operations</param>
+    /// <param name="configHashService">Service for computing configuration hashes</param>
     /// <param name="console">Optional console for progress indicators</param>
     public DevcontainerSpawnerService(
         ILogger<DevcontainerSpawnerService> logger,
         IDockerClient dockerClient,
+        IConfigurationHashService configHashService,
         IAnsiConsole? console = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _dockerClient = dockerClient ?? throw new ArgumentNullException(nameof(dockerClient));
+        _configHashService = configHashService ?? throw new ArgumentNullException(nameof(configHashService));
         _console = console;
     }
 
@@ -84,6 +88,34 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
 
             _logger.LogInformation("devcontainer CLI is installed");
 
+            // Compute configuration hash for change detection
+            onProgress?.Invoke("Computing configuration hash...");
+            _logger.LogInformation("Computing configuration hash...");
+
+            string? configHash = null;
+            try
+            {
+                var devcontainerPath = Path.Combine(options.ProjectPath, ".devcontainer");
+                var hashResult = await _configHashService.ComputeConfigurationHashWithDetailsAsync(
+                    options.ProjectPath,
+                    devcontainerPath);
+
+                configHash = hashResult.Hash;
+                _logger.LogInformation("Configuration hash computed: {Hash} (from {FileCount} files)",
+                    configHash.Substring(0, 16) + "...",
+                    hashResult.IncludedFiles.Count);
+
+                foreach (var file in hashResult.IncludedFiles)
+                {
+                    _logger.LogDebug("  - {File}: {Hash}", file, hashResult.FileHashes[file].Substring(0, 8));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to compute configuration hash, continuing without hash");
+                // Continue without hash - not a critical failure
+            }
+
             // Check for existing container if reuse is enabled
             if (options.ReuseExisting)
             {
@@ -91,6 +123,76 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                 if (existing != null)
                 {
                     _logger.LogInformation("Found existing container: {ContainerId}", existing.ContainerId);
+
+                    // Check if configuration has changed
+                    bool configChanged = false;
+                    if (configHash != null)
+                    {
+                        var storedHash = await GetContainerLabelAsync(existing.ContainerId, "devcontainer.config.hash");
+                        if (storedHash != null && storedHash != configHash)
+                        {
+                            configChanged = true;
+                            _logger.LogWarning("Configuration has changed! Stored hash: {StoredHash}, Current hash: {CurrentHash}",
+                                storedHash.Substring(0, 16) + "...",
+                                configHash.Substring(0, 16) + "...");
+                        }
+                        else if (storedHash == configHash)
+                        {
+                            _logger.LogInformation("Configuration unchanged (hash match)");
+                        }
+                        else
+                        {
+                            _logger.LogWarning("No stored hash found in container labels (container may be from older version)");
+                        }
+                    }
+
+                    // Determine rebuild action based on configuration changes and rebuild behavior
+                    bool shouldRebuild = false;
+
+                    if (configChanged)
+                    {
+                        switch (options.RebuildBehavior)
+                        {
+                            case RebuildBehavior.Always:
+                                _logger.LogInformation("Rebuild forced via --rebuild flag");
+                                shouldRebuild = true;
+                                break;
+
+                            case RebuildBehavior.Never:
+                                _logger.LogInformation("Skipping rebuild via --no-rebuild flag, reusing existing container");
+                                shouldRebuild = false;
+                                break;
+
+                            case RebuildBehavior.Auto:
+                                // Auto: Rebuild when config changed
+                                _logger.LogInformation("Configuration changed, triggering automatic rebuild");
+                                shouldRebuild = true;
+                                break;
+
+                            case RebuildBehavior.Prompt:
+                                // Prompt: This would require user interaction (console prompt)
+                                // For now, default to rebuild when config changed
+                                _logger.LogInformation("Configuration changed, triggering rebuild (prompt mode not yet implemented)");
+                                shouldRebuild = true;
+                                break;
+                        }
+                    }
+                    else if (options.RebuildBehavior == RebuildBehavior.Always)
+                    {
+                        // Force rebuild even if config unchanged
+                        _logger.LogInformation("Force rebuild requested via --rebuild flag");
+                        shouldRebuild = true;
+                    }
+
+                    // If rebuild is needed, trigger rebuild and return
+                    if (shouldRebuild)
+                    {
+                        _logger.LogInformation("Rebuilding devcontainer...");
+                        onProgress?.Invoke("Rebuilding devcontainer...");
+
+                        return await RebuildDevcontainerAsync(options, existing.ContainerId, onProgress);
+                    }
+
                     result.Success = true;
                     result.ContainerId = existing.ContainerId;
                     result.VolumeName = existing.VolumeName;
@@ -209,7 +311,8 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                     options.BuildArgs,
                     options.BuildLogPath,
                     options.ForwardDockerConfig,
-                    options.DockerConfigPath);
+                    options.DockerConfigPath,
+                    configHash);
 
                 if (upResult.Outcome != "success")
                 {
@@ -838,6 +941,66 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
         {
             _logger.LogError(ex, "Error finding existing container");
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Gets a specific label value from a container
+    /// </summary>
+    /// <param name="containerId">Container ID</param>
+    /// <param name="labelKey">Label key to retrieve</param>
+    /// <returns>Label value if found, null otherwise</returns>
+    public async Task<string?> GetContainerLabelAsync(string containerId, string labelKey)
+    {
+        try
+        {
+            _logger.LogDebug("Reading label {LabelKey} from container {ContainerId}", labelKey, containerId);
+
+            var container = await _dockerClient.Containers.InspectContainerAsync(containerId);
+
+            if (container.Config.Labels != null &&
+                container.Config.Labels.TryGetValue(labelKey, out var value))
+            {
+                _logger.LogDebug("Label {LabelKey} found: {Value}", labelKey, value);
+                return value;
+            }
+
+            _logger.LogDebug("Label {LabelKey} not found in container {ContainerId}", labelKey, containerId);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error reading container label {LabelKey} from {ContainerId}", labelKey, containerId);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Gets all labels from a container
+    /// </summary>
+    /// <param name="containerId">Container ID</param>
+    /// <returns>Dictionary of labels, or empty dictionary if none found</returns>
+    public async Task<IDictionary<string, string>> GetContainerLabelsAsync(string containerId)
+    {
+        try
+        {
+            _logger.LogDebug("Reading all labels from container {ContainerId}", containerId);
+
+            var container = await _dockerClient.Containers.InspectContainerAsync(containerId);
+
+            if (container.Config.Labels != null)
+            {
+                _logger.LogDebug("Found {Count} labels in container {ContainerId}",
+                    container.Config.Labels.Count, containerId);
+                return container.Config.Labels;
+            }
+
+            return new Dictionary<string, string>();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error reading container labels from {ContainerId}", containerId);
+            return new Dictionary<string, string>();
         }
     }
 
@@ -2015,6 +2178,7 @@ DEVCONTAINER_EOF";
     /// <param name="buildLogPath">Path to write build output (optional)</param>
     /// <param name="forwardDockerConfig">Whether to forward Docker credentials</param>
     /// <param name="dockerConfigPath">Custom Docker config path</param>
+    /// <param name="configHash">Configuration hash to label the container with (optional)</param>
     /// <returns>Parsed result from devcontainer CLI</returns>
     private async Task<DevcontainerUpResult> RunDevcontainerUpInBootstrapAsync(
         string bootstrapContainerId,
@@ -2023,7 +2187,8 @@ DEVCONTAINER_EOF";
         Dictionary<string, string>? buildArgs = null,
         string? buildLogPath = null,
         bool forwardDockerConfig = false,
-        string? dockerConfigPath = null)
+        string? dockerConfigPath = null,
+        string? configHash = null)
     {
         _logger.LogDebug("Running devcontainer up in bootstrap container: {WorkspaceFolder}", workspaceFolder);
 
@@ -2072,6 +2237,11 @@ DEVCONTAINER_EOF";
         // VS Code pattern: passes --workspace-folder, --config, AND --override-config together
         var projectName = Path.GetFileName(workspaceFolder);
 
+        // Build hash label if hash was computed
+        var hashLabel = !string.IsNullOrEmpty(configHash)
+            ? $" --id-label devcontainer.config.hash={configHash}"
+            : string.Empty;
+
         string devcontainerCommand;
         if (overrideConfigPath != null)
         {
@@ -2079,13 +2249,13 @@ DEVCONTAINER_EOF";
             // The override config has workspaceMount/workspaceFolder removed, and we use --mount for the volume
             // This avoids the bind mount issue while preserving feature metadata processing
             _logger.LogInformation("Using override config approach with file: {OverrideConfig}", overrideConfigPath);
-            devcontainerCommand = $"devcontainer up --config {workspaceFolder}/.devcontainer/devcontainer.json --override-config {overrideConfigPath} --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName} --mount type=volume,source={volumeName},target=/workspaces,external=true --update-remote-user-uid-default off --include-configuration --include-merged-configuration";
+            devcontainerCommand = $"devcontainer up --config {workspaceFolder}/.devcontainer/devcontainer.json --override-config {overrideConfigPath} --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true --update-remote-user-uid-default off --include-configuration --include-merged-configuration";
         }
         else
         {
             // Fallback: use workspace-folder without override-config
             _logger.LogWarning("Using fallback approach without override config");
-            devcontainerCommand = $"devcontainer up --workspace-folder {workspaceFolder} --config {workspaceFolder}/.devcontainer/devcontainer.json --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName} --mount type=volume,source={volumeName},target=/workspaces,external=true --update-remote-user-uid-default off --mount-workspace-git-root false --include-configuration --include-merged-configuration";
+            devcontainerCommand = $"devcontainer up --workspace-folder {workspaceFolder} --config {workspaceFolder}/.devcontainer/devcontainer.json --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true --update-remote-user-uid-default off --mount-workspace-git-root false --include-configuration --include-merged-configuration";
         }
 
         // Execute using ExecuteInBootstrapAsync with 1800 second timeout (30 minutes)
@@ -2242,6 +2412,155 @@ DEVCONTAINER_EOF";
         {
             // Best-effort cleanup - don't throw exceptions
             _logger.LogWarning(ex, "Failed to stop/remove bootstrap container: {ContainerId}", containerId);
+        }
+    }
+
+    #endregion
+
+    #region Rebuild and Container Management
+
+    /// <summary>
+    /// Stops a running devcontainer
+    /// </summary>
+    /// <param name="containerId">Container ID to stop</param>
+    /// <returns>True if stopped successfully</returns>
+    public async Task<bool> StopContainerAsync(string containerId)
+    {
+        try
+        {
+            _logger.LogInformation("Stopping container: {ContainerId}", containerId);
+
+            await _dockerClient.Containers.StopContainerAsync(
+                containerId,
+                new ContainerStopParameters
+                {
+                    WaitBeforeKillSeconds = 10
+                });
+
+            _logger.LogInformation("Container stopped successfully: {ContainerId}", containerId);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to stop container: {ContainerId}", containerId);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Removes a devcontainer (must be stopped first)
+    /// </summary>
+    /// <param name="containerId">Container ID to remove</param>
+    /// <param name="removeVolumes">Whether to remove associated volumes</param>
+    /// <returns>True if removed successfully</returns>
+    public async Task<bool> RemoveContainerAsync(string containerId, bool removeVolumes = false)
+    {
+        try
+        {
+            _logger.LogInformation("Removing container: {ContainerId}", containerId);
+
+            await _dockerClient.Containers.RemoveContainerAsync(
+                containerId,
+                new ContainerRemoveParameters
+                {
+                    RemoveVolumes = removeVolumes,
+                    Force = true
+                });
+
+            _logger.LogInformation("Container removed successfully: {ContainerId}", containerId);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to remove container: {ContainerId}", containerId);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Rebuilds a devcontainer by stopping, removing, and recreating it
+    /// </summary>
+    /// <param name="options">Spawn options for the rebuild</param>
+    /// <param name="existingContainerId">ID of existing container to replace</param>
+    /// <param name="onProgress">Progress callback</param>
+    /// <returns>Spawn result</returns>
+    public async Task<DevcontainerSpawnResult> RebuildDevcontainerAsync(
+        DevcontainerSpawnOptions options,
+        string existingContainerId,
+        Action<string>? onProgress = null)
+    {
+        _logger.LogInformation("Rebuilding devcontainer: {ContainerId}", existingContainerId);
+
+        try
+        {
+            // Step 1: Stop the existing container
+            onProgress?.Invoke("Stopping existing container...");
+            var stopped = await StopContainerAsync(existingContainerId);
+            if (!stopped)
+            {
+                return new DevcontainerSpawnResult
+                {
+                    Success = false,
+                    Message = "Failed to stop existing container",
+                    CompletedStep = DevcontainerSpawnStep.None
+                };
+            }
+
+            // Step 2: Remove the existing container (preserve volume)
+            onProgress?.Invoke("Removing existing container...");
+            var removed = await RemoveContainerAsync(existingContainerId, removeVolumes: false);
+            if (!removed)
+            {
+                return new DevcontainerSpawnResult
+                {
+                    Success = false,
+                    Message = "Failed to remove existing container",
+                    CompletedStep = DevcontainerSpawnStep.None
+                };
+            }
+
+            // Step 3: Spawn new container with same configuration
+            // Disable ReuseExisting to force creation of new container
+            var rebuildOptions = new DevcontainerSpawnOptions
+            {
+                ProjectName = options.ProjectName,
+                ProjectPath = options.ProjectPath,
+                DevcontainerPath = options.DevcontainerPath,
+                VolumeName = options.VolumeName,
+                CopySourceFiles = options.CopySourceFiles,
+                LaunchVsCode = options.LaunchVsCode,
+                ReuseExisting = false, // Force new container creation
+                Mode = options.Mode,
+                UseBootstrapContainer = options.UseBootstrapContainer,
+                BootstrapConfig = options.BootstrapConfig,
+                BuildArgs = options.BuildArgs,
+                BuildLogPath = options.BuildLogPath,
+                ForwardDockerConfig = options.ForwardDockerConfig,
+                DockerConfigPath = options.DockerConfigPath,
+                RebuildBehavior = RebuildBehavior.Never, // Prevent rebuild loop
+                SkipRebuild = false
+            };
+
+            onProgress?.Invoke("Creating new container...");
+            var result = await SpawnLocalAsync(rebuildOptions, onProgress);
+
+            if (result.Success)
+            {
+                _logger.LogInformation("Devcontainer rebuilt successfully: {ContainerId}", result.ContainerId);
+                result.Message = "Devcontainer rebuilt successfully";
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to rebuild devcontainer");
+            return new DevcontainerSpawnResult
+            {
+                Success = false,
+                Message = $"Rebuild failed: {ex.Message}",
+                CompletedStep = DevcontainerSpawnStep.None
+            };
         }
     }
 

@@ -55,6 +55,18 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         [CommandOption("--docker-config-path <PATH>")]
         [Description("Path to Docker config.json to forward (defaults to ~/.docker/config.json)")]
         public string? DockerConfigPath { get; set; }
+
+        [CommandOption("--rebuild")]
+        [Description("Force rebuild even if no configuration changes detected")]
+        public bool ForceRebuild { get; set; }
+
+        [CommandOption("--no-rebuild")]
+        [Description("Skip rebuild even if configuration changes detected")]
+        public bool NoRebuild { get; set; }
+
+        [CommandOption("--auto-rebuild")]
+        [Description("Automatically rebuild without prompting when configuration changes detected")]
+        public bool AutoRebuild { get; set; }
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -194,6 +206,22 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
                     forwardDockerConfig = settings.ForwardDockerConfig.Value;
                 }
 
+                // Determine rebuild behavior based on flags
+                // Priority: --rebuild (Always) > --no-rebuild (Never) > --auto-rebuild (Auto) > default (Auto)
+                var rebuildBehavior = RebuildBehavior.Auto;
+                if (settings.ForceRebuild)
+                {
+                    rebuildBehavior = RebuildBehavior.Always;
+                }
+                else if (settings.NoRebuild)
+                {
+                    rebuildBehavior = RebuildBehavior.Never;
+                }
+                else if (settings.AutoRebuild)
+                {
+                    rebuildBehavior = RebuildBehavior.Auto;
+                }
+
                 var options = new DevcontainerSpawnOptions
                 {
                     ProjectName = projectName,
@@ -205,7 +233,9 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
                     ReuseExisting = !settings.Force,
                     UseBootstrapContainer = !settings.NoBootstrap,
                     ForwardDockerConfig = forwardDockerConfig,
-                    DockerConfigPath = settings.DockerConfigPath
+                    DockerConfigPath = settings.DockerConfigPath,
+                    RebuildBehavior = rebuildBehavior,
+                    SkipRebuild = settings.NoRebuild
                 };
 
                 result = await _spawnerService.SpawnLocalAsync(

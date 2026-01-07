@@ -459,6 +459,43 @@ public class DevcontainerSpawnOptions
     /// Custom path to Docker config.json (optional, defaults to ~/.docker/config.json)
     /// </summary>
     public string? DockerConfigPath { get; set; }
+
+    /// <summary>
+    /// Rebuild behavior when configuration changes are detected
+    /// Auto: Prompt user (default), Always: Force rebuild, Never: Skip rebuild, Prompt: Always ask
+    /// </summary>
+    public RebuildBehavior RebuildBehavior { get; set; } = RebuildBehavior.Auto;
+
+    /// <summary>
+    /// Whether to skip the rebuild prompt and continue with existing container even if config changed
+    /// </summary>
+    public bool SkipRebuild { get; set; } = false;
+}
+
+/// <summary>
+/// Rebuild behavior options for configuration change detection
+/// </summary>
+public enum RebuildBehavior
+{
+    /// <summary>
+    /// Automatically determine whether to prompt based on change detection
+    /// </summary>
+    Auto,
+
+    /// <summary>
+    /// Always rebuild without prompting
+    /// </summary>
+    Always,
+
+    /// <summary>
+    /// Never rebuild, always reuse existing container
+    /// </summary>
+    Never,
+
+    /// <summary>
+    /// Always prompt user regardless of change detection
+    /// </summary>
+    Prompt
 }
 
 /// <summary>
@@ -891,4 +928,75 @@ public class BootstrapImageResult
     public bool WasBuilt { get; set; }
     public TimeSpan BuildDuration { get; set; }
     public string Message { get; set; } = string.Empty;
+}
+/// <summary>
+/// Result of computing configuration hash
+/// </summary>
+public class ConfigurationHashResult
+{
+    /// <summary>
+    /// The computed SHA256 hash
+    /// </summary>
+    public string Hash { get; set; } = string.Empty;
+
+    /// <summary>
+    /// List of files included in the hash computation
+    /// </summary>
+    public List<string> IncludedFiles { get; set; } = new();
+
+    /// <summary>
+    /// Individual file hashes (for detailed change detection)
+    /// </summary>
+    public Dictionary<string, string> FileHashes { get; set; } = new();
+
+    /// <summary>
+    /// Timestamp when hash was computed
+    /// </summary>
+    public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// Hash schema version (for future compatibility)
+    /// </summary>
+    public int Version { get; set; } = 1;
+}
+
+/// <summary>
+/// Result of checking if configuration changed
+/// </summary>
+public class ConfigurationChangeResult
+{
+    /// <summary>
+    /// Whether configuration changed
+    /// </summary>
+    public bool Changed { get; set; }
+
+    /// <summary>
+    /// Reason for the result
+    /// </summary>
+    public string Reason { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Current configuration hash
+    /// </summary>
+    public string CurrentHash { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Stored configuration hash from container label
+    /// </summary>
+    public string? StoredHash { get; set; }
+
+    /// <summary>
+    /// List of files that changed
+    /// </summary>
+    public List<string> ChangedFiles { get; set; } = new();
+
+    /// <summary>
+    /// Timestamp when container was built (from label)
+    /// </summary>
+    public DateTime? ContainerBuildTimestamp { get; set; }
+
+    /// <summary>
+    /// Detailed hash information
+    /// </summary>
+    public ConfigurationHashResult? HashDetails { get; set; }
 }
