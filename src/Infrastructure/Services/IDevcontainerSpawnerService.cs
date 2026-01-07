@@ -97,4 +97,37 @@ public interface IDevcontainerSpawnerService
     /// </summary>
     /// <param name="vsCodeUri">VS Code remote container URI</param>
     Task LaunchVsCodeAsync(string vsCodeUri);
+
+    /// <summary>
+    /// Computes configuration hash from files inside a Docker volume
+    /// </summary>
+    /// <param name="volumeName">Volume name to read from</param>
+    /// <param name="projectName">Project name (determines path inside volume)</param>
+    /// <returns>Configuration hash computed from volume files, or null if error</returns>
+    Task<string?> ComputeVolumeHashAsync(string volumeName, string projectName);
+
+    /// <summary>
+    /// Syncs .devcontainer files from volume to host
+    /// </summary>
+    /// <param name="volumeName">Volume name to sync from</param>
+    /// <param name="projectName">Project name (determines path inside volume)</param>
+    /// <param name="hostProjectPath">Host project path to sync to</param>
+    /// <returns>True if sync successful</returns>
+    Task<bool> SyncVolumeToHostAsync(string volumeName, string projectName, string hostProjectPath);
+
+    /// <summary>
+    /// Gets a specific label value from a container
+    /// </summary>
+    /// <param name="containerId">Container ID</param>
+    /// <param name="labelKey">Label key to retrieve</param>
+    /// <returns>Label value if found, null otherwise</returns>
+    Task<string?> GetContainerLabelAsync(string containerId, string labelKey);
+
+    /// <summary>
+    /// Computes configuration hash from host files
+    /// </summary>
+    /// <param name="projectPath">Project path</param>
+    /// <param name="devcontainerPath">Path to .devcontainer directory</param>
+    /// <returns>Configuration hash</returns>
+    Task<string> ComputeConfigurationHashAsync(string projectPath, string devcontainerPath);
 }

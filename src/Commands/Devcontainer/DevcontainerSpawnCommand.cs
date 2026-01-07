@@ -122,6 +122,138 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
                     DisplayProgress($"Status: {(existing.IsRunning ? "Running" : "Stopped")}");
                     Console.WriteLine();
 
+                    // Perform three-way hash detection (host, container label, volume)
+                    string? labelHash = null;
+                    string? hostHash = null;
+                    string? volumeHash = null;
+
+                    await WithSpinnerAsync("Detecting configuration changes...", async () =>
+                    {
+                        // Get hash from container label (what it was built with)
+                        labelHash = await _spawnerService.GetContainerLabelAsync(
+                            existing.ContainerId, "devcontainer.config.hash");
+
+                        // Compute hash from host files
+                        var devcontainerPath = Path.Combine(projectPath, ".devcontainer");
+                        if (Directory.Exists(devcontainerPath))
+                        {
+                            try
+                            {
+                                var hashResult = await _spawnerService.ComputeConfigurationHashAsync(
+                                    projectPath, devcontainerPath);
+                                hostHash = hashResult;
+                            }
+                            catch (Exception ex)
+                            {
+                                DisplayWarning($"Failed to compute host hash: {ex.Message}");
+                            }
+                        }
+
+                        // Compute hash from volume files (what's in the container)
+                        try
+                        {
+                            volumeHash = await _spawnerService.ComputeVolumeHashAsync(
+                                existing.VolumeName, projectName);
+                        }
+                        catch (Exception ex)
+                        {
+                            DisplayWarning($"Failed to compute volume hash: {ex.Message}");
+                        }
+                    });
+
+                    // Analyze hash differences
+                    bool hostChanged = hostHash != null && labelHash != null && hostHash != labelHash;
+                    bool volumeChanged = volumeHash != null && labelHash != null && volumeHash != labelHash;
+                    bool hostVolumeMatch = hostHash != null && volumeHash != null && hostHash == volumeHash;
+
+                    // Handle volume changes (edited inside container)
+                    if (volumeChanged && !hostChanged)
+                    {
+                        DisplayWarning("Configuration changes detected inside container!");
+                        DisplayInfo($"Container was built with hash: {labelHash?[..16]}...");
+                        DisplayInfo($"Volume now has hash: {volumeHash?[..16]}...");
+                        Console.WriteLine();
+
+                        var choice = PromptSelection(
+                            "How should we handle these changes?",
+                            new[] {
+                                "Sync to host and rebuild (recommended)",
+                                "Discard container changes (revert to host)",
+                                "Cancel"
+                            });
+
+                        if (choice == "Sync to host and rebuild (recommended)") // Sync to host and rebuild
+                        {
+                            DisplayInfo("Syncing .devcontainer from volume to host...");
+                            var synced = await WithSpinnerAsync("Syncing files...",
+                                async () => await _spawnerService.SyncVolumeToHostAsync(
+                                    existing.VolumeName, projectName, projectPath));
+
+                            if (!synced)
+                            {
+                                DisplayError("Failed to sync files from volume to host");
+                                return 1;
+                            }
+
+                            DisplaySuccess("Files synced successfully");
+                            DisplayInfo("Now rebuilding container with updated configuration...");
+                            // Fall through to rebuild (host files now changed)
+                        }
+                        else if (choice == "Discard container changes (revert to host)") // Discard container changes
+                        {
+                            DisplayInfo("Container changes will be discarded on rebuild");
+                            // Continue with normal flow - host hash will be used
+                        }
+                        else // Cancel
+                        {
+                            DisplayWarning("Spawn cancelled");
+                            return 0;
+                        }
+                    }
+                    // Handle both host and volume changed (conflict)
+                    else if (volumeChanged && hostChanged && !hostVolumeMatch)
+                    {
+                        DisplayWarning("Configuration changed BOTH on host AND inside container!");
+                        DisplayInfo($"Container was built with: {labelHash?[..16]}...");
+                        DisplayInfo($"Host now has: {hostHash?[..16]}...");
+                        DisplayInfo($"Volume now has: {volumeHash?[..16]}...");
+                        Console.WriteLine();
+
+                        var choice = PromptSelection(
+                            "Conflict resolution:",
+                            new[] {
+                                "Use host version (discard container edits)",
+                                "Use container version (sync to host and rebuild)",
+                                "Cancel and resolve manually"
+                            });
+
+                        if (choice == "Use host version (discard container edits)") // Use host
+                        {
+                            DisplayInfo("Using host configuration, container edits will be discarded");
+                            // Continue with normal flow
+                        }
+                        else if (choice == "Use container version (sync to host and rebuild)") // Use container
+                        {
+                            DisplayInfo("Syncing .devcontainer from volume to host...");
+                            var synced = await WithSpinnerAsync("Syncing files...",
+                                async () => await _spawnerService.SyncVolumeToHostAsync(
+                                    existing.VolumeName, projectName, projectPath));
+
+                            if (!synced)
+                            {
+                                DisplayError("Failed to sync files from volume to host");
+                                return 1;
+                            }
+
+                            DisplaySuccess("Files synced successfully");
+                        }
+                        else // Cancel
+                        {
+                            DisplayWarning("Spawn cancelled - please resolve conflicts manually");
+                            return 0;
+                        }
+                    }
+
                     // Offer to connect to existing container
                     var shouldConnect = PromptConfirmation(
                         "Connect to existing container?",

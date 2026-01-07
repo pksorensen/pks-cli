@@ -2603,6 +2603,192 @@ DEVCONTAINER_EOF";
         }
     }
 
+    /// <summary>
+    /// Computes configuration hash from host files (wrapper for IConfigurationHashService)
+    /// </summary>
+    /// <param name="projectPath">Project path</param>
+    /// <param name="devcontainerPath">Path to .devcontainer directory</param>
+    /// <returns>Configuration hash</returns>
+    public async Task<string> ComputeConfigurationHashAsync(string projectPath, string devcontainerPath)
+    {
+        return await _configHashService.ComputeConfigurationHashAsync(projectPath, devcontainerPath);
+    }
+
+    /// <summary>
+    /// Computes configuration hash from files inside a Docker volume
+    /// </summary>
+    /// <param name="volumeName">Volume name to read from</param>
+    /// <param name="projectName">Project name (determines path inside volume)</param>
+    /// <returns>Configuration hash computed from volume files, or null if error</returns>
+    public async Task<string?> ComputeVolumeHashAsync(string volumeName, string projectName)
+    {
+        string? tempDir = null;
+        string? tempContainerId = null;
+
+        try
+        {
+            _logger.LogDebug("Computing configuration hash from volume: {VolumeName}", volumeName);
+
+            // 1. Create temp directory
+            tempDir = Path.Combine(Path.GetTempPath(), $"pks-volume-hash-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(tempDir);
+            _logger.LogDebug("Created temp directory: {TempDir}", tempDir);
+
+            // 2. Create temporary container with volume mounted (don't start it)
+            var containerConfig = new CreateContainerParameters
+            {
+                Image = "alpine:latest",
+                Cmd = new[] { "true" }, // No-op command
+                HostConfig = new HostConfig
+                {
+                    Binds = new[] { $"{volumeName}:/workspaces:ro" }
+                }
+            };
+
+            var container = await _dockerClient.Containers.CreateContainerAsync(containerConfig);
+            tempContainerId = container.ID;
+            _logger.LogDebug("Created temporary container: {ContainerId}", tempContainerId[..12]);
+
+            // 3. Copy .devcontainer using docker cp
+            var sourcePath = $"/workspaces/{projectName}/.devcontainer";
+            var destPath = Path.Combine(tempDir, ".devcontainer");
+
+            _logger.LogDebug("Copying {SourcePath} from container to {DestPath}", sourcePath, destPath);
+            await RunDockerCommandAsync($"cp {tempContainerId}:{sourcePath} \"{destPath}\"");
+
+            // 4. Compute hash using same service as host
+            if (!Directory.Exists(destPath))
+            {
+                _logger.LogWarning("No .devcontainer found in volume {VolumeName}", volumeName);
+                return null;
+            }
+
+            var hashResult = await _configHashService.ComputeConfigurationHashWithDetailsAsync(
+                tempDir,
+                destPath);
+
+            _logger.LogInformation("Volume configuration hash computed: {Hash} (from {FileCount} files)",
+                hashResult.Hash.Substring(0, 16) + "...",
+                hashResult.IncludedFiles.Count);
+
+            return hashResult.Hash;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to compute volume hash for {VolumeName}", volumeName);
+            return null;
+        }
+        finally
+        {
+            // 5. Cleanup
+            if (tempContainerId != null)
+            {
+                try
+                {
+                    await _dockerClient.Containers.RemoveContainerAsync(
+                        tempContainerId,
+                        new ContainerRemoveParameters { Force = true });
+                    _logger.LogDebug("Removed temporary container: {ContainerId}", tempContainerId[..12]);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to cleanup temporary container: {ContainerId}", tempContainerId[..12]);
+                }
+            }
+
+            if (tempDir != null && Directory.Exists(tempDir))
+            {
+                try
+                {
+                    Directory.Delete(tempDir, recursive: true);
+                    _logger.LogDebug("Cleaned up temp directory: {TempDir}", tempDir);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to cleanup temp directory: {TempDir}", tempDir);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Syncs .devcontainer files from volume to host
+    /// </summary>
+    /// <param name="volumeName">Volume name to sync from</param>
+    /// <param name="projectName">Project name (determines path inside volume)</param>
+    /// <param name="hostProjectPath">Host project path to sync to</param>
+    /// <returns>True if sync successful</returns>
+    public async Task<bool> SyncVolumeToHostAsync(
+        string volumeName,
+        string projectName,
+        string hostProjectPath)
+    {
+        string? tempContainerId = null;
+
+        try
+        {
+            _logger.LogInformation("Syncing .devcontainer from volume {VolumeName} to host {HostPath}",
+                volumeName, hostProjectPath);
+
+            // 1. Create temporary container with volume mounted (don't start it)
+            var containerConfig = new CreateContainerParameters
+            {
+                Image = "alpine:latest",
+                Cmd = new[] { "true" },
+                HostConfig = new HostConfig
+                {
+                    Binds = new[] { $"{volumeName}:/workspaces:ro" }
+                }
+            };
+
+            var container = await _dockerClient.Containers.CreateContainerAsync(containerConfig);
+            tempContainerId = container.ID;
+            _logger.LogDebug("Created temporary container: {ContainerId}", tempContainerId[..12]);
+
+            // 2. Copy .devcontainer directory from volume to host
+            var sourcePath = $"/workspaces/{projectName}/.devcontainer";
+            var destPath = Path.Combine(hostProjectPath, ".devcontainer");
+
+            // Backup existing .devcontainer on host
+            if (Directory.Exists(destPath))
+            {
+                var backupPath = $"{destPath}.backup-{DateTime.UtcNow:yyyyMMddHHmmss}";
+                _logger.LogInformation("Backing up existing .devcontainer to: {BackupPath}", backupPath);
+                Directory.Move(destPath, backupPath);
+            }
+
+            // Copy from volume
+            _logger.LogDebug("Copying {SourcePath} from container to {DestPath}", sourcePath, destPath);
+            await RunDockerCommandAsync($"cp {tempContainerId}:{sourcePath} \"{hostProjectPath}\"");
+
+            _logger.LogInformation("Successfully synced .devcontainer from volume to host");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to sync volume to host");
+            return false;
+        }
+        finally
+        {
+            // Cleanup
+            if (tempContainerId != null)
+            {
+                try
+                {
+                    await _dockerClient.Containers.RemoveContainerAsync(
+                        tempContainerId,
+                        new ContainerRemoveParameters { Force = true });
+                    _logger.LogDebug("Removed temporary container: {ContainerId}", tempContainerId[..12]);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to cleanup temporary container: {ContainerId}", tempContainerId[..12]);
+                }
+            }
+        }
+    }
+
     #endregion
 }
 
