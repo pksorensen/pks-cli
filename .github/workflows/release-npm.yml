@@ -58,6 +58,10 @@ jobs:
           # Run semantic-release
           npx semantic-release --extends ./.releaserc.npm.json
 
+          # Debug: List files in current directory
+          echo "📂 Files in current directory:"
+          ls -la
+
           # Check if a release was created by looking for the .npm-version file
           if [ -f .npm-version ]; then
             VERSION=$(cat .npm-version)
@@ -66,13 +70,17 @@ jobs:
             echo "✅ Release published: $VERSION"
           else
             echo "new-release-published=false" >> $GITHUB_OUTPUT
-            echo "ℹ️ No release published"
+            echo "ℹ️ No release published - .npm-version file not found"
           fi
 
       - name: Output release info
         run: |
           echo "New release published: ${{ steps.semantic.outputs.new-release-published }}"
           echo "New release version: ${{ steps.semantic.outputs.new-release-version }}"
+
+          # Debug outputs
+          echo "Debug - checking GITHUB_OUTPUT:"
+          cat $GITHUB_OUTPUT || echo "GITHUB_OUTPUT not readable"
 
   build-binaries:
     name: Build npm binaries
