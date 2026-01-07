@@ -5,6 +5,13 @@ All notable changes to the npm distribution of PKS CLI will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0-rc.2](https://github.com/pksorensen/pks-cli/compare/npm-v1.0.0-rc.1...npm-v1.0.0-rc.2) (2026-01-07)
+
+
+### Features
+
+* Enhance semantic-release step to output release status and version ([0d0a841](https://github.com/pksorensen/pks-cli/commit/0d0a841e7b22c4228607dfaab21ad25c9ad40fc5))
+
 ## 1.0.0-rc.1 (2026-01-07)
 
 
