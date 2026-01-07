@@ -448,10 +448,12 @@ public class DevcontainerSpawnOptions
     public string? BuildLogPath { get; set; }
 
     /// <summary>
-    /// Whether to forward Docker credentials from host to devcontainer (default: false)
+    /// Whether to forward Docker credentials from host to devcontainer (default: true)
     /// When enabled, host's Docker config will be copied to devcontainer for authenticated registry access
+    /// This matches VS Code behavior and prevents "Directory nonexistent" errors in postStartCommand
+    /// Set to false with --no-forward-docker-config to disable
     /// </summary>
-    public bool ForwardDockerConfig { get; set; } = false;
+    public bool ForwardDockerConfig { get; set; } = true;
 
     /// <summary>
     /// Custom path to Docker config.json (optional, defaults to ~/.docker/config.json)

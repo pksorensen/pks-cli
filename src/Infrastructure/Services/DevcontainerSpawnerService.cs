@@ -1721,6 +1721,29 @@ DEVCONTAINER_EOF";
                     continue;
                 }
 
+                // Fix postStartCommand to create .docker directory before writing config.json
+                // This prevents "Directory nonexistent" errors that occur when the template's
+                // postStartCommand tries to create ~/.docker/config.json
+                if (property.Name == "postStartCommand" && property.Value.ValueKind == JsonValueKind.String)
+                {
+                    var originalCommand = property.Value.GetString() ?? "";
+
+                    // Only modify if it contains the problematic pattern
+                    if (originalCommand.Contains("~/.docker/config.json") && !originalCommand.Contains("mkdir -p ~/.docker"))
+                    {
+                        // Insert mkdir -p ~/.docker before any ~/.docker/config.json operations
+                        var fixedCommand = originalCommand.Replace(
+                            "echo '{}' > ~/.docker/config.json",
+                            "mkdir -p ~/.docker && echo '{}' > ~/.docker/config.json"
+                        );
+
+                        _logger.LogDebug("Fixed postStartCommand to create .docker directory");
+                        writer.WritePropertyName(property.Name);
+                        writer.WriteStringValue(fixedCommand);
+                        continue;
+                    }
+                }
+
                 // Write property name and value using JsonElement (preserves structure)
                 writer.WritePropertyName(property.Name);
                 property.Value.WriteTo(writer);

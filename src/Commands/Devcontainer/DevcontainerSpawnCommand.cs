@@ -45,8 +45,12 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         public bool NoBootstrap { get; set; }
 
         [CommandOption("--forward-docker-config")]
-        [Description("Forward Docker credentials from host to devcontainer (enables private image pulls)")]
-        public bool ForwardDockerConfig { get; set; }
+        [Description("Forward Docker credentials from host to devcontainer (default: true, matches VS Code behavior)")]
+        public bool? ForwardDockerConfig { get; set; }
+
+        [CommandOption("--no-forward-docker-config")]
+        [Description("Disable Docker credential forwarding (use when you don't want host Docker credentials in container)")]
+        public bool NoForwardDockerConfig { get; set; }
 
         [CommandOption("--docker-config-path <PATH>")]
         [Description("Path to Docker config.json to forward (defaults to ~/.docker/config.json)")]
@@ -178,6 +182,18 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
             DevcontainerSpawnResult? result = null;
             await WithSpinnerAsync("Spawning devcontainer...", async (ctx) =>
             {
+                // Determine Docker credential forwarding behavior
+                // Priority: --no-forward-docker-config > --forward-docker-config > default (true)
+                bool forwardDockerConfig = true; // Default matches VS Code behavior
+                if (settings.NoForwardDockerConfig)
+                {
+                    forwardDockerConfig = false;
+                }
+                else if (settings.ForwardDockerConfig.HasValue)
+                {
+                    forwardDockerConfig = settings.ForwardDockerConfig.Value;
+                }
+
                 var options = new DevcontainerSpawnOptions
                 {
                     ProjectName = projectName,
@@ -188,7 +204,7 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
                     LaunchVsCode = !settings.NoLaunchVsCode,
                     ReuseExisting = !settings.Force,
                     UseBootstrapContainer = !settings.NoBootstrap,
-                    ForwardDockerConfig = settings.ForwardDockerConfig,
+                    ForwardDockerConfig = forwardDockerConfig,
                     DockerConfigPath = settings.DockerConfigPath
                 };
 
