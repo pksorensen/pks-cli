@@ -1671,9 +1671,13 @@ DEVCONTAINER_EOF";
     /// Creates an override config file using JsonElement to preserve JSON structure
     /// This approach aims to preserve feature metadata processing while overriding workspace properties
     /// </summary>
+    /// <param name="bootstrapContainerId">Bootstrap container ID</param>
+    /// <param name="workspaceFolder">Workspace folder path inside bootstrap</param>
+    /// <param name="volumeName">Volume name (used for unique filename)</param>
     private async Task<string?> CreateOverrideConfigWithJsonElementAsync(
         string bootstrapContainerId,
-        string workspaceFolder)
+        string workspaceFolder,
+        string volumeName)
     {
         _logger.LogDebug("Creating override config using JsonElement approach");
 
@@ -1733,7 +1737,8 @@ DEVCONTAINER_EOF";
             _logger.LogInformation("=== END OVERRIDE CONFIG ===");
 
             // Write override config to a temporary file in the bootstrap container
-            var overrideConfigPath = $"{workspaceFolder}/.devcontainer/override-config.json";
+            // Use volumeName in filename to avoid conflicts when running multiple projects concurrently
+            var overrideConfigPath = $"{workspaceFolder}/.devcontainer/override-config-{volumeName}.json";
             var writeCommand = $@"cat > {overrideConfigPath} <<'OVERRIDE_EOF'
 {overrideJson}
 OVERRIDE_EOF";
@@ -1752,8 +1757,9 @@ OVERRIDE_EOF";
 
             _logger.LogInformation("Created override config at: {Path}", overrideConfigPath);
 
-            // Also copy to host for inspection
-            var hostCopyPath = "/tmp/pks-override-config-debug.json";
+            // Also copy to host for inspection (cross-platform temp directory)
+            // Use volumeName in filename for easy identification during debugging
+            var hostCopyPath = Path.Combine(Path.GetTempPath(), $"pks-override-config-{volumeName}.json");
             try
             {
                 File.WriteAllText(hostCopyPath, overrideJson);
@@ -2056,7 +2062,7 @@ DOCKER_CONFIG_EOF
 
         // Create override config using JsonElement to preserve structure
         // This approach aims to preserve feature metadata processing while overriding workspace properties
-        var overrideConfigPath = await CreateOverrideConfigWithJsonElementAsync(bootstrapContainerId, workspaceFolder);
+        var overrideConfigPath = await CreateOverrideConfigWithJsonElementAsync(bootstrapContainerId, workspaceFolder, volumeName);
 
         if (overrideConfigPath == null)
         {
