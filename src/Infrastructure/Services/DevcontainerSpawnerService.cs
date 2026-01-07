@@ -895,7 +895,12 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
     {
         try
         {
-            _logger.LogDebug("Searching for existing container for project: {ProjectPath}", projectPath);
+            // Extract project name from path for label matching
+            // Labels are set with just the project name, not the full path
+            var projectName = Path.GetFileName(projectPath);
+
+            _logger.LogDebug("Searching for existing container for project: {ProjectPath} (name: {ProjectName})",
+                projectPath, projectName);
 
             var containers = await _dockerClient.Containers.ListContainersAsync(
                 new ContainersListParameters
@@ -905,7 +910,8 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                     {
                         ["label"] = new Dictionary<string, bool>
                         {
-                            [$"devcontainer.local_folder={projectPath}"] = true
+                            // Fixed: Use dot not underscore, and projectName not projectPath
+                            [$"devcontainer.local.folder={projectName}"] = true
                         }
                     }
                 });
@@ -917,7 +923,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                 return null;
             }
 
-            var volumeName = container.Labels.TryGetValue("vsch.local.repository.volume", out var vol)
+            var volumeName = container.Labels.TryGetValue("devcontainer.local.volume", out var vol)
                 ? vol
                 : string.Empty;
 
@@ -1047,26 +1053,22 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
         {
             _logger.LogDebug("Listing managed devcontainer containers...");
 
+            // List all containers - we'll filter by checking for devcontainer labels
             var containers = await _dockerClient.Containers.ListContainersAsync(
                 new ContainersListParameters
                 {
-                    All = true,
-                    Filters = new Dictionary<string, IDictionary<string, bool>>
-                    {
-                        ["label"] = new Dictionary<string, bool>
-                        {
-                            ["pks.managed=true"] = true
-                        }
-                    }
+                    All = true
                 });
 
+            // Filter containers that have devcontainer.local.folder label (PKS-managed containers)
             var managedContainers = containers
+                .Where(c => c.Labels?.ContainsKey("devcontainer.local.folder") == true)
                 .Select(c => new DevcontainerContainerInfo
                 {
                     ContainerId = c.ID,
                     ContainerName = c.Names?.FirstOrDefault()?.TrimStart('/') ?? string.Empty,
-                    ProjectName = c.Labels?.TryGetValue("devcontainer.project", out var proj) == true ? proj : "unknown",
-                    VolumeName = c.Labels?.TryGetValue("vsch.local.repository.volume", out var vol) == true ? vol : string.Empty,
+                    ProjectName = c.Labels?.TryGetValue("devcontainer.local.folder", out var proj) == true ? proj : "unknown",
+                    VolumeName = c.Labels?.TryGetValue("devcontainer.local.volume", out var vol) == true ? vol : string.Empty,
                     Status = c.State,
                     CreatedDate = c.Created,
                     Labels = c.Labels != null ? new Dictionary<string, string>(c.Labels) : new Dictionary<string, string>(),
