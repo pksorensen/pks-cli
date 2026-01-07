@@ -139,6 +139,11 @@ jobs:
     name: Release npm
     needs: detect-changes
     if: needs.detect-changes.outputs.cli == 'true'
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write  # Required for npm provenance (Trusted Publishers)
     uses: ./.github/workflows/release-npm.yml
     with:
       force_npm_token: ${{ github.event.inputs.force_npm_token == 'true' }}
