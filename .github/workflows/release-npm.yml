@@ -289,3 +289,56 @@ jobs:
           prerelease: ${{ contains(needs.semantic-release.outputs.new-release-version, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  cleanup-on-failure:
+    name: Cleanup Failed Release
+    runs-on: ubuntu-latest
+    needs: [semantic-release, build-binaries, create-packages, publish-npm]
+    if: |
+      always() &&
+      needs.semantic-release.outputs.new-release-published == 'true' &&
+      (needs.build-binaries.result == 'failure' ||
+       needs.create-packages.result == 'failure' ||
+       needs.publish-npm.result == 'failure')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Delete tag and revert commit
+        run: |
+          VERSION="${{ needs.semantic-release.outputs.new-release-version }}"
+          TAG="npm-v${VERSION}"
+
+          echo "⚠️ Release failed after tag creation, cleaning up..."
+
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Fetch latest
+          git fetch origin ${GITHUB_REF#refs/heads/}
+
+          # Delete tag locally and remotely
+          git tag -d "$TAG" 2>/dev/null || echo "Tag not found locally"
+          git push origin ":refs/tags/$TAG" 2>/dev/null || echo "Tag not found on remote"
+
+          # Check if latest commit is the release commit
+          git pull origin ${GITHUB_REF#refs/heads/}
+          COMMIT_MSG=$(git log -1 --pretty=%B origin/${GITHUB_REF#refs/heads/})
+          if echo "$COMMIT_MSG" | grep -q "chore(release:npm): ${VERSION}"; then
+            echo "Reverting changelog commit..."
+            git checkout ${GITHUB_REF#refs/heads/}
+            git revert HEAD --no-edit
+            git push origin HEAD:${GITHUB_REF#refs/heads/}
+            echo "✅ Reverted changelog commit"
+          else
+            echo "ℹ️ No changelog commit to revert"
+          fi
+
+          echo "✅ Cleanup complete - tag and commit removed"
+          echo "You can safely re-run the workflow after fixing the issue"

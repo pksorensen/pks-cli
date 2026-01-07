@@ -59,6 +59,8 @@ jobs:
 
       - name: Build self-contained binary
         run: |
+          echo "Building ${{ matrix.rid }} binary..."
+
           dotnet publish src/pks-cli.csproj \
             --configuration ${{ inputs.configuration }} \
             --runtime ${{ matrix.rid }} \
@@ -73,6 +75,31 @@ jobs:
             -p:PublishSelfContained=true \
             -p:EmbedTemplates=true \
             --nologo
+
+          # Verify the build succeeded
+          if [ $? -ne 0 ]; then
+            echo "❌ Build failed for ${{ matrix.rid }}"
+            exit 1
+          fi
+
+          # List what was created
+          echo "📦 Build output:"
+          ls -la ./dist/${{ matrix.rid }}/ || true
+
+          # Verify binary exists
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            if [ ! -f "./dist/${{ matrix.rid }}/pks.exe" ]; then
+              echo "❌ Binary not found: ./dist/${{ matrix.rid }}/pks.exe"
+              exit 1
+            fi
+            echo "✅ Binary created: pks.exe"
+          else
+            if [ ! -f "./dist/${{ matrix.rid }}/pks" ]; then
+              echo "❌ Binary not found: ./dist/${{ matrix.rid }}/pks"
+              exit 1
+            fi
+            echo "✅ Binary created: pks"
+          fi
         shell: bash
 
       - name: Display binary size (Linux/macOS)
@@ -91,7 +118,14 @@ jobs:
 
       - name: Set executable permissions (Linux/macOS)
         if: runner.os != 'Windows'
-        run: chmod +x ./dist/${{ matrix.rid }}/pks
+        run: |
+          if [ -f ./dist/${{ matrix.rid }}/pks ]; then
+            chmod +x ./dist/${{ matrix.rid }}/pks
+            echo "✅ Executable permissions set"
+          else
+            echo "❌ Binary not found, cannot set permissions"
+            exit 1
+          fi
         shell: bash
 
       - name: Upload binary artifact
