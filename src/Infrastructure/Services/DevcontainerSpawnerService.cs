@@ -1532,6 +1532,10 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
 
         _logger.LogDebug("Files copied to bootstrap container");
 
+        // Fix file ownership to match remoteUser from devcontainer.json
+        // Files copied by docker cp are owned by root, but devcontainer runs as remoteUser
+        await FixFileOwnershipAsync(bootstrapContainerId, destPath);
+
         // Verify copy with ls -la
         var verifyCommand = $"ls -la {destPath}";
         var verifyResult = await ExecuteInBootstrapAsync(bootstrapContainerId, verifyCommand);
@@ -1544,6 +1548,74 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
         else
         {
             _logger.LogWarning("Could not verify file copy: {Error}", verifyResult.Error);
+        }
+    }
+
+    /// <summary>
+    /// Fixes file ownership in the volume to match the remoteUser from devcontainer.json
+    /// </summary>
+    /// <param name="bootstrapContainerId">ID of the bootstrap container</param>
+    /// <param name="workspacePath">Path to workspace in bootstrap container</param>
+    private async Task FixFileOwnershipAsync(string bootstrapContainerId, string workspacePath)
+    {
+        try
+        {
+            // Read remoteUser from devcontainer.json
+            var devcontainerJsonPath = $"{workspacePath}/.devcontainer/devcontainer.json";
+            var readResult = await ExecuteInBootstrapAsync(
+                bootstrapContainerId,
+                $"cat {devcontainerJsonPath}",
+                workingDir: null,
+                timeoutSeconds: 10);
+
+            if (!readResult.Success)
+            {
+                _logger.LogWarning("Could not read devcontainer.json to determine remoteUser, skipping ownership fix");
+                return;
+            }
+
+            // Parse JSON and get remoteUser
+            using var jsonDoc = JsonDocument.Parse(readResult.Output);
+            var remoteUser = "node"; // Default
+            if (jsonDoc.RootElement.TryGetProperty("remoteUser", out var remoteUserProp))
+            {
+                remoteUser = remoteUserProp.GetString() ?? "node";
+            }
+
+            // Map common usernames to UID:GID
+            // Most devcontainer images use uid=1000 for non-root users
+            var uidGid = remoteUser.ToLower() switch
+            {
+                "root" => "0:0",
+                "node" => "1000:1000",
+                "vscode" => "1000:1000",
+                "devcontainer" => "1000:1000",
+                _ => "1000:1000" // Default to 1000:1000 for unknown users
+            };
+
+            _logger.LogInformation("Fixing file ownership for remoteUser '{RemoteUser}' (UID:GID {UidGid})",
+                remoteUser, uidGid);
+
+            // Chown all files in workspace to the correct user
+            var chownCommand = $"chown -R {uidGid} {workspacePath}";
+            var chownResult = await ExecuteInBootstrapAsync(
+                bootstrapContainerId,
+                chownCommand,
+                workingDir: null,
+                timeoutSeconds: 30);
+
+            if (!chownResult.Success)
+            {
+                _logger.LogWarning("Failed to fix file ownership: {Error}", chownResult.Error);
+            }
+            else
+            {
+                _logger.LogInformation("File ownership fixed successfully");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fix file ownership, files may have permission issues");
         }
     }
 
@@ -1733,29 +1805,6 @@ DEVCONTAINER_EOF";
                     writer.WritePropertyName(property.Name);
                     writer.WriteStringValue(actualWorkspaceFolder);
                     continue;
-                }
-
-                // Fix postStartCommand to create .docker directory before writing config.json
-                // This prevents "Directory nonexistent" errors that occur when the template's
-                // postStartCommand tries to create ~/.docker/config.json
-                if (property.Name == "postStartCommand" && property.Value.ValueKind == JsonValueKind.String)
-                {
-                    var originalCommand = property.Value.GetString() ?? "";
-
-                    // Only modify if it contains the problematic pattern
-                    if (originalCommand.Contains("~/.docker/config.json") && !originalCommand.Contains("mkdir -p ~/.docker"))
-                    {
-                        // Insert mkdir -p ~/.docker before any ~/.docker/config.json operations
-                        var fixedCommand = originalCommand.Replace(
-                            "echo '{}' > ~/.docker/config.json",
-                            "mkdir -p ~/.docker && echo '{}' > ~/.docker/config.json"
-                        );
-
-                        _logger.LogDebug("Fixed postStartCommand to create .docker directory");
-                        writer.WritePropertyName(property.Name);
-                        writer.WriteStringValue(fixedCommand);
-                        continue;
-                    }
                 }
 
                 // Write property name and value using JsonElement (preserves structure)

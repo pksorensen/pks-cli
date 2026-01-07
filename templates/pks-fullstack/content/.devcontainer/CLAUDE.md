@@ -1,10 +1,28 @@
-# DevContainer Firewall Configuration
+# DevContainer Security Configuration
 
 ## Purpose
 
-This DevContainer includes a restrictive iptables-based firewall (`init-firewall.sh`) designed to protect the agent development environment from accessing unauthorized or potentially malicious sites.
+This DevContainer includes multiple security measures to protect the development environment:
+1. **Restrictive firewall** (`init-firewall.sh`) - default-deny network policy
+2. **Docker credential isolation** - prevents docker-in-docker from accessing host credentials
 
 The firewall operates on a **default-deny** policy: all outbound connections are blocked except those explicitly allowed to trusted domains required for development work.
+
+## Docker Credential Security
+
+### VS Code Credential Helper Disabled
+
+This template disables VS Code's automatic Docker credential helper via:
+
+```json
+"dev.containers.dockerCredentialHelper": false
+```
+
+**Why**: VS Code automatically creates `~/.docker/config.json` with a credential helper that allows docker-in-docker to access host Docker credentials via IPC. This is disabled for security to prevent the inner Docker daemon from using host credentials.
+
+**Result**: Docker commands inside the container (via docker-in-docker) cannot access private registries using host credentials. You must run `docker login` inside the container if needed.
+
+**Note**: The postStartCommand does NOT create `~/.docker/config.json` - it doesn't exist until you manually run `docker login`.
 
 ## Allowed Domains
 

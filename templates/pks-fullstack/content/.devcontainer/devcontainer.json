@@ -57,7 +57,8 @@
         "editor.codeActionsOnSave": {
           "source.fixAll.eslint": "explicit"
         },
-        "remote.containers.gitCredentialHelperConfigLocation": "none"
+        "remote.containers.gitCredentialHelperConfigLocation": "none",
+        "dev.containers.dockerCredentialHelper": false
       }
     }
   },
@@ -78,6 +79,6 @@
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind,consistency=delegated",
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
-  "postStartCommand": "sudo /usr/local/share/docker-init.sh && echo '{}' > ~/.docker/config.json",
+  "postStartCommand": "sudo /usr/local/share/docker-init.sh",
   "waitFor": "postStartCommand"
 }
