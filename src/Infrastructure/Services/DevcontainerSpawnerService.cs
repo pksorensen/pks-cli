@@ -1683,6 +1683,9 @@ DEVCONTAINER_EOF";
 
         var devcontainerJsonPath = $"{workspaceFolder}/.devcontainer/devcontainer.json";
 
+        // Extract project name from workspace folder for use in workspaceFolder property
+        var projectName = Path.GetFileName(workspaceFolder);
+
         try
         {
             // Read the original devcontainer.json
@@ -1714,10 +1717,21 @@ DEVCONTAINER_EOF";
 
             foreach (var property in root.EnumerateObject())
             {
-                // Skip properties that cause bind mount issues
-                if (property.Name == "workspaceMount" || property.Name == "workspaceFolder")
+                // Skip workspaceMount - we use --mount flag instead
+                // Keep workspaceFolder but replace variable with actual project name
+                if (property.Name == "workspaceMount")
                 {
-                    _logger.LogDebug("Skipping property in override config: {PropertyName}", property.Name);
+                    _logger.LogDebug("Skipping workspaceMount in override config (using --mount flag instead)");
+                    continue;
+                }
+
+                // Replace workspaceFolder with actual value (resolve ${localWorkspaceFolderBasename})
+                if (property.Name == "workspaceFolder")
+                {
+                    var actualWorkspaceFolder = $"/workspaces/{projectName}";
+                    _logger.LogDebug("Setting workspaceFolder to: {WorkspaceFolder}", actualWorkspaceFolder);
+                    writer.WritePropertyName(property.Name);
+                    writer.WriteStringValue(actualWorkspaceFolder);
                     continue;
                 }
 
@@ -1889,76 +1903,14 @@ DEVCONTAINER_EOF";
         string bootstrapContainerId,
         string workspaceFolder)
     {
-        _logger.LogDebug("Creating default empty Docker config in bootstrap container");
+        // NOTE: Docker config creation has been moved to postStartCommand in override config
+        // The postStartCommand automatically creates ~/.docker directory before writing config.json
+        // This ensures the directory is created in the correct location (user's home directory)
+        // and avoids creating leftover /workspaces/workspace/.docker directories
 
-        try
-        {
-            // Extract remote user from devcontainer.json
-            var remoteUser = await GetRemoteUserFromDevcontainerAsync(bootstrapContainerId, workspaceFolder);
+        _logger.LogDebug("Docker config will be created by postStartCommand in user's home directory (~/.docker)");
 
-            // Create .docker directory with proper permissions for the remote user
-            var createDirCommand = $@"
-                mkdir -p /workspaces/workspace/.docker && \
-                echo '{{}}' > /workspaces/workspace/.docker/config.json && \
-                chmod 700 /workspaces/workspace/.docker && \
-                chmod 600 /workspaces/workspace/.docker/config.json
-            ";
-
-            var result = await ExecuteInBootstrapAsync(
-                bootstrapContainerId,
-                createDirCommand,
-                workingDir: null,
-                timeoutSeconds: 10);
-
-            if (!result.Success)
-            {
-                _logger.LogWarning(
-                    "Failed to create default Docker config: {Error}. " +
-                    "This may cause Docker authentication warnings but should not prevent container operation.",
-                    result.Error);
-            }
-            else
-            {
-                _logger.LogInformation("Default Docker config created successfully");
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to create default Docker config");
-        }
-    }
-
-    /// <summary>
-    /// Gets the remote user from devcontainer.json
-    /// </summary>
-    private async Task<string> GetRemoteUserFromDevcontainerAsync(
-        string bootstrapContainerId,
-        string workspaceFolder)
-    {
-        try
-        {
-            var devcontainerJsonPath = $"{workspaceFolder}/.devcontainer/devcontainer.json";
-            var readResult = await ExecuteInBootstrapAsync(
-                bootstrapContainerId,
-                $"cat {devcontainerJsonPath}",
-                workingDir: null,
-                timeoutSeconds: 10);
-
-            if (readResult.Success)
-            {
-                var jsonDoc = JsonDocument.Parse(readResult.Output);
-                if (jsonDoc.RootElement.TryGetProperty("remoteUser", out var remoteUserProp))
-                {
-                    return remoteUserProp.GetString() ?? "node";
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Failed to read remoteUser from devcontainer.json, using default 'node'");
-        }
-
-        return "node"; // Default
+        await Task.CompletedTask;
     }
 
     /// <summary>
@@ -1973,67 +1925,26 @@ DEVCONTAINER_EOF";
         string workspaceFolder,
         string? customConfigPath = null)
     {
-        _logger.LogInformation("Forwarding Docker credentials to devcontainer...");
+        // NOTE: Docker credential forwarding has been simplified
+        // The postStartCommand in the override config creates ~/.docker/config.json
+        // This ensures the directory is created in the correct location (user's home directory)
+        //
+        // Full Docker credential forwarding (copying host credentials) is not currently implemented
+        // because it requires writing to the devcontainer's user home directory which doesn't exist
+        // at bootstrap time. This can be added in a future enhancement.
+        //
+        // For now, users can:
+        // 1. Use mounted volumes in their devcontainer.json to mount host .docker config
+        // 2. Run 'docker login' inside the devcontainer after it starts
+        // 3. Add custom postStartCommand logic to copy credentials from a mounted location
 
-        try
-        {
-            // 1. Locate host Docker config
-            var hostConfigPath = customConfigPath ?? GetDefaultDockerConfigPath();
+        _logger.LogDebug("Docker config will be created by postStartCommand in user's home directory (~/.docker)");
+        _logger.LogInformation(
+            "Note: Docker credential forwarding is not fully implemented yet. " +
+            "The ~/.docker directory will be created with an empty config.json. " +
+            "Use mounted volumes or run 'docker login' inside the container for authenticated registry access.");
 
-            if (!File.Exists(hostConfigPath))
-            {
-                _logger.LogWarning(
-                    "Host Docker config not found at {Path}. " +
-                    "Creating empty config instead. " +
-                    "Run 'docker login' on host to enable credential forwarding.",
-                    hostConfigPath);
-
-                await CreateDefaultDockerConfigAsync(bootstrapContainerId, workspaceFolder);
-                return;
-            }
-
-            _logger.LogDebug("Reading host Docker config from: {Path}", hostConfigPath);
-
-            // 2. Read and validate host config
-            var configContent = await File.ReadAllTextAsync(hostConfigPath);
-
-            if (string.IsNullOrWhiteSpace(configContent) || configContent.Trim() == "{}")
-            {
-                _logger.LogInformation("Host Docker config is empty, creating default config");
-                await CreateDefaultDockerConfigAsync(bootstrapContainerId, workspaceFolder);
-                return;
-            }
-
-            // 3. Write config to bootstrap container's workspace
-            var writeConfigCommand = $@"
-                mkdir -p /workspaces/workspace/.docker && \
-                cat > /workspaces/workspace/.docker/config.json <<'DOCKER_CONFIG_EOF'
-{configContent}
-DOCKER_CONFIG_EOF
-                chmod 700 /workspaces/workspace/.docker && \
-                chmod 600 /workspaces/workspace/.docker/config.json
-            ";
-
-            var writeResult = await ExecuteInBootstrapAsync(
-                bootstrapContainerId,
-                writeConfigCommand,
-                workingDir: null,
-                timeoutSeconds: 10);
-
-            if (!writeResult.Success)
-            {
-                _logger.LogError("Failed to write Docker config: {Error}", writeResult.Error);
-                await CreateDefaultDockerConfigAsync(bootstrapContainerId, workspaceFolder);
-                return;
-            }
-
-            _logger.LogInformation("Docker credentials forwarded successfully");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to forward Docker credentials, falling back to empty config");
-            await CreateDefaultDockerConfigAsync(bootstrapContainerId, workspaceFolder);
-        }
+        await Task.CompletedTask;
     }
 
     /// <summary>

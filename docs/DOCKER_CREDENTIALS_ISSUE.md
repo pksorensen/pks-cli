@@ -61,31 +61,37 @@ This ensures the directory exists before writing to it, preventing the error eve
 
 **Code Location**: `DevcontainerSpawnerService.cs` → `CreateOverrideConfigWithJsonElementAsync()` method
 
-### 2. Docker Credential Forwarding Now Default
+### 2. Docker Credential Forwarding Status
 
-To match VS Code behavior, Docker credential forwarding is now **enabled by default**:
+**Current Implementation (v1.2):**
+- ❌ Full Docker credential forwarding is **not yet implemented**
+- ✅ Empty `~/.docker/config.json` is created by postStartCommand to prevent errors
+- ✅ The `--forward-docker-config` flag exists but currently has no effect
 
-**Default Behavior:**
-- ✅ Forward Docker credentials from host to devcontainer (matches VS Code)
-- ✅ Creates `~/.docker` directory with proper permissions
-- ✅ Enables private registry access without additional configuration
+**Why Not Fully Implemented:**
+- Docker credentials must be written to the user's home directory (`~/.docker`)
+- The user's home directory doesn't exist at bootstrap time (before devcontainer starts)
+- Writing to `/workspaces/workspace/.docker` (previous approach) created leftover directories in wrong location
 
-**Command-Line Flags:**
-```bash
-# Default (credential forwarding enabled)
-pks devcontainer spawn /path/to/project
+**Workarounds for Docker Authentication:**
+1. **Mounted Volumes** - Mount host `.docker` config directly in `devcontainer.json`:
+   ```json
+   "mounts": [
+     "source=${localEnv:HOME}/.docker,target=/home/node/.docker,type=bind,consistency=cached"
+   ]
+   ```
 
-# Explicitly enable (redundant, already default)
-pks devcontainer spawn /path/to/project --forward-docker-config
+2. **Manual Login** - Run `docker login` inside the devcontainer after it starts
 
-# Disable credential forwarding
-pks devcontainer spawn /path/to/project --no-forward-docker-config
+3. **Custom postStartCommand** - Add logic to copy credentials from a mounted location
 
-# Use custom Docker config location
-pks devcontainer spawn /path/to/project --docker-config-path /custom/path/config.json
-```
+**Future Enhancement:**
+Docker credential forwarding will be implemented in a future release by:
+- Copying credentials to a temporary location in the volume
+- Having postStartCommand copy them to `~/.docker` after container starts
+- Or using Docker's built-in credential helper mounting
 
-**Code Location**: `DevcontainerModels.cs` → `ForwardDockerConfig` property (default: `true`)
+**Code Location**: `DevcontainerSpawnerService.cs` → `ForwardDockerCredentialsAsync()` method
 
 ---
 
@@ -97,39 +103,48 @@ pks devcontainer spawn /path/to/project --docker-config-path /custom/path/config
 
 1. **Bootstrap container starts** (runs on host Docker)
 2. **Source files copied** to Docker volume
-3. **Override config created** with fixed `postStartCommand`
-4. **Docker credentials forwarded** (if enabled, now default)
-   - Creates `/workspaces/workspace/.docker/config.json` in volume
-   - This happens **before** devcontainer starts
-5. **Devcontainer builds** from Dockerfile/image
-6. **Devcontainer starts** with volume mounted
-7. **postStartCommand runs** inside devcontainer
-   - Now has `mkdir -p ~/.docker &&` prefix (from override config)
-   - Directory creation succeeds
-   - `echo '{}' > ~/.docker/config.json` succeeds
+3. **Override config created** with:
+   - Fixed `postStartCommand` (adds `mkdir -p ~/.docker &&`)
+   - Resolved `workspaceFolder` (replaces `${localWorkspaceFolderBasename}` with actual project name)
+   - Removed `workspaceMount` (uses `--mount` flag instead)
+4. **Devcontainer builds** from Dockerfile/image
+5. **Devcontainer starts** with volume mounted at `/workspaces`
+6. **postStartCommand runs** inside devcontainer
+   - Creates `~/.docker` directory (from override config fix)
+   - Creates empty `~/.docker/config.json` to prevent errors
+   - Runs other initialization commands
 
-### Why Both Fixes Are Needed
+### How the Fix Works
 
-**Fix #1 (postStartCommand)**: Safety net - ensures directory exists even if forwarding is disabled
+**postStartCommand Fix**: Automatically adds `mkdir -p ~/.docker &&` before any `~/.docker/config.json` operations
+- Ensures directory exists in the correct location (user's home directory)
+- Prevents "Directory nonexistent" errors
+- Works even without credential forwarding
 
-**Fix #2 (Default forwarding)**: Matches VS Code behavior and provides better out-of-box experience
+**workspaceFolder Fix**: Resolves template variables to actual paths
+- Template: `"workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}"`
+- Override: `"workspaceFolder": "/workspaces/test666"` (actual project name)
+- Ensures VS Code opens in the correct directory instead of root `/`
 
-Together, these fixes ensure the spawn succeeds in all scenarios:
-- ✅ With credential forwarding (default)
-- ✅ With `--no-forward-docker-config`
-- ✅ With invalid/missing host Docker config
+Together, these fixes ensure the spawn succeeds and VS Code opens correctly in all scenarios:
+- ✅ VS Code opens at `/workspaces/{projectName}` (not root `/`)
+- ✅ No leftover `/workspaces/workspace/.docker` directories
+- ✅ postStartCommand completes successfully
 
 ---
 
 ## VS Code Comparison
 
-| Aspect | VS Code | PKS CLI (Before) | PKS CLI (After) |
-|--------|---------|------------------|-----------------|
-| **Default Behavior** | Forward credentials | No forwarding | ✅ Forward credentials |
-| **.docker Directory** | Created by forwarding | Not created | ✅ Created by forwarding |
-| **postStartCommand** | Succeeds (dir exists) | ❌ Fails (no dir) | ✅ Succeeds (fixed command) |
-| **Private Registries** | Works by default | ❌ Requires flag | ✅ Works by default |
-| **Disable Option** | N/A (always on) | Default behavior | `--no-forward-docker-config` |
+| Aspect | VS Code | PKS CLI (Before) | PKS CLI (After v1.2) |
+|--------|---------|------------------|----------------------|
+| **Mount Point** | `/workspaces/{projectName}` | ❌ Root `/` | ✅ `/workspaces/{projectName}` |
+| **.docker Directory** | Created by credential forwarding | ❌ Not created | ✅ Created by postStartCommand |
+| **postStartCommand** | Succeeds (dir exists) | ❌ Fails (no dir) | ✅ Succeeds (auto-fixed) |
+| **Credential Forwarding** | ✅ Copies host credentials | ❌ Not implemented | ⚠️ Not yet implemented* |
+| **Private Registries** | Works by default | ❌ Requires manual setup | ⚠️ Requires manual setup* |
+| **Leftover Directories** | None | ❌ `/workspaces/workspace/.docker` | ✅ None |
+
+\* Full credential forwarding planned for future release. Use mounted volumes as workaround.
 
 ---
 
