@@ -1303,8 +1303,20 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
     }
 
     /// <summary>
-    /// Launches VS Code with the specified URI
+    /// Launches VS Code with the specified remote container URI
     /// </summary>
+    /// <param name="vsCodeUri">VS Code remote container URI</param>
+    public async Task LaunchVsCodeAsync(string vsCodeUri)
+    {
+        var vsCodeInfo = await CheckVsCodeInstallationAsync();
+        if (vsCodeInfo == null || !vsCodeInfo.IsInstalled)
+        {
+            throw new InvalidOperationException("VS Code is not installed");
+        }
+
+        await LaunchVsCodeAsync(vsCodeUri, vsCodeInfo.ExecutablePath);
+    }
+
     private async Task<bool> LaunchVsCodeAsync(string uri, string vsCodePath)
     {
         try
@@ -2420,6 +2432,31 @@ DEVCONTAINER_EOF";
     #endregion
 
     #region Rebuild and Container Management
+
+    /// <summary>
+    /// Starts a stopped devcontainer
+    /// </summary>
+    /// <param name="containerId">Container ID to start</param>
+    /// <returns>True if started successfully</returns>
+    public async Task<bool> StartContainerAsync(string containerId)
+    {
+        try
+        {
+            _logger.LogInformation("Starting container: {ContainerId}", containerId);
+
+            await _dockerClient.Containers.StartContainerAsync(
+                containerId,
+                new ContainerStartParameters());
+
+            _logger.LogInformation("Container started successfully: {ContainerId}", containerId);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to start container: {ContainerId}", containerId);
+            return false;
+        }
+    }
 
     /// <summary>
     /// Stops a running devcontainer

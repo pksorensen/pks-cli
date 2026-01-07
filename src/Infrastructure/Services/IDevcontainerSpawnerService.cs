@@ -84,4 +84,17 @@ public interface IDevcontainerSpawnerService
     /// <param name="workspaceFolder">The workspace folder path inside the container</param>
     /// <returns>VS Code remote container URI in the format vscode-remote://attached-container+{containerId}{workspaceFolder}</returns>
     Task<string> GetContainerVsCodeUriAsync(string containerId, string workspaceFolder);
+
+    /// <summary>
+    /// Starts a stopped devcontainer
+    /// </summary>
+    /// <param name="containerId">Container ID to start</param>
+    /// <returns>True if started successfully</returns>
+    Task<bool> StartContainerAsync(string containerId);
+
+    /// <summary>
+    /// Launches VS Code with the specified remote container URI
+    /// </summary>
+    /// <param name="vsCodeUri">VS Code remote container URI</param>
+    Task LaunchVsCodeAsync(string vsCodeUri);
 }

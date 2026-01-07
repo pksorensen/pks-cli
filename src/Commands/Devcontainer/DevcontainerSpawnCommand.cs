@@ -122,11 +122,63 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
                     DisplayProgress($"Status: {(existing.IsRunning ? "Running" : "Stopped")}");
                     Console.WriteLine();
 
-                    var shouldContinue = PromptConfirmation(
+                    // Offer to connect to existing container
+                    var shouldConnect = PromptConfirmation(
+                        "Connect to existing container?",
+                        defaultValue: true);
+
+                    if (shouldConnect)
+                    {
+                        // Start container if stopped
+                        if (!existing.IsRunning)
+                        {
+                            DisplayInfo("Starting container...");
+                            await WithSpinnerAsync("Starting container...", async () =>
+                            {
+                                await _spawnerService.StartContainerAsync(existing.ContainerId);
+                            });
+                        }
+
+                        // Launch VS Code if not disabled
+                        if (!settings.NoLaunchVsCode)
+                        {
+                            DisplayInfo("Launching VS Code...");
+                            var workspaceFolder = $"/workspaces/{projectName}";
+                            var vsCodeUri = await _spawnerService.GetContainerVsCodeUriAsync(
+                                existing.ContainerId,
+                                workspaceFolder);
+
+                            await _spawnerService.LaunchVsCodeAsync(vsCodeUri);
+                        }
+
+                        DisplaySuccess("Connected to existing container");
+                        Console.WriteLine();
+
+                        var successPanel = new Panel($"""
+                            [green]Connected to existing devcontainer![/]
+
+                            [cyan1]Container ID:[/] {existing.ContainerId[..12]}
+                            [cyan1]Volume Name:[/] {existing.VolumeName}
+                            [cyan1]Workspace:[/] /workspaces/{projectName}
+
+                            {(!settings.NoLaunchVsCode ? "[dim]VS Code is opening...[/]" : "[dim]Container is ready[/]")}
+
+                            [bold]Ready for development![/]
+                            """)
+                            .Border(BoxBorder.Rounded)
+                            .BorderStyle("green")
+                            .Header(" [bold green]Success[/] ");
+
+                        Console.Write(successPanel);
+                        return 0;
+                    }
+
+                    // User doesn't want to connect, ask if they want to create new
+                    var shouldCreateNew = PromptConfirmation(
                         "Create a new container anyway?",
                         defaultValue: false);
 
-                    if (!shouldContinue)
+                    if (!shouldCreateNew)
                     {
                         DisplayWarning("Spawn cancelled");
                         return 0;
