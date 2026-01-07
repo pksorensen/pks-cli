@@ -1,0 +1,24 @@
+{
+  "name": "@pks-cli/pks-win-arm64",
+  "version": "1.0.0",
+  "description": "PKS CLI - Windows ARM64 binary",
+  "os": ["win32"],
+  "cpu": ["arm64"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pksorensen/pks-cli.git"
+  },
+  "keywords": [
+    "cli",
+    "dotnet",
+    "agentic",
+    "windows",
+    "arm64"
+  ],
+  "author": "PKS Team",
+  "license": "MIT",
+  "homepage": "https://github.com/pksorensen/pks-cli#readme",
+  "bugs": {
+    "url": "https://github.com/pksorensen/pks-cli/issues"
+  }
+}

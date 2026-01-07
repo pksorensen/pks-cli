@@ -1,0 +1,182 @@
+name: Create npm Packages
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version for npm packages'
+        required: true
+        type: string
+      artifact-names:
+        description: 'JSON array of artifact names to download'
+        required: true
+        type: string
+
+jobs:
+  create-packages:
+    name: Create npm packages
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: List downloaded artifacts
+        run: |
+          echo "Downloaded artifacts:"
+          ls -lah ./artifacts/
+          echo ""
+          echo "Contents of each artifact:"
+          for dir in ./artifacts/*; do
+            echo "=== $dir ==="
+            ls -lah "$dir"
+          done
+
+      - name: Copy binaries to npm packages
+        run: |
+          # Platform mappings
+          declare -A platforms=(
+            ["pks-linux-x64"]="linux-x64"
+            ["pks-linux-arm64"]="linux-arm64"
+            ["pks-osx-x64"]="osx-x64"
+            ["pks-osx-arm64"]="osx-arm64"
+            ["pks-win-x64"]="win-x64"
+            ["pks-win-arm64"]="win-arm64"
+          )
+
+          for artifact in "${!platforms[@]}"; do
+            platform="${platforms[$artifact]}"
+            echo "Processing $artifact -> pks-cli-$platform"
+
+            # Create bin directory
+            mkdir -p "npm/pks-cli-$platform/bin"
+
+            # Copy binary (pks or pks.exe)
+            if [ -f "./artifacts/$artifact/pks" ]; then
+              cp "./artifacts/$artifact/pks" "npm/pks-cli-$platform/bin/pks"
+              chmod +x "npm/pks-cli-$platform/bin/pks"
+              echo "  Copied pks binary"
+            fi
+
+            if [ -f "./artifacts/$artifact/pks.exe" ]; then
+              cp "./artifacts/$artifact/pks.exe" "npm/pks-cli-$platform/bin/pks.exe"
+              echo "  Copied pks.exe binary"
+            fi
+
+            # Display size
+            echo "  Binary size:"
+            ls -lh "npm/pks-cli-$platform/bin/"
+          done
+
+      - name: Update package versions
+        run: |
+          # Update main package version
+          sed -i "s/\"version\": \".*\"/\"version\": \"${{ inputs.version }}\"/" npm/pks-cli/package.json
+
+          # Update platform package versions and main package optionalDependencies
+          for platform in linux-x64 linux-arm64 osx-x64 osx-arm64 win-x64 win-arm64; do
+            sed -i "s/\"version\": \".*\"/\"version\": \"${{ inputs.version }}\"/" "npm/pks-cli-$platform/package.json"
+
+            # Update optionalDependencies in main package
+            package_name="@pks-cli/pks-$platform"
+            sed -i "s|\"$package_name\": \".*\"|\"$package_name\": \"${{ inputs.version }}\"|" npm/pks-cli/package.json
+          done
+
+          echo "Updated all package versions to ${{ inputs.version }}"
+
+          # Display updated main package.json
+          echo ""
+          echo "Main package.json:"
+          cat npm/pks-cli/package.json
+
+      - name: Verify package structure
+        run: |
+          echo "Verifying package structure..."
+
+          # Check main package
+          if [ ! -f "npm/pks-cli/package.json" ]; then
+            echo "ERROR: Main package.json not found"
+            exit 1
+          fi
+
+          if [ ! -f "npm/pks-cli/bin/pks.js" ]; then
+            echo "ERROR: Main wrapper script not found"
+            exit 1
+          fi
+
+          # Check platform packages
+          for platform in linux-x64 linux-arm64 osx-x64 osx-arm64 win-x64 win-arm64; do
+            if [ ! -f "npm/pks-cli-$platform/package.json" ]; then
+              echo "ERROR: Platform package.json not found for $platform"
+              exit 1
+            fi
+
+            # Check for binary (either pks or pks.exe)
+            if [ ! -f "npm/pks-cli-$platform/bin/pks" ] && [ ! -f "npm/pks-cli-$platform/bin/pks.exe" ]; then
+              echo "ERROR: Binary not found for $platform"
+              exit 1
+            fi
+          done
+
+          echo "✅ All packages verified successfully"
+
+      - name: Create npm package archives
+        run: |
+          cd npm
+
+          # Pack main package
+          echo "Creating main package..."
+          cd pks-cli
+          npm pack
+          mv *.tgz ../
+          cd ..
+
+          # Pack platform packages
+          for platform in linux-x64 linux-arm64 osx-x64 osx-arm64 win-x64 win-arm64; do
+            echo "Creating package for $platform..."
+            cd "pks-cli-$platform"
+            npm pack
+            mv *.tgz ../
+            cd ..
+          done
+
+          echo ""
+          echo "Created packages:"
+          ls -lh *.tgz
+
+      - name: Upload npm packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-packages
+          path: npm/*.tgz
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Generate package summary
+        run: |
+          echo "## npm Package Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Created Packages" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Package | Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|------|" >> $GITHUB_STEP_SUMMARY
+
+          cd npm
+          for tgz in *.tgz; do
+            size=$(du -h "$tgz" | cut -f1)
+            echo "| $tgz | $size |" >> $GITHUB_STEP_SUMMARY
+          done

@@ -1,0 +1,256 @@
+name: Release npm
+
+on:
+  workflow_call:
+    secrets:
+      NPM_TOKEN:
+        required: true
+      GITHUB_TOKEN:
+        required: true
+
+jobs:
+  semantic-release:
+    name: Semantic Release (npm)
+    runs-on: ubuntu-latest
+    outputs:
+      new-release-published: ${{ steps.semantic.outputs.new-release-published }}
+      new-release-version: ${{ steps.semantic.outputs.new-release-version }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install semantic-release
+        run: |
+          npm install -g \
+            semantic-release@^23.0.0 \
+            @semantic-release/commit-analyzer@^11.0.0 \
+            @semantic-release/release-notes-generator@^12.0.0 \
+            @semantic-release/exec@^6.0.0 \
+            @semantic-release/changelog@^6.0.0 \
+            @semantic-release/git@^10.0.0 \
+            @semantic-release/github@^9.0.0
+
+      - name: Run semantic-release
+        id: semantic
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npx semantic-release --extends ./.releaserc.npm.json
+
+      - name: Output release info
+        run: |
+          echo "New release published: ${{ steps.semantic.outputs.new-release-published }}"
+          echo "New release version: ${{ steps.semantic.outputs.new-release-version }}"
+
+  build-binaries:
+    name: Build npm binaries
+    needs: semantic-release
+    if: needs.semantic-release.outputs.new-release-published == 'true'
+    uses: ./.github/workflows/build-npm-binaries.yml
+    with:
+      version: ${{ needs.semantic-release.outputs.new-release-version }}
+      configuration: Release
+
+  create-packages:
+    name: Create npm packages
+    needs: [semantic-release, build-binaries]
+    if: needs.semantic-release.outputs.new-release-published == 'true'
+    uses: ./.github/workflows/create-npm-packages.yml
+    with:
+      version: ${{ needs.semantic-release.outputs.new-release-version }}
+      artifact-names: ${{ needs.build-binaries.outputs.artifact-names }}
+
+  publish-npm:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    needs: [semantic-release, create-packages]
+    if: needs.semantic-release.outputs.new-release-published == 'true'
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download npm packages
+        uses: actions/download-artifact@v4
+        with:
+          name: npm-packages
+          path: ./packages
+
+      - name: List packages
+        run: |
+          echo "Packages to publish:"
+          ls -lh ./packages/*.tgz
+
+      - name: Publish to npm (dry-run)
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "🔍 Dry-run mode (pull request)"
+          for package in ./packages/*.tgz; do
+            echo "Would publish: $package"
+            npm publish "$package" --dry-run --access public
+          done
+
+      - name: Publish to npm
+        if: github.event_name == 'push'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          echo "📦 Publishing packages to npm..."
+
+          # Determine npm dist-tag based on version
+          VERSION="${{ needs.semantic-release.outputs.new-release-version }}"
+
+          if [[ "$VERSION" == *"-rc."* ]]; then
+            TAG="rc"
+            echo "📦 Publishing to 'rc' channel (release candidate)"
+          elif [[ "$VERSION" == *"-dev."* ]]; then
+            TAG="dev"
+            echo "📦 Publishing to 'dev' channel (development)"
+          else
+            TAG="latest"
+            echo "📦 Publishing to 'latest' channel (stable)"
+          fi
+
+          # Publish all platform packages first (they are optionalDependencies)
+          for package in ./packages/pks-cli-*.tgz; do
+            echo "Publishing $(basename $package)..."
+            npm publish "$package" --access public --tag "$TAG"
+          done
+
+          # Publish main package last (after all optionalDependencies are available)
+          echo "Publishing main package..."
+          npm publish ./packages/pks-cli-pks-*.tgz --access public --tag "$TAG"
+
+          echo "✅ All packages published successfully to '$TAG' channel"
+
+      - name: Verify publication
+        if: github.event_name == 'push'
+        run: |
+          echo "Waiting 30 seconds for npm registry propagation..."
+          sleep 30
+
+          # Verify main package
+          echo "Verifying @pks-cli/pks@${{ needs.semantic-release.outputs.new-release-version }}..."
+          npm view @pks-cli/pks@${{ needs.semantic-release.outputs.new-release-version }}
+
+      - name: Generate publish summary
+        run: |
+          echo "## npm Publish Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ needs.semantic-release.outputs.new-release-version }}" >> $GITHUB_STEP_SUMMARY
+
+          # Determine channel
+          VERSION="${{ needs.semantic-release.outputs.new-release-version }}"
+          if [[ "$VERSION" == *"-rc."* ]]; then
+            CHANNEL="rc (release candidate)"
+            TAG="rc"
+          elif [[ "$VERSION" == *"-dev."* ]]; then
+            CHANNEL="dev (development)"
+            TAG="dev"
+          else
+            CHANNEL="latest (stable)"
+            TAG="latest"
+          fi
+
+          echo "**Channel:** $CHANNEL" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            echo "**Mode:** Dry-run (PR)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Mode:** Published to npm" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Installation" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```bash' >> $GITHUB_STEP_SUMMARY
+            echo "# Install from $TAG channel" >> $GITHUB_STEP_SUMMARY
+            echo "npm install -g @pks-cli/pks@$TAG" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "# Or specific version" >> $GITHUB_STEP_SUMMARY
+            echo "npm install -g @pks-cli/pks@${{ needs.semantic-release.outputs.new-release-version }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "# Or use with npx" >> $GITHUB_STEP_SUMMARY
+            echo "npx @pks-cli/pks@$TAG init MyProject" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Published Packages" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- @pks-cli/pks" >> $GITHUB_STEP_SUMMARY
+          echo "- @pks-cli/pks-linux-x64" >> $GITHUB_STEP_SUMMARY
+          echo "- @pks-cli/pks-linux-arm64" >> $GITHUB_STEP_SUMMARY
+          echo "- @pks-cli/pks-osx-x64" >> $GITHUB_STEP_SUMMARY
+          echo "- @pks-cli/pks-osx-arm64" >> $GITHUB_STEP_SUMMARY
+          echo "- @pks-cli/pks-win-x64" >> $GITHUB_STEP_SUMMARY
+          echo "- @pks-cli/pks-win-arm64" >> $GITHUB_STEP_SUMMARY
+
+  create-github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [semantic-release, publish-npm]
+    if: needs.semantic-release.outputs.new-release-published == 'true' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download npm packages
+        uses: actions/download-artifact@v4
+        with:
+          name: npm-packages
+          path: ./packages
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: npm-v${{ needs.semantic-release.outputs.new-release-version }}
+          name: npm v${{ needs.semantic-release.outputs.new-release-version }}
+          body: |
+            npm distribution of PKS CLI version ${{ needs.semantic-release.outputs.new-release-version }}
+
+            ## Installation
+
+            ```bash
+            # Global install
+            npm install -g @pks-cli/pks@${{ needs.semantic-release.outputs.new-release-version }}
+
+            # Or use with npx
+            npx @pks-cli/pks@${{ needs.semantic-release.outputs.new-release-version }} --version
+            ```
+
+            ## Packages Published
+
+            - [@pks-cli/pks](https://www.npmjs.com/package/@pks-cli/pks/v/${{ needs.semantic-release.outputs.new-release-version }}) - Main wrapper package
+            - Platform packages:
+              - `@pks-cli/pks-linux-x64`
+              - `@pks-cli/pks-linux-arm64`
+              - `@pks-cli/pks-osx-x64`
+              - `@pks-cli/pks-osx-arm64`
+              - `@pks-cli/pks-win-x64`
+              - `@pks-cli/pks-win-arm64`
+
+            ## What's Changed
+
+            See [npm/CHANGELOG.md](https://github.com/pksorensen/pks-cli/blob/npm-v${{ needs.semantic-release.outputs.new-release-version }}/npm/CHANGELOG.md) for details.
+          files: |
+            packages/*.tgz
+          draft: false
+          prerelease: ${{ contains(needs.semantic-release.outputs.new-release-version, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

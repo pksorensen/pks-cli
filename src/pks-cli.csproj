@@ -19,6 +19,17 @@
     <RepositoryUrl>https://github.com/pks-team/pks-cli</RepositoryUrl>
   </PropertyGroup>
 
+  <!-- Self-Contained Build Configuration (for npm distribution) -->
+  <PropertyGroup Condition="'$(PublishSelfContained)' == 'true'">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <PublishTrimmed>false</PublishTrimmed> <!-- Keep reflection for Spectre.Console.Cli -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <PublishReadyToRun>true</PublishReadyToRun> <!-- Pre-compile for faster startup -->
+    <EmbedTemplates>true</EmbedTemplates>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Spectre.Console" Version="0.47.0" />
     <PackageReference Include="Spectre.Console.Cli" Version="0.47.0" />
@@ -37,12 +48,20 @@
     <PackageReference Include="Docker.DotNet" Version="3.125.15" />
   </ItemGroup>
 
-  <ItemGroup>
+  <!-- Template inclusion for normal builds (NuGet global tool) -->
+  <ItemGroup Condition="'$(EmbedTemplates)' != 'true'">
     <Content Include="../templates/**/*" Exclude="../templates/**/bin/**;../templates/**/obj/**;../templates/**/*.nupkg">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <PackagePath>Templates/</PackagePath>
       <Link>Templates/%(RecursiveDir)%(Filename)%(Extension)</Link>
     </Content>
+  </ItemGroup>
+
+  <!-- Template embedding for self-contained builds (npm distribution) -->
+  <ItemGroup Condition="'$(EmbedTemplates)' == 'true'">
+    <EmbeddedResource Include="../templates/**/*" Exclude="../templates/**/bin/**;../templates/**/obj/**;../templates/**/*.nupkg;../templates/**/*.csproj">
+      <Link>Templates/%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </EmbeddedResource>
   </ItemGroup>
 
   <ItemGroup>

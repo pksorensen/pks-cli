@@ -165,9 +165,15 @@ pks config --get github.token
 ## 🛠️ Installation
 
 ### Prerequisites
+
+**For .NET Installation:**
 - .NET 10.0 SDK or later
 - Git (for GitHub integration)
 - Optional: Docker (for container features)
+
+**For npm Installation:**
+- Node.js 18.0.0 or later
+- No .NET SDK required!
 
 ### One-Command Installation (Recommended)
 ```bash
@@ -235,11 +241,106 @@ scripts\docker-run.bat --help
 
 See [DOCKER.md](DOCKER.md) for complete Docker usage guide including Windows-specific instructions.
 
-### From NuGet (Coming Soon)
+### NuGet Installation (.NET Global Tool)
+
+PKS CLI is published to NuGet.org as a .NET global tool:
+
 ```bash
-# Future: Install from NuGet registry
+# Install stable release
 dotnet tool install -g pks-cli
+
+# Install release candidate (vnext)
+dotnet tool install -g pks-cli --version 1.0.0-rc.1 --prerelease
+
+# Update to latest version
+dotnet tool update -g pks-cli
+
+# Uninstall
+dotnet tool uninstall -g pks-cli
 ```
+
+**Run without installing (dnx - dotnet's version of npx):**
+
+```bash
+# Run stable version
+dotnet tool run pks-cli init MyProject
+
+# Run prerelease version
+dotnet tool run --prerelease pks-cli init MyProject
+
+# With arguments (note the -- separator)
+dotnet tool run --prerelease pks-cli init MyProject -- --agentic --mcp
+
+# Or using dnx (if available)
+dnx pks-cli init MyProject
+```
+
+**Benefits:**
+- ✅ Native .NET tool integration
+- ✅ Works on all .NET-supported platforms
+- ✅ Seamless update mechanism
+- ✅ Shared runtime (smaller install size)
+- ✅ Best integration with .NET ecosystem
+
+### npm Installation (Cross-Platform, No .NET Required)
+
+PKS CLI is available via npm for users who don't have .NET SDK:
+
+```bash
+# Stable release
+npm install -g @pks-cli/pks
+
+# Release candidate (vnext branch)
+npm install -g @pks-cli/pks@rc
+
+# Development version (develop branch)
+npm install -g @pks-cli/pks@dev
+
+# Or use with npx (no installation required)
+npx @pks-cli/pks init MyProject
+npx @pks-cli/pks@rc init MyProject
+```
+
+**Release Channels:**
+- `@latest` - Stable production releases (main branch)
+- `@rc` - Release candidates (vnext branch)
+- `@dev` - Development builds (develop branch)
+
+**Supported Platforms:**
+- Linux x64 & ARM64
+- macOS x64 (Intel) & ARM64 (Apple Silicon)
+- Windows x64 & ARM64
+
+**Benefits:**
+- ✅ No .NET SDK required
+- ✅ Self-contained single-file binaries
+- ✅ Automatic platform detection
+- ✅ Multi-channel support (latest/rc/dev)
+- ✅ Perfect for CI/CD environments
+- ✅ All features fully functional
+
+See [docs/NPM_DISTRIBUTION.md](docs/NPM_DISTRIBUTION.md) for more details.
+
+### Installation Comparison
+
+Choose the right installation method for your needs:
+
+| Feature | NuGet Global Tool | npm | Local Development |
+|---------|------------------|-----|-------------------|
+| **Command** | `dotnet tool install -g` | `npm install -g` | `./install.sh` |
+| **Prerequisites** | .NET 10 SDK | Node.js 18+ | .NET 10 SDK + Git |
+| **Install Size** | ~10MB + runtime | ~50-70MB | Full source |
+| **Update Command** | `dotnet tool update -g` | `npm update -g` | `git pull && ./install.sh` |
+| **Run without install** | `dotnet tool run` | `npx` | `dotnet run` |
+| **Prerelease Access** | `--prerelease` flag | `@rc` or `@dev` tag | Branch checkout |
+| **Best For** | .NET developers | Non-.NET users | Contributors |
+| **CI/CD** | ✅ Excellent | ✅ Excellent | ⚠️ Build required |
+
+**Recommendations:**
+- **Have .NET SDK?** → Use NuGet (`dotnet tool install -g pks-cli`)
+- **No .NET SDK?** → Use npm (`npm install -g @pks-cli/pks`)
+- **Contributing?** → Use local dev setup (`./install.sh`)
+- **Testing prereleases?** → Use NuGet with `--prerelease` or npm with `@rc`
 
 ## 🚀 Quick Start
 

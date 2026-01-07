@@ -99,6 +99,72 @@ dotnet tool install -g --add-source ./bin/Release pks-cli --force
 pks --help
 ```
 
+### NuGet Installation (.NET Global Tool)
+
+PKS CLI is published to NuGet.org as a .NET global tool:
+
+```bash
+# Install stable release
+dotnet tool install -g pks-cli
+
+# Install prerelease (vnext/develop)
+dotnet tool install -g pks-cli --version 1.0.0-rc.1 --prerelease
+
+# Update to latest
+dotnet tool update -g pks-cli
+
+# Run without installing (dotnet's version of npx)
+dotnet tool run pks-cli init MyProject
+dotnet tool run --prerelease pks-cli init MyProject -- --agentic --mcp
+```
+
+**Release Channels:**
+- Stable versions: `dotnet tool install -g pks-cli`
+- Prereleases: Use `--prerelease` flag with specific version
+
+### npm Installation (Cross-Platform)
+
+For users without .NET SDK, PKS CLI is also available via npm with multi-channel support:
+
+```bash
+# Stable release (recommended)
+npm install -g @pks-cli/pks
+
+# Release candidate (testing)
+npm install -g @pks-cli/pks@rc
+
+# Development version (bleeding edge)
+npm install -g @pks-cli/pks@dev
+
+# Or use with npx (no installation required)
+npx @pks-cli/pks init MyProject
+npx @pks-cli/pks@rc init MyProject
+npx @pks-cli/pks@dev init MyProject
+```
+
+**Release Channels:**
+- `@latest` (main branch) - Stable production releases
+- `@rc` (vnext branch) - Release candidates for testing
+- `@dev` (develop branch) - Development builds
+
+**Platform Support:**
+- Linux x64 & ARM64
+- macOS x64 (Intel) & ARM64 (Apple Silicon)
+- Windows x64 & ARM64
+
+**Advantages:**
+- No .NET SDK required
+- Single-file self-contained binaries
+- Automatic platform detection
+- Multi-channel support matching NuGet
+- Ideal for CI/CD environments without .NET
+
+**What you get:**
+- Same features as .NET tool
+- Templates embedded in binary
+- All commands fully functional
+- Zero additional dependencies
+
 ## Usage Scenarios
 
 ### When to Use Each Approach

@@ -129,6 +129,13 @@ jobs:
     uses: ./.github/workflows/release-cli.yml
     secrets: inherit
 
+  release-npm:
+    name: Release npm
+    needs: detect-changes
+    if: needs.detect-changes.outputs.cli == 'true'
+    uses: ./.github/workflows/release-npm.yml
+    secrets: inherit
+
   release-templates:
     name: Release Templates
     needs: detect-changes
@@ -146,7 +153,7 @@ jobs:
 
   summary:
     name: Release Summary
-    needs: [detect-changes, release-cli, release-templates]
+    needs: [detect-changes, release-cli, release-npm, release-templates]
     if: always()
     runs-on: ubuntu-latest
 
@@ -173,7 +180,8 @@ jobs:
         echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
         echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
         echo "| Change Detection | ${{ needs.detect-changes.result }} |" >> $GITHUB_STEP_SUMMARY
-        echo "| CLI Release | ${{ needs.release-cli.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| CLI Release (NuGet) | ${{ needs.release-cli.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| npm Release | ${{ needs.release-npm.result }} |" >> $GITHUB_STEP_SUMMARY
         echo "| Template Releases | ${{ needs.release-templates.result }} |" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
 
@@ -188,7 +196,7 @@ jobs:
           CLI_TAG=$(git tag -l "v*" --sort=-version:refname | head -n 1 || echo "")
           if [[ -n "$CLI_TAG" ]]; then
             CLI_VERSION=${CLI_TAG#v}
-            echo "### ✅ CLI - v$CLI_VERSION" >> $GITHUB_STEP_SUMMARY
+            echo "### ✅ CLI (NuGet) - v$CLI_VERSION" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "- **Package:** \`pks-cli\`" >> $GITHUB_STEP_SUMMARY
             echo "- **Version:** \`$CLI_VERSION\`" >> $GITHUB_STEP_SUMMARY
@@ -202,6 +210,31 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "Changes detected but no release created (no releasable commits)" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+        fi
+
+        # Check npm release
+        if [[ "${{ needs.detect-changes.outputs.cli }}" == "true" ]]; then
+          NPM_TAG=$(git tag -l "npm-v*" --sort=-version:refname | head -n 1 || echo "")
+          if [[ -n "$NPM_TAG" ]]; then
+            NPM_VERSION=${NPM_TAG#npm-v}
+            echo "### ✅ npm - v$NPM_VERSION" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **Package:** \`@pks-cli/pks\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Version:** \`$NPM_VERSION\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Tag:** \`$NPM_TAG\`" >> $GITHUB_STEP_SUMMARY
+            echo "- [View Release](https://github.com/${{ github.repository }}/releases/tag/$NPM_TAG)" >> $GITHUB_STEP_SUMMARY
+            echo "- [View on npm](https://www.npmjs.com/package/@pks-cli/pks/v/$NPM_VERSION)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Platform Packages:**" >> $GITHUB_STEP_SUMMARY
+            echo "- [@pks-cli/pks-linux-x64](https://www.npmjs.com/package/@pks-cli/pks-linux-x64/v/$NPM_VERSION)" >> $GITHUB_STEP_SUMMARY
+            echo "- [@pks-cli/pks-linux-arm64](https://www.npmjs.com/package/@pks-cli/pks-linux-arm64/v/$NPM_VERSION)" >> $GITHUB_STEP_SUMMARY
+            echo "- [@pks-cli/pks-osx-x64](https://www.npmjs.com/package/@pks-cli/pks-osx-x64/v/$NPM_VERSION)" >> $GITHUB_STEP_SUMMARY
+            echo "- [@pks-cli/pks-osx-arm64](https://www.npmjs.com/package/@pks-cli/pks-osx-arm64/v/$NPM_VERSION)" >> $GITHUB_STEP_SUMMARY
+            echo "- [@pks-cli/pks-win-x64](https://www.npmjs.com/package/@pks-cli/pks-win-x64/v/$NPM_VERSION)" >> $GITHUB_STEP_SUMMARY
+            echo "- [@pks-cli/pks-win-arm64](https://www.npmjs.com/package/@pks-cli/pks-win-arm64/v/$NPM_VERSION)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            RELEASES_CREATED=true
           fi
         fi
 
@@ -264,15 +297,30 @@ jobs:
 
           if [[ "${{ needs.detect-changes.outputs.cli }}" == "true" ]]; then
             CLI_TAG=$(git tag -l "v*" --sort=-version:refname | head -n 1 || echo "")
+            NPM_TAG=$(git tag -l "npm-v*" --sort=-version:refname | head -n 1 || echo "")
+
             if [[ -n "$CLI_TAG" ]]; then
               CLI_VERSION=${CLI_TAG#v}
-              echo "### CLI Tool" >> $GITHUB_STEP_SUMMARY
+              echo "### CLI Tool (NuGet)" >> $GITHUB_STEP_SUMMARY
               echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
               if [[ "$CLI_VERSION" == *"-rc."* ]] || [[ "$CLI_VERSION" == *"-dev."* ]]; then
                 echo "dotnet tool install --global pks-cli --version $CLI_VERSION --prerelease" >> $GITHUB_STEP_SUMMARY
               else
                 echo "dotnet tool install --global pks-cli --version $CLI_VERSION" >> $GITHUB_STEP_SUMMARY
               fi
+              echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            if [[ -n "$NPM_TAG" ]]; then
+              NPM_VERSION=${NPM_TAG#npm-v}
+              echo "### CLI Tool (npm)" >> $GITHUB_STEP_SUMMARY
+              echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+              echo "# Global install" >> $GITHUB_STEP_SUMMARY
+              echo "npm install -g @pks-cli/pks@$NPM_VERSION" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "# Or use with npx" >> $GITHUB_STEP_SUMMARY
+              echo "npx @pks-cli/pks@$NPM_VERSION --version" >> $GITHUB_STEP_SUMMARY
               echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
               echo "" >> $GITHUB_STEP_SUMMARY
             fi
