@@ -7,6 +7,12 @@ on:
       - vnext
       - develop
   workflow_dispatch:
+    inputs:
+      force_npm_token:
+        description: 'Force use of NPM_TOKEN instead of Trusted Publishers (for first publish or troubleshooting)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -134,6 +140,8 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.cli == 'true'
     uses: ./.github/workflows/release-npm.yml
+    with:
+      force_npm_token: ${{ github.event.inputs.force_npm_token == 'true' }}
     secrets: inherit
 
   release-templates:

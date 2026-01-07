@@ -2,14 +2,26 @@ name: Release npm
 
 on:
   workflow_call:
+    inputs:
+      force_npm_token:
+        description: 'Force use of NPM_TOKEN instead of Trusted Publishers'
+        required: false
+        type: boolean
+        default: false
     secrets:
       NPM_TOKEN:
-        required: true
+        required: false
+        description: 'npm access token (required only if force_npm_token is true or for first publish)'
 
 jobs:
   semantic-release:
     name: Semantic Release (npm)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write  # Required for npm provenance
     outputs:
       new-release-published: ${{ steps.semantic.outputs.new-release-published }}
       new-release-version: ${{ steps.semantic.outputs.new-release-version }}
@@ -73,6 +85,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [semantic-release, create-packages]
     if: needs.semantic-release.outputs.new-release-published == 'true'
+    permissions:
+      contents: read
+      id-token: write  # Required for npm provenance
 
     steps:
       - name: Setup Node.js
@@ -105,6 +120,7 @@ jobs:
         if: github.event_name == 'push'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          FORCE_NPM_TOKEN: ${{ inputs.force_npm_token }}
         run: |
           echo "📦 Publishing packages to npm..."
 
@@ -122,15 +138,36 @@ jobs:
             echo "📦 Publishing to 'latest' channel (stable)"
           fi
 
+          # Determine authentication method
+          if [[ "$FORCE_NPM_TOKEN" == "true" ]]; then
+            # Force NPM_TOKEN mode (for first publish or troubleshooting)
+            if [ -z "$NODE_AUTH_TOKEN" ]; then
+              echo "❌ ERROR: force_npm_token is true but NPM_TOKEN secret is not set!"
+              echo "Please add NPM_TOKEN to GitHub secrets or disable force_npm_token."
+              exit 1
+            fi
+            echo "🔐 Using NPM_TOKEN for authentication (forced via workflow input)"
+            PUBLISH_FLAGS="--access public --tag $TAG"
+          elif [ -n "$NODE_AUTH_TOKEN" ]; then
+            # NPM_TOKEN is set, use it (backward compatibility)
+            echo "🔐 Using NPM_TOKEN for authentication"
+            PUBLISH_FLAGS="--access public --tag $TAG"
+          else
+            # No NPM_TOKEN and not forced, use Trusted Publishers
+            echo "🔐 Using Trusted Publishers (provenance) for authentication"
+            echo "ℹ️  To use NPM_TOKEN instead, run workflow manually with 'force_npm_token' enabled"
+            PUBLISH_FLAGS="--access public --tag $TAG --provenance"
+          fi
+
           # Publish all platform packages first (they are optionalDependencies)
           for package in ./packages/pks-cli-*.tgz; do
             echo "Publishing $(basename $package)..."
-            npm publish "$package" --access public --tag "$TAG"
+            npm publish "$package" $PUBLISH_FLAGS
           done
 
           # Publish main package last (after all optionalDependencies are available)
           echo "Publishing main package..."
-          npm publish ./packages/pks-cli-pks-*.tgz --access public --tag "$TAG"
+          npm publish ./packages/pks-cli-pks-*.tgz $PUBLISH_FLAGS
 
           echo "✅ All packages published successfully to '$TAG' channel"
 
