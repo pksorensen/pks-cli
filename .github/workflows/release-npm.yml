@@ -55,7 +55,19 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          # Run semantic-release
           npx semantic-release --extends ./.releaserc.npm.json
+
+          # Check if a release was created by looking for the .npm-version file
+          if [ -f .npm-version ]; then
+            VERSION=$(cat .npm-version)
+            echo "new-release-published=true" >> $GITHUB_OUTPUT
+            echo "new-release-version=$VERSION" >> $GITHUB_OUTPUT
+            echo "✅ Release published: $VERSION"
+          else
+            echo "new-release-published=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ No release published"
+          fi
 
       - name: Output release info
         run: |
