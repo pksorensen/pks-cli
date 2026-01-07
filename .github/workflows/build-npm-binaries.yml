@@ -88,17 +88,17 @@ jobs:
 
           # Verify binary exists
           if [ "${{ runner.os }}" == "Windows" ]; then
-            if [ ! -f "./dist/${{ matrix.rid }}/pks.exe" ]; then
-              echo "❌ Binary not found: ./dist/${{ matrix.rid }}/pks.exe"
+            if [ ! -f "./dist/${{ matrix.rid }}/pks-cli.exe" ]; then
+              echo "❌ Binary not found: ./dist/${{ matrix.rid }}/pks-cli.exe"
               exit 1
             fi
-            echo "✅ Binary created: pks.exe"
+            echo "✅ Binary created: pks-cli.exe"
           else
-            if [ ! -f "./dist/${{ matrix.rid }}/pks" ]; then
-              echo "❌ Binary not found: ./dist/${{ matrix.rid }}/pks"
+            if [ ! -f "./dist/${{ matrix.rid }}/pks-cli" ]; then
+              echo "❌ Binary not found: ./dist/${{ matrix.rid }}/pks-cli"
               exit 1
             fi
-            echo "✅ Binary created: pks"
+            echo "✅ Binary created: pks-cli"
           fi
         shell: bash
 
@@ -119,8 +119,8 @@ jobs:
       - name: Set executable permissions (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
-          if [ -f ./dist/${{ matrix.rid }}/pks ]; then
-            chmod +x ./dist/${{ matrix.rid }}/pks
+          if [ -f ./dist/${{ matrix.rid }}/pks-cli ]; then
+            chmod +x ./dist/${{ matrix.rid }}/pks-cli
             echo "✅ Executable permissions set"
           else
             echo "❌ Binary not found, cannot set permissions"
@@ -133,8 +133,8 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: |
-            ./dist/${{ matrix.rid }}/pks
-            ./dist/${{ matrix.rid }}/pks.exe
+            ./dist/${{ matrix.rid }}/pks-cli
+            ./dist/${{ matrix.rid }}/pks-cli.exe
           if-no-files-found: error
           retention-days: 7
           compression-level: 9
