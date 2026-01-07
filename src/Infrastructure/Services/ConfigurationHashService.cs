@@ -150,18 +150,10 @@ public class ConfigurationHashService : IConfigurationHashService
             return "{}";
         }
 
+        // First, try to parse directly without comment removal
+        // This handles standard JSON and JSONC with escaped newlines correctly
         try
         {
-            // 1. Remove single-line comments (// ...)
-            json = Regex.Replace(json, @"//.*$", "", RegexOptions.Multiline);
-
-            // 2. Remove multi-line comments (/* ... */)
-            json = Regex.Replace(json, @"/\*.*?\*/", "", RegexOptions.Singleline);
-
-            // 3. Remove trailing commas before } or ]
-            json = Regex.Replace(json, @",(\s*[}\]])", "$1");
-
-            // 4. Parse and re-serialize to minify and normalize
             using var document = JsonDocument.Parse(json);
             using var stream = new MemoryStream();
             using var writer = new Utf8JsonWriter(stream, new JsonWriterOptions
@@ -169,19 +161,49 @@ public class ConfigurationHashService : IConfigurationHashService
                 Indented = false // Minified output
             });
 
-            // 5. Write with sorted keys (for consistent ordering)
             WriteElementWithSortedKeys(writer, document.RootElement);
             writer.Flush();
 
             var normalized = Encoding.UTF8.GetString(stream.ToArray());
+            return normalized;
+        }
+        catch (JsonException)
+        {
+            // If direct parsing fails, try removing comments and trailing commas
+            _logger.LogDebug("Direct JSON parsing failed, attempting comment removal");
+        }
 
+        try
+        {
+            // Remove trailing commas (common in JSONC)
+            var cleanedJson = Regex.Replace(json, @",(\s*[}\]])", "$1");
+
+            // Try removing single-line comments (// ...) carefully
+            // Only match at start of line or after whitespace to avoid breaking strings
+            cleanedJson = Regex.Replace(cleanedJson, @"^\s*//.*$", "", RegexOptions.Multiline);
+
+            // Remove multi-line comments (/* ... */)
+            cleanedJson = Regex.Replace(cleanedJson, @"/\*.*?\*/", "", RegexOptions.Singleline);
+
+            // Try parsing again
+            using var document = JsonDocument.Parse(cleanedJson);
+            using var stream = new MemoryStream();
+            using var writer = new Utf8JsonWriter(stream, new JsonWriterOptions
+            {
+                Indented = false
+            });
+
+            WriteElementWithSortedKeys(writer, document.RootElement);
+            writer.Flush();
+
+            var normalized = Encoding.UTF8.GetString(stream.ToArray());
             return normalized;
         }
         catch (JsonException ex)
         {
-            _logger.LogWarning(ex, "Failed to normalize JSON, using raw content");
-            // If JSON is invalid, return cleaned up version without parsing
-            return RemoveCommentsOnly(json);
+            _logger.LogWarning(ex, "Failed to normalize JSON after comment removal, using raw content for hashing");
+            // Last resort: use raw content (will still produce consistent hash for same content)
+            return json;
         }
     }
 
