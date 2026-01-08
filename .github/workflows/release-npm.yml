@@ -180,14 +180,16 @@ jobs:
           fi
 
           # Publish all platform packages first (they are optionalDependencies)
-          for package in ./packages/pks-cli-*.tgz; do
-            echo "Publishing $(basename $package)..."
-            npm publish "$package" $PUBLISH_FLAGS
+          for package in ./packages/pks-cli-cli-{linux,osx,win}-*.tgz; do
+            if [ -f "$package" ]; then
+              echo "Publishing $(basename $package)..."
+              npm publish "$package" $PUBLISH_FLAGS
+            fi
           done
 
           # Publish main package last (after all optionalDependencies are available)
           echo "Publishing main package..."
-          npm publish ./packages/pks-cli-cli-*.tgz $PUBLISH_FLAGS
+          npm publish ./packages/pks-cli-cli-[0-9]*.tgz $PUBLISH_FLAGS
 
           echo "✅ All packages published successfully to '$TAG' channel"
 
