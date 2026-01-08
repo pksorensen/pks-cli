@@ -5,6 +5,13 @@ All notable changes to the npm distribution of PKS CLI will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0-rc.8](https://github.com/pksorensen/pks-cli/compare/npm-v1.0.0-rc.7...npm-v1.0.0-rc.8) (2026-01-08)
+
+
+### Features
+
+* **docs:** add comprehensive implementation plan for remote devcontainer spawning with lifecycle management ([67c95b4](https://github.com/pksorensen/pks-cli/commit/67c95b43b6ac664014dfa5cc3915f97cde05af35))
+
 ## [1.0.0-rc.7](https://github.com/pksorensen/pks-cli/compare/npm-v1.0.0-rc.6...npm-v1.0.0-rc.7) (2026-01-08)
 
 
