@@ -168,13 +168,10 @@ jobs:
             fi
             echo "🔐 Using NPM_TOKEN for authentication (forced via workflow input)"
             PUBLISH_FLAGS="--access public --tag $TAG"
-          elif [ -n "$NODE_AUTH_TOKEN" ]; then
-            # NPM_TOKEN is set, use it (backward compatibility)
-            echo "🔐 Using NPM_TOKEN for authentication"
-            PUBLISH_FLAGS="--access public --tag $TAG"
           else
-            # No NPM_TOKEN and not forced, use Trusted Publishers
+            # Default: use Trusted Publishers (provenance) for authentication
             echo "🔐 Using Trusted Publishers (provenance) for authentication"
+            echo "ℹ️  Packages will be published with provenance attestation"
             echo "ℹ️  To use NPM_TOKEN instead, run workflow manually with 'force_npm_token' enabled"
             PUBLISH_FLAGS="--access public --tag $TAG --provenance"
           fi
