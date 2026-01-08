@@ -7,7 +7,7 @@ The next agentic CLI for .NET developers - combining beautiful terminal UI with 
 ### Quick Install (npm)
 
 ```bash
-npm install -g @pks-cli/pks
+npm install -g @pks-cli/cli
 ```
 
 ### Quick Install (.NET Global Tool)
@@ -101,12 +101,12 @@ If you see "PKS CLI binary not found" after installation:
 
 ```bash
 # Try forcing reinstall
-npm install -g @pks-cli/pks --force
+npm install -g @pks-cli/cli --force
 
 # Or install the platform-specific package manually
-npm install -g @pks-cli/pks-linux-x64  # for Linux x64
-npm install -g @pks-cli/pks-osx-arm64  # for macOS Apple Silicon
-npm install -g @pks-cli/pks-win-x64    # for Windows x64
+npm install -g @pks-cli/cli-linux-x64  # for Linux x64
+npm install -g @pks-cli/cli-osx-arm64  # for macOS Apple Silicon
+npm install -g @pks-cli/cli-win-x64    # for Windows x64
 ```
 
 ### Unsupported Platform
