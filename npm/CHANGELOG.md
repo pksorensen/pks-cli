@@ -5,6 +5,13 @@ All notable changes to the npm distribution of PKS CLI will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0-rc.7](https://github.com/pksorensen/pks-cli/compare/npm-v1.0.0-rc.6...npm-v1.0.0-rc.7) (2026-01-08)
+
+
+### Bug Fixes
+
+* **workflow:** improve NPM_TOKEN authentication handling and add provenance notice ([13f84f9](https://github.com/pksorensen/pks-cli/commit/13f84f92091de0b3f4c410272a4860e103e946e3))
+
 ## [1.0.0-rc.6](https://github.com/pksorensen/pks-cli/compare/npm-v1.0.0-rc.5...npm-v1.0.0-rc.6) (2026-01-08)
 
 
