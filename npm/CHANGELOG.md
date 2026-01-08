@@ -5,6 +5,13 @@ All notable changes to the npm distribution of PKS CLI will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0-rc.5](https://github.com/pksorensen/pks-cli/compare/npm-v1.0.0-rc.4...npm-v1.0.0-rc.5) (2026-01-08)
+
+
+### Bug Fixes
+
+* **ci:** support workflow_dispatch events in npm publish workflow ([63b5bd7](https://github.com/pksorensen/pks-cli/commit/63b5bd78782e8facdd8d69b6014b32087dcc53c0))
+
 ## [1.0.0-rc.4](https://github.com/pksorensen/pks-cli/compare/npm-v1.0.0-rc.3...npm-v1.0.0-rc.4) (2026-01-07)
 
 
