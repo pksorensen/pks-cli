@@ -187,7 +187,7 @@ jobs:
 
           # Publish main package last (after all optionalDependencies are available)
           echo "Publishing main package..."
-          npm publish ./packages/pks-cli-pks-*.tgz $PUBLISH_FLAGS
+          npm publish ./packages/pks-cli-cli-*.tgz $PUBLISH_FLAGS
 
           echo "✅ All packages published successfully to '$TAG' channel"
 
@@ -198,8 +198,8 @@ jobs:
           sleep 30
 
           # Verify main package
-          echo "Verifying @pks-cli/pks@${{ needs.semantic-release.outputs.new-release-version }}..."
-          npm view @pks-cli/pks@${{ needs.semantic-release.outputs.new-release-version }}
+          echo "Verifying @pks-cli/cli@${{ needs.semantic-release.outputs.new-release-version }}..."
+          npm view @pks-cli/cli@${{ needs.semantic-release.outputs.new-release-version }}
 
       - name: Generate publish summary
         run: |
@@ -232,26 +232,26 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo '```bash' >> $GITHUB_STEP_SUMMARY
             echo "# Install from $TAG channel" >> $GITHUB_STEP_SUMMARY
-            echo "npm install -g @pks-cli/pks@$TAG" >> $GITHUB_STEP_SUMMARY
+            echo "npm install -g @pks-cli/cli@$TAG" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "# Or specific version" >> $GITHUB_STEP_SUMMARY
-            echo "npm install -g @pks-cli/pks@${{ needs.semantic-release.outputs.new-release-version }}" >> $GITHUB_STEP_SUMMARY
+            echo "npm install -g @pks-cli/cli@${{ needs.semantic-release.outputs.new-release-version }}" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "# Or use with npx" >> $GITHUB_STEP_SUMMARY
-            echo "npx @pks-cli/pks@$TAG init MyProject" >> $GITHUB_STEP_SUMMARY
+            echo "npx @pks-cli/cli@$TAG init MyProject" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Published Packages" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- @pks-cli/pks" >> $GITHUB_STEP_SUMMARY
-          echo "- @pks-cli/pks-linux-x64" >> $GITHUB_STEP_SUMMARY
-          echo "- @pks-cli/pks-linux-arm64" >> $GITHUB_STEP_SUMMARY
-          echo "- @pks-cli/pks-osx-x64" >> $GITHUB_STEP_SUMMARY
-          echo "- @pks-cli/pks-osx-arm64" >> $GITHUB_STEP_SUMMARY
-          echo "- @pks-cli/pks-win-x64" >> $GITHUB_STEP_SUMMARY
-          echo "- @pks-cli/pks-win-arm64" >> $GITHUB_STEP_SUMMARY
+          echo "- @pks-cli/cli" >> $GITHUB_STEP_SUMMARY
+          echo "- @pks-cli/cli-linux-x64" >> $GITHUB_STEP_SUMMARY
+          echo "- @pks-cli/cli-linux-arm64" >> $GITHUB_STEP_SUMMARY
+          echo "- @pks-cli/cli-osx-x64" >> $GITHUB_STEP_SUMMARY
+          echo "- @pks-cli/cli-osx-arm64" >> $GITHUB_STEP_SUMMARY
+          echo "- @pks-cli/cli-win-x64" >> $GITHUB_STEP_SUMMARY
+          echo "- @pks-cli/cli-win-arm64" >> $GITHUB_STEP_SUMMARY
 
   create-github-release:
     name: Create GitHub Release
@@ -283,22 +283,22 @@ jobs:
 
             ```bash
             # Global install
-            npm install -g @pks-cli/pks@${{ needs.semantic-release.outputs.new-release-version }}
+            npm install -g @pks-cli/cli@${{ needs.semantic-release.outputs.new-release-version }}
 
             # Or use with npx
-            npx @pks-cli/pks@${{ needs.semantic-release.outputs.new-release-version }} --version
+            npx @pks-cli/cli@${{ needs.semantic-release.outputs.new-release-version }} --version
             ```
 
             ## Packages Published
 
-            - [@pks-cli/pks](https://www.npmjs.com/package/@pks-cli/pks/v/${{ needs.semantic-release.outputs.new-release-version }}) - Main wrapper package
+            - [@pks-cli/cli](https://www.npmjs.com/package/@pks-cli/cli/v/${{ needs.semantic-release.outputs.new-release-version }}) - Main wrapper package
             - Platform packages:
-              - `@pks-cli/pks-linux-x64`
-              - `@pks-cli/pks-linux-arm64`
-              - `@pks-cli/pks-osx-x64`
-              - `@pks-cli/pks-osx-arm64`
-              - `@pks-cli/pks-win-x64`
-              - `@pks-cli/pks-win-arm64`
+              - `@pks-cli/cli-linux-x64`
+              - `@pks-cli/cli-linux-arm64`
+              - `@pks-cli/cli-osx-x64`
+              - `@pks-cli/cli-osx-arm64`
+              - `@pks-cli/cli-win-x64`
+              - `@pks-cli/cli-win-arm64`
 
             ## What's Changed
 
