@@ -1,5 +1,5 @@
 {
-  "name": "@pks-cli/pks-win-arm64",
+  "name": "@pks-cli/cli-win-arm64",
   "version": "1.0.0",
   "description": "PKS CLI - Windows ARM64 binary",
   "os": ["win32"],

@@ -1,5 +1,5 @@
 {
-  "name": "@pks-cli/pks",
+  "name": "@pks-cli/cli",
   "version": "1.0.0",
   "description": "The next agentic CLI for .NET developers",
   "bin": {
@@ -9,12 +9,12 @@
     "postinstall": "node postinstall.js"
   },
   "optionalDependencies": {
-    "@pks-cli/pks-linux-x64": "1.0.0",
-    "@pks-cli/pks-linux-arm64": "1.0.0",
-    "@pks-cli/pks-osx-x64": "1.0.0",
-    "@pks-cli/pks-osx-arm64": "1.0.0",
-    "@pks-cli/pks-win-x64": "1.0.0",
-    "@pks-cli/pks-win-arm64": "1.0.0"
+    "@pks-cli/cli-linux-x64": "1.0.0",
+    "@pks-cli/cli-linux-arm64": "1.0.0",
+    "@pks-cli/cli-osx-x64": "1.0.0",
+    "@pks-cli/cli-osx-arm64": "1.0.0",
+    "@pks-cli/cli-win-x64": "1.0.0",
+    "@pks-cli/cli-win-arm64": "1.0.0"
   },
   "engines": {
     "node": ">=18.0.0"

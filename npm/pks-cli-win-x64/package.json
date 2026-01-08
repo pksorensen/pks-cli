@@ -1,5 +1,5 @@
 {
-  "name": "@pks-cli/pks-win-x64",
+  "name": "@pks-cli/cli-win-x64",
   "version": "1.0.0",
   "description": "PKS CLI - Windows x64 binary",
   "os": ["win32"],

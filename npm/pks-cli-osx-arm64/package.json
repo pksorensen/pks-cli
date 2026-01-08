@@ -1,5 +1,5 @@
 {
-  "name": "@pks-cli/pks-osx-arm64",
+  "name": "@pks-cli/cli-osx-arm64",
   "version": "1.0.0",
   "description": "PKS CLI - macOS ARM64 binary (Apple Silicon)",
   "os": ["darwin"],

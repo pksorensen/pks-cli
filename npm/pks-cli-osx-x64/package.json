@@ -1,5 +1,5 @@
 {
-  "name": "@pks-cli/pks-osx-x64",
+  "name": "@pks-cli/cli-osx-x64",
   "version": "1.0.0",
   "description": "PKS CLI - macOS x64 binary",
   "os": ["darwin"],

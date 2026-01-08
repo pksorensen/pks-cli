@@ -1,5 +1,5 @@
 {
-  "name": "@pks-cli/pks-linux-x64",
+  "name": "@pks-cli/cli-linux-x64",
   "version": "1.0.0",
   "description": "PKS CLI - Linux x64 binary",
   "os": ["linux"],
