@@ -150,12 +150,8 @@ public class NpmWrapperTests : TestBase
         }
     }
 
-    [Theory]
-    [InlineData("--version")]
-    [InlineData("--help")]
-    [InlineData("init MyProject")]
-    [InlineData("deploy --dry-run")]
-    public void Wrapper_ShouldPassThroughExitCode_FromBinary(string command)
+    [Fact]
+    public void Wrapper_ShouldPassThroughExitCode_FromBinary()
     {
         // The wrapper should forward the exit code from the binary process
         // This is typically done with: process.exit(result.status || 0)
