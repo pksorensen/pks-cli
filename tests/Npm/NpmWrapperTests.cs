@@ -126,7 +126,7 @@ public class NpmWrapperTests : TestBase
 
         // Assert
         possiblePaths.Should().HaveCount(2, "Wrapper should check at least 2 possible locations");
-        possiblePaths.Should().AllSatisfy(p => p.Should().EndWith("/pks") | p.Should().EndWith("/pks.exe"));
+        possiblePaths.Should().AllSatisfy(p => p.Should().MatchRegex(@"/pks(\.exe)?$"));
     }
 
     [Fact]
