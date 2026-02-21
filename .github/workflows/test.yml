@@ -14,20 +14,17 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: 8.0.x
+        dotnet-version: 10.0.x
         
     - name: Restore dependencies
-      working-directory: ./pks-cli
-      run: dotnet restore
-      
+      run: dotnet restore pks-cli.sln
+
     - name: Build
-      working-directory: ./pks-cli
-      run: dotnet build --no-restore
-      
+      run: dotnet build pks-cli.sln --no-restore
+
     - name: Test - Core Stable Tests Only (CI Ready)
-      working-directory: ./pks-cli
+      working-directory: ./tests
       run: |
-        cd tests
         dotnet test --no-build --settings .runsettings \
           --filter "Category=Core&Reliability!=Unstable" \
           --logger "console;verbosity=normal" \

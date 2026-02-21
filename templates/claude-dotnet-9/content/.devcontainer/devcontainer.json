@@ -1,0 +1,53 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/dotnet
+{
+  "name": "PKSClaudeDotNet9 - .NET 9 with Aspire",
+  "initializeCommand": "if [ ! -f .devcontainer/.env ]; then cat > .devcontainer/.env << 'EOF'\n# Development Container Environment Variables\n# This file contains environment variables for the development container\n\n# GitHub Personal Access Token (PAT)\n# Required for GitHub CLI authentication and API access\n# Generate a token at: https://github.com/settings/tokens\n# Recommended scopes: repo, read:org, workflow\ngithub_pat_token=<insert_your_github_pat_here>\n\n# Add your custom environment variables here\n# Example:\n# MY_API_KEY=your_api_key_here\n# DATABASE_URL=postgresql://user:pass@localhost:5432/dbname\nEOF\nfi",
+  // Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
+  //"image": "mcr.microsoft.com/devcontainers/dotnet:9.0-bookworm",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "args": {
+      "TZ": "${localEnv:TZ:TIMEZONE_VALUE}"
+    }
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/powershell:1": {}
+  },
+  // Use 'forwardPorts' to make a list of ports inside the container available locally.
+  // "forwardPorts": [5000, 5001],
+  // "portsAttributes": {
+  //		"5001": {
+  //			"protocol": "https"
+  //		}
+  // }
+  // Use 'postCreateCommand' to run commands after the container is created.
+  // "postCreateCommand": "dotnet restore",
+  "onCreateCommand": "curl -sSL https://aspire.dev/install.sh | bash",
+  "postStartCommand": "dotnet dev-certs https --trust",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-dotnettools.csdevkit",
+        "GitHub.copilot-chat",
+        "GitHub.copilot"
+      ]
+    }
+  },
+  // Configure tool-specific properties.
+  // "customizations": {},
+  // Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
+  // "remoteUser": "root"
+  "mounts": [
+    "source=claude-code-bashhistory,target=/commandhistory,type=volume",
+    "source=claude-code-config,target=/home/vscode/.claude,type=volume",
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gitconfig,target=/home/vscode/.gitconfig,type=bind,consistency=cached",
+    "source=playwright-browsers,target=/home/vscode/.playwright,type=volume"
+  ],
+  "remoteEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
+    "NODE_OPTIONS": "--max-old-space-size=NODE_MEMORY_LIMIT",
+    "PLAYWRIGHT_BROWSERS_PATH": "/home/vscode/.playwright"
+  }
+}

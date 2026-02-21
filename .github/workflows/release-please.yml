@@ -1,0 +1,412 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+      - vnext
+      - develop
+
+permissions:
+  contents: write
+  pull-requests: write
+  packages: write
+  id-token: write
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_NOLOGO: true
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    outputs:
+      # Global
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      # CLI outputs
+      cli_release_created: ${{ steps.release.outputs['src--release_created'] }}
+      cli_version: ${{ steps.release.outputs['src--version'] }}
+      cli_tag_name: ${{ steps.release.outputs['src--tag_name'] }}
+      # Template outputs
+      devcontainer_release_created: ${{ steps.release.outputs['templates/devcontainer--release_created'] }}
+      devcontainer_version: ${{ steps.release.outputs['templates/devcontainer--version'] }}
+      devcontainer_tag_name: ${{ steps.release.outputs['templates/devcontainer--tag_name'] }}
+      claude_dotnet_9_release_created: ${{ steps.release.outputs['templates/claude-dotnet-9--release_created'] }}
+      claude_dotnet_9_version: ${{ steps.release.outputs['templates/claude-dotnet-9--version'] }}
+      claude_dotnet_9_tag_name: ${{ steps.release.outputs['templates/claude-dotnet-9--tag_name'] }}
+      claude_dotnet_10_full_release_created: ${{ steps.release.outputs['templates/claude-dotnet-10-full--release_created'] }}
+      claude_dotnet_10_full_version: ${{ steps.release.outputs['templates/claude-dotnet-10-full--version'] }}
+      claude_dotnet_10_full_tag_name: ${{ steps.release.outputs['templates/claude-dotnet-10-full--tag_name'] }}
+      pks_fullstack_release_created: ${{ steps.release.outputs['templates/pks-fullstack--release_created'] }}
+      pks_fullstack_version: ${{ steps.release.outputs['templates/pks-fullstack--version'] }}
+      pks_fullstack_tag_name: ${{ steps.release.outputs['templates/pks-fullstack--tag_name'] }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine config file
+        id: config
+        run: |
+          case "${{ github.ref_name }}" in
+            main)
+              echo "config-file=release-please-config.json" >> $GITHUB_OUTPUT
+              ;;
+            vnext)
+              echo "config-file=release-please-config.vnext.json" >> $GITHUB_OUTPUT
+              ;;
+            develop)
+              echo "config-file=release-please-config.develop.json" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Run Release Please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: ${{ steps.config.outputs.config-file }}
+          manifest-file: .release-please-manifest.json
+          target-branch: ${{ github.ref_name }}
+
+  # ============================================================
+  # CLI Release: Build, pack, and publish NuGet package
+  # ============================================================
+  release-cli:
+    name: Release CLI
+    needs: release-please
+    if: needs.release-please.outputs.cli_release_created == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.cli_tag_name }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore and build
+        run: |
+          dotnet restore src/pks-cli.csproj
+          dotnet build src/pks-cli.csproj --configuration Release --no-restore
+
+      - name: Extract version components
+        id: version
+        run: |
+          VERSION="${{ needs.release-please.outputs.cli_version }}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          # Extract numeric version for AssemblyVersion (e.g., 1.2.0-rc.10 -> 1.2.0.10)
+          if [[ $VERSION =~ ^([0-9]+\.[0-9]+\.[0-9]+)(-[a-z]+\.([0-9]+))?$ ]]; then
+            NUMERIC="${BASH_REMATCH[1]}"
+            if [ -n "${BASH_REMATCH[3]}" ]; then
+              NUMERIC="${NUMERIC}.${BASH_REMATCH[3]}"
+            else
+              NUMERIC="${NUMERIC}.0"
+            fi
+          else
+            NUMERIC="$VERSION"
+          fi
+          echo "numeric=$NUMERIC" >> $GITHUB_OUTPUT
+
+      - name: Create NuGet package
+        run: |
+          mkdir -p packages
+          dotnet pack src/pks-cli.csproj \
+            --configuration Release \
+            --output ./packages \
+            --no-restore \
+            -p:PackageVersion=${{ steps.version.outputs.version }} \
+            -p:Version=${{ steps.version.outputs.numeric }} \
+            -p:AssemblyVersion=${{ steps.version.outputs.numeric }} \
+            -p:FileVersion=${{ steps.version.outputs.numeric }} \
+            -p:InformationalVersion=${{ steps.version.outputs.version }}
+
+      - name: Publish to NuGet.org
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if [ -n "$NUGET_API_KEY" ]; then
+            for package in packages/*.nupkg; do
+              if [ -f "$package" ]; then
+                echo "Publishing $(basename $package)..."
+                dotnet nuget push "$package" \
+                  --api-key "$NUGET_API_KEY" \
+                  --source https://api.nuget.org/v3/index.json \
+                  --skip-duplicate
+              fi
+            done
+          else
+            echo "NUGET_API_KEY not set, skipping NuGet publish"
+          fi
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-package-${{ steps.version.outputs.version }}
+          path: packages/*.nupkg
+          retention-days: 30
+
+  # ============================================================
+  # npm Release: Build binaries, create packages, publish to npm
+  # npm version follows CLI version (no separate Release Please package)
+  # ============================================================
+  build-npm-binaries:
+    name: Build npm binaries
+    needs: release-please
+    if: needs.release-please.outputs.cli_release_created == 'true'
+    uses: ./.github/workflows/build-npm-binaries.yml
+    with:
+      version: ${{ needs.release-please.outputs.cli_version }}
+      configuration: Release
+
+  create-npm-packages:
+    name: Create npm packages
+    needs: [release-please, build-npm-binaries]
+    if: needs.release-please.outputs.cli_release_created == 'true'
+    uses: ./.github/workflows/create-npm-packages.yml
+    with:
+      version: ${{ needs.release-please.outputs.cli_version }}
+      artifact-names: ${{ needs.build-npm-binaries.outputs.artifact-names }}
+
+  publish-npm:
+    name: Publish to npm
+    needs: [release-please, create-npm-packages]
+    if: needs.release-please.outputs.cli_release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download npm packages
+        uses: actions/download-artifact@v4
+        with:
+          name: npm-packages
+          path: ./packages
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION="${{ needs.release-please.outputs.cli_version }}"
+
+          # Determine npm dist-tag based on version
+          if [[ "$VERSION" == *"-rc."* ]]; then
+            TAG="rc"
+          elif [[ "$VERSION" == *"-dev."* ]]; then
+            TAG="dev"
+          else
+            TAG="latest"
+          fi
+
+          echo "Publishing version $VERSION to '$TAG' channel..."
+          PUBLISH_FLAGS="--access public --tag $TAG"
+
+          # Publish platform packages first (they are optionalDependencies)
+          for package in ./packages/pks-cli-cli-{linux,osx,win}-*.tgz; do
+            if [ -f "$package" ]; then
+              echo "Publishing $(basename $package)..."
+              npm publish "$package" $PUBLISH_FLAGS
+            fi
+          done
+
+          # Publish main package last
+          echo "Publishing main package..."
+          npm publish ./packages/pks-cli-cli-[0-9]*.tgz $PUBLISH_FLAGS
+
+  # ============================================================
+  # Template Releases: Build and publish NuGet template packages
+  # ============================================================
+  release-templates:
+    name: Release ${{ matrix.template }} template
+    needs: release-please
+    if: |
+      needs.release-please.outputs.devcontainer_release_created == 'true' ||
+      needs.release-please.outputs.claude_dotnet_9_release_created == 'true' ||
+      needs.release-please.outputs.claude_dotnet_10_full_release_created == 'true' ||
+      needs.release-please.outputs.pks_fullstack_release_created == 'true'
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - template: devcontainer
+            path: templates/devcontainer
+            package_id: PKS.Templates.DevContainer
+            released: ${{ needs.release-please.outputs.devcontainer_release_created }}
+            version: ${{ needs.release-please.outputs.devcontainer_version }}
+            tag: ${{ needs.release-please.outputs.devcontainer_tag_name }}
+          - template: claude-dotnet-9
+            path: templates/claude-dotnet-9
+            package_id: PKS.Templates.ClaudeDotNet9
+            released: ${{ needs.release-please.outputs.claude_dotnet_9_release_created }}
+            version: ${{ needs.release-please.outputs.claude_dotnet_9_version }}
+            tag: ${{ needs.release-please.outputs.claude_dotnet_9_tag_name }}
+          - template: claude-dotnet-10-full
+            path: templates/claude-dotnet-10-full
+            package_id: PKS.Templates.ClaudeDotNet10.Full
+            released: ${{ needs.release-please.outputs.claude_dotnet_10_full_release_created }}
+            version: ${{ needs.release-please.outputs.claude_dotnet_10_full_version }}
+            tag: ${{ needs.release-please.outputs.claude_dotnet_10_full_tag_name }}
+          - template: pks-fullstack
+            path: templates/pks-fullstack
+            package_id: PKS.Templates.PksFullstack
+            released: ${{ needs.release-please.outputs.pks_fullstack_release_created }}
+            version: ${{ needs.release-please.outputs.pks_fullstack_version }}
+            tag: ${{ needs.release-please.outputs.pks_fullstack_tag_name }}
+
+    steps:
+      - name: Skip if not released
+        if: matrix.released != 'true'
+        run: echo "No release for ${{ matrix.template }}, skipping"
+
+      - name: Checkout code
+        if: matrix.released == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.tag }}
+
+      - name: Setup .NET
+        if: matrix.released == 'true'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Extract version components
+        if: matrix.released == 'true'
+        id: version
+        run: |
+          VERSION="${{ matrix.version }}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          if [[ $VERSION =~ ^([0-9]+\.[0-9]+\.[0-9]+)(-[a-z]+\.([0-9]+))?$ ]]; then
+            NUMERIC="${BASH_REMATCH[1]}"
+            if [ -n "${BASH_REMATCH[3]}" ]; then
+              NUMERIC="${NUMERIC}.${BASH_REMATCH[3]}"
+            else
+              NUMERIC="${NUMERIC}.0"
+            fi
+          else
+            NUMERIC="$VERSION"
+          fi
+          echo "numeric=$NUMERIC" >> $GITHUB_OUTPUT
+
+      - name: Find and build template project
+        if: matrix.released == 'true'
+        run: |
+          CSPROJ_FILE=$(find "${{ matrix.path }}" -maxdepth 1 -name "*.csproj" | head -n 1)
+          if [ -z "$CSPROJ_FILE" ]; then
+            echo "No .csproj file found in ${{ matrix.path }}"
+            exit 1
+          fi
+          dotnet restore "$CSPROJ_FILE"
+          dotnet build "$CSPROJ_FILE" --configuration Release --no-restore
+
+      - name: Create NuGet package
+        if: matrix.released == 'true'
+        run: |
+          mkdir -p packages
+          CSPROJ_FILE=$(find "${{ matrix.path }}" -maxdepth 1 -name "*.csproj" | head -n 1)
+          dotnet pack "$CSPROJ_FILE" \
+            --configuration Release \
+            --output ./packages \
+            --no-restore \
+            -p:PackageVersion=${{ steps.version.outputs.version }} \
+            -p:Version=${{ steps.version.outputs.numeric }} \
+            -p:AssemblyVersion=${{ steps.version.outputs.numeric }} \
+            -p:FileVersion=${{ steps.version.outputs.numeric }} \
+            -p:InformationalVersion=${{ steps.version.outputs.version }} \
+            -p:PackageId=${{ matrix.package_id }}
+
+      - name: Publish to NuGet.org
+        if: matrix.released == 'true'
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if [ -n "$NUGET_API_KEY" ]; then
+            for package in packages/*.nupkg; do
+              if [ -f "$package" ]; then
+                echo "Publishing $(basename $package)..."
+                dotnet nuget push "$package" \
+                  --api-key "$NUGET_API_KEY" \
+                  --source https://api.nuget.org/v3/index.json \
+                  --skip-duplicate
+              fi
+            done
+          else
+            echo "NUGET_API_KEY not set, skipping NuGet publish"
+          fi
+
+      - name: Upload package artifact
+        if: matrix.released == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: template-${{ matrix.template }}-package-${{ steps.version.outputs.version }}
+          path: packages/*.nupkg
+          retention-days: 30
+
+  # ============================================================
+  # Summary
+  # ============================================================
+  summary:
+    name: Release Summary
+    needs: [release-please, release-cli, publish-npm, release-templates]
+    if: always() && needs.release-please.outputs.releases_created == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate summary
+        run: |
+          echo "# Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.release-please.outputs.cli_release_created }}" == "true" ]; then
+            echo "## CLI" >> $GITHUB_STEP_SUMMARY
+            echo "- **Version:** ${{ needs.release-please.outputs.cli_version }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Tag:** ${{ needs.release-please.outputs.cli_tag_name }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **NuGet:** [pks-cli](https://www.nuget.org/packages/pks-cli/${{ needs.release-please.outputs.cli_version }})" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ needs.release-please.outputs.devcontainer_release_created }}" == "true" ]; then
+            echo "## DevContainer Template" >> $GITHUB_STEP_SUMMARY
+            echo "- **Version:** ${{ needs.release-please.outputs.devcontainer_version }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Tag:** ${{ needs.release-please.outputs.devcontainer_tag_name }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ needs.release-please.outputs.claude_dotnet_9_release_created }}" == "true" ]; then
+            echo "## Claude .NET 9 Template" >> $GITHUB_STEP_SUMMARY
+            echo "- **Version:** ${{ needs.release-please.outputs.claude_dotnet_9_version }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Tag:** ${{ needs.release-please.outputs.claude_dotnet_9_tag_name }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ needs.release-please.outputs.claude_dotnet_10_full_release_created }}" == "true" ]; then
+            echo "## Claude .NET 10 Full Template" >> $GITHUB_STEP_SUMMARY
+            echo "- **Version:** ${{ needs.release-please.outputs.claude_dotnet_10_full_version }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Tag:** ${{ needs.release-please.outputs.claude_dotnet_10_full_tag_name }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ needs.release-please.outputs.pks_fullstack_release_created }}" == "true" ]; then
+            echo "## PKS Fullstack Template" >> $GITHUB_STEP_SUMMARY
+            echo "- **Version:** ${{ needs.release-please.outputs.pks_fullstack_version }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Tag:** ${{ needs.release-please.outputs.pks_fullstack_tag_name }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi

@@ -1,32 +1,61 @@
 {
-  "name": "Codespaces for Claude Code",
+  "name": "pks-cli devcontainer",
+  "initializeCommand": "if [ ! -f .devcontainer/.env ]; then cat > .devcontainer/.env << 'EOF'\n# Development Container Environment Variables\n# This file contains environment variables for the development container\n\n# GitHub Personal Access Token (PAT)\n# Required for GitHub CLI authentication and API access\n# Generate a token at: https://github.com/settings/tokens\n# Recommended scopes: repo, read:org, workflow\ngithub_pat_token=<insert_your_github_pat_here>\n\n# Add your custom environment variables here\n# Example:\n# MY_API_KEY=your_api_key_here\n# DATABASE_URL=postgresql://user:pass@localhost:5432/dbname\nEOF\nfi",
   "build": {
     "dockerfile": "Dockerfile",
     "args": {
-      "TZ": "${localEnv:TZ:Europe/Copenhagen}"
+      "BASE_IMAGE_TAG": "vnext",
+      "TZ": "${localEnv:TZ:Europe/Copenhagen}",
+      "CLAUDE_CODE_VERSION": "latest",
+      "GIT_DELTA_VERSION": "0.18.2",
+      "ZSH_IN_DOCKER_VERSION": "1.2.0",
+      "WORKSPACE_NAME": "${localWorkspaceFolderBasename}"
     }
   },
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest",
+      "enableNonRootDocker": true,
+      "moby": true
+    },
+    "ghcr.io/devcontainers/features/powershell:1": {}
+  },
   "runArgs": [
+    "--sysctl",
+    "net.ipv6.conf.all.disable_ipv6=1",
+    "--sysctl",
+    "net.ipv6.conf.default.disable_ipv6=1",
     "--cap-add=NET_ADMIN",
     "--cap-add=NET_RAW",
-    "--tty",
-    "--interactive",
     "--env-file",
     ".devcontainer/.env"
   ],
   "customizations": {
     "vscode": {
       "extensions": [
+        "anthropic.claude-code",
         "dbaeumer.vscode-eslint",
         "esbenp.prettier-vscode",
         "eamodio.gitlens",
+        "eamodio.gitlens",
         "github.copilot",
         "github.copilot-chat",
-        "anthropic.claude-code",
         "saoudrizwan.claude-dev",
-        "ms-dotnettools.csharp"
+        "ms-dotnettools.csharp",
+        "ms-dotnettools.csdevkit",
+        "ms-vscode.azure-repos"
       ],
       "settings": {
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "terminal.integrated.profiles.linux": {
+          "bash": {
+            "path": "bash",
+            "icon": "terminal-bash"
+          },
+          "zsh": {
+            "path": "zsh"
+          }
+        },
         "editor.formatOnSave": true,
         "editor.defaultFormatter": "esbenp.prettier-vscode",
         "editor.codeActionsOnSave": {
@@ -35,22 +64,27 @@
       }
     }
   },
-  //"remoteUser": "root",
+  "remoteUser": "node",
   "mounts": [
-    "source=claude-code-bashhistory,target=/commandhistory,type=volume",
-    "source=claude-code-config,target=/home/node/.claude,type=volume",
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.gitconfig,target=/home/node/.gitconfig,type=bind,consistency=cached",
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/node/.ssh,type=bind,consistency=cached"
+    "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
+    "source=claude-code-config-${devcontainerId},target=/home/node/.claude,type=volume"
   ],
   "remoteEnv": {
+    "WORKSPACE_ROOT": "/workspaces/${localWorkspaceFolderBasename}",
     "NODE_OPTIONS": "--max-old-space-size=4096",
     "CLAUDE_CONFIG_DIR": "/home/node/.claude",
     "POWERLEVEL9K_DISABLE_GITSTATUS": "true",
     "TERM": "xterm-256color",
     "COLORTERM": "truecolor",
-    "FORCE_COLOR": "3"
+    "FORCE_COLOR": "3",
+    "SSL_CERT_DIR": "/home/node/.aspnet/dev-certs/trust:/usr/lib/ssl/certs",
+    "GIT_ASKPASS": "${localEnv:GIT_ASKPASS}",
+    "VSCODE_GIT_ASKPASS_NODE": "${localEnv:VSCODE_GIT_ASKPASS_NODE}",
+    "VSCODE_GIT_ASKPASS_EXTRA_ARGS": "${localEnv:VSCODE_GIT_ASKPASS_EXTRA_ARGS}",
+    "VSCODE_GIT_ASKPASS_MAIN": "${localEnv:VSCODE_GIT_ASKPASS_MAIN}"
   },
-  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
-  "workspaceFolder": "/workspace"
-  //"postCreateCommand": "dotnet workload update && dotnet tool restore && dotnet restore && sudo /usr/local/bin/init-firewall.sh",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind,consistency=delegated",
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+  "postStartCommand": "sudo /usr/local/share/docker-init.sh",
+  "waitFor": "postStartCommand"
 }

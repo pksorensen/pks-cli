@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+
+    <!-- Template Package Properties -->
+    <PackageType>Template</PackageType>
+    <PackageId>PKS.Templates.DevContainer</PackageId>
+    <PackageVersion>1.0.0</PackageVersion>
+    <Title>PKS DevContainer Templates</Title>
+    <Authors>PKS CLI Team</Authors>
+    <Owners>pksorensen</Owners>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/pksorensen/pks-cli</PackageProjectUrl>
+    <Description>Universal development container template for PKS CLI projects. Provides a comprehensive development environment with support for .NET, Node.js, Python, and Go development.</Description>
+    <PackageSummary>DevContainer template for consistent development environments across PKS CLI projects</PackageSummary>
+    <PackageReleaseNotes>Initial release of PKS Universal DevContainer template</PackageReleaseNotes>
+    <PackageTags>pks-templates devcontainer docker template pks-cli pks-devcontainers development-environment vscode</PackageTags>
+    <RepositoryType>git</RepositoryType>
+    <RepositoryUrl>https://github.com/pksorensen/pks-cli.git</RepositoryUrl>
+    <RepositoryBranch>main</RepositoryBranch>
+    
+    <!-- Template Specific Properties -->
+    <IncludeContentInPack>true</IncludeContentInPack>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <ContentTargetFolders>content</ContentTargetFolders>
+    <NoWarn>$(NoWarn);NU5128;NU5119</NoWarn>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <NoDefaultExcludes>true</NoDefaultExcludes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="content/**/*" Pack="true" PackagePath="content/" />
+    <Content Include=".template.config/**/*" Pack="true" PackagePath="content/.template.config/" />
+    <!-- Explicitly include .env and .gitignore files that might be excluded by default -->
+    <Content Include="content/.devcontainer/.env" Pack="true" PackagePath="content/.devcontainer/" />
+    <Content Include="content/.devcontainer/.gitignore" Pack="true" PackagePath="content/.devcontainer/" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="content/README.md" />
+  </ItemGroup>
+
+</Project>

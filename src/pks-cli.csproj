@@ -1,0 +1,71 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>PKS</RootNamespace>
+
+    <!-- Global Tool Configuration -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>pks</ToolCommandName>
+    <PackageId>pks-cli</PackageId>
+    <PackageVersion>2.0.0-rc.28</PackageVersion>
+    <Authors>PKS Team</Authors>
+    <Description>The next agentic CLI for .NET developers - Poul's Killer Swarms</Description>
+    <PackageTags>cli;dotnet;agentic;developer-tools</PackageTags>
+    <RepositoryUrl>https://github.com/pks-team/pks-cli</RepositoryUrl>
+  </PropertyGroup>
+
+  <!-- Self-Contained Build Configuration (for npm distribution) -->
+  <PropertyGroup Condition="'$(PublishSelfContained)' == 'true'">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <PublishTrimmed>false</PublishTrimmed> <!-- Keep reflection for Spectre.Console.Cli -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <PublishReadyToRun>true</PublishReadyToRun> <!-- Pre-compile for faster startup -->
+    <EmbedTemplates>true</EmbedTemplates>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Spectre.Console" Version="0.47.0"/>
+    <PackageReference Include="Spectre.Console.Cli" Version="0.47.0"/>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0"/>
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0"/>
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.0"/>
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.0"/>
+    <PackageReference Include="NuGet.Protocol" Version="6.8.0"/>
+    <PackageReference Include="NuGet.Configuration" Version="6.8.0"/>
+    <PackageReference Include="NuGet.Common" Version="6.8.0"/>
+    <PackageReference Include="System.IO.Compression" Version="4.3.0"/>
+    <!-- Model Context Protocol SDK -->
+    <PackageReference Include="ModelContextProtocol" Version="0.3.0-preview.3"/>
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="0.3.0-preview.3"/>
+    <!-- Docker integration -->
+    <PackageReference Include="Docker.DotNet" Version="3.125.15"/>
+  </ItemGroup>
+
+  <!-- Template inclusion for normal builds (NuGet global tool) -->
+  <ItemGroup Condition="'$(EmbedTemplates)' != 'true'">
+    <Content Include="../templates/**/*" Exclude="../templates/**/bin/**;../templates/**/obj/**;../templates/**/*.nupkg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <PackagePath>Templates/</PackagePath>
+      <Link>Templates/%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </Content>
+  </ItemGroup>
+
+  <!-- Template embedding for self-contained builds (npm distribution) -->
+  <ItemGroup Condition="'$(EmbedTemplates)' == 'true'">
+    <EmbeddedResource Include="../templates/**/*" Exclude="../templates/**/bin/**;../templates/**/obj/**;../templates/**/*.nupkg;../templates/**/*.csproj">
+      <Link>Templates/%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Infrastructure\Resources\bootstrap.Dockerfile"/>
+  </ItemGroup>
+
+</Project>

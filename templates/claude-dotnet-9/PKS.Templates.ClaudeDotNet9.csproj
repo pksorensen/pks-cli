@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+
+    <!-- Template Package Properties -->
+    <PackageType>Template</PackageType>
+    <PackageId>PKS.Templates.ClaudeDotNet9</PackageId>
+    <PackageVersion>2.0.0-rc.11</PackageVersion>
+    <Title>PKS Claude .NET 9 DevContainer Template</Title>
+    <Authors>PKS CLI Team</Authors>
+    <Owners>pksorensen</Owners>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/pksorensen/pks-cli</PackageProjectUrl>
+    <Description>Claude-optimized .NET 9 development container template with Aspire support. Provides a comprehensive development environment for .NET 9 with Claude Code integration, GitHub Copilot, and Aspire tooling.</Description>
+    <PackageSummary>Claude-optimized .NET 9 DevContainer template with Aspire support for PKS CLI projects</PackageSummary>
+    <PackageReleaseNotes>Initial release of PKS Claude .NET 9 DevContainer template with Aspire integration</PackageReleaseNotes>
+    <PackageTags>pks-templates devcontainer docker template pks-cli dotnet9 aspire claude-code development-environment vscode</PackageTags>
+    <RepositoryType>git</RepositoryType>
+    <RepositoryUrl>https://github.com/pksorensen/pks-cli.git</RepositoryUrl>
+    <RepositoryBranch>main</RepositoryBranch>
+
+    <!-- Template Specific Properties -->
+    <IncludeContentInPack>true</IncludeContentInPack>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <ContentTargetFolders>content</ContentTargetFolders>
+    <NoWarn>$(NoWarn);NU5128;NU5119</NoWarn>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <NoDefaultExcludes>true</NoDefaultExcludes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="content/**/*" Pack="true" PackagePath="content/"/>
+    <Content Include=".template.config/**/*" Pack="true" PackagePath="content/.template.config/"/>
+    <!-- Explicitly include .env and .gitignore files that might be excluded by default -->
+    <Content Include="content/.devcontainer/.env" Pack="true" PackagePath="content/.devcontainer/"/>
+    <Content Include="content/.devcontainer/.gitignore" Pack="true" PackagePath="content/.devcontainer/"/>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="content/README.md"/>
+  </ItemGroup>
+
+</Project>

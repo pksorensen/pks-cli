@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+
+    <!-- Template Package Properties -->
+    <PackageType>Template</PackageType>
+    <PackageId>PKS.Templates.PksFullstack</PackageId>
+    <PackageVersion>1.0.0</PackageVersion>
+    <Title>PKS Fullstack DevContainer Template</Title>
+    <Authors>PKS CLI Team</Authors>
+    <Owners>pksorensen</Owners>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/pksorensen/pks-cli</PackageProjectUrl>
+    <Description>Fullstack development container template with Node.js 20, .NET 8+10, Playwright, DevTunnel CLI, Git Credential Manager, Aspire CLI, Claude Code, and security firewall. Uses pre-built base image for fast setup.</Description>
+    <PackageSummary>PKS Fullstack DevContainer with Node.js, .NET, and AI development tools</PackageSummary>
+    <PackageReleaseNotes>Initial release of PKS Fullstack DevContainer template</PackageReleaseNotes>
+    <PackageTags>pks-templates devcontainer docker template pks-cli fullstack nodejs dotnet claude-code ai-development</PackageTags>
+    <RepositoryType>git</RepositoryType>
+    <RepositoryUrl>https://github.com/pksorensen/pks-cli.git</RepositoryUrl>
+    <RepositoryBranch>main</RepositoryBranch>
+
+    <!-- Template Specific Properties -->
+    <IncludeContentInPack>true</IncludeContentInPack>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <ContentTargetFolders>content</ContentTargetFolders>
+    <NoWarn>$(NoWarn);NU5128;NU5119</NoWarn>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <NoDefaultExcludes>true</NoDefaultExcludes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="content/**/*" Pack="true" PackagePath="content/" />
+    <Content Include=".template.config/**/*" Pack="true" PackagePath="content/.template.config/" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="content/README.md" />
+  </ItemGroup>
+
+</Project>

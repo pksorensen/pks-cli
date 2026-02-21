@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-PKS CLI is a .NET 8 console application built with Spectre.Console that provides an agentic CLI tool for .NET developers. It combines beautiful terminal UI with AI-powered development assistance and Kubernetes deployment capabilities.
+PKS CLI is a .NET 10 console application built with Spectre.Console that provides an agentic CLI tool for .NET developers. It combines beautiful terminal UI with AI-powered development assistance and Kubernetes deployment capabilities.
 
 **Repository**: https://github.com/pksorensen/pks-cli
 
@@ -74,7 +74,7 @@ CONFIGURATION=Debug ./install.sh    # Use Debug configuration
 ```
 
 **What the script does:**
-1. ✅ Validates .NET 8+ is installed
+1. ✅ Validates .NET 10+ is installed
 2. 🔨 Builds the entire solution (CLI + Templates)
 3. 📦 Creates NuGet packages for distribution
 4. 🌍 Installs PKS CLI as a global .NET tool
@@ -98,6 +98,72 @@ dotnet tool install -g --add-source ./bin/Release pks-cli --force
 # Verify installation
 pks --help
 ```
+
+### NuGet Installation (.NET Global Tool)
+
+PKS CLI is published to NuGet.org as a .NET global tool:
+
+```bash
+# Install stable release
+dotnet tool install -g pks-cli
+
+# Install prerelease (vnext/develop)
+dotnet tool install -g pks-cli --version 1.0.0-rc.1 --prerelease
+
+# Update to latest
+dotnet tool update -g pks-cli
+
+# Run without installing (dotnet's version of npx)
+dotnet tool run pks-cli init MyProject
+dotnet tool run --prerelease pks-cli init MyProject -- --agentic --mcp
+```
+
+**Release Channels:**
+- Stable versions: `dotnet tool install -g pks-cli`
+- Prereleases: Use `--prerelease` flag with specific version
+
+### npm Installation (Cross-Platform)
+
+For users without .NET SDK, PKS CLI is also available via npm with multi-channel support:
+
+```bash
+# Stable release (recommended)
+npm install -g @pks-cli/pks
+
+# Release candidate (testing)
+npm install -g @pks-cli/pks@rc
+
+# Development version (bleeding edge)
+npm install -g @pks-cli/pks@dev
+
+# Or use with npx (no installation required)
+npx @pks-cli/pks init MyProject
+npx @pks-cli/pks@rc init MyProject
+npx @pks-cli/pks@dev init MyProject
+```
+
+**Release Channels:**
+- `@latest` (main branch) - Stable production releases
+- `@rc` (vnext branch) - Release candidates for testing
+- `@dev` (develop branch) - Development builds
+
+**Platform Support:**
+- Linux x64 & ARM64
+- macOS x64 (Intel) & ARM64 (Apple Silicon)
+- Windows x64 & ARM64
+
+**Advantages:**
+- No .NET SDK required
+- Single-file self-contained binaries
+- Automatic platform detection
+- Multi-channel support matching NuGet
+- Ideal for CI/CD environments without .NET
+
+**What you get:**
+- Same features as .NET tool
+- Templates embedded in binary
+- All commands fully functional
+- Zero additional dependencies
 
 ## Usage Scenarios
 
@@ -177,7 +243,7 @@ pks init AnotherTest --template api
 FORCE_INSTALL=true ./install.sh
 
 # Check .NET version
-dotnet --version  # Should be 8.0 or higher
+dotnet --version  # Should be 10.0 or higher
 
 # Verify PATH includes .NET tools
 echo $PATH | grep -o '[^:]*\.dotnet[^:]*'
@@ -229,7 +295,7 @@ CONFIGURATION=Debug ./install.sh  # Debug build
 **Before** (complex):
 ```bash
 ./build.sh        # Build only
-./package.sh      # Package only  
+./package.sh      # Package only
 ./deploy.sh       # Deploy only
 ./install.sh      # Install only
 ```
@@ -240,7 +306,7 @@ CONFIGURATION=Debug ./install.sh  # Debug build
 ```
 
 The single script intelligently handles:
-- Dependency validation (.NET 8+)
+- Dependency validation (.NET 10+)
 - Solution building (CLI + Templates)
 - Package creation (NuGet packages)
 - Global tool installation
@@ -297,7 +363,7 @@ The application uses Spectre.Console.Cli's command pattern with:
 
 - **Spectre.Console** (v0.47.0) - Rich terminal UI framework
 - **Spectre.Console.Cli** (v0.47.0) - Command-line interface framework
-- **Microsoft.Extensions.DependencyInjection** (v8.0.0) - DI container
+- **Microsoft.Extensions.DependencyInjection** (v10.0.0) - DI container
 
 ## Development Patterns
 
@@ -381,7 +447,7 @@ The application is designed to be packaged as a .NET Global Tool with:
 
 - Tool command name: `pks`
 - Package ID: `pks-cli`
-- Target framework: .NET 8.0
+- Target framework: .NET 10.0
 - Output configured for global tool packaging
 
 ## Initializer System
@@ -584,3 +650,164 @@ When using the `/triage` command or performing GitHub-related operations, always
 - `owner:pksorensen repo:pks-cli` for more specific queries
 
 This prevents unnecessary API calls to other repositories and keeps the focus on the PKS CLI project.
+
+## Per-Package Releases with Release Please
+
+PKS CLI uses [Release Please](https://github.com/googleapis/release-please) for automated, per-package releases with a human review gate via Release PRs.
+
+### Architecture Overview
+
+The release system consists of:
+- **1 CLI package**: `pks-cli` (main tool)
+- **4 Template packages**:
+  - `PKS.Templates.DevContainer`
+  - `PKS.Templates.ClaudeDotNet9`
+  - `PKS.Templates.ClaudeDotNet10.Full`
+  - `PKS.Templates.PksFullstack`
+
+Each package maintains its own version history and releases independently via separate Release PRs.
+
+### How It Works
+
+Release Please operates in **manifest mode** with two configuration files:
+- `release-please-config.json` (or branch-specific variants) - Package definitions and release settings
+- `.release-please-manifest.json` - Current version state for each package
+
+**Workflow:**
+1. Push conventional commits to main/vnext/develop
+2. Release Please automatically creates/updates a **Release PR** per package with changelog preview
+3. Review the Release PR to see exactly what will release
+4. Merge the Release PR to trigger the actual release (NuGet publish, npm publish, GitHub Release)
+
+**Branch-Specific Configs:**
+- `release-please-config.json` - main branch (stable releases)
+- `release-please-config.vnext.json` - vnext branch (rc prereleases)
+- `release-please-config.develop.json` - develop branch (dev prereleases)
+
+### Package-Specific Tags
+
+- CLI: `v1.0.0`, `v1.1.0`, `v2.0.0-rc.1` (no component prefix)
+- DevContainer: `devcontainer-v1.0.0`, `devcontainer-v1.1.0`
+- Claude .NET 9: `claude-dotnet-9-v1.0.0`, `claude-dotnet-9-v2.0.0`
+- Claude .NET 10 Full: `claude-dotnet-10-full-v1.0.0`
+- PKS Fullstack: `pks-fullstack-v1.0.0`
+
+### Workflow Structure
+
+```mermaid
+graph TD
+    A[Push to main/vnext/develop] --> B[Release Please Action]
+    B --> C[Creates/Updates Release PRs]
+    C --> D{Merge Release PR}
+    D -->|CLI| E[Build + NuGet Publish]
+    D -->|CLI| F[npm Build + Publish]
+    D -->|Templates| G[Template NuGet Publish]
+    E --> H[Summary]
+    F --> H
+    G --> H
+```
+
+### Commit Message Scoping
+
+Use conventional commit scopes to target specific packages:
+
+```bash
+# CLI changes
+feat(cli): add new command
+fix(cli): resolve bug in init command
+
+# Template changes
+feat(devcontainer): add Python support
+fix(claude-dotnet-9): correct Aspire configuration
+docs(pks-fullstack): update README
+
+# Cross-package changes (releases all affected)
+feat: add new template parameter system
+fix!: breaking change to template.json schema
+```
+
+### Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `release-please-config.json` | Package definitions for stable releases (main) |
+| `release-please-config.vnext.json` | Package definitions for rc prereleases (vnext) |
+| `release-please-config.develop.json` | Package definitions for dev prereleases (develop) |
+| `.release-please-manifest.json` | Current version state per package |
+| `src/version.txt` | CLI version (managed by Release Please) |
+| `templates/*/version.txt` | Template versions (managed by Release Please) |
+
+### Changelogs
+
+Each package maintains its own changelog (auto-generated by Release Please):
+- CLI: `src/CHANGELOG.md`
+- DevContainer: `templates/devcontainer/CHANGELOG.md`
+- Claude .NET 9: `templates/claude-dotnet-9/CHANGELOG.md`
+- Claude .NET 10 Full: `templates/claude-dotnet-10-full/CHANGELOG.md`
+- PKS Fullstack: `templates/pks-fullstack/CHANGELOG.md`
+
+### Utility Scripts
+
+**Version Update**: `scripts/update-version.sh <version> <scope>`
+- Updates version in .csproj files
+- Scopes: `cli`, `devcontainer`, `claude-dotnet-9`, `claude-dotnet-10-full`, `pks-fullstack`, `all`
+- Example: `./scripts/update-version.sh 1.2.0 cli`
+
+**Get Version**: `scripts/get-package-version.sh <scope>`
+- Retrieves current version from .csproj
+- Example: `./scripts/get-package-version.sh devcontainer`
+
+### Workflow
+
+**Single Workflow**: `.github/workflows/release-please.yml`
+- Runs Release Please action with branch-specific config
+- Conditional downstream jobs:
+  - **release-cli**: Builds and publishes CLI NuGet package
+  - **build-npm-binaries** + **create-npm-packages** + **publish-npm**: npm distribution (follows CLI version)
+  - **release-templates**: Matrix job for template NuGet packages
+  - **summary**: Release summary
+
+### Benefits
+
+1. **Human Review Gate**: Release PRs let you review exactly what will release before merging
+2. **Independent Versioning**: Separate PRs per package, merge when ready
+3. **Simple Configuration**: 2 JSON files replace 3 releaserc configs + 4 custom scripts
+4. **Automatic Changelogs**: Generated from conventional commits per package
+5. **Branch Channels**: main=stable, vnext=rc, develop=dev
+6. **Backward Compatible Tags**: Same tag format as before
+
+### Adding New Templates
+
+To add a new template to the release system:
+
+1. **Create template directory** with `.csproj` and `version.txt`:
+   ```bash
+   mkdir templates/my-new-template
+   echo "1.0.0" > templates/my-new-template/version.txt
+   ```
+
+2. **Add to `release-please-config.json`** (and vnext/develop variants):
+   ```json
+   "templates/my-new-template": {
+     "release-type": "simple",
+     "component": "my-new-template",
+     "package-name": "PKS.Templates.MyNewTemplate",
+     "include-component-in-tag": true,
+     "tag-separator": "-",
+     "changelog-path": "CHANGELOG.md",
+     "extra-files": [
+       { "type": "xml", "path": "PKS.Templates.MyNewTemplate.csproj", "xpath": "//Project/PropertyGroup/PackageVersion" }
+     ]
+   }
+   ```
+
+3. **Add to `.release-please-manifest.json`**:
+   ```json
+   "templates/my-new-template": "1.0.0"
+   ```
+
+4. **Add to the workflow matrix** in `.github/workflows/release-please.yml` under `release-templates`
+
+**Templates NOT included in releases:**
+- Directories without `.csproj` files (like `templates/claude-docs/`, `templates/mcp/`)
+- These are content-only templates used by the CLI directly

@@ -1,0 +1,154 @@
+name: Build npm Binaries
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version to build'
+        required: true
+        type: string
+      configuration:
+        description: 'Build configuration'
+        required: false
+        type: string
+        default: 'Release'
+    outputs:
+      artifact-names:
+        description: 'List of artifact names created'
+        value: ${{ jobs.collect-artifacts.outputs.artifact-names }}
+
+jobs:
+  build-binaries:
+    name: Build ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+            artifact: pks-linux-x64
+          - os: ubuntu-latest
+            rid: linux-arm64
+            artifact: pks-linux-arm64
+          - os: macos-15-intel
+            rid: osx-x64
+            artifact: pks-osx-x64
+          - os: macos-latest
+            rid: osx-arm64
+            artifact: pks-osx-arm64
+          - os: windows-latest
+            rid: win-x64
+            artifact: pks-win-x64
+          - os: windows-latest
+            rid: win-arm64
+            artifact: pks-win-arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore src/pks-cli.csproj
+
+      - name: Build self-contained binary
+        run: |
+          echo "Building ${{ matrix.rid }} binary..."
+
+          dotnet publish src/pks-cli.csproj \
+            --configuration ${{ inputs.configuration }} \
+            --runtime ${{ matrix.rid }} \
+            --self-contained true \
+            --output ./dist/${{ matrix.rid }} \
+            -p:PublishSingleFile=true \
+            -p:PublishTrimmed=false \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:EnableCompressionInSingleFile=true \
+            -p:PublishReadyToRun=true \
+            -p:Version=${{ inputs.version }} \
+            -p:PublishSelfContained=true \
+            -p:EmbedTemplates=true \
+            --nologo
+
+          # Verify the build succeeded
+          if [ $? -ne 0 ]; then
+            echo "❌ Build failed for ${{ matrix.rid }}"
+            exit 1
+          fi
+
+          # List what was created
+          echo "📦 Build output:"
+          ls -la ./dist/${{ matrix.rid }}/ || true
+
+          # Verify binary exists
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            if [ ! -f "./dist/${{ matrix.rid }}/pks-cli.exe" ]; then
+              echo "❌ Binary not found: ./dist/${{ matrix.rid }}/pks-cli.exe"
+              exit 1
+            fi
+            echo "✅ Binary created: pks-cli.exe"
+          else
+            if [ ! -f "./dist/${{ matrix.rid }}/pks-cli" ]; then
+              echo "❌ Binary not found: ./dist/${{ matrix.rid }}/pks-cli"
+              exit 1
+            fi
+            echo "✅ Binary created: pks-cli"
+          fi
+        shell: bash
+
+      - name: Display binary size (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          echo "Binary size for ${{ matrix.rid }}:"
+          ls -lh ./dist/${{ matrix.rid }}/pks* | grep -v '\.pdb$' || true
+        shell: bash
+
+      - name: Display binary size (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          echo "Binary size for ${{ matrix.rid }}:"
+          Get-ChildItem -Path ./dist/${{ matrix.rid }}/pks* -Exclude *.pdb | Format-Table Name, @{Name="Size";Expression={"{0:N2} MB" -f ($_.Length / 1MB)}}
+        shell: pwsh
+
+      - name: Set executable permissions (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          if [ -f ./dist/${{ matrix.rid }}/pks-cli ]; then
+            chmod +x ./dist/${{ matrix.rid }}/pks-cli
+            echo "✅ Executable permissions set"
+          else
+            echo "❌ Binary not found, cannot set permissions"
+            exit 1
+          fi
+        shell: bash
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ./dist/${{ matrix.rid }}/pks-cli
+            ./dist/${{ matrix.rid }}/pks-cli.exe
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 9
+
+  collect-artifacts:
+    name: Collect artifact list
+    runs-on: ubuntu-latest
+    needs: build-binaries
+    outputs:
+      artifact-names: ${{ steps.set-output.outputs.artifact-names }}
+
+    steps:
+      - name: Set artifact names output
+        id: set-output
+        run: |
+          ARTIFACTS='["pks-linux-x64","pks-linux-arm64","pks-osx-x64","pks-osx-arm64","pks-win-x64","pks-win-arm64"]'
+          echo "artifact-names=$ARTIFACTS" >> $GITHUB_OUTPUT

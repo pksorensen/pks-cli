@@ -1,0 +1,23 @@
+{
+  "name": "@pks-cli/cli-osx-x64",
+  "version": "1.0.0",
+  "description": "PKS CLI - macOS x64 binary",
+  "os": ["darwin"],
+  "cpu": ["x64"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pksorensen/pks-cli.git"
+  },
+  "keywords": [
+    "cli",
+    "dotnet",
+    "agentic",
+    "macos"
+  ],
+  "author": "PKS Team",
+  "license": "MIT",
+  "homepage": "https://github.com/pksorensen/pks-cli#readme",
+  "bugs": {
+    "url": "https://github.com/pksorensen/pks-cli/issues"
+  }
+}
