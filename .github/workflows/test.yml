@@ -2,7 +2,7 @@ name: Core Tests (Push Only)
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, vnext, develop ]
 
 jobs:
   test:
