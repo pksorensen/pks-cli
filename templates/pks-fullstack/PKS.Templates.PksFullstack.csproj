@@ -7,7 +7,7 @@
     <!-- Template Package Properties -->
     <PackageType>Template</PackageType>
     <PackageId>PKS.Templates.PksFullstack</PackageId>
-    <PackageVersion>1.0.0</PackageVersion>
+    <PackageVersion>2.0.0-rc.13</PackageVersion>
     <Title>PKS Fullstack DevContainer Template</Title>
     <Authors>PKS CLI Team</Authors>
     <Owners>pksorensen</Owners>
@@ -32,12 +32,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="content/**/*" Pack="true" PackagePath="content/" />
-    <Content Include=".template.config/**/*" Pack="true" PackagePath="content/.template.config/" />
+    <Content Include="content/**/*" Pack="true" PackagePath="content/"/>
+    <Content Include=".template.config/**/*" Pack="true" PackagePath="content/.template.config/"/>
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="README.md" Pack="true" PackagePath="content/README.md" />
+    <None Include="README.md" Pack="true" PackagePath="content/README.md"/>
   </ItemGroup>
 
 </Project>
