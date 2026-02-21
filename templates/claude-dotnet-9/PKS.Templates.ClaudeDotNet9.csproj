@@ -7,7 +7,7 @@
     <!-- Template Package Properties -->
     <PackageType>Template</PackageType>
     <PackageId>PKS.Templates.ClaudeDotNet9</PackageId>
-    <PackageVersion>1.0.0</PackageVersion>
+    <PackageVersion>2.0.0-rc.11</PackageVersion>
     <Title>PKS Claude .NET 9 DevContainer Template</Title>
     <Authors>PKS CLI Team</Authors>
     <Owners>pksorensen</Owners>
@@ -32,15 +32,15 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="content/**/*" Pack="true" PackagePath="content/" />
-    <Content Include=".template.config/**/*" Pack="true" PackagePath="content/.template.config/" />
+    <Content Include="content/**/*" Pack="true" PackagePath="content/"/>
+    <Content Include=".template.config/**/*" Pack="true" PackagePath="content/.template.config/"/>
     <!-- Explicitly include .env and .gitignore files that might be excluded by default -->
-    <Content Include="content/.devcontainer/.env" Pack="true" PackagePath="content/.devcontainer/" />
-    <Content Include="content/.devcontainer/.gitignore" Pack="true" PackagePath="content/.devcontainer/" />
+    <Content Include="content/.devcontainer/.env" Pack="true" PackagePath="content/.devcontainer/"/>
+    <Content Include="content/.devcontainer/.gitignore" Pack="true" PackagePath="content/.devcontainer/"/>
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="README.md" Pack="true" PackagePath="content/README.md" />
+    <None Include="README.md" Pack="true" PackagePath="content/README.md"/>
   </ItemGroup>
 
 </Project>

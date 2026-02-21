@@ -1,7 +1,7 @@
 {
   "src": "1.2.0-rc.28",
   "templates/devcontainer": "1.2.0-rc.11",
-  "templates/claude-dotnet-9": "1.2.0-rc.11",
+  "templates/claude-dotnet-9": "2.0.0-rc.11",
   "templates/claude-dotnet-10-full": "1.2.0-rc.11",
   "templates/pks-fullstack": "1.2.0-rc.13"
 }
