@@ -2,6 +2,6 @@
   "src": "1.1.0",
   "templates/devcontainer": "0.0.0",
   "templates/claude-dotnet-9": "0.0.0",
-  "templates/claude-dotnet-10-full": "0.0.0",
+  "templates/claude-dotnet-10-full": "1.0.0",
   "templates/pks-fullstack": "0.0.0"
 }
