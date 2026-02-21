@@ -124,7 +124,9 @@ namespace PKS.CLI.Tests.Commands
             {
                 ProjectName = "TestProject",
                 Template = "pks-claude-dotnet9", // Use shortName
-                Tag = "pks-templates"
+                Tag = "pks-templates",
+                Description = "Test project",
+                NoDevcontainerPrompt = true
             };
 
             _mockTemplateDiscovery
@@ -132,7 +134,7 @@ namespace PKS.CLI.Tests.Commands
                     "PKS.Templates.ClaudeDotNet9",
                     "1.0.0",
                     It.IsAny<string>(),
-                    It.IsAny<IEnumerable<string>>(),
+                    It.IsAny<IEnumerable<string>?>(),
                     It.IsAny<System.Threading.CancellationToken>()))
                 .ReturnsAsync(new NuGetTemplateExtractionResult
                 {
@@ -185,7 +187,7 @@ namespace PKS.CLI.Tests.Commands
                     "PKS.Templates.ClaudeDotNet10.Full",
                     "1.0.0",
                     It.IsAny<string>(),
-                    It.IsAny<IEnumerable<string>>(),
+                    It.IsAny<IEnumerable<string>?>(),
                     It.IsAny<System.Threading.CancellationToken>()))
                 .ReturnsAsync(new NuGetTemplateExtractionResult
                 {
@@ -198,7 +200,9 @@ namespace PKS.CLI.Tests.Commands
             {
                 ProjectName = "TestProject",
                 Template = "pks-claude-dotnet10-full", // Use exact shortName
-                Tag = "pks-templates"
+                Tag = "pks-templates",
+                Description = "Test project",
+                NoDevcontainerPrompt = true
             };
 
             // Act
