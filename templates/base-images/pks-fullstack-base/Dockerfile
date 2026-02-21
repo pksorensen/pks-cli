@@ -77,6 +77,16 @@ RUN apt update && apt install -y \
 # Install DevTunnel CLI dependencies
 RUN apt update && apt install -y libsecret-1-0
 
+# Install tmux for Claude Code agent team split-pane mode
+# Install libnss3-tools for dotnet dev-certs trust (certutil needed for browser/Playwright cert trust)
+RUN apt-get update && apt-get install -y --no-install-recommends tmux libnss3-tools && \
+  rm -rf /var/lib/apt/lists/*
+
+# Install ttyd for web-based terminal access (useful with tmux for split-pane viewing)
+ARG TTYD_VERSION=1.7.7
+RUN curl -fsSL -o /tmp/ttyd https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.x86_64 && \
+  install -m 755 /tmp/ttyd /usr/local/bin/ttyd && rm /tmp/ttyd
+
 RUN apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Ensure default node user has access to /usr/local/share
@@ -211,7 +221,10 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
   -a "export PATH=\$PATH:/home/node/.dotnet/tools:/home/node/.local/bin:/home/node/bin" \
   -x
 
-# Install Claude
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
+# Configure tmux mouse scroll support
+RUN echo "set -g mouse on" > /home/node/.tmux.conf
+
+# Install Claude Code (supports: "latest", "stable", or specific version like "1.0.58")
+RUN curl -fsSL https://claude.ai/install.sh | bash -s -- ${CLAUDE_CODE_VERSION}
 
 USER node

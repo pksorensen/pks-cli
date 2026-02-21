@@ -4,6 +4,7 @@
   "build": {
     "dockerfile": "Dockerfile",
     "args": {
+      "BASE_IMAGE_TAG": "vnext",
       "TZ": "${localEnv:TZ:Europe/Copenhagen}",
       "CLAUDE_CODE_VERSION": "latest",
       "GIT_DELTA_VERSION": "0.18.2",
@@ -20,6 +21,10 @@
     "ghcr.io/devcontainers/features/powershell:1": {}
   },
   "runArgs": [
+    "--sysctl",
+    "net.ipv6.conf.all.disable_ipv6=1",
+    "--sysctl",
+    "net.ipv6.conf.default.disable_ipv6=1",
     "--cap-add=NET_ADMIN",
     "--cap-add=NET_RAW",
     "--env-file",
@@ -55,16 +60,14 @@
         "editor.defaultFormatter": "esbenp.prettier-vscode",
         "editor.codeActionsOnSave": {
           "source.fixAll.eslint": "explicit"
-        },
-        "remote.containers.gitCredentialHelperConfigLocation": "none"
+        }
       }
     }
   },
   "remoteUser": "node",
   "mounts": [
     "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
-    "source=claude-code-config-${devcontainerId},target=/home/node/.claude,type=volume",
-    "source=gcm-credentials-${devcontainerId},target=/home/node/.gcm,type=volume"
+    "source=claude-code-config-${devcontainerId},target=/home/node/.claude,type=volume"
   ],
   "remoteEnv": {
     "WORKSPACE_ROOT": "/workspaces/${localWorkspaceFolderBasename}",
@@ -73,10 +76,15 @@
     "POWERLEVEL9K_DISABLE_GITSTATUS": "true",
     "TERM": "xterm-256color",
     "COLORTERM": "truecolor",
-    "FORCE_COLOR": "3"
+    "FORCE_COLOR": "3",
+    "SSL_CERT_DIR": "/home/node/.aspnet/dev-certs/trust:/usr/lib/ssl/certs",
+    "GIT_ASKPASS": "${localEnv:GIT_ASKPASS}",
+    "VSCODE_GIT_ASKPASS_NODE": "${localEnv:VSCODE_GIT_ASKPASS_NODE}",
+    "VSCODE_GIT_ASKPASS_EXTRA_ARGS": "${localEnv:VSCODE_GIT_ASKPASS_EXTRA_ARGS}",
+    "VSCODE_GIT_ASKPASS_MAIN": "${localEnv:VSCODE_GIT_ASKPASS_MAIN}"
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind,consistency=delegated",
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
-  "postStartCommand": "sudo /usr/local/share/docker-init.sh && echo '{}' > ~/.docker/config.json",
+  "postStartCommand": "sudo /usr/local/share/docker-init.sh",
   "waitFor": "postStartCommand"
 }

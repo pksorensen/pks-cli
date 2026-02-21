@@ -1,0 +1,63 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "separate-pull-requests": true,
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": true,
+  "include-v-in-tag": true,
+  "packages": {
+    "src": {
+      "release-type": "simple",
+      "component": "pks-cli",
+      "package-name": "pks-cli",
+      "include-component-in-tag": false,
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        { "type": "xml", "path": "pks-cli.csproj", "xpath": "//Project/PropertyGroup/PackageVersion" }
+      ]
+    },
+    "templates/devcontainer": {
+      "release-type": "simple",
+      "component": "devcontainer",
+      "package-name": "PKS.Templates.DevContainer",
+      "include-component-in-tag": true,
+      "tag-separator": "-",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        { "type": "xml", "path": "PKS.Templates.DevContainer.csproj", "xpath": "//Project/PropertyGroup/PackageVersion" }
+      ]
+    },
+    "templates/claude-dotnet-9": {
+      "release-type": "simple",
+      "component": "claude-dotnet-9",
+      "package-name": "PKS.Templates.ClaudeDotNet9",
+      "include-component-in-tag": true,
+      "tag-separator": "-",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        { "type": "xml", "path": "PKS.Templates.ClaudeDotNet9.csproj", "xpath": "//Project/PropertyGroup/PackageVersion" }
+      ]
+    },
+    "templates/claude-dotnet-10-full": {
+      "release-type": "simple",
+      "component": "claude-dotnet-10-full",
+      "package-name": "PKS.Templates.ClaudeDotNet10.Full",
+      "include-component-in-tag": true,
+      "tag-separator": "-",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        { "type": "xml", "path": "PKS.Templates.ClaudeDotNet10.Full.csproj", "xpath": "//Project/PropertyGroup/PackageVersion" }
+      ]
+    },
+    "templates/pks-fullstack": {
+      "release-type": "simple",
+      "component": "pks-fullstack",
+      "package-name": "PKS.Templates.PksFullstack",
+      "include-component-in-tag": true,
+      "tag-separator": "-",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        { "type": "xml", "path": "PKS.Templates.PksFullstack.csproj", "xpath": "//Project/PropertyGroup/PackageVersion" }
+      ]
+    }
+  }
+}
