@@ -1,6 +1,7 @@
 using FluentAssertions;
 using PKS.CLI.Tests.Infrastructure;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Xunit;
 
 namespace PKS.CLI.Tests.Integration.Npm;
