@@ -7,7 +7,7 @@
     <!-- Template Package Properties -->
     <PackageType>Template</PackageType>
     <PackageId>PKS.Templates.ClaudeDotNet9</PackageId>
-    <PackageVersion>2.0.0-rc.11</PackageVersion>
+    <PackageVersion>3.0.0-rc.11</PackageVersion>
     <Title>PKS Claude .NET 9 DevContainer Template</Title>
     <Authors>PKS CLI Team</Authors>
     <Owners>pksorensen</Owners>
