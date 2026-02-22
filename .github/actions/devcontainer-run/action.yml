@@ -29,6 +29,10 @@ inputs:
     description: 'Version of @devcontainers/cli to install'
     required: false
     default: 'latest'
+  remote-user:
+    description: 'Override the remote user for exec. Use "root" to fix permission issues with bind-mounted sources.'
+    required: false
+    default: ''
   skip-cleanup:
     description: 'Keep the container alive for downstream steps'
     required: false
@@ -97,6 +101,10 @@ runs:
           done <<< "${{ inputs.env }}"
         fi
 
+        if [ -n "${{ inputs.remote-user }}" ]; then
+          ARGS="$ARGS --remote-user ${{ inputs.remote-user }}"
+        fi
+
         if [ -n "${{ inputs.up-args }}" ]; then
           ARGS="$ARGS ${{ inputs.up-args }}"
         fi
@@ -146,6 +154,10 @@ runs:
 
         if [ -n "${{ inputs.config }}" ]; then
           ARGS="$ARGS --config ${{ inputs.config }}"
+        fi
+
+        if [ -n "${{ inputs.remote-user }}" ]; then
+          ARGS="$ARGS --remote-user ${{ inputs.remote-user }}"
         fi
 
         # Build --remote-env flags
