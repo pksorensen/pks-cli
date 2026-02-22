@@ -1,5 +1,5 @@
 {
-  "src": "1.1.0",
+  "src": "2.0.0",
   "templates/devcontainer": "1.0.0",
   "templates/claude-dotnet-9": "1.0.0",
   "templates/claude-dotnet-10-full": "0.0.0",
