@@ -101,19 +101,24 @@ runs:
           ARGS="$ARGS ${{ inputs.up-args }}"
         fi
 
-        echo "::group::devcontainer up $ARGS $ENV_FLAGS"
-        OUTPUT=$(devcontainer up $ARGS $ENV_FLAGS 2>&1)
-        EXIT_CODE=$?
-        echo "$OUTPUT"
-        echo "::endgroup::"
+        LOG_FILE=$(mktemp)
+        echo "Running: devcontainer up $ARGS $ENV_FLAGS"
+
+        # Stream output in real-time to both console and log file
+        devcontainer up $ARGS $ENV_FLAGS 2>&1 | tee "$LOG_FILE"
+        EXIT_CODE=${PIPESTATUS[0]}
 
         if [ $EXIT_CODE -ne 0 ]; then
           echo "::error::devcontainer up failed with exit code $EXIT_CODE"
+          echo "--- Full output ---"
+          cat "$LOG_FILE"
+          rm -f "$LOG_FILE"
           exit $EXIT_CODE
         fi
 
         # Parse the last JSON line from output
-        JSON_LINE=$(echo "$OUTPUT" | grep -o '{.*}' | tail -1)
+        JSON_LINE=$(grep -o '{.*}' "$LOG_FILE" | tail -1)
+        rm -f "$LOG_FILE"
 
         CONTAINER_ID=$(echo "$JSON_LINE" | jq -r '.containerId // empty')
         REMOTE_USER=$(echo "$JSON_LINE" | jq -r '.remoteUser // empty')
