@@ -4,7 +4,7 @@ All notable changes to the PKS Fullstack template will be documented in this fil
 
 This template follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
-## 1.0.0 (2026-02-21)
+## 1.0.0 (2026-02-22)
 
 
 ### ⚠ BREAKING CHANGES
