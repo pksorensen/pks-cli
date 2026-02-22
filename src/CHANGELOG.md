@@ -49,6 +49,17 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [3.0.0-rc.28](https://github.com/pksorensen/pks-cli/compare/v2.0.0-rc.28...v3.0.0-rc.28) (2026-02-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* Release infrastructure replaced with Release Please
+
+### Features
+
+* migrate from semantic-release to Release Please ([f364bbb](https://github.com/pksorensen/pks-cli/commit/f364bbb5b3c3dd32043c72c7f47d8d33f5306107))
+
 ## [2.0.0-rc.28](https://github.com/pksorensen/pks-cli/compare/v1.2.0-rc.28...v2.0.0-rc.28) (2026-02-21)
 
 

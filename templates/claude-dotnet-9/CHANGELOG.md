@@ -4,6 +4,17 @@ All notable changes to the Claude .NET 9 template will be documented in this fil
 
 This template follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [3.0.0-rc.11](https://github.com/pksorensen/pks-cli/compare/claude-dotnet-9-v2.0.0-rc.11...claude-dotnet-9-v3.0.0-rc.11) (2026-02-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* Release infrastructure replaced with Release Please
+
+### Features
+
+* migrate from semantic-release to Release Please ([f364bbb](https://github.com/pksorensen/pks-cli/commit/f364bbb5b3c3dd32043c72c7f47d8d33f5306107))
+
 ## [2.0.0-rc.11](https://github.com/pksorensen/pks-cli/compare/claude-dotnet-9-v1.2.0-rc.11...claude-dotnet-9-v2.0.0-rc.11) (2026-02-21)
 
 
