@@ -36,12 +36,12 @@ Installing rootless Docker does **not** affect the system Docker daemon or any r
 
 ## Setup Steps
 
-All commands below assume the runner user is called `github-runner`. Adjust as needed.
+All commands below assume the runner user is called `github-runner`. Adjust as needed. Run all commands as root unless noted otherwise.
 
 ### 1. Install Prerequisites
 
 ```bash
-apt-get install -y uidmap dbus-user-session
+apt-get install -y uidmap dbus-user-session slirp4netns
 ```
 
 ### 2. Install Rootless Docker
@@ -50,7 +50,51 @@ apt-get install -y uidmap dbus-user-session
 su - github-runner -c 'dockerd-rootless-setuptool.sh install'
 ```
 
-### 3. Start the Daemon
+### 3. Delegate cgroup v2 Controllers
+
+On hosts **without systemd**, rootless Docker cannot create cgroup scopes automatically. You must manually delegate cgroup controllers to the runner user.
+
+First verify cgroup v2 is available:
+
+```bash
+cat /sys/fs/cgroup/cgroup.controllers
+# Should include: cpu io memory pids
+```
+
+Then delegate:
+
+```bash
+RUNNER_UID=$(id -u github-runner)
+
+# Create the user's cgroup slice
+mkdir -p /sys/fs/cgroup/user.slice/user-${RUNNER_UID}.slice
+
+# Enable controller delegation
+echo "+cpu +io +memory +pids" > /sys/fs/cgroup/user.slice/cgroup.subtree_control
+echo "+cpu +io +memory +pids" > /sys/fs/cgroup/user.slice/user-${RUNNER_UID}.slice/cgroup.subtree_control
+
+# Give the runner user ownership
+chown -R github-runner:github-runner /sys/fs/cgroup/user.slice/user-${RUNNER_UID}.slice
+```
+
+> **Why?** Without this step, `docker run` inside rootless Docker fails with:
+> `open /sys/fs/cgroup/user.slice/user-1000.slice/cgroup.controllers: no such file or directory`
+
+### 4. Configure cgroupfs Driver
+
+Rootless Docker defaults to the systemd cgroup driver. On hosts without systemd, this causes `Interactive authentication required` errors. Switch to the cgroupfs driver:
+
+```bash
+su - github-runner -c '
+  mkdir -p ~/.config/docker
+  echo "{\"exec-opts\":[\"native.cgroupdriver=cgroupfs\"]}" > ~/.config/docker/daemon.json
+'
+```
+
+> **Why?** Without this, `docker start` fails with:
+> `unable to start unit ... Interactive authentication required`
+
+### 5. Start the Daemon
 
 On hosts without systemd, the daemon must be started manually:
 
@@ -75,13 +119,12 @@ su - github-runner -c 'systemctl --user start docker'
 su - github-runner -c 'systemctl --user enable docker'
 ```
 
-### 4. Persist Environment Variables
+### 6. Persist Environment Variables
 
 Add to the runner user's `~/.bashrc` so the GitHub Actions runner process inherits them:
 
 ```bash
-su - github-runner -c '
-  cat >> ~/.bashrc << '\''VARS'\''
+su - github-runner -c 'cat >> ~/.bashrc << "VARS"
 export XDG_RUNTIME_DIR=$HOME/.docker/run
 export PATH=/usr/bin:/sbin:/usr/sbin:$PATH
 export DOCKER_HOST=unix://$HOME/.docker/run/docker.sock
@@ -89,22 +132,32 @@ VARS
 '
 ```
 
-### 5. Ensure Daemon Starts on Boot
+### 7. Ensure Daemon Starts on Boot
 
-Without systemd, add a startup script or cron job:
+Without systemd, add a cron job:
 
 ```bash
-# Example: crontab entry for github-runner
-crontab -u github-runner -e
+crontab -u github-runner -l 2>/dev/null > /tmp/runner-cron || true
+echo '@reboot XDG_RUNTIME_DIR=$HOME/.docker/run PATH=/usr/bin:/sbin:/usr/sbin:$PATH nohup dockerd-rootless.sh > $HOME/.docker/dockerd.log 2>&1 &' >> /tmp/runner-cron
+crontab -u github-runner /tmp/runner-cron
+rm /tmp/runner-cron
 ```
 
-Add:
+Also ensure cgroup delegation persists on boot (add to `/etc/rc.local` or equivalent):
 
-```
-@reboot XDG_RUNTIME_DIR=$HOME/.docker/run PATH=/usr/bin:/sbin:/usr/sbin:$PATH nohup dockerd-rootless.sh > $HOME/.docker/dockerd.log 2>&1 &
+```bash
+cat > /etc/rc.local << 'EOF'
+#!/bin/bash
+RUNNER_UID=$(id -u github-runner)
+mkdir -p /sys/fs/cgroup/user.slice/user-${RUNNER_UID}.slice
+echo "+cpu +io +memory +pids" > /sys/fs/cgroup/user.slice/cgroup.subtree_control
+echo "+cpu +io +memory +pids" > /sys/fs/cgroup/user.slice/user-${RUNNER_UID}.slice/cgroup.subtree_control
+chown -R github-runner:github-runner /sys/fs/cgroup/user.slice/user-${RUNNER_UID}.slice
+EOF
+chmod +x /etc/rc.local
 ```
 
-### 6. Verify
+### 8. Verify
 
 ```bash
 su - github-runner -c 'docker ps'
@@ -137,11 +190,28 @@ The rootless daemon isn't running. Start it:
 ```bash
 su - github-runner -c '
   export XDG_RUNTIME_DIR=$HOME/.docker/run
+  export PATH=/usr/bin:/sbin:/usr/sbin:$PATH
   nohup dockerd-rootless.sh > ~/.docker/dockerd.log 2>&1 &
 '
 ```
 
 Check logs at `~/.docker/dockerd.log`.
+
+### `cgroup.controllers: no such file or directory`
+
+cgroup delegation is not set up. Re-run step 3 (Delegate cgroup v2 Controllers).
+
+### `Interactive authentication required`
+
+The Docker daemon is using the systemd cgroup driver on a non-systemd host. Re-run step 4 (Configure cgroupfs Driver) and restart the daemon.
+
+### `invalid character ... after top-level value` in daemon.json
+
+The `~/.config/docker/daemon.json` file is corrupted. Recreate it:
+
+```bash
+su - github-runner -c 'echo "{\"exec-opts\":[\"native.cgroupdriver=cgroupfs\"]}" > ~/.config/docker/daemon.json'
+```
 
 ### `docker ps` shows host containers
 
@@ -162,4 +232,12 @@ Rootless Docker maintains its own image cache, separate from the system Docker. 
 
 ```bash
 su - github-runner -c 'docker pull mcr.microsoft.com/devcontainers/dotnet:1-9.0'
+```
+
+### Stale containers from failed devcontainer up
+
+If `devcontainer up` fails mid-way, it may leave a stopped container. Remove it before retrying:
+
+```bash
+su - github-runner -c 'docker rm -f $(docker ps -aq) 2>/dev/null; docker system prune -f'
 ```
