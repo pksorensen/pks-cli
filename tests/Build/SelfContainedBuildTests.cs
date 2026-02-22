@@ -197,7 +197,7 @@ public class SelfContainedBuildTests : TestBase
         return current;
     }
 
-    private string CreateTempDirectory()
+    private new string CreateTempDirectory()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "pks-cli-tests", Guid.NewGuid().ToString());
         Directory.CreateDirectory(tempDir);
