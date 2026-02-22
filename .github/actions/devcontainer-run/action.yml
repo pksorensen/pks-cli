@@ -105,10 +105,6 @@ runs:
           done <<< "${{ inputs.env }}"
         fi
 
-        if [ -n "${{ inputs.remote-user }}" ]; then
-          ARGS="$ARGS --remote-user ${{ inputs.remote-user }}"
-        fi
-
         if [ -n "${{ inputs.up-args }}" ]; then
           ARGS="$ARGS ${{ inputs.up-args }}"
         fi
