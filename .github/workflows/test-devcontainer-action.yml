@@ -1,0 +1,68 @@
+name: Test Devcontainer Action
+
+on:
+  pull_request:
+    paths:
+      - '.github/actions/devcontainer-run/**'
+      - '.github/workflows/test-devcontainer-action.yml'
+      - '.devcontainer/**'
+  workflow_dispatch:
+
+jobs:
+  test-action:
+    name: Dogfood devcontainer-run action
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run dotnet --version in devcontainer
+        uses: ./.github/actions/devcontainer-run
+        with:
+          command: dotnet --version
+
+      - name: Run multi-line commands in devcontainer
+        uses: ./.github/actions/devcontainer-run
+        with:
+          command: |
+            echo "Hello from devcontainer"
+            dotnet --info
+            uname -a
+
+  test-env-vars:
+    name: Test environment variable passing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run with env vars
+        uses: ./.github/actions/devcontainer-run
+        with:
+          command: |
+            echo "TEST_VAR=$TEST_VAR"
+            test "$TEST_VAR" = "hello"
+          env: |
+            TEST_VAR=hello
+
+  test-skip-cleanup:
+    name: Test skip-cleanup and outputs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start devcontainer (keep alive)
+        id: devcontainer
+        uses: ./.github/actions/devcontainer-run
+        with:
+          command: echo "Container started"
+          skip-cleanup: 'true'
+
+      - name: Verify outputs
+        run: |
+          echo "Container ID: ${{ steps.devcontainer.outputs.container-id }}"
+          echo "Remote user: ${{ steps.devcontainer.outputs.remote-user }}"
+          echo "Remote workspace: ${{ steps.devcontainer.outputs.remote-workspace-folder }}"
+          test -n "${{ steps.devcontainer.outputs.container-id }}"
+
+      - name: Cleanup manually
+        if: always()
+        run: docker rm -f "${{ steps.devcontainer.outputs.container-id }}" 2>/dev/null || true
