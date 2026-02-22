@@ -29,6 +29,10 @@ inputs:
     description: 'Version of @devcontainers/cli to install'
     required: false
     default: 'latest'
+  setup-command:
+    description: 'Command(s) to run once after devcontainer up, before the main command (e.g. dotnet dev-certs https)'
+    required: false
+    default: ''
   remote-user:
     description: 'Override the remote user for exec. Use "root" to fix permission issues with bind-mounted sources.'
     required: false
@@ -146,7 +150,34 @@ runs:
         echo "Remote user: $REMOTE_USER"
         echo "Remote workspace: $REMOTE_WORKSPACE"
 
-    # 3. Execute the user's command inside the devcontainer
+    # 3. Run setup commands (if any)
+    - name: Setup
+      if: ${{ inputs.setup-command != '' }}
+      shell: bash
+      run: |
+        CONTAINER_ID="${{ steps.up.outputs.container-id }}"
+        REMOTE_USER="${{ inputs.remote-user }}"
+        REMOTE_WORKSPACE="${{ steps.up.outputs.remote-workspace-folder }}"
+        USER_FLAG=""
+        if [ -n "$REMOTE_USER" ]; then
+          USER_FLAG="-u $REMOTE_USER"
+        fi
+
+        SETUP_CMD=$(cat <<'SETUP_EOF'
+        ${{ inputs.setup-command }}
+        SETUP_EOF
+        )
+
+        echo "::group::Running setup commands"
+        docker exec $USER_FLAG -w "$REMOTE_WORKSPACE" "$CONTAINER_ID" /bin/sh -c "$SETUP_CMD"
+        EXIT_CODE=$?
+        echo "::endgroup::"
+        if [ $EXIT_CODE -ne 0 ]; then
+          echo "::error::Setup command failed with exit code $EXIT_CODE"
+          exit $EXIT_CODE
+        fi
+
+    # 4. Execute the user's main command inside the devcontainer
     - name: devcontainer exec
       shell: bash
       run: |
