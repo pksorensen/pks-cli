@@ -54,7 +54,7 @@ jobs:
         uses: ./.github/actions/devcontainer-run
         with:
           command: echo "Container started"
-          skip-cleanup: 'true'
+          cleanup: 'none'
 
       - name: Verify outputs
         run: |

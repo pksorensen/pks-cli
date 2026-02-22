@@ -37,10 +37,10 @@ inputs:
     description: 'Override the remote user for exec. Use "root" to fix permission issues with bind-mounted sources.'
     required: false
     default: ''
-  skip-cleanup:
-    description: 'Keep the container alive for downstream steps'
+  cleanup:
+    description: 'Cleanup level after run: "container" (default) removes the container, "all" also removes the image and volumes, "none" keeps everything'
     required: false
-    default: 'false'
+    default: 'container'
 
 outputs:
   container-id:
@@ -85,7 +85,7 @@ runs:
       id: up
       shell: bash
       run: |
-        ARGS="--workspace-folder ${{ inputs.workspace-folder }}"
+        ARGS="--workspace-folder ${{ inputs.workspace-folder }} --remove-existing-container"
 
         if [ -n "${{ inputs.config }}" ]; then
           ARGS="$ARGS --config ${{ inputs.config }}"
@@ -271,18 +271,40 @@ runs:
           fi
         fi
 
-    # 4. Cleanup: remove the container unless skip-cleanup is true
+    # 5. Cleanup
     - name: Cleanup devcontainer
       if: always()
       shell: bash
       run: |
-        if [ "${{ inputs.skip-cleanup }}" = "true" ]; then
-          echo "Skipping cleanup (skip-cleanup=true)"
+        CLEANUP="${{ inputs.cleanup }}"
+        CONTAINER_ID="${{ steps.up.outputs.container-id }}"
+
+        if [ "$CLEANUP" = "none" ]; then
+          echo "Skipping cleanup (cleanup=none)"
           exit 0
         fi
 
-        CONTAINER_ID="${{ steps.up.outputs.container-id }}"
-        if [ -n "$CONTAINER_ID" ]; then
-          echo "Removing container $CONTAINER_ID"
-          docker rm -f "$CONTAINER_ID" 2>/dev/null || true
+        if [ -z "$CONTAINER_ID" ]; then
+          echo "No container to clean up"
+          exit 0
+        fi
+
+        # Get image ID before removing container
+        IMAGE_ID=""
+        if [ "$CLEANUP" = "all" ]; then
+          IMAGE_ID=$(docker inspect --format='{{.Image}}' "$CONTAINER_ID" 2>/dev/null || true)
+        fi
+
+        echo "Removing container $CONTAINER_ID"
+        docker rm -f "$CONTAINER_ID" 2>/dev/null || true
+
+        if [ "$CLEANUP" = "all" ]; then
+          # Remove volumes created for this devcontainer
+          echo "Removing associated volumes"
+          docker volume ls -q --filter dangling=true | xargs -r docker volume rm 2>/dev/null || true
+
+          if [ -n "$IMAGE_ID" ]; then
+            echo "Removing image $IMAGE_ID"
+            docker rmi -f "$IMAGE_ID" 2>/dev/null || true
+          fi
         fi
