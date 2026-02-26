@@ -49,6 +49,20 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [3.1.0-rc.28](https://github.com/pksorensen/pks-cli/compare/v3.0.0-rc.28...v3.1.0-rc.28) (2026-02-26)
+
+
+### Features
+
+* Add NamedContainerPool for managing reusable named containers ([0bd33c5](https://github.com/pksorensen/pks-cli/commit/0bd33c5e22ee756702c06580173b89bb90adae9b))
+* Add unit tests for RunnerConfigurationService, RunnerContainerService, and RunnerDaemonService ([0782bef](https://github.com/pksorensen/pks-cli/commit/0782bef1939ac97e96cf35e86513b89176c96702))
+
+
+### Bug Fixes
+
+* update NuGet packages to 6.12.4 and remove unnecessary System.IO.Compression ([fcba202](https://github.com/pksorensen/pks-cli/commit/fcba202f8582f40c06f8306043f96442de388c9e))
+* Update RunnerDaemonService to utilize NamedContainerPool ([0bd33c5](https://github.com/pksorensen/pks-cli/commit/0bd33c5e22ee756702c06580173b89bb90adae9b))
+
 ## [3.0.0-rc.28](https://github.com/pksorensen/pks-cli/compare/v2.0.0-rc.28...v3.0.0-rc.28) (2026-02-22)
 
 
