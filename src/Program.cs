@@ -12,6 +12,8 @@ using PKS.CLI.Commands;
 using PKS.Commands.Agent;
 using PKS.Commands.Prd;
 using PKS.CLI.Infrastructure.Services;
+using PKS.Infrastructure.Services.Runner;
+using PKS.Commands.GitHub.Runner;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.Text;
@@ -148,7 +150,7 @@ services.AddTransient<PrdBranchCommand>();
 // Configure GitHub authentication
 services.AddSingleton(serviceProvider => new PKS.Infrastructure.Services.Models.GitHubAuthConfig
 {
-    ClientId = "Ov23li6wdCCwQfTdFrTJ", // PKS CLI GitHub App client ID
+    ClientId = "Iv23liFv43zosMUb8t9y", // Agentics Live GitHub App (si14agents org)
     DefaultScopes = new[] { "repo", "user:email", "write:packages" },
     DeviceCodeUrl = "https://github.com/login/device/code",
     TokenUrl = "https://github.com/login/oauth/access_token",
@@ -182,6 +184,13 @@ services.AddSingleton<IGitHubIssuesService, GitHubIssuesService>();
 // Note: Using the existing GitHubService registration for IGitHubService
 // EnhancedGitHubService implements IGitHubService but needs the full dependency chain
 services.AddSingleton<EnhancedGitHubService>();
+
+// Register GitHub Runner services
+services.AddSingleton<IRunnerConfigurationService, RunnerConfigurationService>();
+services.AddSingleton<IGitHubActionsService, GitHubActionsService>();
+services.AddSingleton<IProcessRunner, ProcessRunner>();
+services.AddSingleton<IRunnerContainerService, RunnerContainerService>();
+services.AddSingleton<IRunnerDaemonService, RunnerDaemonService>();
 
 // Register System Information service
 services.AddSingleton<ISystemInformationService, SystemInformationService>();
@@ -342,6 +351,43 @@ app.Configure(config =>
             list.AddCommand<PKS.Commands.Devcontainer.DevcontainerListCommand>("")
                 .WithDescription("List all available devcontainer resources")
                 .WithExample(new[] { "devcontainer", "list" });
+        });
+    });
+
+    // Add github branch command with runner subcommands
+    config.AddBranch<PKS.Commands.GitHub.GitHubSettings>("github", github =>
+    {
+        github.SetDescription("Manage GitHub integration and self-hosted runners");
+
+        github.AddBranch<PKS.Commands.GitHub.GitHubSettings>("runner", runner =>
+        {
+            runner.SetDescription("Manage devcontainer-based GitHub Actions runners");
+
+            runner.AddCommand<RunnerRegisterCommand>("register")
+                .WithDescription("Register a repository for devcontainer-based runner")
+                .WithExample(new[] { "github", "runner", "register", "--repo", "owner/repo" })
+                .WithExample(new[] { "github", "runner", "register", "--repo", "owner/repo", "--labels", "custom-label" });
+
+            runner.AddCommand<RunnerUnregisterCommand>("unregister")
+                .WithDescription("Unregister a repository from the runner")
+                .WithExample(new[] { "github", "runner", "unregister", "--repo", "owner/repo" });
+
+            runner.AddCommand<RunnerListCommand>("list")
+                .WithDescription("List registered repositories")
+                .WithExample(new[] { "github", "runner", "list" });
+
+            runner.AddCommand<RunnerStartCommand>("start")
+                .WithDescription("Start the runner daemon to process workflow jobs")
+                .WithExample(new[] { "github", "runner", "start" })
+                .WithExample(new[] { "github", "runner", "start", "--repo", "owner/repo" });
+
+            runner.AddCommand<RunnerStatusCommand>("status")
+                .WithDescription("Show runner daemon status and active jobs")
+                .WithExample(new[] { "github", "runner", "status" });
+
+            runner.AddCommand<RunnerStopCommand>("stop")
+                .WithDescription("Gracefully stop the runner daemon")
+                .WithExample(new[] { "github", "runner", "stop" });
         });
     });
 

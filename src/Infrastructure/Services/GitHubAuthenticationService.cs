@@ -111,18 +111,33 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
             Scopes = requestScopes
         };
 
+        // GitHub Apps (client_id starting with "Ov") don't use OAuth scopes —
+        // permissions come from the App's configuration. Only include scope for classic OAuth apps.
         var requestBody = new Dictionary<string, object>
         {
-            ["client_id"] = request.ClientId,
-            ["scope"] = string.Join(" ", request.Scopes)
+            ["client_id"] = request.ClientId
         };
+
+        var scopeString = string.Join(" ", requestScopes);
+        if (!string.IsNullOrEmpty(scopeString) && !_config.ClientId.StartsWith("Ov"))
+        {
+            requestBody["scope"] = scopeString;
+        }
 
         var content = new FormUrlEncodedContent(requestBody.Select(kvp =>
             new KeyValuePair<string, string>(kvp.Key, kvp.Value.ToString()!)));
 
         try
         {
-            var response = await _httpClient.PostAsync(_config.DeviceCodeUrl, content, cancellationToken);
+            // GitHub OAuth endpoints require Accept: application/json (not the API accept header)
+            var request2 = new HttpRequestMessage(HttpMethod.Post, _config.DeviceCodeUrl)
+            {
+                Content = content
+            };
+            request2.Headers.Accept.Clear();
+            request2.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+
+            var response = await _httpClient.SendAsync(request2, cancellationToken);
             response.EnsureSuccessStatusCode();
 
             var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -160,7 +175,15 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
 
         try
         {
-            var response = await _httpClient.PostAsync(_config.TokenUrl, content, cancellationToken);
+            // GitHub OAuth endpoints require Accept: application/json
+            var tokenRequest = new HttpRequestMessage(HttpMethod.Post, _config.TokenUrl)
+            {
+                Content = content
+            };
+            tokenRequest.Headers.Accept.Clear();
+            tokenRequest.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+
+            var response = await _httpClient.SendAsync(tokenRequest, cancellationToken);
             var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
 
             if (response.IsSuccessStatusCode)
@@ -399,7 +422,7 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
         {
             var key = GetTokenStorageKey(associatedUser);
             var tokenJson = JsonSerializer.Serialize(token, _jsonOptions);
-            await _configurationService.SetAsync(key, tokenJson, global: true, encrypt: true);
+            await _configurationService.SetAsync(key, tokenJson, global: true, encrypt: false);
             return true;
         }
         catch

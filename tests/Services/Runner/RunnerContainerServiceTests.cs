@@ -1,0 +1,367 @@
+using FluentAssertions;
+using Microsoft.Extensions.Logging;
+using Moq;
+using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Runner;
+using Xunit;
+
+namespace PKS.CLI.Tests.Services.Runner;
+
+public class RunnerContainerServiceTests : IDisposable
+{
+    private readonly Mock<IProcessRunner> _mockProcessRunner;
+    private readonly Mock<ILogger<RunnerContainerService>> _mockLogger;
+    private readonly RunnerContainerService _service;
+    private readonly RunnerRegistration _testRegistration;
+
+    public RunnerContainerServiceTests()
+    {
+        _mockProcessRunner = new Mock<IProcessRunner>();
+        _mockLogger = new Mock<ILogger<RunnerContainerService>>();
+        _service = new RunnerContainerService(_mockProcessRunner.Object, _mockLogger.Object);
+        _testRegistration = new RunnerRegistration
+        {
+            Owner = "testowner",
+            Repository = "testrepo",
+            Labels = "devcontainer-runner"
+        };
+    }
+
+    public void Dispose()
+    {
+        GC.SuppressFinalize(this);
+    }
+
+    #region CheckPrerequisitesAsync
+
+    [Fact]
+    public async Task CheckPrerequisitesAsync_WhenBothAvailable_ReturnsSuccess()
+    {
+        // Arrange
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", "version", null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "Docker version 24.0.0", ""));
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("devcontainer", "--version", null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "0.62.0", ""));
+
+        // Act
+        var (dockerAvailable, devcontainerAvailable, error) = await _service.CheckPrerequisitesAsync();
+
+        // Assert
+        dockerAvailable.Should().BeTrue();
+        devcontainerAvailable.Should().BeTrue();
+        error.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CheckPrerequisitesAsync_WhenDockerMissing_ReturnsError()
+    {
+        // Arrange
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", "version", null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(1, "", "docker: command not found"));
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("devcontainer", "--version", null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "0.62.0", ""));
+
+        // Act
+        var (dockerAvailable, devcontainerAvailable, error) = await _service.CheckPrerequisitesAsync();
+
+        // Assert
+        dockerAvailable.Should().BeFalse();
+        devcontainerAvailable.Should().BeTrue();
+        error.Should().NotBeNullOrEmpty();
+        error.Should().Contain("Docker");
+    }
+
+    [Fact]
+    public async Task CheckPrerequisitesAsync_WhenDevcontainerCliMissing_ReturnsError()
+    {
+        // Arrange
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", "version", null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "Docker version 24.0.0", ""));
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("devcontainer", "--version", null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(1, "", "devcontainer: command not found"));
+
+        // Act
+        var (dockerAvailable, devcontainerAvailable, error) = await _service.CheckPrerequisitesAsync();
+
+        // Assert
+        dockerAvailable.Should().BeTrue();
+        devcontainerAvailable.Should().BeFalse();
+        error.Should().NotBeNullOrEmpty();
+        error.Should().Contain("devcontainer CLI");
+    }
+
+    [Fact]
+    public async Task CheckPrerequisitesAsync_WhenDockerThrowsException_ReturnsError()
+    {
+        // Arrange
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", "version", null, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception("Process not found"));
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("devcontainer", "--version", null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "0.62.0", ""));
+
+        // Act
+        var (dockerAvailable, devcontainerAvailable, error) = await _service.CheckPrerequisitesAsync();
+
+        // Assert
+        dockerAvailable.Should().BeFalse();
+        error.Should().NotBeNullOrEmpty();
+    }
+
+    #endregion
+
+    #region ExecuteJobAsync
+
+    [Fact]
+    public async Task ExecuteJobAsync_CompletesFullLifecycle()
+    {
+        // Arrange
+        var progressMessages = new List<string>();
+        var devcontainerUpJson = """{"outcome":"success","containerId":"abc123","remoteUser":"vscode"}""";
+
+        // git clone
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("git", It.Is<string>(a => a.Contains("clone")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "Cloning into...", ""));
+
+        // devcontainer up
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("devcontainer", It.Is<string>(a => a.Contains("up")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, devcontainerUpJson, ""));
+
+        // docker exec (runner install)
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.Is<string>(a => a.Contains("mkdir")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "", ""));
+
+        // docker exec (runner run)
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.Is<string>(a => a.Contains("run.sh")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "Runner completed", ""));
+
+        // Act
+        var result = await _service.ExecuteJobAsync(
+            _testRegistration,
+            12345,
+            "main",
+            "ghp_test_token",
+            "encoded_jit_config",
+            msg => progressMessages.Add(msg));
+
+        // Assert
+        result.Should().NotBeNull();
+        result.Status.Should().Be(RunnerJobStatus.Completed);
+        result.RunId.Should().Be(12345);
+        result.Branch.Should().Be("main");
+        result.Registration.Should().Be(_testRegistration);
+        progressMessages.Should().NotBeEmpty();
+        progressMessages.Should().Contain(m => m.Contains("Cloning"));
+        progressMessages.Should().Contain(m => m.Contains("devcontainer"));
+    }
+
+    [Fact]
+    public async Task ExecuteJobAsync_WhenCloneFails_ReturnsFailedState()
+    {
+        // Arrange
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("git", It.Is<string>(a => a.Contains("clone")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(128, "", "fatal: repository not found"));
+
+        // Act
+        var result = await _service.ExecuteJobAsync(
+            _testRegistration,
+            12345,
+            "main",
+            "ghp_test_token",
+            "encoded_jit_config");
+
+        // Assert
+        result.Should().NotBeNull();
+        result.Status.Should().Be(RunnerJobStatus.Failed);
+    }
+
+    [Fact]
+    public async Task ExecuteJobAsync_WhenDevcontainerUpFails_ReturnsFailedState()
+    {
+        // Arrange
+        // git clone succeeds
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("git", It.Is<string>(a => a.Contains("clone")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "Cloning into...", ""));
+
+        // devcontainer up fails
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("devcontainer", It.Is<string>(a => a.Contains("up")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(1, "", "Error: Docker daemon not responding"));
+
+        // cleanup docker rm (may be called)
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.Is<string>(a => a.Contains("rm")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "", ""));
+
+        // Act
+        var result = await _service.ExecuteJobAsync(
+            _testRegistration,
+            12345,
+            "main",
+            "ghp_test_token",
+            "encoded_jit_config");
+
+        // Assert
+        result.Should().NotBeNull();
+        result.Status.Should().Be(RunnerJobStatus.Failed);
+    }
+
+    [Fact]
+    public async Task ExecuteJobAsync_WhenCancelled_CleansUp()
+    {
+        // Arrange
+        var cts = new CancellationTokenSource();
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("git", It.Is<string>(a => a.Contains("clone")), null, It.IsAny<CancellationToken>()))
+            .Returns(async (string cmd, string args, string? wd, CancellationToken ct) =>
+            {
+                cts.Cancel();
+                ct.ThrowIfCancellationRequested();
+                return new ProcessResult(0, "", "");
+            });
+
+        // cleanup docker rm (should be attempted)
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.Is<string>(a => a.Contains("rm")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "", ""));
+
+        // Act
+        var result = await _service.ExecuteJobAsync(
+            _testRegistration,
+            12345,
+            "main",
+            "ghp_test_token",
+            "encoded_jit_config",
+            cancellationToken: cts.Token);
+
+        // Assert
+        result.Should().NotBeNull();
+        result.Status.Should().Be(RunnerJobStatus.Failed);
+    }
+
+    [Fact]
+    public async Task ExecuteJobAsync_SetsClonePathOnJobState()
+    {
+        // Arrange
+        var devcontainerUpJson = """{"outcome":"success","containerId":"container123","remoteUser":"vscode"}""";
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("git", It.Is<string>(a => a.Contains("clone")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "", ""));
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("devcontainer", It.Is<string>(a => a.Contains("up")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, devcontainerUpJson, ""));
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.IsAny<string>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "", ""));
+
+        // Act
+        var result = await _service.ExecuteJobAsync(
+            _testRegistration,
+            99,
+            "feature-branch",
+            "token",
+            "jit_config");
+
+        // Assert
+        result.ClonePath.Should().NotBeNullOrEmpty();
+        result.ClonePath.Should().Contain("pks-runner-");
+        result.ContainerId.Should().Be("container123");
+    }
+
+    #endregion
+
+    #region CleanupJobAsync
+
+    [Fact]
+    public async Task CleanupJobAsync_RemovesContainerAndCloneDirectory()
+    {
+        // Arrange
+        var tempDir = Path.Combine(Path.GetTempPath(), $"pks-runner-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+
+        var job = new RunnerJobState
+        {
+            ContainerId = "test-container-id",
+            ClonePath = tempDir,
+            Status = RunnerJobStatus.Completed
+        };
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.Is<string>(a => a.Contains("rm -f test-container-id")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "", ""));
+
+        // Act
+        await _service.CleanupJobAsync(job);
+
+        // Assert
+        _mockProcessRunner.Verify(
+            r => r.RunAsync("docker", It.Is<string>(a => a.Contains("rm -f test-container-id")), null, It.IsAny<CancellationToken>()),
+            Times.Once);
+
+        Directory.Exists(tempDir).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CleanupJobAsync_IgnoresDockerRemoveErrors()
+    {
+        // Arrange
+        var job = new RunnerJobState
+        {
+            ContainerId = "nonexistent-container",
+            ClonePath = "/nonexistent/path",
+            Status = RunnerJobStatus.Completed
+        };
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.Is<string>(a => a.Contains("rm")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(1, "", "Error: No such container"));
+
+        // Act & Assert - should not throw
+        await _service.Invoking(s => s.CleanupJobAsync(job))
+            .Should().NotThrowAsync();
+    }
+
+    [Fact]
+    public async Task CleanupJobAsync_HandlesEmptyContainerId()
+    {
+        // Arrange
+        var job = new RunnerJobState
+        {
+            ContainerId = "",
+            ClonePath = "/nonexistent/path",
+            Status = RunnerJobStatus.Completed
+        };
+
+        // Act & Assert - should not throw
+        await _service.Invoking(s => s.CleanupJobAsync(job))
+            .Should().NotThrowAsync();
+
+        // docker rm should not be called for empty container ID
+        _mockProcessRunner.Verify(
+            r => r.RunAsync("docker", It.Is<string>(a => a.Contains("rm")), null, It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    #endregion
+}
