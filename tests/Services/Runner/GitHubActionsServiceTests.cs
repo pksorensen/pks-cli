@@ -308,6 +308,103 @@ public class GitHubActionsServiceTests
         result.Should().BeFalse();
     }
 
+    // ── GetJobsForRunAsync ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetJobsForRunAsync_ReturnsJobs()
+    {
+        // Arrange
+        var apiResponse = new WorkflowJobsResponse
+        {
+            TotalCount = 2,
+            Jobs = new List<WorkflowJob>
+            {
+                new()
+                {
+                    Id = 200,
+                    RunId = 100,
+                    Name = "build",
+                    Status = "completed",
+                    Conclusion = "success",
+                    Labels = new List<string> { "self-hosted", "linux" },
+                    HtmlUrl = "https://github.com/testowner/testrepo/actions/runs/100/jobs/200",
+                    StartedAt = new DateTime(2026, 1, 15, 10, 0, 0, DateTimeKind.Utc)
+                },
+                new()
+                {
+                    Id = 201,
+                    RunId = 100,
+                    Name = "test",
+                    Status = "queued",
+                    Conclusion = null,
+                    Labels = new List<string> { "self-hosted" },
+                    HtmlUrl = "https://github.com/testowner/testrepo/actions/runs/100/jobs/201",
+                    StartedAt = null
+                }
+            }
+        };
+
+        _mockApiClient
+            .Setup(c => c.GetAsync<WorkflowJobsResponse>(
+                "repos/testowner/testrepo/actions/runs/100/jobs?filter=latest&per_page=100",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(apiResponse);
+
+        // Act
+        var result = await _sut.GetJobsForRunAsync("testowner", "testrepo", 100);
+
+        // Assert
+        result.Should().NotBeNull();
+        result.Should().HaveCount(2);
+        result[0].Id.Should().Be(200);
+        result[0].Name.Should().Be("build");
+        result[0].Labels.Should().Contain("self-hosted");
+        result[1].Id.Should().Be(201);
+        result[1].Name.Should().Be("test");
+    }
+
+    [Fact]
+    public async Task GetJobsForRunAsync_WhenNoJobs_ReturnsEmptyList()
+    {
+        // Arrange
+        var apiResponse = new WorkflowJobsResponse
+        {
+            TotalCount = 0,
+            Jobs = new List<WorkflowJob>()
+        };
+
+        _mockApiClient
+            .Setup(c => c.GetAsync<WorkflowJobsResponse>(
+                "repos/testowner/testrepo/actions/runs/100/jobs?filter=latest&per_page=100",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(apiResponse);
+
+        // Act
+        var result = await _sut.GetJobsForRunAsync("testowner", "testrepo", 100);
+
+        // Assert
+        result.Should().NotBeNull();
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetJobsForRunAsync_WhenApiReturnsNull_ReturnsEmptyList()
+    {
+        // Arrange
+        _mockApiClient
+            .Setup(c => c.GetAsync<WorkflowJobsResponse>(
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((WorkflowJobsResponse?)null);
+
+        // Act
+        var result = await _sut.GetJobsForRunAsync("testowner", "testrepo", 100);
+
+        // Assert
+        result.Should().NotBeNull();
+        result.Should().BeEmpty();
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────
 
     private static bool VerifyJitConfigRequestBody(object body, string expectedName, string[] expectedLabels)

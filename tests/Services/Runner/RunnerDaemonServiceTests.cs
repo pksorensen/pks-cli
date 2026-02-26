@@ -15,6 +15,7 @@ public class RunnerDaemonServiceTests : IDisposable
     private readonly Mock<IRunnerContainerService> _mockContainerService;
     private readonly Mock<IGitHubAuthenticationService> _mockAuthService;
     private readonly Mock<IGitHubApiClient> _mockApiClient;
+    private readonly Mock<INamedContainerPool> _mockContainerPool;
     private readonly Mock<ILogger<RunnerDaemonService>> _mockLogger;
     private readonly RunnerDaemonService _service;
 
@@ -29,6 +30,7 @@ public class RunnerDaemonServiceTests : IDisposable
         _mockContainerService = new Mock<IRunnerContainerService>();
         _mockAuthService = new Mock<IGitHubAuthenticationService>();
         _mockApiClient = new Mock<IGitHubApiClient>();
+        _mockContainerPool = new Mock<INamedContainerPool>();
         _mockLogger = new Mock<ILogger<RunnerDaemonService>>();
 
         _testRegistration = new RunnerRegistration
@@ -43,7 +45,7 @@ public class RunnerDaemonServiceTests : IDisposable
         _defaultConfig = new RunnerConfiguration
         {
             Registrations = new List<RunnerRegistration> { _testRegistration },
-            PollingIntervalSeconds = 1, // Short interval for tests
+            PollingIntervalSeconds = 1,
             MaxConcurrentJobs = 2
         };
 
@@ -62,12 +64,17 @@ public class RunnerDaemonServiceTests : IDisposable
             .Setup(a => a.GetStoredTokenAsync(null))
             .ReturnsAsync(_testToken);
 
+        _mockContainerPool
+            .Setup(p => p.GetAll())
+            .Returns(new List<NamedContainerEntry>().AsReadOnly());
+
         _service = new RunnerDaemonService(
             _mockConfigService.Object,
             _mockActionsService.Object,
             _mockContainerService.Object,
             _mockAuthService.Object,
             _mockApiClient.Object,
+            _mockContainerPool.Object,
             _mockLogger.Object);
     }
 
@@ -76,15 +83,60 @@ public class RunnerDaemonServiceTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
+    private void SetupJobsForRun(long runId, params (long jobId, List<string> labels)[] jobs)
+    {
+        var workflowJobs = jobs.Select(j => new WorkflowJob
+        {
+            Id = j.jobId,
+            RunId = runId,
+            Name = $"Job {j.jobId}",
+            Status = "queued",
+            Labels = j.labels
+        }).ToList();
+
+        _mockActionsService
+            .Setup(a => a.GetJobsForRunAsync("testowner", "testrepo", runId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(workflowJobs);
+    }
+
+    /// <summary>
+    /// Helper: setup a standard ephemeral dispatch flow and cancel after JIT config is generated
+    /// </summary>
+    private void SetupEphemeralDispatch(
+        CancellationTokenSource cts,
+        QueuedWorkflowRun run,
+        long jobId,
+        string jitConfig = "jit-config")
+    {
+        _mockActionsService
+            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<QueuedWorkflowRun> { run });
+
+        SetupJobsForRun(run.Id, (jobId, new List<string> { "devcontainer-runner" }));
+
+        _mockActionsService
+            .Setup(a => a.GenerateJitConfigAsync(
+                "testowner", "testrepo",
+                It.IsAny<string>(), It.IsAny<string[]>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitHubJitRunnerConfig { RunnerId = 1, EncodedJitConfig = jitConfig })
+            .Callback(() => cts.Cancel()); // Cancel AFTER JIT is generated
+
+        _mockContainerService
+            .Setup(c => c.ExecuteJobAsync(
+                It.IsAny<RunnerRegistration>(), run.Id, run.HeadBranch,
+                "ghp_test123", jitConfig,
+                It.IsAny<Action<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RunnerJobState { RunId = run.Id, Status = RunnerJobStatus.Completed });
+    }
+
     #region GetStatus
 
     [Fact]
     public void GetStatus_WhenNotStarted_ReturnsNotRunning()
     {
-        // Act
         var status = _service.GetStatus();
-
-        // Assert
         status.IsRunning.Should().BeFalse();
         status.StartedAt.Should().BeNull();
         status.ActiveJobs.Should().BeEmpty();
@@ -99,7 +151,6 @@ public class RunnerDaemonServiceTests : IDisposable
     [Fact]
     public async Task RunAsync_StartsPollingLoop_ReportsRunning()
     {
-        // Arrange
         var cts = new CancellationTokenSource();
         string? lastStatus = null;
         _service.StatusChanged += (_, msg) => lastStatus = msg;
@@ -107,23 +158,17 @@ public class RunnerDaemonServiceTests : IDisposable
         _mockActionsService
             .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<QueuedWorkflowRun>())
-            .Callback(() => cts.Cancel()); // Cancel after first poll
+            .Callback(() => cts.Cancel());
 
-        // Act
         await _service.RunAsync(cts.Token);
 
-        // Assert
-        var status = _service.GetStatus();
-        // After RunAsync returns, the daemon is no longer running
-        status.IsRunning.Should().BeFalse();
-        // But we should have seen a status change indicating it was running
+        _service.GetStatus().IsRunning.Should().BeFalse();
         lastStatus.Should().NotBeNull();
     }
 
     [Fact]
     public async Task RunAsync_WhenCancelled_StopsGracefully()
     {
-        // Arrange
         var cts = new CancellationTokenSource();
         var pollCount = 0;
 
@@ -136,87 +181,188 @@ public class RunnerDaemonServiceTests : IDisposable
                 if (pollCount >= 2) cts.Cancel();
             });
 
-        // Act
         await _service.RunAsync(cts.Token);
 
-        // Assert - should complete without throwing
         pollCount.Should().BeGreaterThanOrEqualTo(2);
         _service.GetStatus().IsRunning.Should().BeFalse();
     }
 
     #endregion
 
-    #region RunAsync - Job Dispatch
+    #region RunAsync - Job Dispatch (Job-Level)
 
     [Fact]
-    public async Task RunAsync_WhenQueuedRunFound_DispatchesJob()
+    public async Task RunAsync_WhenQueuedRunFound_FetchesJobsAndDispatches()
     {
-        // Arrange
         var cts = new CancellationTokenSource();
-        var queuedRun = new QueuedWorkflowRun
-        {
-            Id = 12345,
-            Name = "CI Build",
-            Status = "queued",
-            HeadBranch = "main",
-            HeadSha = "abc123",
-            Labels = new List<string> { "devcontainer-runner" }
-        };
+        var run = new QueuedWorkflowRun { Id = 12345, Name = "CI Build", Status = "queued", HeadBranch = "main" };
 
-        _mockActionsService
-            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<QueuedWorkflowRun> { queuedRun })
-            .Callback(() => cts.Cancel()); // Cancel after dispatch
+        SetupEphemeralDispatch(cts, run, jobId: 99001, jitConfig: "base64encodedconfig");
 
-        var jitConfig = new GitHubJitRunnerConfig
-        {
-            RunnerId = 42,
-            EncodedJitConfig = "base64encodedconfig"
-        };
-
-        _mockActionsService
-            .Setup(a => a.GenerateJitConfigAsync(
-                "testowner", "testrepo",
-                It.IsAny<string>(), It.IsAny<string[]>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(jitConfig);
-
-        var completedJob = new RunnerJobState
-        {
-            RunId = 12345,
-            Registration = _testRegistration,
-            Status = RunnerJobStatus.Completed,
-            StartedAt = DateTime.UtcNow
-        };
-
-        _mockContainerService
-            .Setup(c => c.ExecuteJobAsync(
-                _testRegistration, 12345L, "main",
-                "ghp_test123", "base64encodedconfig",
-                It.IsAny<Action<string>?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(completedJob);
-
-        // Act
         await _service.RunAsync(cts.Token);
 
-        // Assert
+        _mockActionsService.Verify(a => a.GetJobsForRunAsync(
+            "testowner", "testrepo", 12345L, It.IsAny<CancellationToken>()), Times.Once);
+
         _mockActionsService.Verify(a => a.GenerateJitConfigAsync(
             "testowner", "testrepo",
             It.IsAny<string>(), It.Is<string[]>(l => l.Contains("devcontainer-runner")),
             It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenJobHasNamedLabel_DispatchesWithContainerName()
+    {
+        var cts = new CancellationTokenSource();
+        var run = new QueuedWorkflowRun { Id = 12345, Name = "CI Build", Status = "queued", HeadBranch = "main" };
+
+        _mockActionsService
+            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<QueuedWorkflowRun> { run });
+
+        SetupJobsForRun(12345, (jobId: 99001, labels: new List<string> { "devcontainer-runner", "my-app-dev" }));
+
+        _mockActionsService
+            .Setup(a => a.GenerateJitConfigAsync(
+                It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<string>(), It.IsAny<string[]>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitHubJitRunnerConfig { RunnerId = 42, EncodedJitConfig = "jit" })
+            .Callback(() => cts.Cancel());
+
+        _mockContainerPool.Setup(p => p.TryGet("my-app-dev")).Returns((NamedContainerEntry?)null);
+        _mockContainerPool
+            .Setup(p => p.AcquireAsync("my-app-dev", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Mock.Of<IDisposable>());
+
+        _mockContainerService
+            .Setup(c => c.ExecuteJobAsync(
+                It.IsAny<RunnerRegistration>(), 12345L, "main",
+                "ghp_test123", "jit",
+                It.IsAny<Action<string>?>(),
+                It.IsAny<CancellationToken>(),
+                "my-app-dev"))
+            .ReturnsAsync(new RunnerJobState
+            {
+                RunId = 12345,
+                Status = RunnerJobStatus.Completed,
+                ContainerId = "container-abc",
+                ClonePath = "/tmp/clone",
+                ContainerName = "my-app-dev"
+            });
+
+        await _service.RunAsync(cts.Token);
+        await Task.Delay(300);
+
+        _mockContainerPool.Verify(p => p.Register(It.Is<NamedContainerEntry>(
+            e => e.Name == "my-app-dev" && e.ContainerId == "container-abc")), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenNamedContainerExists_ReusesIt()
+    {
+        var cts = new CancellationTokenSource();
+        var run = new QueuedWorkflowRun { Id = 12345, Name = "CI Build", Status = "queued", HeadBranch = "main" };
+
+        _mockActionsService
+            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<QueuedWorkflowRun> { run });
+
+        SetupJobsForRun(12345, (jobId: 99001, labels: new List<string> { "devcontainer-runner", "my-app" }));
+
+        _mockActionsService
+            .Setup(a => a.GenerateJitConfigAsync(
+                It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<string>(), It.IsAny<string[]>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitHubJitRunnerConfig { RunnerId = 42, EncodedJitConfig = "jit" })
+            .Callback(() => cts.Cancel());
+
+        var existingEntry = new NamedContainerEntry
+        {
+            Name = "my-app",
+            ContainerId = "existing-container-123",
+            ClonePath = "/tmp/existing-clone",
+            Owner = "testowner",
+            Repository = "testrepo"
+        };
+        _mockContainerPool.Setup(p => p.TryGet("my-app")).Returns(existingEntry);
+        _mockContainerPool
+            .Setup(p => p.AcquireAsync("my-app", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Mock.Of<IDisposable>());
+
+        // Container is still alive
+        _mockContainerService
+            .Setup(c => c.IsContainerRunningAsync("existing-container-123", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        _mockContainerService
+            .Setup(c => c.ExecuteJobInExistingContainerAsync(
+                It.IsAny<RunnerRegistration>(), 12345L, 99001L, "main",
+                "existing-container-123", "/tmp/existing-clone", "my-app",
+                "jit",
+                It.IsAny<Action<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RunnerJobState { RunId = 12345, Status = RunnerJobStatus.Completed });
+
+        await _service.RunAsync(cts.Token);
+        await Task.Delay(300);
+
+        _mockContainerService.Verify(c => c.ExecuteJobInExistingContainerAsync(
+            It.IsAny<RunnerRegistration>(), 12345L, 99001L, "main",
+            "existing-container-123", "/tmp/existing-clone", "my-app",
+            "jit",
+            It.IsAny<Action<string>?>(),
+            It.IsAny<CancellationToken>()), Times.Once);
 
         _mockContainerService.Verify(c => c.ExecuteJobAsync(
-            _testRegistration, 12345L, "main",
-            "ghp_test123", "base64encodedconfig",
+            It.IsAny<RunnerRegistration>(), It.IsAny<long>(), It.IsAny<string>(),
+            It.IsAny<string>(), It.IsAny<string>(),
             It.IsAny<Action<string>?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenJobsApiFails_FallsBackToRunLevel()
+    {
+        var cts = new CancellationTokenSource();
+        var run = new QueuedWorkflowRun { Id = 12345, Name = "CI Build", Status = "queued", HeadBranch = "main" };
+
+        _mockActionsService
+            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<QueuedWorkflowRun> { run });
+
+        _mockActionsService
+            .Setup(a => a.GetJobsForRunAsync("testowner", "testrepo", 12345L, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception("API error"));
+
+        _mockActionsService
+            .Setup(a => a.GenerateJitConfigAsync(
+                It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<string>(), It.IsAny<string[]>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitHubJitRunnerConfig { RunnerId = 42, EncodedJitConfig = "jit" })
+            .Callback(() => cts.Cancel());
+
+        _mockContainerService
+            .Setup(c => c.ExecuteJobAsync(
+                It.IsAny<RunnerRegistration>(), 12345L, "main",
+                "ghp_test123", "jit",
+                It.IsAny<Action<string>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RunnerJobState { RunId = 12345, Status = RunnerJobStatus.Completed });
+
+        await _service.RunAsync(cts.Token);
+
+        _mockActionsService.Verify(a => a.GenerateJitConfigAsync(
+            "testowner", "testrepo",
+            It.IsAny<string>(), It.IsAny<string[]>(),
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
     public async Task RunAsync_WhenNoQueuedRuns_ContinuesPolling()
     {
-        // Arrange
         var cts = new CancellationTokenSource();
         var pollCount = 0;
 
@@ -229,10 +375,8 @@ public class RunnerDaemonServiceTests : IDisposable
                 if (pollCount >= 3) cts.Cancel();
             });
 
-        // Act
         await _service.RunAsync(cts.Token);
 
-        // Assert
         pollCount.Should().BeGreaterThanOrEqualTo(3);
         _mockContainerService.Verify(
             c => c.ExecuteJobAsync(
@@ -249,39 +393,21 @@ public class RunnerDaemonServiceTests : IDisposable
     [Fact]
     public async Task RequestShutdown_StopsAcceptingNewJobs()
     {
-        // Arrange
         var cts = new CancellationTokenSource();
         var pollCount = 0;
 
-        var queuedRun = new QueuedWorkflowRun
-        {
-            Id = 99999,
-            Name = "Post-Shutdown Run",
-            Status = "queued",
-            HeadBranch = "main",
-            Labels = new List<string> { "devcontainer-runner" }
-        };
-
         _mockActionsService
             .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<QueuedWorkflowRun> { queuedRun })
+            .ReturnsAsync(new List<QueuedWorkflowRun> { new() { Id = 99999, Name = "Run", Status = "queued", HeadBranch = "main" } })
             .Callback(() =>
             {
                 pollCount++;
-                if (pollCount == 1)
-                {
-                    // Request shutdown on first poll before job dispatch
-                    _service.RequestShutdown();
-                }
+                if (pollCount == 1) _service.RequestShutdown();
                 if (pollCount >= 2) cts.Cancel();
             });
 
-        // Act
         await _service.RunAsync(cts.Token);
 
-        // Assert - should NOT dispatch jobs after shutdown requested
-        // The first poll triggers shutdown, so no JIT config should be generated
-        // after that point
         _mockActionsService.Verify(a => a.GenerateJitConfigAsync(
             It.IsAny<string>(), It.IsAny<string>(),
             It.IsAny<string>(), It.IsAny<string[]>(),
@@ -295,51 +421,15 @@ public class RunnerDaemonServiceTests : IDisposable
     [Fact]
     public async Task RunAsync_RaisesJobStartedEvent()
     {
-        // Arrange
         var cts = new CancellationTokenSource();
         RunnerJobState? startedJob = null;
         _service.JobStarted += (_, job) => startedJob = job;
 
-        var queuedRun = new QueuedWorkflowRun
-        {
-            Id = 555,
-            Name = "Event Test",
-            Status = "queued",
-            HeadBranch = "feature",
-            Labels = new List<string> { "devcontainer-runner" }
-        };
+        var run = new QueuedWorkflowRun { Id = 555, Name = "Event Test", Status = "queued", HeadBranch = "feature" };
+        SetupEphemeralDispatch(cts, run, jobId: 99001, jitConfig: "jit");
 
-        _mockActionsService
-            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<QueuedWorkflowRun> { queuedRun })
-            .Callback(() => cts.Cancel());
-
-        _mockActionsService
-            .Setup(a => a.GenerateJitConfigAsync(
-                It.IsAny<string>(), It.IsAny<string>(),
-                It.IsAny<string>(), It.IsAny<string[]>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new GitHubJitRunnerConfig { RunnerId = 1, EncodedJitConfig = "jit" });
-
-        var jobState = new RunnerJobState
-        {
-            RunId = 555,
-            Status = RunnerJobStatus.Completed,
-            StartedAt = DateTime.UtcNow
-        };
-
-        _mockContainerService
-            .Setup(c => c.ExecuteJobAsync(
-                It.IsAny<RunnerRegistration>(), 555L, "feature",
-                "ghp_test123", "jit",
-                It.IsAny<Action<string>?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(jobState);
-
-        // Act
         await _service.RunAsync(cts.Token);
 
-        // Assert
         startedJob.Should().NotBeNull();
         startedJob!.RunId.Should().Be(555);
     }
@@ -347,54 +437,16 @@ public class RunnerDaemonServiceTests : IDisposable
     [Fact]
     public async Task RunAsync_RaisesJobCompletedEvent()
     {
-        // Arrange
         var cts = new CancellationTokenSource();
         RunnerJobState? completedJob = null;
         _service.JobCompleted += (_, job) => completedJob = job;
 
-        var queuedRun = new QueuedWorkflowRun
-        {
-            Id = 777,
-            Name = "Complete Test",
-            Status = "queued",
-            HeadBranch = "main",
-            Labels = new List<string> { "devcontainer-runner" }
-        };
+        var run = new QueuedWorkflowRun { Id = 777, Name = "Complete Test", Status = "queued", HeadBranch = "main" };
+        SetupEphemeralDispatch(cts, run, jobId: 99001, jitConfig: "jit2");
 
-        _mockActionsService
-            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<QueuedWorkflowRun> { queuedRun })
-            .Callback(() => cts.Cancel());
-
-        _mockActionsService
-            .Setup(a => a.GenerateJitConfigAsync(
-                It.IsAny<string>(), It.IsAny<string>(),
-                It.IsAny<string>(), It.IsAny<string[]>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new GitHubJitRunnerConfig { RunnerId = 2, EncodedJitConfig = "jit2" });
-
-        var jobState = new RunnerJobState
-        {
-            RunId = 777,
-            Status = RunnerJobStatus.Completed,
-            StartedAt = DateTime.UtcNow
-        };
-
-        _mockContainerService
-            .Setup(c => c.ExecuteJobAsync(
-                It.IsAny<RunnerRegistration>(), 777L, "main",
-                "ghp_test123", "jit2",
-                It.IsAny<Action<string>?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(jobState);
-
-        // Act
         await _service.RunAsync(cts.Token);
+        await Task.Delay(300);
 
-        // Allow time for async job completion tracking
-        await Task.Delay(200);
-
-        // Assert
         completedJob.Should().NotBeNull();
         completedJob!.RunId.Should().Be(777);
         completedJob.Status.Should().Be(RunnerJobStatus.Completed);
@@ -407,44 +459,26 @@ public class RunnerDaemonServiceTests : IDisposable
     [Fact]
     public async Task RunAsync_WhenMaxConcurrentJobsReached_SkipsNewJobs()
     {
-        // Arrange
         var cts = new CancellationTokenSource();
         _defaultConfig.MaxConcurrentJobs = 1;
         var pollCount = 0;
 
-        // Create a job that blocks until we release it
         var blockingTcs = new TaskCompletionSource<RunnerJobState>();
-
-        var queuedRun1 = new QueuedWorkflowRun
-        {
-            Id = 100,
-            Name = "Job 1",
-            Status = "queued",
-            HeadBranch = "main",
-            Labels = new List<string> { "devcontainer-runner" }
-        };
-
-        var queuedRun2 = new QueuedWorkflowRun
-        {
-            Id = 200,
-            Name = "Job 2",
-            Status = "queued",
-            HeadBranch = "main",
-            Labels = new List<string> { "devcontainer-runner" }
-        };
 
         _mockActionsService
             .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
             .ReturnsAsync(() =>
             {
                 pollCount++;
-                if (pollCount == 1) return new List<QueuedWorkflowRun> { queuedRun1 };
-                if (pollCount == 2) return new List<QueuedWorkflowRun> { queuedRun2 };
-                // On third poll, complete the blocking job and cancel
+                if (pollCount == 1) return new List<QueuedWorkflowRun> { new() { Id = 100, Name = "Job 1", Status = "queued", HeadBranch = "main" } };
+                if (pollCount == 2) return new List<QueuedWorkflowRun> { new() { Id = 200, Name = "Job 2", Status = "queued", HeadBranch = "main" } };
                 blockingTcs.TrySetResult(new RunnerJobState { RunId = 100, Status = RunnerJobStatus.Completed });
                 cts.Cancel();
                 return new List<QueuedWorkflowRun>();
             });
+
+        SetupJobsForRun(100, (jobId: 1001, labels: new List<string> { "devcontainer-runner" }));
+        SetupJobsForRun(200, (jobId: 2001, labels: new List<string> { "devcontainer-runner" }));
 
         _mockActionsService
             .Setup(a => a.GenerateJitConfigAsync(
@@ -453,7 +487,6 @@ public class RunnerDaemonServiceTests : IDisposable
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new GitHubJitRunnerConfig { RunnerId = 1, EncodedJitConfig = "jit" });
 
-        // First job blocks until released
         _mockContainerService
             .Setup(c => c.ExecuteJobAsync(
                 It.IsAny<RunnerRegistration>(), 100L, "main",
@@ -462,11 +495,8 @@ public class RunnerDaemonServiceTests : IDisposable
                 It.IsAny<CancellationToken>()))
             .Returns(blockingTcs.Task);
 
-        // Act
         await _service.RunAsync(cts.Token);
 
-        // Assert - JIT config should only be generated once (for job 1)
-        // Job 2 should be skipped because max concurrent is 1
         _mockActionsService.Verify(a => a.GenerateJitConfigAsync(
             It.IsAny<string>(), It.IsAny<string>(),
             It.IsAny<string>(), It.IsAny<string[]>(),
@@ -480,12 +510,10 @@ public class RunnerDaemonServiceTests : IDisposable
     [Fact]
     public async Task RunAsync_WhenNoToken_ThrowsInvalidOperationException()
     {
-        // Arrange
         _mockAuthService
             .Setup(a => a.GetStoredTokenAsync(null))
             .ReturnsAsync((GitHubStoredToken?)null);
 
-        // Act & Assert
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => _service.RunAsync(CancellationToken.None));
     }
@@ -493,16 +521,11 @@ public class RunnerDaemonServiceTests : IDisposable
     [Fact]
     public async Task RunAsync_WhenNoRegistrations_ExitsImmediately()
     {
-        // Arrange
         _defaultConfig.Registrations.Clear();
         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        string? lastStatus = null;
-        _service.StatusChanged += (_, msg) => lastStatus = msg;
 
-        // Act
         await _service.RunAsync(cts.Token);
 
-        // Assert
         _mockActionsService.Verify(
             a => a.GetQueuedRunsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
@@ -511,34 +534,19 @@ public class RunnerDaemonServiceTests : IDisposable
     [Fact]
     public async Task RunAsync_SkipsDisabledRegistrations()
     {
-        // Arrange
         var cts = new CancellationTokenSource();
         _testRegistration.Enabled = false;
-        var pollCount = 0;
 
-        // Add an enabled registration to keep the loop going
-        var enabledReg = new RunnerRegistration
-        {
-            Owner = "other",
-            Repository = "repo",
-            Labels = "devcontainer-runner",
-            Enabled = true
-        };
+        var enabledReg = new RunnerRegistration { Owner = "other", Repository = "repo", Labels = "devcontainer-runner", Enabled = true };
         _defaultConfig.Registrations.Add(enabledReg);
 
         _mockActionsService
             .Setup(a => a.GetQueuedRunsAsync("other", "repo", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<QueuedWorkflowRun>())
-            .Callback(() =>
-            {
-                pollCount++;
-                if (pollCount >= 1) cts.Cancel();
-            });
+            .Callback(() => cts.Cancel());
 
-        // Act
         await _service.RunAsync(cts.Token);
 
-        // Assert - should NOT poll the disabled registration
         _mockActionsService.Verify(
             a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()),
             Times.Never);

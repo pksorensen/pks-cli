@@ -29,11 +29,46 @@ public interface IRunnerContainerService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Execute a full job lifecycle with a named container that persists after the job.
+    /// Clone, devcontainer up, install runner, run — but skip cleanup so the container can be reused.
+    /// </summary>
+    Task<RunnerJobState> ExecuteJobAsync(
+        RunnerRegistration registration,
+        long runId,
+        string branch,
+        string accessToken,
+        string encodedJitConfig,
+        Action<string>? onProgress,
+        CancellationToken cancellationToken,
+        string? containerName);
+
+    /// <summary>
+    /// Execute a job in an existing named container. Skips clone and devcontainer up.
+    /// Installs a fresh JIT runner and runs it. Does NOT clean up the container afterwards.
+    /// </summary>
+    Task<RunnerJobState> ExecuteJobInExistingContainerAsync(
+        RunnerRegistration registration,
+        long runId,
+        long jobId,
+        string branch,
+        string containerId,
+        string clonePath,
+        string containerName,
+        string encodedJitConfig,
+        Action<string>? onProgress = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Cleanup a job's resources (container and clone directory)
     /// </summary>
     /// <param name="job">The job state containing container and path info</param>
     /// <param name="cancellationToken">Cancellation token</param>
     Task CleanupJobAsync(RunnerJobState job, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Check if a container is still running
+    /// </summary>
+    Task<bool> IsContainerRunningAsync(string containerId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Check if Docker and devcontainer CLI are available

@@ -190,6 +190,7 @@ services.AddSingleton<IRunnerConfigurationService, RunnerConfigurationService>()
 services.AddSingleton<IGitHubActionsService, GitHubActionsService>();
 services.AddSingleton<IProcessRunner, ProcessRunner>();
 services.AddSingleton<IRunnerContainerService, RunnerContainerService>();
+services.AddSingleton<INamedContainerPool, NamedContainerPool>();
 services.AddSingleton<IRunnerDaemonService, RunnerDaemonService>();
 
 // Register System Information service

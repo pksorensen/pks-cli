@@ -42,6 +42,8 @@ public class RunnerJobState
     public RunnerRegistration Registration { get; set; } = new();
     public long RunId { get; set; }
     public string Branch { get; set; } = string.Empty;
+    public long? WorkflowJobId { get; set; }
+    public string? ContainerName { get; set; }
     public string ContainerId { get; set; } = string.Empty;
     public string ClonePath { get; set; } = string.Empty;
     public DateTime StartedAt { get; set; }
@@ -72,6 +74,7 @@ public class RunnerDaemonStatus
     public Dictionary<string, DateTime> LastPollTimes { get; set; } = new();
     public int TotalJobsCompleted { get; set; }
     public int TotalJobsFailed { get; set; }
+    public List<NamedContainerEntry> NamedContainers { get; set; } = new();
 }
 
 /// <summary>
@@ -140,4 +143,57 @@ public class GitHubRepositoryPermissions
     public bool Push { get; set; }
     public bool Triage { get; set; }
     public bool Pull { get; set; }
+}
+
+/// <summary>
+/// A job within a workflow run, fetched from GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs
+/// </summary>
+public class WorkflowJob
+{
+    public long Id { get; set; }
+    public long RunId { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public string? Conclusion { get; set; }
+    public List<string> Labels { get; set; } = new();
+    public string HtmlUrl { get; set; } = string.Empty;
+    public DateTime? StartedAt { get; set; }
+}
+
+/// <summary>
+/// GitHub API response wrapper for workflow run jobs
+/// </summary>
+public class WorkflowJobsResponse
+{
+    public int TotalCount { get; set; }
+    public List<WorkflowJob> Jobs { get; set; } = new();
+}
+
+/// <summary>
+/// Tracks a named container that persists across jobs
+/// </summary>
+public class NamedContainerEntry
+{
+    public string Name { get; set; } = string.Empty;
+    public string ContainerId { get; set; } = string.Empty;
+    public string ClonePath { get; set; } = string.Empty;
+    public string Owner { get; set; } = string.Empty;
+    public string Repository { get; set; } = string.Empty;
+    public DateTime CreatedAt { get; set; }
+    public DateTime LastUsedAt { get; set; }
+    public bool InUse { get; set; }
+}
+
+/// <summary>
+/// Describes how a job should be dispatched — ephemeral or named container
+/// </summary>
+public class JobDispatchInfo
+{
+    public WorkflowJob Job { get; set; } = new();
+    public QueuedWorkflowRun Run { get; set; } = new();
+    public RunnerRegistration Registration { get; set; } = new();
+    /// <summary>
+    /// Null means ephemeral (current behavior). Non-null means reuse/create a named container.
+    /// </summary>
+    public string? ContainerName { get; set; }
 }

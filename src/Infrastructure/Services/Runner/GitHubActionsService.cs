@@ -128,4 +128,15 @@ public class GitHubActionsService : IGitHubActionsService
             return (false, false);
         }
     }
+
+    /// <inheritdoc />
+    public async Task<List<WorkflowJob>> GetJobsForRunAsync(
+        string owner, string repo, long runId,
+        CancellationToken cancellationToken = default)
+    {
+        await EnsureAuthenticatedAsync();
+        var endpoint = $"repos/{owner}/{repo}/actions/runs/{runId}/jobs?filter=latest&per_page=100";
+        var response = await _apiClient.GetAsync<WorkflowJobsResponse>(endpoint, cancellationToken);
+        return response?.Jobs ?? new List<WorkflowJob>();
+    }
 }

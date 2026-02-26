@@ -363,5 +363,150 @@ public class RunnerContainerServiceTests : IDisposable
             Times.Never);
     }
 
+    [Fact]
+    public async Task CleanupJobAsync_WhenNamedContainer_SkipsCleanup()
+    {
+        // Arrange
+        var job = new RunnerJobState
+        {
+            ContainerId = "some-container-id",
+            ContainerName = "my-named-container",
+            ClonePath = "/some/path",
+            Status = RunnerJobStatus.Completed
+        };
+
+        // Act
+        await _service.CleanupJobAsync(job);
+
+        // Assert - docker rm should NOT be called
+        _mockProcessRunner.Verify(
+            r => r.RunAsync("docker", It.Is<string>(a => a.Contains("rm")), null, It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    #endregion
+
+    #region ExecuteJobInExistingContainerAsync
+
+    [Fact]
+    public async Task ExecuteJobInExistingContainerAsync_SkipsCloneAndDevcontainerUp()
+    {
+        // Arrange
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.IsAny<string>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "Runner.Listener completed", ""));
+
+        // Act
+        var result = await _service.ExecuteJobInExistingContainerAsync(
+            _testRegistration,
+            runId: 100,
+            jobId: 200,
+            branch: "main",
+            containerId: "existing-container-abc",
+            clonePath: "/workspace/repo",
+            containerName: "my-container",
+            encodedJitConfig: "encoded_jit");
+
+        // Assert - git clone should NOT be called
+        _mockProcessRunner.Verify(
+            r => r.RunAsync("git", It.Is<string>(a => a.Contains("clone")), null, It.IsAny<CancellationToken>()),
+            Times.Never);
+
+        // devcontainer up should NOT be called
+        _mockProcessRunner.Verify(
+            r => r.RunAsync("devcontainer", It.IsAny<string>(), null, It.IsAny<CancellationToken>()),
+            Times.Never);
+
+        // docker exec (runner install) SHOULD be called
+        _mockProcessRunner.Verify(
+            r => r.RunAsync("docker", It.Is<string>(a => a.Contains("mkdir")), null, It.IsAny<CancellationToken>()),
+            Times.Once);
+
+        // docker exec (run.sh) SHOULD be called
+        _mockProcessRunner.Verify(
+            r => r.RunAsync("docker", It.Is<string>(a => a.Contains("run.sh")), null, It.IsAny<CancellationToken>()),
+            Times.Once);
+
+        result.Status.Should().Be(RunnerJobStatus.Completed);
+    }
+
+    [Fact]
+    public async Task ExecuteJobInExistingContainerAsync_UsesUniqueRunnerPath()
+    {
+        // Arrange
+        var capturedArgs = new List<string>();
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.IsAny<string>(), null, It.IsAny<CancellationToken>()))
+            .Callback<string, string, string?, CancellationToken>((cmd, args, wd, ct) => capturedArgs.Add(args))
+            .ReturnsAsync(new ProcessResult(0, "Runner.Listener completed", ""));
+
+        long jobId = 42;
+
+        // Act
+        await _service.ExecuteJobInExistingContainerAsync(
+            _testRegistration,
+            runId: 100,
+            jobId: jobId,
+            branch: "main",
+            containerId: "container-xyz",
+            clonePath: "/workspace/repo",
+            containerName: "my-container",
+            encodedJitConfig: "encoded_jit");
+
+        // Assert - the runner install path should contain the jobId
+        capturedArgs.Should().Contain(a => a.Contains($"/tmp/actions-runner-{jobId}"));
+    }
+
+    [Fact]
+    public async Task ExecuteJobInExistingContainerAsync_DoesNotCleanupContainer()
+    {
+        // Arrange
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.IsAny<string>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "Runner.Listener completed", ""));
+
+        // Act
+        await _service.ExecuteJobInExistingContainerAsync(
+            _testRegistration,
+            runId: 100,
+            jobId: 200,
+            branch: "main",
+            containerId: "container-xyz",
+            clonePath: "/workspace/repo",
+            containerName: "my-container",
+            encodedJitConfig: "encoded_jit");
+
+        // Assert - docker rm should NOT be called (container stays alive)
+        _mockProcessRunner.Verify(
+            r => r.RunAsync("docker", It.Is<string>(a => a.StartsWith("rm")), null, It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ExecuteJobInExistingContainerAsync_CleansUpRunnerDirectory()
+    {
+        // Arrange
+        long jobId = 555;
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.IsAny<string>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "Runner.Listener completed", ""));
+
+        // Act
+        await _service.ExecuteJobInExistingContainerAsync(
+            _testRegistration,
+            runId: 100,
+            jobId: jobId,
+            branch: "main",
+            containerId: "container-xyz",
+            clonePath: "/workspace/repo",
+            containerName: "my-container",
+            encodedJitConfig: "encoded_jit");
+
+        // Assert - docker exec rm -rf for the runner directory SHOULD be called
+        _mockProcessRunner.Verify(
+            r => r.RunAsync("docker", It.Is<string>(a => a.Contains($"rm -rf /tmp/actions-runner-{jobId}")), null, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
     #endregion
 }

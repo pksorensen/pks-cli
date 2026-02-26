@@ -29,4 +29,12 @@ public interface IGitHubActionsService
     /// Returns (isInstalled, hasAdminPermission).
     /// </summary>
     Task<(bool IsInstalled, bool HasAdmin)> CheckAppInstallationAsync(string owner, string repo, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get jobs for a specific workflow run to access job-level labels.
+    /// GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs?filter=latest
+    /// </summary>
+    Task<List<WorkflowJob>> GetJobsForRunAsync(
+        string owner, string repo, long runId,
+        CancellationToken cancellationToken = default);
 }

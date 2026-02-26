@@ -30,6 +30,20 @@ public class RunnerContainerService : IRunnerContainerService
     }
 
     /// <inheritdoc/>
+    public async Task<bool> IsContainerRunningAsync(string containerId, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var result = await _processRunner.RunAsync("docker", $"inspect --format={{{{.State.Running}}}} {containerId}", null, cancellationToken);
+            return result.ExitCode == 0 && result.StandardOutput?.Trim().Equals("true", StringComparison.OrdinalIgnoreCase) == true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <inheritdoc/>
     public async Task<(bool DockerAvailable, bool DevcontainerCliAvailable, string? Error)> CheckPrerequisitesAsync(
         CancellationToken cancellationToken = default)
     {
@@ -74,7 +88,7 @@ public class RunnerContainerService : IRunnerContainerService
     }
 
     /// <inheritdoc/>
-    public async Task<RunnerJobState> ExecuteJobAsync(
+    public Task<RunnerJobState> ExecuteJobAsync(
         RunnerRegistration registration,
         long runId,
         string branch,
@@ -82,6 +96,21 @@ public class RunnerContainerService : IRunnerContainerService
         string encodedJitConfig,
         Action<string>? onProgress = null,
         CancellationToken cancellationToken = default)
+        => ExecuteJobAsync(registration, runId, branch, accessToken, encodedJitConfig, onProgress, cancellationToken, containerName: null);
+
+    /// <summary>
+    /// Execute a full job lifecycle with optional container name for reuse.
+    /// When containerName is set, the container is kept alive after the job completes.
+    /// </summary>
+    public async Task<RunnerJobState> ExecuteJobAsync(
+        RunnerRegistration registration,
+        long runId,
+        string branch,
+        string accessToken,
+        string encodedJitConfig,
+        Action<string>? onProgress,
+        CancellationToken cancellationToken,
+        string? containerName)
     {
         var job = new RunnerJobState
         {
@@ -122,7 +151,9 @@ public class RunnerContainerService : IRunnerContainerService
             onProgress?.Invoke($"Running: devcontainer up --workspace-folder {clonePath} (this may take a few minutes on first run)");
             _logger.LogInformation("Running devcontainer up for {Path}", clonePath);
 
-            var devcontainerArgs = $"up --workspace-folder {clonePath} --remove-existing-container";
+            var devcontainerArgs = containerName != null
+                ? $"up --workspace-folder {clonePath}"
+                : $"up --workspace-folder {clonePath} --remove-existing-container";
             var devcontainerResult = await _processRunner.RunAsync("devcontainer", devcontainerArgs, null, cancellationToken);
 
             if (devcontainerResult.ExitCode != 0)
@@ -149,6 +180,8 @@ public class RunnerContainerService : IRunnerContainerService
             }
 
             job.ContainerId = containerId;
+            if (containerName != null)
+                job.ContainerName = containerName;
             onProgress?.Invoke($"Devcontainer ready: container {containerId[..Math.Min(12, containerId.Length)]}");
 
             // Step 3: Install the GitHub Actions runner inside the container
@@ -218,10 +251,17 @@ public class RunnerContainerService : IRunnerContainerService
                 onProgress?.Invoke($"Runner exited with code {runResult.ExitCode}: {details}");
             }
 
-            // Step 6: Cleanup
-            onProgress?.Invoke("Cleaning up container and clone directory...");
-            await CleanupJobAsync(job, cancellationToken);
-            onProgress?.Invoke("Cleanup complete");
+            // Step 6: Cleanup (skip for named containers)
+            if (containerName == null)
+            {
+                onProgress?.Invoke("Cleaning up container and clone directory...");
+                await CleanupJobAsync(job, cancellationToken);
+                onProgress?.Invoke("Cleanup complete");
+            }
+            else
+            {
+                onProgress?.Invoke($"Keeping named container '{containerName}' alive for reuse");
+            }
 
             return job;
         }
@@ -264,8 +304,138 @@ public class RunnerContainerService : IRunnerContainerService
     }
 
     /// <inheritdoc/>
+    public async Task<RunnerJobState> ExecuteJobInExistingContainerAsync(
+        RunnerRegistration registration,
+        long runId,
+        long jobId,
+        string branch,
+        string containerId,
+        string clonePath,
+        string containerName,
+        string encodedJitConfig,
+        Action<string>? onProgress = null,
+        CancellationToken cancellationToken = default)
+    {
+        var job = new RunnerJobState
+        {
+            Registration = registration,
+            RunId = runId,
+            WorkflowJobId = jobId,
+            Branch = branch,
+            ContainerId = containerId,
+            ClonePath = clonePath,
+            ContainerName = containerName,
+            StartedAt = DateTime.UtcNow,
+            Status = RunnerJobStatus.Running
+        };
+
+        var runnerPath = $"/tmp/actions-runner-{jobId}";
+
+        try
+        {
+            // Step 1: Install the GitHub Actions runner to a unique path
+            onProgress?.Invoke($"Installing GitHub Actions runner v{RunnerVersion} in existing container {containerId[..Math.Min(12, containerId.Length)]}...");
+            _logger.LogInformation("Installing runner to {RunnerPath} in container {ContainerId} for job {JobId}",
+                runnerPath, containerId, jobId);
+
+            var installArgs = $"exec {containerId} bash -c \"mkdir -p {runnerPath} && curl -sfL {RunnerDownloadUrl} | tar xz -C {runnerPath}\"";
+            var installResult = await _processRunner.RunAsync("docker", installArgs, null, cancellationToken);
+
+            if (installResult.ExitCode != 0)
+            {
+                var errorMsg = installResult.StandardError?.Trim();
+                onProgress?.Invoke($"Runner install failed (exit {installResult.ExitCode}): {errorMsg}");
+                _logger.LogError("Runner installation failed with exit code {ExitCode}: {StdErr}",
+                    installResult.ExitCode, installResult.StandardError);
+                job.Status = RunnerJobStatus.Failed;
+                return job;
+            }
+
+            onProgress?.Invoke("Runner binary installed");
+
+            // Step 2: Start the runner with JIT config
+            onProgress?.Invoke("Starting runner with JIT config (waiting for job to complete)...");
+            _logger.LogInformation("Starting runner in container {ContainerId} for run {RunId}, job {JobId}",
+                containerId, runId, jobId);
+
+            var writeConfigArgs = $"exec {containerId} bash -c \"echo '{encodedJitConfig}' > {runnerPath}/.jitconfig\"";
+            await _processRunner.RunAsync("docker", writeConfigArgs, null, cancellationToken);
+
+            var runArgs = $"exec -w {runnerPath} -e RUNNER_ALLOW_RUNASROOT=1 {containerId} bash -c \"./run.sh --jitconfig $(cat .jitconfig) 2>&1\"";
+            var runResult = await _processRunner.RunAsync("docker", runArgs, null, cancellationToken);
+
+            var stdout = runResult.StandardOutput?.Trim();
+            var stderr = runResult.StandardError?.Trim();
+            if (!string.IsNullOrEmpty(stdout))
+                onProgress?.Invoke($"Runner output: {stdout}");
+            if (!string.IsNullOrEmpty(stderr))
+                onProgress?.Invoke($"Runner stderr: {stderr}");
+
+            _logger.LogInformation("Runner exit code {ExitCode} for run {RunId}, job {JobId}. stdout: {StdOut}, stderr: {StdErr}",
+                runResult.ExitCode, runId, jobId, stdout, stderr);
+
+            // Step 3: Determine outcome
+            if (runResult.ExitCode == 0 && !string.IsNullOrEmpty(stdout) && stdout.Contains("Runner.Listener"))
+            {
+                job.Status = RunnerJobStatus.Completed;
+                onProgress?.Invoke("Runner completed successfully");
+            }
+            else if (runResult.ExitCode == 0 && string.IsNullOrEmpty(stdout))
+            {
+                job.Status = RunnerJobStatus.Failed;
+                onProgress?.Invoke("Runner exited with code 0 but produced no output — may not have started properly");
+            }
+            else if (runResult.ExitCode == 0)
+            {
+                job.Status = RunnerJobStatus.Completed;
+                onProgress?.Invoke("Runner completed successfully");
+            }
+            else
+            {
+                job.Status = RunnerJobStatus.Failed;
+                var details = !string.IsNullOrEmpty(stderr) ? stderr : stdout;
+                onProgress?.Invoke($"Runner exited with code {runResult.ExitCode}: {details}");
+            }
+
+            // Step 4: Clean up the runner install directory only (container stays alive)
+            onProgress?.Invoke($"Cleaning up runner directory {runnerPath}...");
+            try
+            {
+                await _processRunner.RunAsync("docker", $"exec {containerId} rm -rf {runnerPath}", null, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to clean up runner directory {RunnerPath} in container {ContainerId}", runnerPath, containerId);
+            }
+
+            onProgress?.Invoke($"Keeping named container '{containerName}' alive for reuse");
+            return job;
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation("Job {JobId} was cancelled", job.JobId);
+            job.Status = RunnerJobStatus.Failed;
+            onProgress?.Invoke("Job cancelled");
+            return job;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unexpected error during job execution in existing container for run {RunId}, job {JobId}", runId, jobId);
+            job.Status = RunnerJobStatus.Failed;
+            onProgress?.Invoke($"Error: {ex.Message}");
+            return job;
+        }
+    }
+
+    /// <inheritdoc/>
     public async Task CleanupJobAsync(RunnerJobState job, CancellationToken cancellationToken = default)
     {
+        if (!string.IsNullOrEmpty(job.ContainerName))
+        {
+            _logger.LogInformation("Skipping cleanup for named container '{Name}' (job {JobId})", job.ContainerName, job.JobId);
+            return;
+        }
+
         _logger.LogInformation("Cleaning up job {JobId}", job.JobId);
 
         // Remove the Docker container (ignore errors)

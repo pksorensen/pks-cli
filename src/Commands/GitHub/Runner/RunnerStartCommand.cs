@@ -33,6 +33,9 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
 
     public class Settings : RunnerSettings
     {
+        [CommandOption("--max-jobs <MAX_JOBS>")]
+        [Description("Maximum number of concurrent jobs (default: 1)")]
+        public int? MaxJobs { get; set; }
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -106,7 +109,18 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
                 return 1;
             }
 
-            DisplaySuccess($"Found {enabledRegistrations.Count} enabled registration(s)");
+            // Apply --max-jobs override if specified
+            if (settings.MaxJobs.HasValue && settings.MaxJobs.Value > 0)
+            {
+                var config = await _configService.LoadAsync();
+                config.MaxConcurrentJobs = settings.MaxJobs.Value;
+                await _configService.SaveAsync(config);
+                DisplaySuccess($"Found {enabledRegistrations.Count} enabled registration(s) (max {settings.MaxJobs.Value} concurrent jobs)");
+            }
+            else
+            {
+                DisplaySuccess($"Found {enabledRegistrations.Count} enabled registration(s)");
+            }
             Console.WriteLine();
 
             // 4. Set up log file

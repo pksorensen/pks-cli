@@ -10,7 +10,13 @@ public class RunnerDaemonService : IRunnerDaemonService
     private readonly IRunnerContainerService _containerService;
     private readonly IGitHubAuthenticationService _authService;
     private readonly IGitHubApiClient _apiClient;
+    private readonly INamedContainerPool _containerPool;
     private readonly ILogger<RunnerDaemonService> _logger;
+
+    private static readonly HashSet<string> ReservedLabels = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "self-hosted", "devcontainer-runner"
+    };
 
     // State tracking
     private bool _isRunning;
@@ -21,7 +27,7 @@ public class RunnerDaemonService : IRunnerDaemonService
     private readonly List<RunnerJobState> _activeJobs = new();
     private readonly Dictionary<string, DateTime> _lastPollTimes = new();
     private readonly List<Task<RunnerJobState>> _runningTasks = new();
-    private readonly HashSet<long> _dispatchedRunIds = new();
+    private readonly HashSet<long> _dispatchedJobIds = new();
     private readonly object _lock = new();
 
     public event EventHandler<RunnerJobState>? JobStarted;
@@ -34,6 +40,7 @@ public class RunnerDaemonService : IRunnerDaemonService
         IRunnerContainerService containerService,
         IGitHubAuthenticationService authService,
         IGitHubApiClient apiClient,
+        INamedContainerPool containerPool,
         ILogger<RunnerDaemonService> logger)
     {
         _configService = configService;
@@ -41,6 +48,7 @@ public class RunnerDaemonService : IRunnerDaemonService
         _containerService = containerService;
         _authService = authService;
         _apiClient = apiClient;
+        _containerPool = containerPool;
         _logger = logger;
     }
 
@@ -55,7 +63,8 @@ public class RunnerDaemonService : IRunnerDaemonService
                 ActiveJobs = new List<RunnerJobState>(_activeJobs),
                 LastPollTimes = new Dictionary<string, DateTime>(_lastPollTimes),
                 TotalJobsCompleted = _totalJobsCompleted,
-                TotalJobsFailed = _totalJobsFailed
+                TotalJobsFailed = _totalJobsFailed,
+                NamedContainers = _containerPool.GetAll().ToList()
             };
         }
     }
@@ -184,59 +193,151 @@ public class RunnerDaemonService : IRunnerDaemonService
 
         OnStatusChanged($"Polled {repoKey}: {queuedRuns.Count} queued run(s)");
 
-        // All queued runs for this registered repo are candidates.
-        // Label matching happens at the GitHub Actions level (runs-on), so we dispatch
-        // any queued run and let the JIT runner pick up only matching jobs.
-        var matchingRuns = queuedRuns
-            .Where(r => !_dispatchedRunIds.Contains(r.Id))
-            .ToList();
+        if (queuedRuns.Count == 0)
+            return;
 
-        foreach (var run in matchingRuns)
+        // Fetch jobs for each queued run to get job-level labels
+        foreach (var run in queuedRuns)
         {
-            if (_shutdownRequested)
+            if (_shutdownRequested || cancellationToken.IsCancellationRequested)
                 break;
 
-            // Check concurrency limit
-            int activeCount;
-            lock (_lock)
+            List<WorkflowJob> jobs;
+            try
             {
-                activeCount = _activeJobs.Count;
+                jobs = await _actionsService.GetJobsForRunAsync(
+                    registration.Owner, registration.Repository, run.Id, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                // Fallback: if Jobs API fails, dispatch at run level as ephemeral (backward compat)
+                _logger.LogWarning(ex, "Failed to fetch jobs for run {RunId}, falling back to run-level dispatch", run.Id);
+                await DispatchRunLevelFallback(registration, run, config, accessToken, cancellationToken);
+                continue;
             }
 
-            if (activeCount >= config.MaxConcurrentJobs)
-            {
-                _logger.LogDebug(
-                    "Max concurrent jobs ({Max}) reached, skipping run {RunId}",
-                    config.MaxConcurrentJobs, run.Id);
-                OnStatusChanged($"Max concurrent jobs reached, skipping run {run.Id}");
-                break;
-            }
+            var queuedJobs = jobs.Where(j =>
+                string.Equals(j.Status, "queued", StringComparison.OrdinalIgnoreCase)).ToList();
 
-            await DispatchJob(registration, run, accessToken, cancellationToken);
+            foreach (var job in queuedJobs)
+            {
+                if (_shutdownRequested)
+                    break;
+
+                // Skip if already dispatched
+                lock (_lock)
+                {
+                    if (_dispatchedJobIds.Contains(job.Id))
+                        continue;
+                }
+
+                // Check concurrency limit
+                int activeCount;
+                lock (_lock)
+                {
+                    activeCount = _activeJobs.Count;
+                }
+
+                if (activeCount >= config.MaxConcurrentJobs)
+                {
+                    _logger.LogDebug(
+                        "Max concurrent jobs ({Max}) reached, skipping job {JobId}",
+                        config.MaxConcurrentJobs, job.Id);
+                    OnStatusChanged($"Max concurrent jobs reached, skipping job {job.Id}");
+                    break;
+                }
+
+                // Extract container name from labels (non-reserved label = demand)
+                var containerName = ExtractContainerName(job.Labels);
+
+                var dispatchInfo = new JobDispatchInfo
+                {
+                    Job = job,
+                    Run = run,
+                    Registration = registration,
+                    ContainerName = containerName
+                };
+
+                await DispatchJob(dispatchInfo, accessToken, cancellationToken);
+            }
         }
     }
 
-    private async Task DispatchJob(
+    /// <summary>
+    /// Fallback for when the Jobs API is unavailable — dispatches at the run level as ephemeral.
+    /// </summary>
+    private async Task DispatchRunLevelFallback(
         RunnerRegistration registration,
         QueuedWorkflowRun run,
+        RunnerConfiguration config,
         string accessToken,
         CancellationToken cancellationToken)
     {
+        // Use a synthetic job ID based on run ID to avoid conflicts
+        lock (_lock)
+        {
+            if (_dispatchedJobIds.Contains(run.Id))
+                return;
+
+            if (_activeJobs.Count >= config.MaxConcurrentJobs)
+            {
+                OnStatusChanged($"Max concurrent jobs reached, skipping run {run.Id}");
+                return;
+            }
+        }
+
+        var syntheticJob = new WorkflowJob
+        {
+            Id = run.Id, // Use run ID as synthetic job ID
+            RunId = run.Id,
+            Name = run.Name,
+            Status = "queued",
+            Labels = new List<string>()
+        };
+
+        var dispatchInfo = new JobDispatchInfo
+        {
+            Job = syntheticJob,
+            Run = run,
+            Registration = registration,
+            ContainerName = null // Always ephemeral in fallback
+        };
+
+        await DispatchJob(dispatchInfo, accessToken, cancellationToken);
+    }
+
+    private async Task DispatchJob(
+        JobDispatchInfo dispatchInfo,
+        string accessToken,
+        CancellationToken cancellationToken)
+    {
+        var registration = dispatchInfo.Registration;
+        var run = dispatchInfo.Run;
+        var job = dispatchInfo.Job;
         var repoKey = $"{registration.Owner}/{registration.Repository}";
-        _logger.LogInformation("Dispatching job for run {RunId} on {Repo}", run.Id, repoKey);
+        var containerLabel = dispatchInfo.ContainerName != null
+            ? $" (container: {dispatchInfo.ContainerName})"
+            : "";
+
+        _logger.LogInformation("Dispatching job {JobId} for run {RunId} on {Repo}{Container}",
+            job.Id, run.Id, repoKey, containerLabel);
 
         try
         {
-            // Generate JIT config — always include "self-hosted" label since
-            // workflows use runs-on: [self-hosted, devcontainer-runner]
-            var userLabels = registration.Labels
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            // Build labels for JIT config — use the job's actual labels so GitHub matches them.
+            // Fall back to registration labels if job has none (e.g. fallback dispatch).
+            var jobLabels = job.Labels.Count > 0
+                ? job.Labels
+                : registration.Labels
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .ToList();
+
             var labels = new[] { "self-hosted" }
-                .Concat(userLabels)
+                .Concat(jobLabels)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
-            var runnerName = $"pks-runner-{run.Id}-{DateTime.UtcNow:yyyyMMddHHmmss}";
+            var runnerName = $"pks-runner-{job.Id}-{DateTime.UtcNow:yyyyMMddHHmmss}";
             var jitConfig = await _actionsService.GenerateJitConfigAsync(
                 registration.Owner, registration.Repository,
                 runnerName, labels, cancellationToken);
@@ -246,6 +347,8 @@ public class RunnerDaemonService : IRunnerDaemonService
             {
                 Registration = registration,
                 RunId = run.Id,
+                WorkflowJobId = job.Id,
+                ContainerName = dispatchInfo.ContainerName,
                 Branch = run.HeadBranch,
                 StartedAt = DateTime.UtcNow,
                 Status = RunnerJobStatus.Running
@@ -254,16 +357,16 @@ public class RunnerDaemonService : IRunnerDaemonService
             lock (_lock)
             {
                 _activeJobs.Add(jobState);
-                _dispatchedRunIds.Add(run.Id);
+                _dispatchedJobIds.Add(job.Id);
             }
 
             // Raise JobStarted event
             JobStarted?.Invoke(this, jobState);
-            OnStatusChanged($"Job started for run {run.Id} on {repoKey}");
+            OnStatusChanged($"Job started for run {run.Id} on {repoKey}{containerLabel}");
 
             // Fire-and-forget with tracking
             var task = ExecuteAndTrackJob(
-                registration, run, accessToken, jitConfig.EncodedJitConfig, jobState, cancellationToken);
+                dispatchInfo, accessToken, jitConfig.EncodedJitConfig, jobState, cancellationToken);
 
             lock (_lock)
             {
@@ -272,26 +375,38 @@ public class RunnerDaemonService : IRunnerDaemonService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to dispatch job for run {RunId}", run.Id);
+            _logger.LogError(ex, "Failed to dispatch job {JobId} for run {RunId}", job.Id, run.Id);
             OnStatusChanged($"Failed to dispatch job for run {run.Id}: {ex.Message}");
         }
     }
 
     private async Task<RunnerJobState> ExecuteAndTrackJob(
-        RunnerRegistration registration,
-        QueuedWorkflowRun run,
+        JobDispatchInfo dispatchInfo,
         string accessToken,
         string encodedJitConfig,
         RunnerJobState jobState,
         CancellationToken cancellationToken)
     {
+        var run = dispatchInfo.Run;
+        var job = dispatchInfo.Job;
+
         try
         {
-            var result = await _containerService.ExecuteJobAsync(
-                registration, run.Id, run.HeadBranch,
-                accessToken, encodedJitConfig,
-                progress => OnStatusChanged($"Run {run.Id}: {progress}"),
-                cancellationToken);
+            RunnerJobState result;
+
+            if (dispatchInfo.ContainerName != null)
+            {
+                result = await ExecuteNamedContainerJob(
+                    dispatchInfo, accessToken, encodedJitConfig, cancellationToken);
+            }
+            else
+            {
+                result = await _containerService.ExecuteJobAsync(
+                    dispatchInfo.Registration, run.Id, run.HeadBranch,
+                    accessToken, encodedJitConfig,
+                    progress => OnStatusChanged($"Run {run.Id}: {progress}"),
+                    cancellationToken);
+            }
 
             jobState.Status = result.Status;
             jobState.ContainerId = result.ContainerId;
@@ -300,9 +415,7 @@ public class RunnerDaemonService : IRunnerDaemonService
             lock (_lock)
             {
                 _activeJobs.Remove(jobState);
-                // Remove from dispatched so the same run can be re-dispatched
-                // if it has more queued jobs (e.g. multi-job workflows)
-                _dispatchedRunIds.Remove(run.Id);
+                _dispatchedJobIds.Remove(job.Id);
                 if (result.Status == RunnerJobStatus.Failed)
                     _totalJobsFailed++;
                 else
@@ -322,7 +435,7 @@ public class RunnerDaemonService : IRunnerDaemonService
             lock (_lock)
             {
                 _activeJobs.Remove(jobState);
-                _dispatchedRunIds.Remove(run.Id);
+                _dispatchedJobIds.Remove(job.Id);
                 _totalJobsFailed++;
             }
 
@@ -331,6 +444,86 @@ public class RunnerDaemonService : IRunnerDaemonService
 
             return jobState;
         }
+    }
+
+    private async Task<RunnerJobState> ExecuteNamedContainerJob(
+        JobDispatchInfo dispatchInfo,
+        string accessToken,
+        string encodedJitConfig,
+        CancellationToken cancellationToken)
+    {
+        var containerName = dispatchInfo.ContainerName!;
+        var run = dispatchInfo.Run;
+        var job = dispatchInfo.Job;
+        var registration = dispatchInfo.Registration;
+
+        // Acquire exclusive access to this named container
+        using var containerLock = await _containerPool.AcquireAsync(containerName, cancellationToken);
+
+        var existing = _containerPool.TryGet(containerName);
+
+        if (existing != null)
+        {
+            // Verify the container is still alive
+            var isAlive = await _containerService.IsContainerRunningAsync(existing.ContainerId, cancellationToken);
+
+            if (isAlive)
+            {
+                OnStatusChanged($"Run {run.Id}: Reusing named container '{containerName}' ({existing.ContainerId[..Math.Min(12, existing.ContainerId.Length)]})");
+
+                return await _containerService.ExecuteJobInExistingContainerAsync(
+                    registration, run.Id, job.Id, run.HeadBranch,
+                    existing.ContainerId, existing.ClonePath, containerName,
+                    encodedJitConfig,
+                    progress => OnStatusChanged($"Run {run.Id}: {progress}"),
+                    cancellationToken);
+            }
+
+            // Container is dead — remove from pool and create fresh
+            _logger.LogWarning("Named container '{Name}' ({ContainerId}) is no longer running, creating fresh",
+                containerName, existing.ContainerId);
+            _containerPool.Remove(containerName);
+            OnStatusChanged($"Run {run.Id}: Named container '{containerName}' was dead, creating fresh");
+        }
+        else
+        {
+            OnStatusChanged($"Run {run.Id}: Creating named container '{containerName}'");
+        }
+
+        // Create a new container with the name
+        var result = await _containerService.ExecuteJobAsync(
+            registration, run.Id, run.HeadBranch,
+            accessToken, encodedJitConfig,
+            progress => OnStatusChanged($"Run {run.Id}: {progress}"),
+            cancellationToken,
+            containerName: containerName);
+
+        // Register in pool if we got a container ID (even if the job failed,
+        // the container might be usable for the next job)
+        if (!string.IsNullOrEmpty(result.ContainerId))
+        {
+            _containerPool.Register(new NamedContainerEntry
+            {
+                Name = containerName,
+                ContainerId = result.ContainerId,
+                ClonePath = result.ClonePath,
+                Owner = registration.Owner,
+                Repository = registration.Repository,
+                CreatedAt = DateTime.UtcNow,
+                LastUsedAt = DateTime.UtcNow
+            });
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Extract the container demand name from job labels.
+    /// Any label that's not a reserved label (self-hosted, devcontainer-runner) is treated as a container name.
+    /// </summary>
+    private static string? ExtractContainerName(List<string> labels)
+    {
+        return labels.FirstOrDefault(l => !ReservedLabels.Contains(l));
     }
 
     private void CollectCompletedJobs()
