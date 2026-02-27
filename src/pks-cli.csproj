@@ -12,7 +12,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>pks</ToolCommandName>
     <PackageId>pks-cli</PackageId>
-    <PackageVersion>3.0.0-rc.28</PackageVersion>
+    <PackageVersion>3.1.0-rc.28</PackageVersion>
     <Authors>PKS Team</Authors>
     <Description>The next agentic CLI for .NET developers - Poul's Killer Swarms</Description>
     <PackageTags>cli;dotnet;agentic;developer-tools</PackageTags>
