@@ -1,0 +1,61 @@
+name: 'Setup PKS Devcontainer Runner'
+description: 'Prepare a PKS self-hosted devcontainer runner: trust .NET dev certs, set environment variables.'
+
+inputs:
+  trust-dev-certs:
+    description: 'Generate and trust .NET HTTPS development certificates'
+    required: false
+    default: 'true'
+  extra-ca-certs:
+    description: 'Additional PEM certificate file paths to trust (one per line)'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Trust .NET dev certs
+      if: inputs.trust-dev-certs == 'true'
+      shell: bash
+      run: |
+        if [ -f /usr/local/share/ca-certificates/aspnet-dev-cert.crt ]; then
+          echo "Dev certs already trusted (reused container), skipping"
+        else
+          dotnet dev-certs https
+          dotnet dev-certs https --export-path /tmp/aspnet-dev-cert.pem --format pem --no-password
+          sudo cp /tmp/aspnet-dev-cert.pem /usr/local/share/ca-certificates/aspnet-dev-cert.crt
+          sudo update-ca-certificates
+          rm /tmp/aspnet-dev-cert.pem
+          echo "Dev certs generated and trusted"
+        fi
+        echo "NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt" >> "$GITHUB_ENV"
+        echo "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt" >> "$GITHUB_ENV"
+
+    - name: Trust extra CA certificates
+      if: inputs.extra-ca-certs != ''
+      shell: bash
+      run: |
+        while IFS= read -r cert_path; do
+          [ -z "$cert_path" ] && continue
+          if [ ! -f "$cert_path" ]; then
+            echo "::warning::Certificate file not found: $cert_path"
+            continue
+          fi
+          cert_name=$(basename "$cert_path" .pem)
+          sudo cp "$cert_path" "/usr/local/share/ca-certificates/${cert_name}.crt"
+          echo "Added certificate: $cert_name"
+        done <<< "${{ inputs.extra-ca-certs }}"
+        sudo update-ca-certificates
+
+    - name: Set PKS runner environment
+      shell: bash
+      run: |
+        echo "ASPNETCORE_ENVIRONMENT=Development" >> "$GITHUB_ENV"
+        echo "DOTNET_RUNNING_IN_CONTAINER=true" >> "$GITHUB_ENV"
+
+    - name: Verify dev certs
+      if: inputs.trust-dev-certs == 'true'
+      shell: bash
+      run: |
+        dotnet dev-certs https --check --trust 2>&1 || true
+        echo "Dev certs configured for PKS runner"
