@@ -4,7 +4,7 @@ All notable changes to the DevContainer template will be documented in this file
 
 This template follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
-## 1.0.0 (2026-02-21)
+## [4.0.0-rc.11](https://github.com/pksorensen/pks-cli/compare/devcontainer-v3.0.0-rc.11...devcontainer-v4.0.0-rc.11) (2026-02-22)
 
 
 ### ⚠ BREAKING CHANGES
@@ -26,7 +26,6 @@ This template follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 * add git notes to v1.2.0-rc.10 for semantic-release tracking ([0871b5d](https://github.com/pksorensen/pks-cli/commit/0871b5df26580d33d9978eb2880f59bb257bafbc))
 * Include .env template files in all template packages ([d793177](https://github.com/pksorensen/pks-cli/commit/d793177003cee03ad4d79dd38e9c134069647b21))
-* reset manifest to stable version baselines for main branch ([b49145a](https://github.com/pksorensen/pks-cli/commit/b49145a5d867858bcadd7f20c656a4dd6b508799))
 * trigger semantic-release to create v1.2.0-rc.11 ([230763d](https://github.com/pksorensen/pks-cli/commit/230763de7ad31f15e0273ad4d94805c2e90cb136))
 
 ## [3.0.0-rc.11](https://github.com/pksorensen/pks-cli/compare/devcontainer-v2.0.0-rc.11...devcontainer-v3.0.0-rc.11) (2026-02-21)

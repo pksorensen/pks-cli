@@ -1,0 +1,306 @@
+name: 'Devcontainer Run'
+description: 'Run commands inside a devcontainer. Works on self-hosted runners without root/sudo.'
+
+inputs:
+  command:
+    description: 'Command(s) to run inside the devcontainer'
+    required: true
+  workspace-folder:
+    description: 'Path to workspace containing .devcontainer/'
+    required: false
+    default: '.'
+  config:
+    description: 'Explicit path to devcontainer.json'
+    required: false
+    default: ''
+  env:
+    description: 'Environment variables, one per line (KEY=VALUE or KEY to inherit from host)'
+    required: false
+    default: ''
+  shell:
+    description: 'Shell for wrapping commands. Use "none" to exec each line separately.'
+    required: false
+    default: '/bin/sh'
+  up-args:
+    description: 'Extra arguments for devcontainer up'
+    required: false
+    default: ''
+  devcontainer-cli-version:
+    description: 'Version of @devcontainers/cli to install'
+    required: false
+    default: 'latest'
+  setup-command:
+    description: 'Command(s) to run once after devcontainer up, before the main command (e.g. dotnet dev-certs https)'
+    required: false
+    default: ''
+  remote-user:
+    description: 'Override the remote user for exec. Use "root" to fix permission issues with bind-mounted sources.'
+    required: false
+    default: ''
+  cleanup:
+    description: 'Cleanup level after run: "container" (default) removes the container, "all" also removes the image and volumes, "none" keeps everything'
+    required: false
+    default: 'container'
+
+outputs:
+  container-id:
+    description: 'Docker container ID of the running devcontainer'
+    value: ${{ steps.up.outputs.container-id }}
+  remote-user:
+    description: 'Remote user inside the devcontainer'
+    value: ${{ steps.up.outputs.remote-user }}
+  remote-workspace-folder:
+    description: 'Workspace folder path inside the devcontainer'
+    value: ${{ steps.up.outputs.remote-workspace-folder }}
+
+runs:
+  using: 'composite'
+  steps:
+    # 1. Install devcontainer CLI to a user-local prefix (no root needed)
+    - name: Install devcontainer CLI
+      shell: bash
+      run: |
+        NPM_PREFIX="$HOME/.devcontainer-cli"
+        mkdir -p "$NPM_PREFIX"
+
+        VERSION="${{ inputs.devcontainer-cli-version }}"
+        if [ "$VERSION" = "latest" ]; then
+          PACKAGE="@devcontainers/cli"
+        else
+          PACKAGE="@devcontainers/cli@$VERSION"
+        fi
+
+        echo "::group::Installing $PACKAGE to $NPM_PREFIX"
+        npm install --prefix "$NPM_PREFIX" -g "$PACKAGE"
+        echo "::endgroup::"
+
+        echo "$NPM_PREFIX/bin" >> "$GITHUB_PATH"
+        export PATH="$NPM_PREFIX/bin:$PATH"
+
+        echo "Installed devcontainer CLI:"
+        devcontainer --version
+
+    # 2. Build and start the devcontainer
+    - name: devcontainer up
+      id: up
+      shell: bash
+      run: |
+        ARGS="--workspace-folder ${{ inputs.workspace-folder }} --remove-existing-container"
+
+        if [ -n "${{ inputs.config }}" ]; then
+          ARGS="$ARGS --config ${{ inputs.config }}"
+        fi
+
+        # Build --remote-env flags from env input
+        ENV_FLAGS=""
+        if [ -n "${{ inputs.env }}" ]; then
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            if [[ "$line" == *"="* ]]; then
+              ENV_FLAGS="$ENV_FLAGS --remote-env $line"
+            else
+              # Inherit from host
+              ENV_FLAGS="$ENV_FLAGS --remote-env ${line}=${!line}"
+            fi
+          done <<< "${{ inputs.env }}"
+        fi
+
+        if [ -n "${{ inputs.up-args }}" ]; then
+          ARGS="$ARGS ${{ inputs.up-args }}"
+        fi
+
+        LOG_FILE=$(mktemp)
+        echo "Running: devcontainer up $ARGS $ENV_FLAGS"
+
+        # Stream output in real-time to both console and log file
+        devcontainer up $ARGS $ENV_FLAGS 2>&1 | tee "$LOG_FILE"
+        EXIT_CODE=${PIPESTATUS[0]}
+
+        if [ $EXIT_CODE -ne 0 ]; then
+          echo "::error::devcontainer up failed with exit code $EXIT_CODE"
+          echo "--- Full output ---"
+          cat "$LOG_FILE"
+          rm -f "$LOG_FILE"
+          exit $EXIT_CODE
+        fi
+
+        # Parse the last JSON line from output
+        JSON_LINE=$(grep -o '{.*}' "$LOG_FILE" | tail -1)
+        rm -f "$LOG_FILE"
+
+        CONTAINER_ID=$(echo "$JSON_LINE" | jq -r '.containerId // empty')
+        REMOTE_USER=$(echo "$JSON_LINE" | jq -r '.remoteUser // empty')
+        REMOTE_WORKSPACE=$(echo "$JSON_LINE" | jq -r '.remoteWorkspaceFolder // empty')
+
+        if [ -z "$CONTAINER_ID" ]; then
+          echo "::error::Could not parse container ID from devcontainer up output"
+          echo "Raw output: $OUTPUT"
+          exit 1
+        fi
+
+        echo "container-id=$CONTAINER_ID" >> "$GITHUB_OUTPUT"
+        echo "remote-user=$REMOTE_USER" >> "$GITHUB_OUTPUT"
+        echo "remote-workspace-folder=$REMOTE_WORKSPACE" >> "$GITHUB_OUTPUT"
+
+        echo "Container ID: $CONTAINER_ID"
+        echo "Remote user: $REMOTE_USER"
+        echo "Remote workspace: $REMOTE_WORKSPACE"
+
+    # 3. Run setup commands (if any)
+    - name: Setup
+      if: ${{ inputs.setup-command != '' }}
+      shell: bash
+      run: |
+        CONTAINER_ID="${{ steps.up.outputs.container-id }}"
+        REMOTE_USER="${{ inputs.remote-user }}"
+        REMOTE_WORKSPACE="${{ steps.up.outputs.remote-workspace-folder }}"
+        USER_FLAG=""
+        if [ -n "$REMOTE_USER" ]; then
+          USER_FLAG="-u $REMOTE_USER"
+        fi
+
+        SETUP_CMD=$(cat <<'SETUP_EOF'
+        ${{ inputs.setup-command }}
+        SETUP_EOF
+        )
+
+        echo "::group::Running setup commands"
+        docker exec $USER_FLAG -w "$REMOTE_WORKSPACE" "$CONTAINER_ID" /bin/sh -c "$SETUP_CMD"
+        EXIT_CODE=$?
+        echo "::endgroup::"
+        if [ $EXIT_CODE -ne 0 ]; then
+          echo "::error::Setup command failed with exit code $EXIT_CODE"
+          exit $EXIT_CODE
+        fi
+
+    # 4. Execute the user's main command inside the devcontainer
+    - name: devcontainer exec
+      shell: bash
+      run: |
+        CONTAINER_ID="${{ steps.up.outputs.container-id }}"
+        REMOTE_USER="${{ inputs.remote-user }}"
+        REMOTE_WORKSPACE="${{ steps.up.outputs.remote-workspace-folder }}"
+
+        COMMAND=$(cat <<'COMMAND_EOF'
+        ${{ inputs.command }}
+        COMMAND_EOF
+        )
+
+        # If remote-user is set, use docker exec directly (devcontainer exec doesn't support --remote-user)
+        if [ -n "$REMOTE_USER" ]; then
+          # Build -e flags from env input
+          ENV_FLAGS=""
+          if [ -n "${{ inputs.env }}" ]; then
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              if [[ "$line" == *"="* ]]; then
+                ENV_FLAGS="$ENV_FLAGS -e $line"
+              else
+                ENV_FLAGS="$ENV_FLAGS -e ${line}=${!line}"
+              fi
+            done <<< "${{ inputs.env }}"
+          fi
+
+          SHELL_CMD="${{ inputs.shell }}"
+          if [ "$SHELL_CMD" = "none" ]; then
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              echo "::group::exec: $line"
+              docker exec -u "$REMOTE_USER" -w "$REMOTE_WORKSPACE" $ENV_FLAGS "$CONTAINER_ID" $line
+              EXIT_CODE=$?
+              echo "::endgroup::"
+              if [ $EXIT_CODE -ne 0 ]; then
+                echo "::error::Command failed: $line (exit code $EXIT_CODE)"
+                exit $EXIT_CODE
+              fi
+            done <<< "$COMMAND"
+          else
+            echo "::group::exec as $REMOTE_USER via $SHELL_CMD"
+            docker exec -u "$REMOTE_USER" -w "$REMOTE_WORKSPACE" $ENV_FLAGS "$CONTAINER_ID" "$SHELL_CMD" -c "$COMMAND"
+            EXIT_CODE=$?
+            echo "::endgroup::"
+            if [ $EXIT_CODE -ne 0 ]; then
+              exit $EXIT_CODE
+            fi
+          fi
+        else
+          # Use devcontainer exec (respects devcontainer.json remoteUser)
+          ARGS="--workspace-folder ${{ inputs.workspace-folder }}"
+
+          if [ -n "${{ inputs.config }}" ]; then
+            ARGS="$ARGS --config ${{ inputs.config }}"
+          fi
+
+          ENV_FLAGS=""
+          if [ -n "${{ inputs.env }}" ]; then
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              if [[ "$line" == *"="* ]]; then
+                ENV_FLAGS="$ENV_FLAGS --remote-env $line"
+              else
+                ENV_FLAGS="$ENV_FLAGS --remote-env ${line}=${!line}"
+              fi
+            done <<< "${{ inputs.env }}"
+          fi
+
+          SHELL_CMD="${{ inputs.shell }}"
+          if [ "$SHELL_CMD" = "none" ]; then
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              echo "::group::exec: $line"
+              devcontainer exec $ARGS $ENV_FLAGS $line
+              EXIT_CODE=$?
+              echo "::endgroup::"
+              if [ $EXIT_CODE -ne 0 ]; then
+                echo "::error::Command failed: $line (exit code $EXIT_CODE)"
+                exit $EXIT_CODE
+              fi
+            done <<< "$COMMAND"
+          else
+            echo "::group::exec via $SHELL_CMD"
+            devcontainer exec $ARGS $ENV_FLAGS "$SHELL_CMD" -c "$COMMAND"
+            EXIT_CODE=$?
+            echo "::endgroup::"
+            if [ $EXIT_CODE -ne 0 ]; then
+              exit $EXIT_CODE
+            fi
+          fi
+        fi
+
+    # 5. Cleanup
+    - name: Cleanup devcontainer
+      if: always()
+      shell: bash
+      run: |
+        CLEANUP="${{ inputs.cleanup }}"
+        CONTAINER_ID="${{ steps.up.outputs.container-id }}"
+
+        if [ "$CLEANUP" = "none" ]; then
+          echo "Skipping cleanup (cleanup=none)"
+          exit 0
+        fi
+
+        if [ -z "$CONTAINER_ID" ]; then
+          echo "No container to clean up"
+          exit 0
+        fi
+
+        # Get image ID before removing container
+        IMAGE_ID=""
+        if [ "$CLEANUP" = "all" ]; then
+          IMAGE_ID=$(docker inspect --format='{{.Image}}' "$CONTAINER_ID" 2>/dev/null || true)
+        fi
+
+        echo "Removing container $CONTAINER_ID"
+        docker rm -f "$CONTAINER_ID" 2>/dev/null || true
+
+        if [ "$CLEANUP" = "all" ]; then
+          # Remove volumes created for this devcontainer
+          echo "Removing associated volumes"
+          docker volume ls -q --filter dangling=true | xargs -r docker volume rm 2>/dev/null || true
+
+          if [ -n "$IMAGE_ID" ]; then
+            echo "Removing image $IMAGE_ID"
+            docker rmi -f "$IMAGE_ID" 2>/dev/null || true
+          fi
+        fi

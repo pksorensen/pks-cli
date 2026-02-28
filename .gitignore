@@ -423,3 +423,4 @@ claude-flow.ps1
 hive-mind-prompt-*.txt
 /.devcontainer/.env
 
+pks-cli

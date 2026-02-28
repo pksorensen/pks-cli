@@ -49,50 +49,41 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
-## [2.0.0](https://github.com/pksorensen/pks-cli/compare/v1.1.0...v2.0.0) (2026-02-22)
+## [3.1.0-rc.28](https://github.com/pksorensen/pks-cli/compare/v3.0.0-rc.28...v3.1.0-rc.28) (2026-02-26)
+
+
+### Features
+
+* Add NamedContainerPool for managing reusable named containers ([0bd33c5](https://github.com/pksorensen/pks-cli/commit/0bd33c5e22ee756702c06580173b89bb90adae9b))
+* Add unit tests for RunnerConfigurationService, RunnerContainerService, and RunnerDaemonService ([0782bef](https://github.com/pksorensen/pks-cli/commit/0782bef1939ac97e96cf35e86513b89176c96702))
+
+
+### Bug Fixes
+
+* update NuGet packages to 6.12.4 and remove unnecessary System.IO.Compression ([fcba202](https://github.com/pksorensen/pks-cli/commit/fcba202f8582f40c06f8306043f96442de388c9e))
+* Update RunnerDaemonService to utilize NamedContainerPool ([0bd33c5](https://github.com/pksorensen/pks-cli/commit/0bd33c5e22ee756702c06580173b89bb90adae9b))
+
+## [3.0.0-rc.28](https://github.com/pksorensen/pks-cli/compare/v2.0.0-rc.28...v3.0.0-rc.28) (2026-02-22)
 
 
 ### ⚠ BREAKING CHANGES
 
 * Release infrastructure replaced with Release Please
+
+### Features
+
+* migrate from semantic-release to Release Please ([f364bbb](https://github.com/pksorensen/pks-cli/commit/f364bbb5b3c3dd32043c72c7f47d8d33f5306107))
+
+## [3.0.0-rc.28](https://github.com/pksorensen/pks-cli/compare/v2.0.0-rc.28...v3.0.0-rc.28) (2026-02-21)
+
+
+### ⚠ BREAKING CHANGES
+
 * Release infrastructure replaced with Release Please
 
 ### Features
 
-* Add comprehensive documentation on VS Code Dev Containers enhancements vs devcontainer CLI ([7c1d65c](https://github.com/pksorensen/pks-cli/commit/7c1d65c765337dc333b29e500997c38f1033f2d9))
-* Add devcontainer spawning functionality and related services ([16f9905](https://github.com/pksorensen/pks-cli/commit/16f9905846dc8b095a5e569ca2b65124de450c63))
-* Add progress reporting to devcontainer spawning operations ([1137805](https://github.com/pksorensen/pks-cli/commit/11378051ca6871cb2e67a8eec9f51d78b75c363b))
-* Add self-contained build and npm version synchronization scripts ([cd6202f](https://github.com/pksorensen/pks-cli/commit/cd6202fcbb6017e6cf0c2a7ce7098d94bcfbf09d))
-* add semantic release configuration for multiple templates ([2389ff8](https://github.com/pksorensen/pks-cli/commit/2389ff8d2cf19b4740f8366f407b38fab240ec2e))
-* Enable Docker credential forwarding by default and fix postStartCommand for directory creation ([41f0fd8](https://github.com/pksorensen/pks-cli/commit/41f0fd841be9d786a39c51bafd6eb05403da3bbe))
-* Enhance command execution with working directory support and Windows compatibility ([1634ea8](https://github.com/pksorensen/pks-cli/commit/1634ea896c5b185cba9fa3bf69428e295c3b09d0))
-* Enhance CreateOverrideConfigWithJsonElementAsync to include volume name for unique config files ([c614d0a](https://github.com/pksorensen/pks-cli/commit/c614d0a12531acd08bc49379ec001deaf3f6182b))
-* Enhance devcontainer CLI detection with multiple approaches ([ae80a9d](https://github.com/pksorensen/pks-cli/commit/ae80a9d11f5f37db7bd10d6abc9a83a248104d42))
-* Enhance RunDevcontainerUpInBootstrapAsync with Docker config forwarding options ([fd4e827](https://github.com/pksorensen/pks-cli/commit/fd4e82758010770e62922cd7079528b5492eeaed))
-* Implement bootstrap container strategy for cross-platform devcontainer support ([f072597](https://github.com/pksorensen/pks-cli/commit/f072597f0eeed59cd201b7803a9b401fe656ea89))
-* Implement configuration hash detection and synchronization for devcontainers ([e93f0f5](https://github.com/pksorensen/pks-cli/commit/e93f0f56ca68f2a42ec23fd6d9591f9b9964ef01))
-* Implement configuration hash service for devcontainer change detection and enhance rebuild options ([43afb65](https://github.com/pksorensen/pks-cli/commit/43afb65efa802467566ca96cebf738bb231371e6))
-* Improve Docker socket handling in DevcontainerSpawnerService and add new Dockerfile for VS Code Dev Containers ([6a50c9c](https://github.com/pksorensen/pks-cli/commit/6a50c9cd0fc436ffa8e739c4c51a2cb6507c97be))
 * migrate from semantic-release to Release Please ([f364bbb](https://github.com/pksorensen/pks-cli/commit/f364bbb5b3c3dd32043c72c7f47d8d33f5306107))
-* migrate from semantic-release to Release Please ([a4d5488](https://github.com/pksorensen/pks-cli/commit/a4d5488775b775948779d2738c572f1086213644))
-* refactored things ([a068996](https://github.com/pksorensen/pks-cli/commit/a068996ee53e95eaad61576ecf0d97dc1cd9d050))
-* upgrade to .NET 10 and update related configurations ([179435b](https://github.com/pksorensen/pks-cli/commit/179435b888d38cc9aac7a53011503280e8faacf1))
-
-
-### Bug Fixes
-
-* Add functionality to connect to existing devcontainers and start them if stopped ([8fcdb2b](https://github.com/pksorensen/pks-cli/commit/8fcdb2b32e8803f998db9af57ea94d8fc4c04212))
-* add git notes to v1.2.0-rc.10 for semantic-release tracking ([0871b5d](https://github.com/pksorensen/pks-cli/commit/0871b5df26580d33d9978eb2880f59bb257bafbc))
-* Correct label matching for existing containers and improve logging for project identification ([4ce218f](https://github.com/pksorensen/pks-cli/commit/4ce218f528e5a6ee700bf8dae548cba8a269e5e5))
-* Correct resource path for embedded Dockerfile in DevcontainerSpawnerService ([69fac98](https://github.com/pksorensen/pks-cli/commit/69fac987c9eb782c89225fad6a5d97a3fe276ba2))
-* DevcontainerSpawnerService to improve override config handling ([3dd4578](https://github.com/pksorensen/pks-cli/commit/3dd45788c228c9056d7c431d7a7a0802e8305915))
-* display .NET runtime version in welcome banner ([1a554f6](https://github.com/pksorensen/pks-cli/commit/1a554f6a969ace1b3809617f4b497b3b295b9c2b))
-* Enhance Docker credential handling and fix file ownership issues in devcontainer spawning ([0b0ff68](https://github.com/pksorensen/pks-cli/commit/0b0ff68f7c5343086cd3598bb4c44a0a30eb9281))
-* Escape markup in error and warning messages for better display ([9e75df1](https://github.com/pksorensen/pks-cli/commit/9e75df1871d2f6427ae45a724f1a9b985e468844))
-* Improve JSON normalization by handling direct parsing and comment removal more effectively ([f938279](https://github.com/pksorensen/pks-cli/commit/f938279d2c2d60768b5cac35158a293f9dd419da))
-* reset manifest to stable version baselines for main branch ([b49145a](https://github.com/pksorensen/pks-cli/commit/b49145a5d867858bcadd7f20c656a4dd6b508799))
-* trigger semantic-release to create v1.2.0-rc.11 ([230763d](https://github.com/pksorensen/pks-cli/commit/230763de7ad31f15e0273ad4d94805c2e90cb136))
-* Update Docker credential handling and improve workspace folder resolution in DevcontainerSpawnerService ([688f6d2](https://github.com/pksorensen/pks-cli/commit/688f6d2d1d53cb0ac0cdcf278153cdd7e6b8daaf))
 
 ## [2.0.0-rc.28](https://github.com/pksorensen/pks-cli/compare/v1.2.0-rc.28...v2.0.0-rc.28) (2026-02-21)
 
