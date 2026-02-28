@@ -186,6 +186,11 @@ public class MockGitHubAuthenticationService : IGitHubAuthenticationService
                (!token.ExpiresAt.HasValue || token.ExpiresAt.Value > DateTime.UtcNow);
     }
 
+    public Task<GitHubStoredToken?> RefreshTokenAsync(string? associatedUser = null)
+    {
+        return Task.FromResult<GitHubStoredToken?>(null);
+    }
+
     private static string GenerateUserCode()
     {
         var random = new Random();

@@ -386,6 +386,158 @@ public class RunnerContainerServiceTests : IDisposable
 
     #endregion
 
+    #region ExecuteJobAsync with Container Labels
+
+    [Fact]
+    public async Task ExecuteJobAsync_WhenNamedContainer_AddsIdLabelsToDevcontainerUp()
+    {
+        // Arrange
+        var capturedArgs = new List<string>();
+        var devcontainerUpJson = """{"outcome":"success","containerId":"labeled-container","remoteUser":"vscode"}""";
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("git", It.Is<string>(a => a.Contains("clone")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "", ""));
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("devcontainer", It.IsAny<string>(), null, It.IsAny<CancellationToken>()))
+            .Callback<string, string, string?, CancellationToken>((cmd, args, wd, ct) => capturedArgs.Add(args))
+            .ReturnsAsync(new ProcessResult(0, devcontainerUpJson, ""));
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.IsAny<string>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "Runner completed", ""));
+
+        // Act
+        await _service.ExecuteJobAsync(
+            _testRegistration, 12345, "main", "token", "jit",
+            null, CancellationToken.None, containerName: "my-app");
+
+        // Assert - devcontainer up should include --id-label flags
+        var devcontainerArgs = capturedArgs.First(a => a.Contains("up"));
+        devcontainerArgs.Should().Contain("--id-label pks.runner.name=my-app");
+        devcontainerArgs.Should().Contain("--id-label pks.runner.owner=testowner");
+        devcontainerArgs.Should().Contain("--id-label pks.runner.repo=testrepo");
+        devcontainerArgs.Should().NotContain("--remove-existing-container");
+    }
+
+    [Fact]
+    public async Task ExecuteJobAsync_WhenEphemeral_DoesNotAddIdLabels()
+    {
+        // Arrange
+        var capturedArgs = new List<string>();
+        var devcontainerUpJson = """{"outcome":"success","containerId":"ephemeral-container","remoteUser":"vscode"}""";
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("git", It.Is<string>(a => a.Contains("clone")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "", ""));
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("devcontainer", It.IsAny<string>(), null, It.IsAny<CancellationToken>()))
+            .Callback<string, string, string?, CancellationToken>((cmd, args, wd, ct) => capturedArgs.Add(args))
+            .ReturnsAsync(new ProcessResult(0, devcontainerUpJson, ""));
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.IsAny<string>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "Runner completed", ""));
+
+        // Act
+        await _service.ExecuteJobAsync(
+            _testRegistration, 12345, "main", "token", "jit");
+
+        // Assert - should use --remove-existing-container, NOT --id-label
+        var devcontainerArgs = capturedArgs.First(a => a.Contains("up"));
+        devcontainerArgs.Should().Contain("--remove-existing-container");
+        devcontainerArgs.Should().NotContain("--id-label");
+    }
+
+    #endregion
+
+    #region DiscoverNamedContainersAsync
+
+    [Fact]
+    public async Task DiscoverNamedContainersAsync_FindsLabeledContainers()
+    {
+        // Arrange - docker ps with label filter returns one container
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.Is<string>(a => a.Contains("ps") && a.Contains("label=pks.runner.name")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "container1\ncontainer2", ""));
+
+        // container1 inspect returns labels
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.Is<string>(a => a.Contains("inspect") && a.Contains("container1")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "my-container|testowner|testrepo", ""));
+
+        // container2 inspect returns labels
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.Is<string>(a => a.Contains("inspect") && a.Contains("container2")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "other-app|otherowner|otherrepo", ""));
+
+        // Act
+        var result = await _service.DiscoverNamedContainersAsync();
+
+        // Assert
+        result.Should().HaveCount(2);
+        result[0].Name.Should().Be("my-container");
+        result[0].Owner.Should().Be("testowner");
+        result[0].Repository.Should().Be("testrepo");
+        result[0].ContainerId.Should().Be("container1");
+        result[1].Name.Should().Be("other-app");
+        result[1].ContainerId.Should().Be("container2");
+    }
+
+    [Fact]
+    public async Task DiscoverNamedContainersAsync_WhenNoContainersRunning_ReturnsEmptyList()
+    {
+        // Arrange
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.Is<string>(a => a.Contains("ps")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "", ""));
+
+        // Act
+        var result = await _service.DiscoverNamedContainersAsync();
+
+        // Assert
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DiscoverNamedContainersAsync_WhenDockerPsFails_ReturnsEmptyList()
+    {
+        // Arrange
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.Is<string>(a => a.Contains("ps")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(1, "", "Cannot connect to Docker daemon"));
+
+        // Act
+        var result = await _service.DiscoverNamedContainersAsync();
+
+        // Assert
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DiscoverNamedContainersAsync_SkipsContainersWithFailedInspect()
+    {
+        // Arrange
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.Is<string>(a => a.Contains("ps") && a.Contains("label=pks.runner.name")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "container1", ""));
+
+        // inspect fails
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.Is<string>(a => a.Contains("inspect") && a.Contains("container1")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(1, "", "Error"));
+
+        // Act
+        var result = await _service.DiscoverNamedContainersAsync();
+
+        // Assert
+        result.Should().BeEmpty();
+    }
+
+    #endregion
+
     #region ExecuteJobInExistingContainerAsync
 
     [Fact]

@@ -152,7 +152,7 @@ public class RunnerContainerService : IRunnerContainerService
             _logger.LogInformation("Running devcontainer up for {Path}", clonePath);
 
             var devcontainerArgs = containerName != null
-                ? $"up --workspace-folder {clonePath}"
+                ? $"up --workspace-folder {clonePath} --id-label pks.runner.name={containerName} --id-label pks.runner.owner={registration.Owner} --id-label pks.runner.repo={registration.Repository}"
                 : $"up --workspace-folder {clonePath} --remove-existing-container";
             var devcontainerResult = await _processRunner.RunAsync("devcontainer", devcontainerArgs, null, cancellationToken);
 
@@ -469,6 +469,67 @@ public class RunnerContainerService : IRunnerContainerService
                 _logger.LogWarning(ex, "Failed to remove clone directory {Path}", job.ClonePath);
             }
         }
+    }
+
+    /// <inheritdoc/>
+    public async Task<List<NamedContainerEntry>> DiscoverNamedContainersAsync(CancellationToken cancellationToken = default)
+    {
+        var entries = new List<NamedContainerEntry>();
+
+        try
+        {
+            // Find running containers with pks.runner.name label
+            var psResult = await _processRunner.RunAsync("docker",
+                "ps --filter label=pks.runner.name --filter status=running --format {{.ID}}",
+                null, cancellationToken);
+
+            if (psResult.ExitCode != 0 || string.IsNullOrWhiteSpace(psResult.StandardOutput))
+                return entries;
+
+            var containerIds = psResult.StandardOutput
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            foreach (var containerId in containerIds)
+            {
+                try
+                {
+                    // Read labels from the container
+                    var inspectResult = await _processRunner.RunAsync("docker",
+                        $"inspect --format {{{{index .Config.Labels \"pks.runner.name\"}}}}|{{{{index .Config.Labels \"pks.runner.owner\"}}}}|{{{{index .Config.Labels \"pks.runner.repo\"}}}} {containerId}",
+                        null, cancellationToken);
+
+                    if (inspectResult.ExitCode != 0 || string.IsNullOrWhiteSpace(inspectResult.StandardOutput))
+                        continue;
+
+                    var parts = inspectResult.StandardOutput.Trim().Split('|');
+                    if (parts.Length < 3 || string.IsNullOrEmpty(parts[0]))
+                        continue;
+
+                    var entry = new NamedContainerEntry
+                    {
+                        Name = parts[0],
+                        ContainerId = containerId,
+                        Owner = parts[1],
+                        Repository = parts[2],
+                        CreatedAt = DateTime.UtcNow,
+                        LastUsedAt = DateTime.UtcNow
+                    };
+
+                    entries.Add(entry);
+                    _logger.LogInformation("Discovered named container '{Name}' in container {ContainerId}", entry.Name, containerId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to inspect container {ContainerId} for labels", containerId);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to discover named containers");
+        }
+
+        return entries;
     }
 
     /// <summary>

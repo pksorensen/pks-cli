@@ -71,6 +71,12 @@ public interface IRunnerContainerService
     Task<bool> IsContainerRunningAsync(string containerId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Discover running containers that have PKS runner labels (pks.runner.name).
+    /// Returns entries for containers that can be re-populated into the named container pool.
+    /// </summary>
+    Task<List<NamedContainerEntry>> DiscoverNamedContainersAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Check if Docker and devcontainer CLI are available
     /// </summary>
     /// <param name="cancellationToken">Cancellation token</param>

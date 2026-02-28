@@ -29,6 +29,7 @@ public class RunnerDaemonService : IRunnerDaemonService
     private readonly List<Task<RunnerJobState>> _runningTasks = new();
     private readonly HashSet<long> _dispatchedJobIds = new();
     private readonly object _lock = new();
+    private int _consecutiveAuthFailures;
 
     public event EventHandler<RunnerJobState>? JobStarted;
     public event EventHandler<RunnerJobState>? JobCompleted;
@@ -111,6 +112,24 @@ public class RunnerDaemonService : IRunnerDaemonService
         }
         OnStatusChanged($"Daemon started, watching {enabledRegistrations.Count} registration(s)");
 
+        // Discover existing named containers from previous sessions
+        try
+        {
+            var discovered = await _containerService.DiscoverNamedContainersAsync(cancellationToken);
+            foreach (var entry in discovered)
+            {
+                _containerPool.Register(entry);
+                OnStatusChanged($"Recovered named container '{entry.Name}' ({entry.ContainerId[..Math.Min(12, entry.ContainerId.Length)]})");
+            }
+            if (discovered.Count > 0)
+                OnStatusChanged($"Recovered {discovered.Count} named container(s) from previous session");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to discover existing named containers, continuing without recovery");
+            OnStatusChanged("Container discovery failed, starting fresh");
+        }
+
         try
         {
             await PollLoop(config, enabledRegistrations, accessToken, cancellationToken);
@@ -149,10 +168,46 @@ public class RunnerDaemonService : IRunnerDaemonService
 
                     await PollRegistration(registration, config, accessToken, cancellationToken);
                 }
+
+                // Polling succeeded — reset auth failure counter
+                _consecutiveAuthFailures = 0;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 break;
+            }
+            catch (Exception ex) when (ex.Message.Contains("Bad credentials", StringComparison.OrdinalIgnoreCase)
+                                     || ex.Message.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase))
+            {
+                _consecutiveAuthFailures++;
+
+                if (_consecutiveAuthFailures > 3)
+                {
+                    _logger.LogError("Token refresh failed {Count} consecutive times. Re-run 'pks github runner register' to re-authenticate.",
+                        _consecutiveAuthFailures);
+                    OnStatusChanged($"Auth failing repeatedly ({_consecutiveAuthFailures}x) — re-authenticate with 'pks github runner register'");
+
+                    // Wait longer before retrying to avoid hammering the API
+                    try { await Task.Delay(TimeSpan.FromMinutes(5), cancellationToken); }
+                    catch (OperationCanceledException) { break; }
+                    continue;
+                }
+
+                _logger.LogWarning("Token expired (attempt {Count}), attempting refresh...", _consecutiveAuthFailures);
+                OnStatusChanged("Token expired, refreshing...");
+
+                var newToken = await _authService.RefreshTokenAsync();
+                if (newToken != null)
+                {
+                    accessToken = newToken.AccessToken;
+                    _apiClient.SetAuthenticationToken(accessToken);
+                    OnStatusChanged("Token refreshed successfully");
+                }
+                else
+                {
+                    _logger.LogError("Token refresh failed. Re-run 'pks github runner register' to re-authenticate.");
+                    OnStatusChanged("Token refresh failed — re-authenticate with 'pks github runner register'");
+                }
             }
             catch (Exception ex)
             {
@@ -498,8 +553,7 @@ public class RunnerDaemonService : IRunnerDaemonService
             cancellationToken,
             containerName: containerName);
 
-        // Register in pool if we got a container ID (even if the job failed,
-        // the container might be usable for the next job)
+        // Register in pool (labels were already set via --id-label during devcontainer up)
         if (!string.IsNullOrEmpty(result.ContainerId))
         {
             _containerPool.Register(new NamedContainerEntry

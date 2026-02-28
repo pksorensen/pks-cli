@@ -553,4 +553,56 @@ public class RunnerDaemonServiceTests : IDisposable
     }
 
     #endregion
+
+    #region Container Discovery on Startup
+
+    [Fact]
+    public async Task RunAsync_OnStartup_DiscoversExistingContainersAndRegistersInPool()
+    {
+        var cts = new CancellationTokenSource();
+
+        var discoveredEntries = new List<NamedContainerEntry>
+        {
+            new() { Name = "app-1", ContainerId = "container-aaa", ClonePath = "/tmp/clone1", Owner = "testowner", Repository = "testrepo" },
+            new() { Name = "app-2", ContainerId = "container-bbb", ClonePath = "/tmp/clone2", Owner = "testowner", Repository = "testrepo" }
+        };
+
+        _mockContainerService
+            .Setup(c => c.DiscoverNamedContainersAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(discoveredEntries);
+
+        _mockActionsService
+            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<QueuedWorkflowRun>())
+            .Callback(() => cts.Cancel());
+
+        await _service.RunAsync(cts.Token);
+
+        _mockContainerPool.Verify(p => p.Register(It.Is<NamedContainerEntry>(e => e.Name == "app-1")), Times.Once);
+        _mockContainerPool.Verify(p => p.Register(It.Is<NamedContainerEntry>(e => e.Name == "app-2")), Times.Once);
+        _mockContainerService.Verify(c => c.DiscoverNamedContainersAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenDiscoveryFails_ContinuesNormally()
+    {
+        var cts = new CancellationTokenSource();
+
+        _mockContainerService
+            .Setup(c => c.DiscoverNamedContainersAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception("Docker not responding"));
+
+        _mockActionsService
+            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<QueuedWorkflowRun>())
+            .Callback(() => cts.Cancel());
+
+        await _service.RunAsync(cts.Token);
+
+        _mockActionsService.Verify(
+            a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    #endregion
 }

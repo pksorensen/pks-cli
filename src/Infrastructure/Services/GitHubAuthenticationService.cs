@@ -72,6 +72,12 @@ public interface IGitHubAuthenticationService
     /// <param name="associatedUser">Optional user identifier</param>
     /// <returns>Current authentication status</returns>
     Task<bool> IsAuthenticatedAsync(string? associatedUser = null);
+
+    /// <summary>
+    /// Refreshes the access token using the stored refresh token.
+    /// Returns the new stored token, or null if refresh failed.
+    /// </summary>
+    Task<GitHubStoredToken?> RefreshTokenAsync(string? associatedUser = null);
 }
 
 /// <summary>
@@ -495,6 +501,106 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
         }
 
         return true;
+    }
+
+    /// <inheritdoc/>
+    public async Task<GitHubStoredToken?> RefreshTokenAsync(string? associatedUser = null)
+    {
+        var storedToken = await GetStoredTokenAsync(associatedUser);
+        if (storedToken == null || string.IsNullOrEmpty(storedToken.RefreshToken))
+        {
+            return null;
+        }
+
+        try
+        {
+            ConfigureHttpClient();
+            var requestBody = new FormUrlEncodedContent(new[]
+            {
+                new KeyValuePair<string, string>("client_id", _config.ClientId),
+                new KeyValuePair<string, string>("grant_type", "refresh_token"),
+                new KeyValuePair<string, string>("refresh_token", storedToken.RefreshToken)
+            });
+
+            var response = await _httpClient.PostAsync(_config.TokenUrl, requestBody);
+            var content = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                System.Diagnostics.Debug.WriteLine($"Token refresh HTTP failed: {response.StatusCode} {content}");
+                return null;
+            }
+
+            // Check for error in response body (GitHub returns 200 with error in body for some cases)
+            if (content.Contains("error=") || content.Contains("\"error\""))
+            {
+                System.Diagnostics.Debug.WriteLine($"Token refresh returned error in body: {content}");
+                return null;
+            }
+
+            // Parse form-urlencoded or JSON response
+            var tokenResponse = ParseTokenResponse(content);
+            if (tokenResponse == null || string.IsNullOrEmpty(tokenResponse.AccessToken))
+            {
+                System.Diagnostics.Debug.WriteLine($"Token refresh returned no access token. Response: {content}");
+                return null;
+            }
+
+            var newToken = new GitHubStoredToken
+            {
+                AccessToken = tokenResponse.AccessToken,
+                RefreshToken = tokenResponse.RefreshToken ?? storedToken.RefreshToken,
+                Scopes = tokenResponse.Scopes.Length > 0 ? tokenResponse.Scopes : storedToken.Scopes,
+                CreatedAt = DateTime.UtcNow,
+                ExpiresAt = tokenResponse.ExpiresIn.HasValue
+                    ? DateTime.UtcNow.AddSeconds(tokenResponse.ExpiresIn.Value)
+                    : null,
+                IsValid = true,
+                LastValidated = DateTime.UtcNow
+            };
+
+            await StoreTokenAsync(newToken, associatedUser);
+            return newToken;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private GitHubTokenResponse? ParseTokenResponse(string content)
+    {
+        // GitHub returns form-urlencoded by default, JSON if Accept header is set
+        try
+        {
+            if (content.StartsWith("{"))
+            {
+                return System.Text.Json.JsonSerializer.Deserialize<GitHubTokenResponse>(content,
+                    new System.Text.Json.JsonSerializerOptions
+                    {
+                        PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.SnakeCaseLower
+                    });
+            }
+
+            // Parse form-urlencoded
+            var pairs = content.Split('&')
+                .Select(p => p.Split('=', 2))
+                .Where(p => p.Length == 2)
+                .ToDictionary(p => p[0], p => Uri.UnescapeDataString(p[1]));
+
+            return new GitHubTokenResponse
+            {
+                AccessToken = pairs.GetValueOrDefault("access_token", ""),
+                TokenType = pairs.GetValueOrDefault("token_type", ""),
+                RefreshToken = pairs.GetValueOrDefault("refresh_token"),
+                Scopes = pairs.GetValueOrDefault("scope", "").Split(',', StringSplitOptions.RemoveEmptyEntries),
+                ExpiresIn = pairs.TryGetValue("expires_in", out var exp) && int.TryParse(exp, out var expInt) ? expInt : null
+            };
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private void ConfigureHttpClient()
