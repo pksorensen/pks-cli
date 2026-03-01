@@ -14,6 +14,9 @@ using PKS.Commands.Prd;
 using PKS.CLI.Infrastructure.Services;
 using PKS.Infrastructure.Services.Runner;
 using PKS.Commands.GitHub.Runner;
+using PKS.Commands.Agentics;
+using PKS.Commands.Agentics.Runner;
+using PKS.Infrastructure.Services.Runner;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.Text;
@@ -187,6 +190,7 @@ services.AddSingleton<EnhancedGitHubService>();
 
 // Register GitHub Runner services
 services.AddSingleton<IRunnerConfigurationService, RunnerConfigurationService>();
+services.AddSingleton<IAgenticsRunnerConfigurationService, AgenticsRunnerConfigurationService>();
 services.AddSingleton<IGitHubActionsService, GitHubActionsService>();
 services.AddSingleton<IProcessRunner, ProcessRunner>();
 services.AddSingleton<IRunnerContainerService, RunnerContainerService>();
@@ -352,6 +356,23 @@ app.Configure(config =>
             list.AddCommand<PKS.Commands.Devcontainer.DevcontainerListCommand>("")
                 .WithDescription("List all available devcontainer resources")
                 .WithExample(new[] { "devcontainer", "list" });
+        });
+    });
+
+    // Add agentics branch command with runner subcommands
+    config.AddBranch<AgenticsSettings>("agentics", agentics =>
+    {
+        agentics.SetDescription("Manage Agentics runners and integration");
+
+        agentics.AddBranch<AgenticsRunnerSettings>("runner", runner =>
+        {
+            runner.SetDescription("Manage Agentics self-hosted runners");
+
+            runner.AddCommand<AgenticsRunnerRegisterCommand>("register")
+                .WithDescription("Register a runner for an owner/project")
+                .WithExample(new[] { "agentics", "runner", "register", "myorg/myproject" })
+                .WithExample(new[] { "agentics", "runner", "register", "myorg/myproject", "--name", "my-runner" })
+                .WithExample(new[] { "agentics", "runner", "register", "myorg/myproject", "--server", "localhost:3000" });
         });
     });
 
