@@ -373,6 +373,10 @@ app.Configure(config =>
                 .WithExample(new[] { "agentics", "runner", "register", "myorg/myproject" })
                 .WithExample(new[] { "agentics", "runner", "register", "myorg/myproject", "--name", "my-runner" })
                 .WithExample(new[] { "agentics", "runner", "register", "myorg/myproject", "--server", "localhost:3000" });
+
+            runner.AddCommand<AgenticsRunnerStartCommand>("start")
+                .WithDescription("Start the runner daemon to poll for and execute jobs")
+                .WithExample(new[] { "agentics", "runner", "start" });
         });
     });
 

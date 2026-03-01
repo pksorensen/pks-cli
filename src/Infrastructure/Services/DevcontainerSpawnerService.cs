@@ -312,7 +312,8 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                     options.BuildLogPath,
                     options.ForwardDockerConfig,
                     options.DockerConfigPath,
-                    configHash);
+                    configHash,
+                    options.CredentialSocketPath);
 
                 if (upResult.Outcome != "success")
                 {
@@ -2042,6 +2043,111 @@ OVERRIDE_EOF";
         }
     }
 
+    /// <summary>
+    /// Patches an existing override config JSON file inside the bootstrap container to add or merge
+    /// a key/value pair into its <c>remoteEnv</c> section.
+    /// </summary>
+    private async Task InjectRemoteEnvIntoOverrideConfigAsync(
+        string bootstrapContainerId,
+        string overrideConfigPath,
+        string envKey,
+        string envValue)
+    {
+        _logger.LogDebug("Injecting remoteEnv[{Key}] into override config: {Path}", envKey, overrideConfigPath);
+
+        try
+        {
+            var readResult = await ExecuteInBootstrapAsync(
+                bootstrapContainerId,
+                $"cat {overrideConfigPath}",
+                workingDir: null,
+                timeoutSeconds: 10);
+
+            if (!readResult.Success)
+            {
+                _logger.LogWarning("Could not read override config for remoteEnv injection: {Error}", readResult.Error);
+                return;
+            }
+
+            using var jsonDoc = JsonDocument.Parse(readResult.Output);
+            var root = jsonDoc.RootElement;
+
+            using var stream = new MemoryStream();
+            using var writer = new Utf8JsonWriter(stream, new JsonWriterOptions
+            {
+                Indented = true,
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+            });
+
+            writer.WriteStartObject();
+
+            var remoteEnvWritten = false;
+
+            foreach (var property in root.EnumerateObject())
+            {
+                if (property.Name == "remoteEnv")
+                {
+                    writer.WritePropertyName("remoteEnv");
+                    writer.WriteStartObject();
+
+                    // Copy existing remoteEnv entries
+                    foreach (var env in property.Value.EnumerateObject())
+                    {
+                        writer.WritePropertyName(env.Name);
+                        env.Value.WriteTo(writer);
+                    }
+
+                    // Inject new key (overwrite if exists)
+                    writer.WriteString(envKey, envValue);
+                    writer.WriteEndObject();
+                    remoteEnvWritten = true;
+                }
+                else
+                {
+                    writer.WritePropertyName(property.Name);
+                    property.Value.WriteTo(writer);
+                }
+            }
+
+            // If remoteEnv was not present, add it now
+            if (!remoteEnvWritten)
+            {
+                writer.WritePropertyName("remoteEnv");
+                writer.WriteStartObject();
+                writer.WriteString(envKey, envValue);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndObject();
+            await writer.FlushAsync();
+
+            var updatedJson = System.Text.Encoding.UTF8.GetString(stream.ToArray());
+
+            var writeCommand = $@"cat > {overrideConfigPath} <<'OVERRIDE_EOF'
+{updatedJson}
+OVERRIDE_EOF";
+
+            var writeResult = await ExecuteInBootstrapAsync(
+                bootstrapContainerId,
+                writeCommand,
+                workingDir: null,
+                timeoutSeconds: 10);
+
+            if (!writeResult.Success)
+            {
+                _logger.LogWarning("Failed to write updated override config: {Error}", writeResult.Error);
+            }
+            else
+            {
+                _logger.LogDebug("Successfully injected remoteEnv[{Key}] into override config", envKey);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to inject remoteEnv into override config");
+        }
+    }
+
     private async Task RemoveWorkspaceMountPropertiesAsync(
         string bootstrapContainerId,
         string workspaceFolder)
@@ -2202,7 +2308,8 @@ DEVCONTAINER_EOF";
         string? buildLogPath = null,
         bool forwardDockerConfig = false,
         string? dockerConfigPath = null,
-        string? configHash = null)
+        string? configHash = null,
+        string? credentialSocketPath = null)
     {
         _logger.LogDebug("Running devcontainer up in bootstrap container: {WorkspaceFolder}", workspaceFolder);
 
@@ -2245,6 +2352,29 @@ DEVCONTAINER_EOF";
             await CreateDefaultDockerConfigAsync(bootstrapContainerId, workspaceFolder);
         }
 
+        // If credential socket is provided, inject askpass script and add it to override config remoteEnv
+        string? credentialMountArg = null;
+        if (!string.IsNullOrEmpty(credentialSocketPath))
+        {
+            _logger.LogInformation("Injecting git credential helper (socket: {SocketPath})", credentialSocketPath);
+            credentialMountArg = $" --mount type=bind,source={credentialSocketPath},target=/tmp/pks-creds.sock";
+
+            // Write the askpass script inside the bootstrap container
+            const string askpassScript = "#!/bin/sh\ncurl -s --unix-socket /tmp/pks-creds.sock \"http://localhost/git-credential?host=github.com\" | sed -n 's/.*\"password\":\"\\([^\"]*\\)\".*/\\1/p'\n";
+            var writeAskpassCmd = $"printf '%s' '{askpassScript.Replace("'", "'\\''")}' > /tmp/git-askpass.sh && chmod +x /tmp/git-askpass.sh";
+            var askpassResult = await ExecuteInBootstrapAsync(bootstrapContainerId, writeAskpassCmd, workingDir: null, timeoutSeconds: 10);
+            if (!askpassResult.Success)
+            {
+                _logger.LogWarning("Failed to write askpass script: {Error}", askpassResult.Error);
+            }
+
+            // Patch override config to include GIT_ASKPASS in remoteEnv
+            if (overrideConfigPath != null)
+            {
+                await InjectRemoteEnvIntoOverrideConfigAsync(bootstrapContainerId, overrideConfigPath, "GIT_ASKPASS", "/tmp/git-askpass.sh");
+            }
+        }
+
         // Build command using --override-config (if successfully created)
         // Based on source code analysis: override config completely replaces base config
         // Must contain ALL properties including features for feature metadata processing to work
@@ -2263,13 +2393,13 @@ DEVCONTAINER_EOF";
             // The override config has workspaceMount/workspaceFolder removed, and we use --mount for the volume
             // This avoids the bind mount issue while preserving feature metadata processing
             _logger.LogInformation("Using override config approach with file: {OverrideConfig}", overrideConfigPath);
-            devcontainerCommand = $"devcontainer up --config {workspaceFolder}/.devcontainer/devcontainer.json --override-config {overrideConfigPath} --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true --update-remote-user-uid-default off --include-configuration --include-merged-configuration";
+            devcontainerCommand = $"devcontainer up --config {workspaceFolder}/.devcontainer/devcontainer.json --override-config {overrideConfigPath} --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg} --update-remote-user-uid-default off --include-configuration --include-merged-configuration";
         }
         else
         {
             // Fallback: use workspace-folder without override-config
             _logger.LogWarning("Using fallback approach without override config");
-            devcontainerCommand = $"devcontainer up --workspace-folder {workspaceFolder} --config {workspaceFolder}/.devcontainer/devcontainer.json --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true --update-remote-user-uid-default off --mount-workspace-git-root false --include-configuration --include-merged-configuration";
+            devcontainerCommand = $"devcontainer up --workspace-folder {workspaceFolder} --config {workspaceFolder}/.devcontainer/devcontainer.json --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg} --update-remote-user-uid-default off --mount-workspace-git-root false --include-configuration --include-merged-configuration";
         }
 
         // Execute using ExecuteInBootstrapAsync with 1800 second timeout (30 minutes)

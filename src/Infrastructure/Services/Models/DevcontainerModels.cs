@@ -470,6 +470,12 @@ public class DevcontainerSpawnOptions
     /// Whether to skip the rebuild prompt and continue with existing container even if config changed
     /// </summary>
     public bool SkipRebuild { get; set; } = false;
+
+    /// <summary>
+    /// Path to the Unix socket for git credential server (optional).
+    /// When set, the socket is bind-mounted into the devcontainer and GIT_ASKPASS is configured.
+    /// </summary>
+    public string? CredentialSocketPath { get; set; }
 }
 
 /// <summary>
