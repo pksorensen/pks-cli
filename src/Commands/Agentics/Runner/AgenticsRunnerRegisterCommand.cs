@@ -1,8 +1,6 @@
 using System.ComponentModel;
 using System.Net.Http.Json;
 using System.Text.Json;
-using System.Text.Json.Serialization;
-using Microsoft.Extensions.Logging;
 using PKS.Infrastructure.Services.Models;
 using PKS.Infrastructure.Services.Runner;
 using Spectre.Console;
@@ -13,18 +11,11 @@ namespace PKS.Commands.Agentics.Runner;
 /// <summary>
 /// Register an agentics runner for an owner/project
 /// </summary>
-public class AgenticsRunnerRegisterCommand : Command<AgenticsRunnerRegisterCommand.Settings>
+public class AgenticsRunnerRegisterCommand(
+    IAgenticsRunnerConfigurationService configService,
+    IAnsiConsole console) : Command<AgenticsRunnerRegisterCommand.Settings>
 {
-    private readonly IAgenticsRunnerConfigurationService _configService;
-    private readonly IAnsiConsole _console;
-
-    public AgenticsRunnerRegisterCommand(
-        IAgenticsRunnerConfigurationService configService,
-        IAnsiConsole console)
-    {
-        _configService = configService ?? throw new ArgumentNullException(nameof(configService));
-        _console = console ?? throw new ArgumentNullException(nameof(console));
-    }
+    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     public class Settings : AgenticsRunnerSettings
     {
@@ -83,13 +74,13 @@ public class AgenticsRunnerRegisterCommand : Command<AgenticsRunnerRegisterComma
                 DisplayInfo($"Runner name: {runnerName}");
             }
 
-            _console.WriteLine();
+            console.WriteLine();
 
             // 4. POST to register endpoint
             RegisterRunnerResponse? response = null;
             string? registerError = null;
 
-            await _console.Status()
+            await console.Status()
                 .SpinnerStyle(Style.Parse("cyan"))
                 .Spinner(Spinner.Known.Dots)
                 .StartAsync("Registering runner...", async _ =>
@@ -110,10 +101,7 @@ public class AgenticsRunnerRegisterCommand : Command<AgenticsRunnerRegisterComma
                         }
 
                         var json = await httpResponse.Content.ReadAsStringAsync();
-                        response = JsonSerializer.Deserialize<RegisterRunnerResponse>(json, new JsonSerializerOptions
-                        {
-                            PropertyNameCaseInsensitive = true
-                        });
+                        response = JsonSerializer.Deserialize<RegisterRunnerResponse>(json, JsonOptions);
                     }
                     catch (Exception ex)
                     {
@@ -145,9 +133,9 @@ public class AgenticsRunnerRegisterCommand : Command<AgenticsRunnerRegisterComma
                 RegisteredAt = DateTime.UtcNow
             };
 
-            await _configService.AddRegistrationAsync(registration);
+            await configService.AddRegistrationAsync(registration);
 
-            _console.WriteLine();
+            console.WriteLine();
 
             // 6. Display success table
             var table = new Table()
@@ -162,8 +150,8 @@ public class AgenticsRunnerRegisterCommand : Command<AgenticsRunnerRegisterComma
             table.AddRow("Server", registration.Server);
             table.AddRow("Project", $"{registration.Owner}/{registration.Project}");
 
-            _console.Write(table);
-            _console.WriteLine();
+            console.Write(table);
+            console.WriteLine();
             DisplaySuccess($"Runner '{registration.Name}' registered for {owner}/{project}.");
 
             return 0;
@@ -173,7 +161,7 @@ public class AgenticsRunnerRegisterCommand : Command<AgenticsRunnerRegisterComma
             DisplayError($"Failed to register runner: {ex.Message}");
             if (settings.Verbose)
             {
-                _console.WriteException(ex);
+                console.WriteException(ex);
             }
             return 1;
         }
@@ -184,18 +172,18 @@ public class AgenticsRunnerRegisterCommand : Command<AgenticsRunnerRegisterComma
         var panel = new Panel("[bold cyan]Agentics Runner Register[/]")
             .BorderStyle(Style.Parse("cyan"))
             .Padding(1, 0);
-        _console.Write(panel);
-        _console.WriteLine();
+        console.Write(panel);
+        console.WriteLine();
     }
 
     private void DisplaySuccess(string message) =>
-        _console.MarkupLine($"[green]{message}[/]");
+        console.MarkupLine($"[green]{message}[/]");
 
     private void DisplayError(string message) =>
-        _console.MarkupLine($"[red]{message.EscapeMarkup()}[/]");
+        console.MarkupLine($"[red]{message.EscapeMarkup()}[/]");
 
     private void DisplayInfo(string message) =>
-        _console.MarkupLine($"[cyan]{message}[/]");
+        console.MarkupLine($"[cyan]{message}[/]");
 
     private static (string Owner, string Project) ParseOwnerProject(string? ownerProject)
     {
