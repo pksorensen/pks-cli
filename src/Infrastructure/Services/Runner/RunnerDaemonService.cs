@@ -170,7 +170,11 @@ public class RunnerDaemonService : IRunnerDaemonService
                 }
 
                 // Polling succeeded — reset auth failure counter
-                _consecutiveAuthFailures = 0;
+                if (_consecutiveAuthFailures > 0)
+                {
+                    _logger.LogInformation("Polling succeeded after {Count} auth failure(s), resetting counter", _consecutiveAuthFailures);
+                    _consecutiveAuthFailures = 0;
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -181,32 +185,43 @@ public class RunnerDaemonService : IRunnerDaemonService
             {
                 _consecutiveAuthFailures++;
 
-                if (_consecutiveAuthFailures > 3)
-                {
-                    _logger.LogError("Token refresh failed {Count} consecutive times. Re-run 'pks github runner register' to re-authenticate.",
-                        _consecutiveAuthFailures);
-                    OnStatusChanged($"Auth failing repeatedly ({_consecutiveAuthFailures}x) — re-authenticate with 'pks github runner register'");
-
-                    // Wait longer before retrying to avoid hammering the API
-                    try { await Task.Delay(TimeSpan.FromMinutes(5), cancellationToken); }
-                    catch (OperationCanceledException) { break; }
-                    continue;
-                }
-
                 _logger.LogWarning("Token expired (attempt {Count}), attempting refresh...", _consecutiveAuthFailures);
-                OnStatusChanged("Token expired, refreshing...");
+                OnStatusChanged($"Token expired (attempt {_consecutiveAuthFailures}), refreshing...");
 
                 var newToken = await _authService.RefreshTokenAsync();
                 if (newToken != null)
                 {
                     accessToken = newToken.AccessToken;
                     _apiClient.SetAuthenticationToken(accessToken);
+                    _consecutiveAuthFailures = 0;
                     OnStatusChanged("Token refreshed successfully");
+                }
+                else if (_consecutiveAuthFailures >= 3)
+                {
+                    // Check if a refresh token even exists — if not, stop the daemon
+                    var storedToken = await _authService.GetStoredTokenAsync();
+                    if (storedToken == null || string.IsNullOrEmpty(storedToken.RefreshToken))
+                    {
+                        _logger.LogError(
+                            "No refresh token available and access token expired. Stopping daemon — " +
+                            "re-authenticate with 'pks github runner register'.");
+                        OnStatusChanged("Auth failed: no refresh token available, stopping daemon — re-authenticate with 'pks github runner register'");
+                        break;
+                    }
+
+                    _logger.LogError("Token refresh failed {Count} consecutive times. Re-run 'pks github runner register' to re-authenticate.",
+                        _consecutiveAuthFailures);
+                    OnStatusChanged($"Auth failing repeatedly ({_consecutiveAuthFailures}x) — re-authenticate with 'pks github runner register'");
+
+                    // Wait longer before retrying to avoid hammering the API (10x the polling interval)
+                    var backoffSeconds = config.PollingIntervalSeconds * 10;
+                    try { await Task.Delay(TimeSpan.FromSeconds(backoffSeconds), cancellationToken); }
+                    catch (OperationCanceledException) { break; }
                 }
                 else
                 {
-                    _logger.LogError("Token refresh failed. Re-run 'pks github runner register' to re-authenticate.");
-                    OnStatusChanged("Token refresh failed — re-authenticate with 'pks github runner register'");
+                    _logger.LogError("Token refresh failed (attempt {Count}). Will retry.", _consecutiveAuthFailures);
+                    OnStatusChanged($"Token refresh failed (attempt {_consecutiveAuthFailures}), will retry");
                 }
             }
             catch (Exception ex)

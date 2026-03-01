@@ -419,6 +419,7 @@ public class RunnerContainerServiceTests : IDisposable
         devcontainerArgs.Should().Contain("--id-label pks.runner.owner=testowner");
         devcontainerArgs.Should().Contain("--id-label pks.runner.repo=testrepo");
         devcontainerArgs.Should().NotContain("--remove-existing-container");
+        devcontainerArgs.Should().Contain("--remote-env PKS_RUNNER=true");
     }
 
     [Fact]
@@ -449,6 +450,7 @@ public class RunnerContainerServiceTests : IDisposable
         var devcontainerArgs = capturedArgs.First(a => a.Contains("up"));
         devcontainerArgs.Should().Contain("--remove-existing-container");
         devcontainerArgs.Should().NotContain("--id-label");
+        devcontainerArgs.Should().Contain("--remote-env PKS_RUNNER=true");
     }
 
     #endregion

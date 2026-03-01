@@ -151,9 +151,10 @@ public class RunnerContainerService : IRunnerContainerService
             onProgress?.Invoke($"Running: devcontainer up --workspace-folder {clonePath} (this may take a few minutes on first run)");
             _logger.LogInformation("Running devcontainer up for {Path}", clonePath);
 
+            var baseArgs = $"up --workspace-folder {clonePath} --remote-env PKS_RUNNER=true";
             var devcontainerArgs = containerName != null
-                ? $"up --workspace-folder {clonePath} --id-label pks.runner.name={containerName} --id-label pks.runner.owner={registration.Owner} --id-label pks.runner.repo={registration.Repository}"
-                : $"up --workspace-folder {clonePath} --remove-existing-container";
+                ? $"{baseArgs} --id-label pks.runner.name={containerName} --id-label pks.runner.owner={registration.Owner} --id-label pks.runner.repo={registration.Repository}"
+                : $"{baseArgs} --remove-existing-container";
             var devcontainerResult = await _processRunner.RunAsync("devcontainer", devcontainerArgs, null, cancellationToken);
 
             if (devcontainerResult.ExitCode != 0)

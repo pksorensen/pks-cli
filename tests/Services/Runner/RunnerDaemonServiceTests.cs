@@ -605,4 +605,152 @@ public class RunnerDaemonServiceTests : IDisposable
     }
 
     #endregion
+
+    #region Auth Token Refresh
+
+    [Fact]
+    public async Task RunAsync_WhenAuthFails_AttemptsRefreshWithinFirst3Failures()
+    {
+        var cts = new CancellationTokenSource();
+        var pollCount = 0;
+
+        _mockActionsService
+            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception("Bad credentials"));
+
+        _mockAuthService
+            .Setup(a => a.RefreshTokenAsync(null))
+            .ReturnsAsync(new GitHubStoredToken
+            {
+                AccessToken = "ghp_refreshed",
+                IsValid = true,
+                Scopes = new[] { "repo" }
+            })
+            .Callback(() =>
+            {
+                pollCount++;
+                if (pollCount >= 2) cts.Cancel();
+            });
+
+        await _service.RunAsync(cts.Token);
+
+        _mockAuthService.Verify(a => a.RefreshTokenAsync(null), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenAuthFailsRepeatedly_StillAttemptsRefreshAfter3Failures()
+    {
+        var cts = new CancellationTokenSource();
+        var refreshAttempts = 0;
+
+        // Polling always throws auth error
+        _mockActionsService
+            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception("Bad credentials"));
+
+        // Stored token has a refresh token, so daemon won't stop
+        _mockAuthService
+            .Setup(a => a.GetStoredTokenAsync(null))
+            .ReturnsAsync(new GitHubStoredToken
+            {
+                AccessToken = "ghp_test123",
+                RefreshToken = "ghr_refresh_token",
+                IsValid = true,
+                Scopes = new[] { "repo" }
+            });
+
+        // Refresh always fails (returns null) — but should still be attempted after >3 failures
+        _mockAuthService
+            .Setup(a => a.RefreshTokenAsync(null))
+            .ReturnsAsync((GitHubStoredToken?)null)
+            .Callback(() =>
+            {
+                refreshAttempts++;
+                // Cancel after we see the 5th refresh attempt (proves it retries beyond 3)
+                if (refreshAttempts >= 5) cts.Cancel();
+            });
+
+        await _service.RunAsync(cts.Token);
+
+        // Should have attempted refresh more than 3 times (the old code stopped after 3)
+        refreshAttempts.Should().BeGreaterThanOrEqualTo(5);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenRefreshTokenIsNull_StopsDaemonGracefully()
+    {
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var statusMessages = new List<string>();
+        _service.StatusChanged += (_, msg) => statusMessages.Add(msg);
+
+        // Polling throws auth error
+        _mockActionsService
+            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception("Bad credentials"));
+
+        // Stored token has no refresh token
+        _mockAuthService
+            .Setup(a => a.GetStoredTokenAsync(null))
+            .ReturnsAsync(new GitHubStoredToken
+            {
+                AccessToken = "ghp_test123",
+                RefreshToken = null,
+                IsValid = true
+            });
+
+        // RefreshTokenAsync returns null (no refresh token available)
+        _mockAuthService
+            .Setup(a => a.RefreshTokenAsync(null))
+            .ReturnsAsync((GitHubStoredToken?)null);
+
+        await _service.RunAsync(cts.Token);
+
+        // Daemon should have stopped (not running) without hitting the timeout
+        _service.GetStatus().IsRunning.Should().BeFalse();
+        statusMessages.Should().Contain(m => m.Contains("no refresh token") || m.Contains("re-authenticate") || m.Contains("stopping"));
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenRefreshSucceedsAfterFailures_ResetsCounterAndResumesPolling()
+    {
+        var cts = new CancellationTokenSource();
+        var pollCount = 0;
+        var refreshCount = 0;
+
+        _mockActionsService
+            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
+            .Returns(() =>
+            {
+                pollCount++;
+                if (pollCount <= 4)
+                    throw new Exception("Bad credentials");
+                // After refresh succeeds, polling works again
+                cts.Cancel();
+                return Task.FromResult(new List<QueuedWorkflowRun>());
+            });
+
+        _mockAuthService
+            .Setup(a => a.RefreshTokenAsync(null))
+            .Returns(() =>
+            {
+                refreshCount++;
+                if (refreshCount < 3)
+                    return Task.FromResult<GitHubStoredToken?>(null);
+                // 3rd refresh attempt succeeds
+                return Task.FromResult<GitHubStoredToken?>(new GitHubStoredToken
+                {
+                    AccessToken = "ghp_new_token",
+                    RefreshToken = "ghr_new_refresh",
+                    IsValid = true
+                });
+            });
+
+        await _service.RunAsync(cts.Token);
+
+        // Polling should have resumed after the successful refresh
+        pollCount.Should().BeGreaterThanOrEqualTo(5);
+        _mockApiClient.Verify(a => a.SetAuthenticationToken("ghp_new_token"), Times.AtLeastOnce);
+    }
+
+    #endregion
 }

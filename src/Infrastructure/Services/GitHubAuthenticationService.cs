@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.Logging;
 using PKS.Infrastructure.Services.Models;
 
 namespace PKS.Infrastructure.Services;
@@ -87,16 +88,19 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
 {
     private readonly HttpClient _httpClient;
     private readonly IConfigurationService _configurationService;
+    private readonly ILogger<GitHubAuthenticationService> _logger;
     private readonly GitHubAuthConfig _config;
     private readonly JsonSerializerOptions _jsonOptions;
 
     public GitHubAuthenticationService(
         HttpClient httpClient,
         IConfigurationService configurationService,
+        ILogger<GitHubAuthenticationService> logger,
         GitHubAuthConfig? config = null)
     {
         _httpClient = httpClient;
         _configurationService = configurationService;
+        _logger = logger;
         _config = config ?? new GitHubAuthConfig();
 
         _jsonOptions = new JsonSerializerOptions
@@ -509,6 +513,8 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
         var storedToken = await GetStoredTokenAsync(associatedUser);
         if (storedToken == null || string.IsNullOrEmpty(storedToken.RefreshToken))
         {
+            _logger.LogWarning("Cannot refresh token: {Reason}",
+                storedToken == null ? "no stored token found" : "no refresh token available");
             return null;
         }
 
@@ -527,14 +533,14 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
 
             if (!response.IsSuccessStatusCode)
             {
-                System.Diagnostics.Debug.WriteLine($"Token refresh HTTP failed: {response.StatusCode} {content}");
+                _logger.LogError("Token refresh HTTP failed: {StatusCode} {Response}", response.StatusCode, content);
                 return null;
             }
 
             // Check for error in response body (GitHub returns 200 with error in body for some cases)
             if (content.Contains("error=") || content.Contains("\"error\""))
             {
-                System.Diagnostics.Debug.WriteLine($"Token refresh returned error in body: {content}");
+                _logger.LogError("Token refresh returned error in body: {Response}", content);
                 return null;
             }
 
@@ -542,7 +548,7 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
             var tokenResponse = ParseTokenResponse(content);
             if (tokenResponse == null || string.IsNullOrEmpty(tokenResponse.AccessToken))
             {
-                System.Diagnostics.Debug.WriteLine($"Token refresh returned no access token. Response: {content}");
+                _logger.LogError("Token refresh returned no access token. Response: {Response}", content);
                 return null;
             }
 
@@ -559,11 +565,13 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
                 LastValidated = DateTime.UtcNow
             };
 
+            _logger.LogInformation("Token refreshed successfully, new token expires at {ExpiresAt}", newToken.ExpiresAt);
             await StoreTokenAsync(newToken, associatedUser);
             return newToken;
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "Token refresh failed with exception");
             return null;
         }
     }

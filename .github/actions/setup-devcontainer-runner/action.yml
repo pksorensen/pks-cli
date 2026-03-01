@@ -6,10 +6,6 @@ inputs:
     description: 'Generate and trust .NET HTTPS development certificates'
     required: false
     default: 'true'
-  extra-ca-certs:
-    description: 'Additional PEM certificate file paths to trust (one per line)'
-    required: false
-    default: ''
 
 runs:
   using: 'composite'
@@ -18,34 +14,34 @@ runs:
       if: inputs.trust-dev-certs == 'true'
       shell: bash
       run: |
-        if [ -f /usr/local/share/ca-certificates/aspnet-dev-cert.crt ]; then
-          echo "Dev certs already trusted (reused container), skipping"
+        # The devcontainer already has:
+        #   - libnss3-tools (provides certutil for NSS trust)
+        #   - SSL_CERT_DIR pointing to ~/.aspnet/dev-certs/trust
+        #
+        # We just need to run --trust which:
+        #   1. Generates the dev cert PFX in ~/.dotnet/corefx/cryptography/x509stores/my/
+        #   2. Exports PEM + hash symlink to ~/.aspnet/dev-certs/trust/
+        #   3. Adds to NSS database via certutil
+
+        TRUST_DIR="$HOME/.aspnet/dev-certs/trust"
+        if [ -d "$TRUST_DIR" ] && [ -n "$(ls -A "$TRUST_DIR" 2>/dev/null)" ]; then
+          echo "Dev certs already trusted (reused container), skipping generation"
         else
-          dotnet dev-certs https
-          dotnet dev-certs https --export-path /tmp/aspnet-dev-cert.pem --format pem --no-password
-          sudo cp /tmp/aspnet-dev-cert.pem /usr/local/share/ca-certificates/aspnet-dev-cert.crt
-          sudo update-ca-certificates
-          rm /tmp/aspnet-dev-cert.pem
+          echo "Generating and trusting dev certs..."
+          # || true: workaround for .NET SDK 10.0.103 bug — EventSource ID mismatch
+          # causes exit code 4 even though the cert IS successfully trusted.
+          # See: https://github.com/dotnet/sdk/issues — WslWindowsTrustSucceeded ID 115 vs 113
+          dotnet dev-certs https --trust || true
           echo "Dev certs generated and trusted"
         fi
-        echo "NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt" >> "$GITHUB_ENV"
-        echo "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt" >> "$GITHUB_ENV"
 
-    - name: Trust extra CA certificates
-      if: inputs.extra-ca-certs != ''
-      shell: bash
-      run: |
-        while IFS= read -r cert_path; do
-          [ -z "$cert_path" ] && continue
-          if [ ! -f "$cert_path" ]; then
-            echo "::warning::Certificate file not found: $cert_path"
-            continue
-          fi
-          cert_name=$(basename "$cert_path" .pem)
-          sudo cp "$cert_path" "/usr/local/share/ca-certificates/${cert_name}.crt"
-          echo "Added certificate: $cert_name"
-        done <<< "${{ inputs.extra-ca-certs }}"
-        sudo update-ca-certificates
+        # Ensure SSL_CERT_DIR includes the trust directory (may already be set by devcontainer.json)
+        if [[ "${SSL_CERT_DIR:-}" != *"$TRUST_DIR"* ]]; then
+          echo "SSL_CERT_DIR=${TRUST_DIR}:/usr/lib/ssl/certs" >> "$GITHUB_ENV"
+        fi
+
+        # Set NODE_EXTRA_CA_CERTS for Node.js tools
+        echo "NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt" >> "$GITHUB_ENV"
 
     - name: Set PKS runner environment
       shell: bash
@@ -57,5 +53,6 @@ runs:
       if: inputs.trust-dev-certs == 'true'
       shell: bash
       run: |
+        # || true: same .NET SDK 10.0.103 EventSource bug applies to --check --trust
         dotnet dev-certs https --check --trust 2>&1 || true
         echo "Dev certs configured for PKS runner"
