@@ -129,6 +129,17 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
                 ".pks-cli");
             Directory.CreateDirectory(logDir);
             var logPath = Path.Combine(logDir, "runner.log");
+
+            // 5. Start credential server for git operations inside containers
+            var firstRegistration = enabledRegistrations.First();
+            await using var credentialServer = new GitCredentialServer(
+                _authService,
+                firstRegistration.Id,
+                msg => {
+                    try { File.AppendAllText(logPath, $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}] [cred-server] {msg}\n"); } catch { }
+                });
+            await credentialServer.StartAsync();
+            DisplaySuccess($"Credential server started: {credentialServer.SocketPath}");
             DisplayInfo($"Detailed logs: {logPath}");
             DisplayInfo("Starting daemon... Press Ctrl+C to stop.");
             Console.WriteLine();
@@ -226,7 +237,7 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
 
                     try
                     {
-                        await _daemonService.RunAsync(cts.Token);
+                        await _daemonService.RunAsync(cts.Token, credentialServer.SocketDirectory);
                     }
                     catch (OperationCanceledException)
                     {

@@ -163,7 +163,19 @@ RUN set -e && \
 # ============================================================================
 # Git Credential Manager (GCM) Installation
 # ============================================================================
-# Install GCM for Azure DevOps authentication with device code flow
+# Install GCM binary for optional use (e.g. Azure DevOps device-code auth).
+# The binary is available at ~/.local/bin/git-credential-manager but is NOT
+# configured as a system-level credential helper. This avoids breaking
+# non-interactive use cases (CI runners, automation) where GCM would hang
+# waiting for interactive input.
+#
+# To enable GCM in an interactive devcontainer, add to postCreateCommand or run:
+#   git config --global credential.helper '!/home/node/.local/bin/git-credential-manager'
+#   git config --global credential.credentialStore plaintext
+#   git config --global credential.msauthFlow devicecode
+#   git config --global credential.azreposCredentialType oauth
+#   git config --global credential.useHttpPath true
+#
 # Install location: ~/.local/bin/git-credential-manager
 # PATH: Requires ~/.local/bin to be in PATH (set below)
 ARG GCM_VERSION=2.6.0
@@ -175,18 +187,7 @@ RUN set -e && \
     mv /tmp/git-credential-manager ~/.local/bin/ && \
     chmod +x ~/.local/bin/git-credential-manager && \
     rm -rf /tmp/gcm.tar.gz /tmp/git-credential-manager-* && \
-    echo "✓ Git Credential Manager installed successfully"
-
-# Configure GCM for Azure DevOps with device code flow at system level
-# This ensures container-specific config doesn't pollute host's .gitconfig
-USER root
-RUN git config --system credential.helper "!/home/node/.local/bin/git-credential-manager" && \
-    git config --system credential.credentialStore plaintext && \
-    git config --system credential.msauthFlow devicecode && \
-    git config --system credential.azreposCredentialType oauth && \
-    git config --system credential.useHttpPath true && \
-    echo "✓ Git Credential Manager configured for Azure DevOps (system-level)"
-USER node
+    echo "✓ Git Credential Manager installed (not configured — enable manually if needed)"
 # ============================================================================
 
 # ============================================================================

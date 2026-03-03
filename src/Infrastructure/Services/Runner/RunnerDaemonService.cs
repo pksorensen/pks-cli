@@ -77,8 +77,16 @@ public class RunnerDaemonService : IRunnerDaemonService
         OnStatusChanged("Shutdown requested - finishing active jobs");
     }
 
-    public async Task RunAsync(CancellationToken cancellationToken = default)
+    private string? _credentialSocketPath;
+
+    public async Task RunAsync(CancellationToken cancellationToken = default, string? credentialSocketPath = null)
     {
+        _credentialSocketPath = credentialSocketPath;
+        if (!string.IsNullOrEmpty(credentialSocketPath))
+        {
+            _logger.LogInformation("Credential socket path configured: {SocketPath}", credentialSocketPath);
+        }
+
         // Load configuration
         var config = await _configService.LoadAsync();
 
@@ -91,6 +99,7 @@ public class RunnerDaemonService : IRunnerDaemonService
         }
         var accessToken = storedToken.AccessToken;
         _apiClient.SetAuthenticationToken(accessToken);
+        _logger.LogInformation("Initial token loaded, expires at {ExpiresAt}", storedToken.ExpiresAt);
 
         // Filter to enabled registrations
         var enabledRegistrations = config.Registrations
@@ -160,6 +169,26 @@ public class RunnerDaemonService : IRunnerDaemonService
                 // Collect completed tasks
                 CollectCompletedJobs();
 
+                // Proactive token refresh: refresh if within 5 minutes of expiry
+                var storedToken = await _authService.GetStoredTokenAsync();
+                if (storedToken?.ExpiresAt != null && storedToken.ExpiresAt.Value <= DateTime.UtcNow.AddMinutes(5))
+                {
+                    _logger.LogInformation("Token expires at {ExpiresAt}, proactively refreshing...", storedToken.ExpiresAt);
+                    OnStatusChanged("Proactively refreshing token before expiry...");
+                    var newToken = await _authService.RefreshTokenAsync();
+                    if (newToken != null)
+                    {
+                        accessToken = newToken.AccessToken;
+                        _apiClient.SetAuthenticationToken(accessToken);
+                        _logger.LogInformation("Proactive refresh succeeded, new token expires at {ExpiresAt}", newToken.ExpiresAt);
+                        OnStatusChanged($"Token refreshed, expires at {newToken.ExpiresAt:HH:mm:ss}");
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Proactive token refresh failed, will continue with current token");
+                    }
+                }
+
                 // Poll each registration
                 foreach (var registration in registrations)
                 {
@@ -194,7 +223,9 @@ public class RunnerDaemonService : IRunnerDaemonService
                     accessToken = newToken.AccessToken;
                     _apiClient.SetAuthenticationToken(accessToken);
                     _consecutiveAuthFailures = 0;
-                    OnStatusChanged("Token refreshed successfully");
+                    _logger.LogInformation("Token refreshed, new expiry: {ExpiresAt}, expires_in: {ExpiresIn}s",
+                        newToken.ExpiresAt, newToken.ExpiresAt.HasValue ? (newToken.ExpiresAt.Value - DateTime.UtcNow).TotalSeconds : -1);
+                    OnStatusChanged($"Token refreshed (expires {newToken.ExpiresAt:HH:mm:ss})");
                 }
                 else if (_consecutiveAuthFailures >= 3)
                 {
@@ -475,7 +506,8 @@ public class RunnerDaemonService : IRunnerDaemonService
                     dispatchInfo.Registration, run.Id, run.HeadBranch,
                     accessToken, encodedJitConfig,
                     progress => OnStatusChanged($"Run {run.Id}: {progress}"),
-                    cancellationToken);
+                    cancellationToken,
+                    credentialSocketPath: _credentialSocketPath);
             }
 
             jobState.Status = result.Status;
@@ -546,7 +578,8 @@ public class RunnerDaemonService : IRunnerDaemonService
                     existing.ContainerId, existing.ClonePath, containerName,
                     encodedJitConfig,
                     progress => OnStatusChanged($"Run {run.Id}: {progress}"),
-                    cancellationToken);
+                    cancellationToken,
+                    credentialSocketPath: _credentialSocketPath);
             }
 
             // Container is dead — remove from pool and create fresh
@@ -566,7 +599,8 @@ public class RunnerDaemonService : IRunnerDaemonService
             accessToken, encodedJitConfig,
             progress => OnStatusChanged($"Run {run.Id}: {progress}"),
             cancellationToken,
-            containerName: containerName);
+            containerName: containerName,
+            credentialSocketPath: _credentialSocketPath);
 
         // Register in pool (labels were already set via --id-label during devcontainer up)
         if (!string.IsNullOrEmpty(result.ContainerId))

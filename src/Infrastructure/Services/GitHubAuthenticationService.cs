@@ -552,6 +552,9 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
                 return null;
             }
 
+            _logger.LogInformation("Refresh response: expires_in={ExpiresIn}, has_refresh_token={HasRefresh}, scopes={Scopes}",
+                tokenResponse.ExpiresIn, tokenResponse.RefreshToken != null, string.Join(",", tokenResponse.Scopes));
+
             var newToken = new GitHubStoredToken
             {
                 AccessToken = tokenResponse.AccessToken,

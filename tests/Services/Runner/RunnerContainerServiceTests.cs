@@ -663,4 +663,160 @@ public class RunnerContainerServiceTests : IDisposable
     }
 
     #endregion
+
+    #region GIT_ASKPASS Credential Support
+
+    [Fact]
+    public async Task ExecuteJobAsync_WhenCredentialSocketProvided_MountsSocketAndSetsAskpass()
+    {
+        // Arrange
+        var capturedArgs = new List<string>();
+        var devcontainerUpJson = """{"outcome":"success","containerId":"cred-container","remoteUser":"vscode"}""";
+        var credentialSocketPath = "/tmp/pks-credentials-test.sock";
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("git", It.Is<string>(a => a.Contains("clone")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "", ""));
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("devcontainer", It.IsAny<string>(), null, It.IsAny<CancellationToken>()))
+            .Callback<string, string, string?, CancellationToken>((cmd, args, wd, ct) => capturedArgs.Add(args))
+            .ReturnsAsync(new ProcessResult(0, devcontainerUpJson, ""));
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.IsAny<string>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "Runner completed", ""));
+
+        // Act
+        await _service.ExecuteJobAsync(
+            _testRegistration, 12345, "main", "token", "jit",
+            null, CancellationToken.None, credentialSocketPath: credentialSocketPath);
+
+        // Assert - devcontainer up should include socket mount and GIT_ASKPASS
+        var devcontainerArgs = capturedArgs.First(a => a.Contains("up"));
+        devcontainerArgs.Should().Contain($"--mount type=bind,source={credentialSocketPath},target=/var/run/pks-creds");
+        devcontainerArgs.Should().Contain("--remote-env GIT_ASKPASS=/tmp/git-askpass.sh");
+    }
+
+    [Fact]
+    public async Task ExecuteJobAsync_WhenCredentialSocketProvided_WritesAskpassScript()
+    {
+        // Arrange
+        var capturedDockerArgs = new List<string>();
+        var devcontainerUpJson = """{"outcome":"success","containerId":"askpass-container","remoteUser":"vscode"}""";
+        var credentialSocketPath = "/tmp/pks-credentials-test.sock";
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("git", It.Is<string>(a => a.Contains("clone")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "", ""));
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("devcontainer", It.IsAny<string>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, devcontainerUpJson, ""));
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.IsAny<string>(), null, It.IsAny<CancellationToken>()))
+            .Callback<string, string, string?, CancellationToken>((cmd, args, wd, ct) => capturedDockerArgs.Add(args))
+            .ReturnsAsync(new ProcessResult(0, "Runner completed", ""));
+
+        // Act
+        await _service.ExecuteJobAsync(
+            _testRegistration, 12345, "main", "token", "jit",
+            null, CancellationToken.None, credentialSocketPath: credentialSocketPath);
+
+        // Assert - docker exec should write the askpass script
+        capturedDockerArgs.Should().Contain(a =>
+            a.Contains("askpass-container") &&
+            a.Contains("git-askpass.sh") &&
+            a.Contains("chmod +x"));
+    }
+
+    [Fact]
+    public async Task ExecuteJobAsync_WhenNoCredentialSocket_DoesNotMountOrSetAskpass()
+    {
+        // Arrange
+        var capturedArgs = new List<string>();
+        var devcontainerUpJson = """{"outcome":"success","containerId":"no-cred-container","remoteUser":"vscode"}""";
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("git", It.Is<string>(a => a.Contains("clone")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "", ""));
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("devcontainer", It.IsAny<string>(), null, It.IsAny<CancellationToken>()))
+            .Callback<string, string, string?, CancellationToken>((cmd, args, wd, ct) => capturedArgs.Add(args))
+            .ReturnsAsync(new ProcessResult(0, devcontainerUpJson, ""));
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.IsAny<string>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "Runner completed", ""));
+
+        // Act
+        await _service.ExecuteJobAsync(
+            _testRegistration, 12345, "main", "token", "jit");
+
+        // Assert - devcontainer up should NOT include socket mount or GIT_ASKPASS
+        var devcontainerArgs = capturedArgs.First(a => a.Contains("up"));
+        devcontainerArgs.Should().NotContain("--mount");
+        devcontainerArgs.Should().NotContain("GIT_ASKPASS");
+    }
+
+    [Fact]
+    public async Task ExecuteJobInExistingContainerAsync_WhenCredentialSocketProvided_WritesAskpassScript()
+    {
+        // Arrange
+        var capturedDockerArgs = new List<string>();
+        var credentialSocketPath = "/tmp/pks-credentials-test.sock";
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.IsAny<string>(), null, It.IsAny<CancellationToken>()))
+            .Callback<string, string, string?, CancellationToken>((cmd, args, wd, ct) => capturedDockerArgs.Add(args))
+            .ReturnsAsync(new ProcessResult(0, "Runner.Listener completed", ""));
+
+        // Act
+        await _service.ExecuteJobInExistingContainerAsync(
+            _testRegistration,
+            runId: 100,
+            jobId: 200,
+            branch: "main",
+            containerId: "existing-container",
+            clonePath: "/workspace/repo",
+            containerName: "my-container",
+            encodedJitConfig: "encoded_jit",
+            credentialSocketPath: credentialSocketPath);
+
+        // Assert - docker exec should write the askpass script before runner install
+        capturedDockerArgs.Should().Contain(a =>
+            a.Contains("existing-container") &&
+            a.Contains("git-askpass.sh") &&
+            a.Contains("chmod +x"));
+    }
+
+    [Fact]
+    public async Task ExecuteJobInExistingContainerAsync_WhenNoCredentialSocket_DoesNotWriteAskpass()
+    {
+        // Arrange
+        var capturedDockerArgs = new List<string>();
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.IsAny<string>(), null, It.IsAny<CancellationToken>()))
+            .Callback<string, string, string?, CancellationToken>((cmd, args, wd, ct) => capturedDockerArgs.Add(args))
+            .ReturnsAsync(new ProcessResult(0, "Runner.Listener completed", ""));
+
+        // Act
+        await _service.ExecuteJobInExistingContainerAsync(
+            _testRegistration,
+            runId: 100,
+            jobId: 200,
+            branch: "main",
+            containerId: "existing-container",
+            clonePath: "/workspace/repo",
+            containerName: "my-container",
+            encodedJitConfig: "encoded_jit");
+
+        // Assert - no askpass script should be written
+        capturedDockerArgs.Should().NotContain(a => a.Contains("git-askpass.sh"));
+    }
+
+    #endregion
 }

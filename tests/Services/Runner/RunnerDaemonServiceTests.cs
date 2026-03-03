@@ -241,7 +241,8 @@ public class RunnerDaemonServiceTests : IDisposable
                 "ghp_test123", "jit",
                 It.IsAny<Action<string>?>(),
                 It.IsAny<CancellationToken>(),
-                "my-app-dev"))
+                "my-app-dev",
+                It.IsAny<string?>()))
             .ReturnsAsync(new RunnerJobState
             {
                 RunId = 12345,
@@ -302,7 +303,8 @@ public class RunnerDaemonServiceTests : IDisposable
                 "existing-container-123", "/tmp/existing-clone", "my-app",
                 "jit",
                 It.IsAny<Action<string>?>(),
-                It.IsAny<CancellationToken>()))
+                It.IsAny<CancellationToken>(),
+                It.IsAny<string?>()))
             .ReturnsAsync(new RunnerJobState { RunId = 12345, Status = RunnerJobStatus.Completed });
 
         await _service.RunAsync(cts.Token);
@@ -313,7 +315,8 @@ public class RunnerDaemonServiceTests : IDisposable
             "existing-container-123", "/tmp/existing-clone", "my-app",
             "jit",
             It.IsAny<Action<string>?>(),
-            It.IsAny<CancellationToken>()), Times.Once);
+            It.IsAny<CancellationToken>(),
+            It.IsAny<string?>()), Times.Once);
 
         _mockContainerService.Verify(c => c.ExecuteJobAsync(
             It.IsAny<RunnerRegistration>(), It.IsAny<long>(), It.IsAny<string>(),
@@ -501,6 +504,90 @@ public class RunnerDaemonServiceTests : IDisposable
             It.IsAny<string>(), It.IsAny<string>(),
             It.IsAny<string>(), It.IsAny<string[]>(),
             It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    #endregion
+
+    #region Proactive Token Refresh
+
+    [Fact]
+    public async Task RunAsync_WhenTokenNearExpiry_ProactivelyRefreshes()
+    {
+        var cts = new CancellationTokenSource();
+        var pollCount = 0;
+
+        // Initial token expires in 2 minutes (within the 5-minute threshold)
+        var nearExpiryToken = new GitHubStoredToken
+        {
+            AccessToken = "ghp_old_token",
+            RefreshToken = "ghr_refresh",
+            IsValid = true,
+            Scopes = new[] { "repo" },
+            ExpiresAt = DateTime.UtcNow.AddMinutes(2)
+        };
+
+        var refreshedToken = new GitHubStoredToken
+        {
+            AccessToken = "ghp_refreshed_token",
+            RefreshToken = "ghr_new_refresh",
+            IsValid = true,
+            Scopes = new[] { "repo" },
+            ExpiresAt = DateTime.UtcNow.AddHours(8)
+        };
+
+        _mockAuthService
+            .Setup(a => a.GetStoredTokenAsync(null))
+            .ReturnsAsync(nearExpiryToken);
+
+        _mockAuthService
+            .Setup(a => a.RefreshTokenAsync(null))
+            .ReturnsAsync(refreshedToken);
+
+        _mockActionsService
+            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<QueuedWorkflowRun>())
+            .Callback(() =>
+            {
+                pollCount++;
+                if (pollCount >= 1) cts.Cancel();
+            });
+
+        await _service.RunAsync(cts.Token);
+
+        // RefreshTokenAsync should have been called proactively (not from a "Bad credentials" error)
+        _mockAuthService.Verify(a => a.RefreshTokenAsync(null), Times.AtLeastOnce);
+        // The new token should have been set on the API client
+        _mockApiClient.Verify(a => a.SetAuthenticationToken("ghp_refreshed_token"), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenTokenNotNearExpiry_DoesNotProactivelyRefresh()
+    {
+        var cts = new CancellationTokenSource();
+
+        // Token expires in 30 minutes (well outside the 5-minute threshold)
+        var validToken = new GitHubStoredToken
+        {
+            AccessToken = "ghp_valid_token",
+            RefreshToken = "ghr_refresh",
+            IsValid = true,
+            Scopes = new[] { "repo" },
+            ExpiresAt = DateTime.UtcNow.AddMinutes(30)
+        };
+
+        _mockAuthService
+            .Setup(a => a.GetStoredTokenAsync(null))
+            .ReturnsAsync(validToken);
+
+        _mockActionsService
+            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<QueuedWorkflowRun>())
+            .Callback(() => cts.Cancel());
+
+        await _service.RunAsync(cts.Token);
+
+        // RefreshTokenAsync should NOT have been called since token is not near expiry
+        _mockAuthService.Verify(a => a.RefreshTokenAsync(null), Times.Never);
     }
 
     #endregion
