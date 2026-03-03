@@ -16,6 +16,7 @@ using PKS.Infrastructure.Services.Runner;
 using PKS.Commands.GitHub.Runner;
 using PKS.Commands.Agentics;
 using PKS.Commands.Agentics.Runner;
+using PKS.Commands.Ado;
 using PKS.Infrastructure.Services.Runner;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -36,6 +37,11 @@ var isMcpStdio = commandArgs.Length > 2 &&
                   commandArgs[Array.IndexOf(commandArgs, a) + 1].Equals("stdio", StringComparison.OrdinalIgnoreCase)) ||
                   !commandArgs.Any(a => a.Equals("--transport", StringComparison.OrdinalIgnoreCase) || a.Equals("-t", StringComparison.OrdinalIgnoreCase)));
 
+// Skip banner for git askpass (GIT_ASKPASS must have zero extra output)
+var isGitAskPass = commandArgs.Length > 2 &&
+                   commandArgs[1].Equals("git", StringComparison.OrdinalIgnoreCase) &&
+                   commandArgs[2].Equals("askpass", StringComparison.OrdinalIgnoreCase);
+
 // Skip banner for hooks commands (Claude Code compatibility)
 var isHooksCommand = commandArgs.Length > 1 &&
                      commandArgs[1].Equals("hooks", StringComparison.OrdinalIgnoreCase);
@@ -50,7 +56,7 @@ var isHookEventCommand = commandArgs.Length > 2 &&
                             .Contains(commandArgs[2], StringComparer.OrdinalIgnoreCase);
 
 // Display welcome banner with fancy ASCII art (unless we should skip it)
-if (!isMcpStdio && !(isHooksCommand && (hasJsonFlag || isHookEventCommand)))
+if (!isMcpStdio && !isGitAskPass && !(isHooksCommand && (hasJsonFlag || isHookEventCommand)))
 {
     DisplayWelcomeBanner();
 
@@ -171,6 +177,10 @@ services.AddSingleton(serviceProvider => new PKS.Infrastructure.Services.Models.
     MaxDelay = TimeSpan.FromSeconds(30),
     BackoffMultiplier = 2.0
 });
+
+// Configure Azure DevOps authentication
+services.AddSingleton<PKS.Infrastructure.Services.Models.AzureDevOpsAuthConfig>();
+services.AddHttpClient<IAzureDevOpsAuthService, AzureDevOpsAuthService>();
 
 // Register GitHub and Project Identity services
 services.AddHttpClient<IGitHubService, GitHubService>();
@@ -417,6 +427,31 @@ app.Configure(config =>
         });
     });
 
+    // Add Azure DevOps branch command
+    config.AddBranch<AdoSettings>("ado", ado =>
+    {
+        ado.SetDescription("Manage Azure DevOps authentication");
+
+        ado.AddCommand<AdoInitCommand>("init")
+            .WithDescription("Authenticate with Azure DevOps via OAuth2")
+            .WithExample(new[] { "ado", "init" })
+            .WithExample(new[] { "ado", "init", "--force" });
+
+        ado.AddCommand<AdoStatusCommand>("status")
+            .WithDescription("Show Azure DevOps authentication status")
+            .WithExample(new[] { "ado", "status" });
+    });
+
+    // Add git branch command (credential helpers)
+    config.AddBranch("git", git =>
+    {
+        git.SetDescription("Git credential helpers");
+
+        git.AddCommand<GitAskPassCommand>("askpass")
+            .WithDescription("Git credential helper for Azure DevOps (GIT_ASKPASS)")
+            .WithExample(new[] { "git", "askpass", "Password for 'https://dev.azure.com':" });
+    });
+
     // Add hooks branch command with subcommands
     config.AddBranch<HooksSettings>("hooks", hooks =>
     {
@@ -610,6 +645,15 @@ static bool ShouldSkipFirstTimeWarning(string[] commandArgs)
                           !commandArgs.Any(a => a.Equals("--transport", StringComparison.OrdinalIgnoreCase) || a.Equals("-t", StringComparison.OrdinalIgnoreCase)));
 
         if (isMcpStdio)
+        {
+            return true;
+        }
+
+        // Skip for git askpass (GIT_ASKPASS must have zero extra output)
+        var isGitAskPass = commandArgs.Length > 2 &&
+                           commandArgs[1].Equals("git", StringComparison.OrdinalIgnoreCase) &&
+                           commandArgs[2].Equals("askpass", StringComparison.OrdinalIgnoreCase);
+        if (isGitAskPass)
         {
             return true;
         }
