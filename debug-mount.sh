@@ -1,0 +1,1 @@
+echo "=== 1. Git config (local + global) ===" && git config --list --show-origin 2>&1 && echo "=== 2. Test clone with credential helper ===" && GIT_TRACE=1 GIT_CURL_VERBOSE=1 git clone https://github.com/pksorensen/claude-plugins.git /tmp/test-submodule-clone 2>&1 | head -50 && rm -rf /tmp/test-submodule-clone

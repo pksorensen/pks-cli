@@ -4,6 +4,13 @@ All notable changes to the DevContainer template will be documented in this file
 
 This template follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [4.0.1-rc.11](https://github.com/pksorensen/pks-cli/compare/devcontainer-v4.0.0-rc.11...devcontainer-v4.0.1-rc.11) (2026-03-04)
+
+
+### Bug Fixes
+
+* **cli:** correct npm publish to use OIDC trusted publishing ([793d141](https://github.com/pksorensen/pks-cli/commit/793d14190974e7808be3dec61598da51bfd49322))
+
 ## [4.0.0-rc.11](https://github.com/pksorensen/pks-cli/compare/devcontainer-v3.0.0-rc.11...devcontainer-v4.0.0-rc.11) (2026-02-22)
 
 
