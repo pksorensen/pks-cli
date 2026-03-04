@@ -17,7 +17,6 @@ using PKS.Commands.GitHub.Runner;
 using PKS.Commands.Agentics;
 using PKS.Commands.Agentics.Runner;
 using PKS.Commands.Ado;
-using PKS.Infrastructure.Services.Runner;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.Text;
