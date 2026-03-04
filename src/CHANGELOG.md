@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [5.1.1-rc.28](https://github.com/pksorensen/pks-cli/compare/v5.1.0-rc.28...v5.1.1-rc.28) (2026-03-04)
+
+
+### Bug Fixes
+
+* **cli:** improve AdoInitCommand documentation ([c864194](https://github.com/pksorensen/pks-cli/commit/c8641948062808ae4a876779528e051a05cf0187))
+
 ## [5.1.0-rc.28](https://github.com/pksorensen/pks-cli/compare/v5.0.3-rc.28...v5.1.0-rc.28) (2026-03-04)
 
 
