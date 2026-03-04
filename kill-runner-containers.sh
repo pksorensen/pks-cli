@@ -1,0 +1,1 @@
+docker ps --filter label=pks.runner.name --format "{{.ID}}\t{{.Labels}}" && echo "---" && docker rm -f $(docker ps --filter label=pks.runner.name -q) 2>/dev/null || echo "No PKS runner containers found"
