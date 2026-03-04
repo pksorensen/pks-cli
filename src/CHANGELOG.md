@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [5.1.3-rc.28](https://github.com/pksorensen/pks-cli/compare/v5.1.2-rc.28...v5.1.3-rc.28) (2026-03-04)
+
+
+### Bug Fixes
+
+* **cli:** extract token status variable in AdoStatusCommand ([f38ae86](https://github.com/pksorensen/pks-cli/commit/f38ae86e2bc40979f49c9a7c1ba90fb63ad87819))
+
 ## [5.1.2-rc.28](https://github.com/pksorensen/pks-cli/compare/v5.1.1-rc.28...v5.1.2-rc.28) (2026-03-04)
 
 
