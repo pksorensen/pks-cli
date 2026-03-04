@@ -95,8 +95,9 @@ public class RunnerContainerService : IRunnerContainerService
         string accessToken,
         string encodedJitConfig,
         Action<string>? onProgress = null,
-        CancellationToken cancellationToken = default)
-        => ExecuteJobAsync(registration, runId, branch, accessToken, encodedJitConfig, onProgress, cancellationToken, containerName: null);
+        CancellationToken cancellationToken = default,
+        string? credentialSocketPath = null)
+        => ExecuteJobAsync(registration, runId, branch, accessToken, encodedJitConfig, onProgress, cancellationToken, containerName: null, credentialSocketPath: credentialSocketPath);
 
     /// <summary>
     /// Execute a full job lifecycle with optional container name for reuse.
@@ -110,7 +111,8 @@ public class RunnerContainerService : IRunnerContainerService
         string encodedJitConfig,
         Action<string>? onProgress,
         CancellationToken cancellationToken,
-        string? containerName)
+        string? containerName,
+        string? credentialSocketPath = null)
     {
         var job = new RunnerJobState
         {
@@ -151,10 +153,41 @@ public class RunnerContainerService : IRunnerContainerService
             onProgress?.Invoke($"Running: devcontainer up --workspace-folder {clonePath} (this may take a few minutes on first run)");
             _logger.LogInformation("Running devcontainer up for {Path}", clonePath);
 
+            var baseArgs = $"up --workspace-folder {clonePath} --remote-env PKS_RUNNER=true";
+
+            // Mount credential socket directory and set GIT_ASKPASS if credential server is available.
+            // We mount the directory (not the file) so the bind mount survives socket recreation
+            // across runner restarts — directory mounts reflect new files, file mounts go stale.
+            if (!string.IsNullOrEmpty(credentialSocketPath))
+            {
+                baseArgs += $" --mount type=bind,source={credentialSocketPath},target=/var/run/pks-creds";
+                baseArgs += " --remote-env GIT_ASKPASS=/tmp/git-askpass.sh";
+                _logger.LogInformation("Credential socket dir mounted: {SocketDir} -> /var/run/pks-creds, GIT_ASKPASS=/tmp/git-askpass.sh", credentialSocketPath);
+            }
+
             var devcontainerArgs = containerName != null
-                ? $"up --workspace-folder {clonePath} --id-label pks.runner.name={containerName} --id-label pks.runner.owner={registration.Owner} --id-label pks.runner.repo={registration.Repository}"
-                : $"up --workspace-folder {clonePath} --remove-existing-container";
+                ? $"{baseArgs} --id-label pks.runner.name={containerName} --id-label pks.runner.owner={registration.Owner} --id-label pks.runner.repo={registration.Repository}"
+                : $"{baseArgs} --remove-existing-container";
             var devcontainerResult = await _processRunner.RunAsync("devcontainer", devcontainerArgs, null, cancellationToken);
+
+            // Persist devcontainer up output to a log file for later debugging
+            var logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".pks-cli", "devcontainer-logs");
+            try
+            {
+                Directory.CreateDirectory(logDir);
+                var logFile = Path.Combine(logDir, $"devcontainer-up-{runId}-{DateTime.UtcNow:yyyyMMdd-HHmmss}.log");
+                var logContent = $"[{DateTime.UtcNow:O}] devcontainer {devcontainerArgs}\n" +
+                    $"Exit code: {devcontainerResult.ExitCode}\n\n" +
+                    $"=== STDOUT ===\n{devcontainerResult.StandardOutput}\n\n" +
+                    $"=== STDERR ===\n{devcontainerResult.StandardError}\n";
+                await File.WriteAllTextAsync(logFile, logContent, cancellationToken);
+                onProgress?.Invoke($"devcontainer up log: {logFile}");
+                _logger.LogInformation("Wrote devcontainer up log to {LogFile}", logFile);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to write devcontainer up log");
+            }
 
             if (devcontainerResult.ExitCode != 0)
             {
@@ -183,6 +216,12 @@ public class RunnerContainerService : IRunnerContainerService
             if (containerName != null)
                 job.ContainerName = containerName;
             onProgress?.Invoke($"Devcontainer ready: container {containerId[..Math.Min(12, containerId.Length)]}");
+
+            // Write the askpass script if credential socket is mounted
+            if (!string.IsNullOrEmpty(credentialSocketPath))
+            {
+                await WriteAskpassScriptAsync(containerId, onProgress, cancellationToken);
+            }
 
             // Step 3: Install the GitHub Actions runner inside the container
             onProgress?.Invoke($"Installing GitHub Actions runner v{RunnerVersion} in container...");
@@ -314,7 +353,8 @@ public class RunnerContainerService : IRunnerContainerService
         string containerName,
         string encodedJitConfig,
         Action<string>? onProgress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? credentialSocketPath = null)
     {
         var job = new RunnerJobState
         {
@@ -333,6 +373,12 @@ public class RunnerContainerService : IRunnerContainerService
 
         try
         {
+            // Write/update the askpass script if credential socket is available
+            if (!string.IsNullOrEmpty(credentialSocketPath))
+            {
+                await WriteAskpassScriptAsync(containerId, onProgress, cancellationToken);
+            }
+
             // Step 1: Install the GitHub Actions runner to a unique path
             onProgress?.Invoke($"Installing GitHub Actions runner v{RunnerVersion} in existing container {containerId[..Math.Min(12, containerId.Length)]}...");
             _logger.LogInformation("Installing runner to {RunnerPath} in container {ContainerId} for job {JobId}",
@@ -530,6 +576,78 @@ public class RunnerContainerService : IRunnerContainerService
         }
 
         return entries;
+    }
+
+    /// <summary>
+    /// Writes the git-askpass.sh script into a container so that git operations
+    /// can retrieve credentials from the credential server Unix socket.
+    /// </summary>
+    private async Task WriteAskpassScriptAsync(
+        string containerId,
+        Action<string>? onProgress,
+        CancellationToken cancellationToken)
+    {
+        // The askpass script fetches credentials from the Unix socket and extracts the password.
+        // We base64-encode it to avoid all shell escaping issues with nested quotes and special chars.
+        // The socket is at /var/run/pks-creds/creds.sock (directory mount, survives runner restarts).
+        const string askpassScript =
+            "#!/bin/sh\n" +
+            "curl -s --unix-socket /var/run/pks-creds/creds.sock \"http://localhost/git-credential?host=github.com\" " +
+            "| sed -n 's/.*\"password\":\"\\([^\"]*\\)\".*/\\1/p'\n";
+
+        var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(askpassScript));
+        var writeAskpassArgs = $"exec {containerId} sh -c \"echo {base64} | base64 -d > /tmp/git-askpass.sh && chmod +x /tmp/git-askpass.sh\"";
+        var askpassResult = await _processRunner.RunAsync("docker", writeAskpassArgs, null, cancellationToken);
+
+        if (askpassResult.ExitCode == 0)
+        {
+            onProgress?.Invoke("GIT_ASKPASS script written to /tmp/git-askpass.sh");
+            _logger.LogInformation("Wrote git-askpass.sh to container {ContainerId}", containerId);
+
+            // Set core.askpass in git config
+            var gitConfigArgs = $"exec {containerId} git config --global core.askpass /tmp/git-askpass.sh";
+            await _processRunner.RunAsync("docker", gitConfigArgs, null, cancellationToken);
+
+            // Write a proper git credential helper that speaks the git-credential protocol
+            const string credHelperScript =
+                "#!/bin/sh\n" +
+                "# Read stdin (git sends host/protocol info)\n" +
+                "while read line; do [ -z \"$line\" ] && break; done\n" +
+                "TOKEN=$(curl -s --unix-socket /var/run/pks-creds/creds.sock " +
+                "\"http://localhost/git-credential?host=github.com\" " +
+                "| sed -n 's/.*\"password\":\"\\([^\"]*\\)\".*/\\1/p')\n" +
+                "echo \"username=x-access-token\"\n" +
+                "echo \"password=$TOKEN\"\n";
+            var credBase64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(credHelperScript));
+            var writeCredHelper = $"exec {containerId} sh -c \"echo {credBase64} | base64 -d > /tmp/git-credential-pks.sh && chmod +x /tmp/git-credential-pks.sh\"";
+            await _processRunner.RunAsync("docker", writeCredHelper, null, cancellationToken);
+
+            // Unset any system-level credential helpers (e.g. git-credential-manager from /etc/gitconfig)
+            // that would run before ours and hang waiting for interactive input
+            var unsetSystemHelper = $"exec --user root {containerId} git config --system --unset-all credential.helper";
+            var unsetResult = await _processRunner.RunAsync("docker", unsetSystemHelper, null, cancellationToken);
+            if (unsetResult.ExitCode == 0)
+            {
+                onProgress?.Invoke("Removed system-level credential helpers (e.g. git-credential-manager)");
+                _logger.LogInformation("Unset system credential.helper in container {ContainerId}", containerId);
+            }
+
+            // Set the credential helper globally — this is the most reliable method as it
+            // speaks the proper git-credential protocol and won't be overridden by the runner
+            var credHelperConfig = $"exec {containerId} git config --global credential.helper /tmp/git-credential-pks.sh";
+            var credResult = await _processRunner.RunAsync("docker", credHelperConfig, null, cancellationToken);
+            if (credResult.ExitCode == 0)
+            {
+                onProgress?.Invoke("git credential helper configured: /tmp/git-credential-pks.sh");
+                _logger.LogInformation("Set git credential.helper in container {ContainerId}", containerId);
+            }
+        }
+        else
+        {
+            _logger.LogWarning("Failed to write git-askpass.sh to container {ContainerId}: {StdErr}",
+                containerId, askpassResult.StandardError);
+            onProgress?.Invoke($"Warning: Failed to write askpass script: {askpassResult.StandardError}");
+        }
     }
 
     /// <summary>

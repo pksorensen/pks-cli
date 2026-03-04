@@ -14,6 +14,9 @@ using PKS.Commands.Prd;
 using PKS.CLI.Infrastructure.Services;
 using PKS.Infrastructure.Services.Runner;
 using PKS.Commands.GitHub.Runner;
+using PKS.Commands.Agentics;
+using PKS.Commands.Agentics.Runner;
+using PKS.Commands.Ado;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.Text;
@@ -33,6 +36,11 @@ var isMcpStdio = commandArgs.Length > 2 &&
                   commandArgs[Array.IndexOf(commandArgs, a) + 1].Equals("stdio", StringComparison.OrdinalIgnoreCase)) ||
                   !commandArgs.Any(a => a.Equals("--transport", StringComparison.OrdinalIgnoreCase) || a.Equals("-t", StringComparison.OrdinalIgnoreCase)));
 
+// Skip banner for git askpass (GIT_ASKPASS must have zero extra output)
+var isGitAskPass = commandArgs.Length > 2 &&
+                   commandArgs[1].Equals("git", StringComparison.OrdinalIgnoreCase) &&
+                   commandArgs[2].Equals("askpass", StringComparison.OrdinalIgnoreCase);
+
 // Skip banner for hooks commands (Claude Code compatibility)
 var isHooksCommand = commandArgs.Length > 1 &&
                      commandArgs[1].Equals("hooks", StringComparison.OrdinalIgnoreCase);
@@ -47,7 +55,7 @@ var isHookEventCommand = commandArgs.Length > 2 &&
                             .Contains(commandArgs[2], StringComparer.OrdinalIgnoreCase);
 
 // Display welcome banner with fancy ASCII art (unless we should skip it)
-if (!isMcpStdio && !(isHooksCommand && (hasJsonFlag || isHookEventCommand)))
+if (!isMcpStdio && !isGitAskPass && !(isHooksCommand && (hasJsonFlag || isHookEventCommand)))
 {
     DisplayWelcomeBanner();
 
@@ -169,6 +177,10 @@ services.AddSingleton(serviceProvider => new PKS.Infrastructure.Services.Models.
     BackoffMultiplier = 2.0
 });
 
+// Configure Azure DevOps authentication
+services.AddSingleton<PKS.Infrastructure.Services.Models.AzureDevOpsAuthConfig>();
+services.AddHttpClient<IAzureDevOpsAuthService, AzureDevOpsAuthService>();
+
 // Register GitHub and Project Identity services
 services.AddHttpClient<IGitHubService, GitHubService>();
 services.AddSingleton<IProjectIdentityService, ProjectIdentityService>();
@@ -187,6 +199,7 @@ services.AddSingleton<EnhancedGitHubService>();
 
 // Register GitHub Runner services
 services.AddSingleton<IRunnerConfigurationService, RunnerConfigurationService>();
+services.AddSingleton<IAgenticsRunnerConfigurationService, AgenticsRunnerConfigurationService>();
 services.AddSingleton<IGitHubActionsService, GitHubActionsService>();
 services.AddSingleton<IProcessRunner, ProcessRunner>();
 services.AddSingleton<IRunnerContainerService, RunnerContainerService>();
@@ -355,6 +368,27 @@ app.Configure(config =>
         });
     });
 
+    // Add agentics branch command with runner subcommands
+    config.AddBranch<AgenticsSettings>("agentics", agentics =>
+    {
+        agentics.SetDescription("Manage Agentics runners and integration");
+
+        agentics.AddBranch<AgenticsRunnerSettings>("runner", runner =>
+        {
+            runner.SetDescription("Manage Agentics self-hosted runners");
+
+            runner.AddCommand<AgenticsRunnerRegisterCommand>("register")
+                .WithDescription("Register a runner for an owner/project")
+                .WithExample(new[] { "agentics", "runner", "register", "myorg/myproject" })
+                .WithExample(new[] { "agentics", "runner", "register", "myorg/myproject", "--name", "my-runner" })
+                .WithExample(new[] { "agentics", "runner", "register", "myorg/myproject", "--server", "localhost:3000" });
+
+            runner.AddCommand<AgenticsRunnerStartCommand>("start")
+                .WithDescription("Start the runner daemon to poll for and execute jobs")
+                .WithExample(new[] { "agentics", "runner", "start" });
+        });
+    });
+
     // Add github branch command with runner subcommands
     config.AddBranch<PKS.Commands.GitHub.GitHubSettings>("github", github =>
     {
@@ -390,6 +424,31 @@ app.Configure(config =>
                 .WithDescription("Gracefully stop the runner daemon")
                 .WithExample(new[] { "github", "runner", "stop" });
         });
+    });
+
+    // Add Azure DevOps branch command
+    config.AddBranch<AdoSettings>("ado", ado =>
+    {
+        ado.SetDescription("Manage Azure DevOps authentication");
+
+        ado.AddCommand<AdoInitCommand>("init")
+            .WithDescription("Authenticate with Azure DevOps via OAuth2")
+            .WithExample(new[] { "ado", "init" })
+            .WithExample(new[] { "ado", "init", "--force" });
+
+        ado.AddCommand<AdoStatusCommand>("status")
+            .WithDescription("Show Azure DevOps authentication status")
+            .WithExample(new[] { "ado", "status" });
+    });
+
+    // Add git branch command (credential helpers)
+    config.AddBranch("git", git =>
+    {
+        git.SetDescription("Git credential helpers");
+
+        git.AddCommand<GitAskPassCommand>("askpass")
+            .WithDescription("Git credential helper for Azure DevOps (GIT_ASKPASS)")
+            .WithExample(new[] { "git", "askpass", "Password for 'https://dev.azure.com':" });
     });
 
     // Add hooks branch command with subcommands
@@ -585,6 +644,15 @@ static bool ShouldSkipFirstTimeWarning(string[] commandArgs)
                           !commandArgs.Any(a => a.Equals("--transport", StringComparison.OrdinalIgnoreCase) || a.Equals("-t", StringComparison.OrdinalIgnoreCase)));
 
         if (isMcpStdio)
+        {
+            return true;
+        }
+
+        // Skip for git askpass (GIT_ASKPASS must have zero extra output)
+        var isGitAskPass = commandArgs.Length > 2 &&
+                           commandArgs[1].Equals("git", StringComparison.OrdinalIgnoreCase) &&
+                           commandArgs[2].Equals("askpass", StringComparison.OrdinalIgnoreCase);
+        if (isGitAskPass)
         {
             return true;
         }

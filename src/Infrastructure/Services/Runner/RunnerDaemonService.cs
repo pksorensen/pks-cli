@@ -77,8 +77,16 @@ public class RunnerDaemonService : IRunnerDaemonService
         OnStatusChanged("Shutdown requested - finishing active jobs");
     }
 
-    public async Task RunAsync(CancellationToken cancellationToken = default)
+    private string? _credentialSocketPath;
+
+    public async Task RunAsync(CancellationToken cancellationToken = default, string? credentialSocketPath = null)
     {
+        _credentialSocketPath = credentialSocketPath;
+        if (!string.IsNullOrEmpty(credentialSocketPath))
+        {
+            _logger.LogInformation("Credential socket path configured: {SocketPath}", credentialSocketPath);
+        }
+
         // Load configuration
         var config = await _configService.LoadAsync();
 
@@ -91,6 +99,7 @@ public class RunnerDaemonService : IRunnerDaemonService
         }
         var accessToken = storedToken.AccessToken;
         _apiClient.SetAuthenticationToken(accessToken);
+        _logger.LogInformation("Initial token loaded, expires at {ExpiresAt}", storedToken.ExpiresAt);
 
         // Filter to enabled registrations
         var enabledRegistrations = config.Registrations
@@ -160,6 +169,26 @@ public class RunnerDaemonService : IRunnerDaemonService
                 // Collect completed tasks
                 CollectCompletedJobs();
 
+                // Proactive token refresh: refresh if within 5 minutes of expiry
+                var storedToken = await _authService.GetStoredTokenAsync();
+                if (storedToken?.ExpiresAt != null && storedToken.ExpiresAt.Value <= DateTime.UtcNow.AddMinutes(5))
+                {
+                    _logger.LogInformation("Token expires at {ExpiresAt}, proactively refreshing...", storedToken.ExpiresAt);
+                    OnStatusChanged("Proactively refreshing token before expiry...");
+                    var newToken = await _authService.RefreshTokenAsync();
+                    if (newToken != null)
+                    {
+                        accessToken = newToken.AccessToken;
+                        _apiClient.SetAuthenticationToken(accessToken);
+                        _logger.LogInformation("Proactive refresh succeeded, new token expires at {ExpiresAt}", newToken.ExpiresAt);
+                        OnStatusChanged($"Token refreshed, expires at {newToken.ExpiresAt:HH:mm:ss}");
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Proactive token refresh failed, will continue with current token");
+                    }
+                }
+
                 // Poll each registration
                 foreach (var registration in registrations)
                 {
@@ -170,7 +199,11 @@ public class RunnerDaemonService : IRunnerDaemonService
                 }
 
                 // Polling succeeded — reset auth failure counter
-                _consecutiveAuthFailures = 0;
+                if (_consecutiveAuthFailures > 0)
+                {
+                    _logger.LogInformation("Polling succeeded after {Count} auth failure(s), resetting counter", _consecutiveAuthFailures);
+                    _consecutiveAuthFailures = 0;
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -181,32 +214,45 @@ public class RunnerDaemonService : IRunnerDaemonService
             {
                 _consecutiveAuthFailures++;
 
-                if (_consecutiveAuthFailures > 3)
-                {
-                    _logger.LogError("Token refresh failed {Count} consecutive times. Re-run 'pks github runner register' to re-authenticate.",
-                        _consecutiveAuthFailures);
-                    OnStatusChanged($"Auth failing repeatedly ({_consecutiveAuthFailures}x) — re-authenticate with 'pks github runner register'");
-
-                    // Wait longer before retrying to avoid hammering the API
-                    try { await Task.Delay(TimeSpan.FromMinutes(5), cancellationToken); }
-                    catch (OperationCanceledException) { break; }
-                    continue;
-                }
-
                 _logger.LogWarning("Token expired (attempt {Count}), attempting refresh...", _consecutiveAuthFailures);
-                OnStatusChanged("Token expired, refreshing...");
+                OnStatusChanged($"Token expired (attempt {_consecutiveAuthFailures}), refreshing...");
 
                 var newToken = await _authService.RefreshTokenAsync();
                 if (newToken != null)
                 {
                     accessToken = newToken.AccessToken;
                     _apiClient.SetAuthenticationToken(accessToken);
-                    OnStatusChanged("Token refreshed successfully");
+                    _consecutiveAuthFailures = 0;
+                    _logger.LogInformation("Token refreshed, new expiry: {ExpiresAt}, expires_in: {ExpiresIn}s",
+                        newToken.ExpiresAt, newToken.ExpiresAt.HasValue ? (newToken.ExpiresAt.Value - DateTime.UtcNow).TotalSeconds : -1);
+                    OnStatusChanged($"Token refreshed (expires {newToken.ExpiresAt:HH:mm:ss})");
+                }
+                else if (_consecutiveAuthFailures >= 3)
+                {
+                    // Check if a refresh token even exists — if not, stop the daemon
+                    var storedToken = await _authService.GetStoredTokenAsync();
+                    if (storedToken == null || string.IsNullOrEmpty(storedToken.RefreshToken))
+                    {
+                        _logger.LogError(
+                            "No refresh token available and access token expired. Stopping daemon — " +
+                            "re-authenticate with 'pks github runner register'.");
+                        OnStatusChanged("Auth failed: no refresh token available, stopping daemon — re-authenticate with 'pks github runner register'");
+                        break;
+                    }
+
+                    _logger.LogError("Token refresh failed {Count} consecutive times. Re-run 'pks github runner register' to re-authenticate.",
+                        _consecutiveAuthFailures);
+                    OnStatusChanged($"Auth failing repeatedly ({_consecutiveAuthFailures}x) — re-authenticate with 'pks github runner register'");
+
+                    // Wait longer before retrying to avoid hammering the API (10x the polling interval)
+                    var backoffSeconds = config.PollingIntervalSeconds * 10;
+                    try { await Task.Delay(TimeSpan.FromSeconds(backoffSeconds), cancellationToken); }
+                    catch (OperationCanceledException) { break; }
                 }
                 else
                 {
-                    _logger.LogError("Token refresh failed. Re-run 'pks github runner register' to re-authenticate.");
-                    OnStatusChanged("Token refresh failed — re-authenticate with 'pks github runner register'");
+                    _logger.LogError("Token refresh failed (attempt {Count}). Will retry.", _consecutiveAuthFailures);
+                    OnStatusChanged($"Token refresh failed (attempt {_consecutiveAuthFailures}), will retry");
                 }
             }
             catch (Exception ex)
@@ -460,7 +506,8 @@ public class RunnerDaemonService : IRunnerDaemonService
                     dispatchInfo.Registration, run.Id, run.HeadBranch,
                     accessToken, encodedJitConfig,
                     progress => OnStatusChanged($"Run {run.Id}: {progress}"),
-                    cancellationToken);
+                    cancellationToken,
+                    credentialSocketPath: _credentialSocketPath);
             }
 
             jobState.Status = result.Status;
@@ -531,7 +578,8 @@ public class RunnerDaemonService : IRunnerDaemonService
                     existing.ContainerId, existing.ClonePath, containerName,
                     encodedJitConfig,
                     progress => OnStatusChanged($"Run {run.Id}: {progress}"),
-                    cancellationToken);
+                    cancellationToken,
+                    credentialSocketPath: _credentialSocketPath);
             }
 
             // Container is dead — remove from pool and create fresh
@@ -551,7 +599,8 @@ public class RunnerDaemonService : IRunnerDaemonService
             accessToken, encodedJitConfig,
             progress => OnStatusChanged($"Run {run.Id}: {progress}"),
             cancellationToken,
-            containerName: containerName);
+            containerName: containerName,
+            credentialSocketPath: _credentialSocketPath);
 
         // Register in pool (labels were already set via --id-label during devcontainer up)
         if (!string.IsNullOrEmpty(result.ContainerId))

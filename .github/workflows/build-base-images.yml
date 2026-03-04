@@ -7,6 +7,7 @@ on:
       - vnext
     paths:
       - 'templates/base-images/**'
+      - 'src/**'
   workflow_dispatch:
     inputs:
       image:
@@ -94,8 +95,8 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
-          context: templates/base-images
-          file: templates/base-images/${{ matrix.image.dockerfile }}
+          context: ${{ matrix.image.context || 'templates/base-images' }}
+          file: ${{ matrix.image.dockerfile }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

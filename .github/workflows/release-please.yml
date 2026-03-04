@@ -189,7 +189,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Download npm packages
@@ -199,8 +199,6 @@ jobs:
           path: ./packages
 
       - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION="${{ needs.release-please.outputs.cli_version }}"
 
@@ -214,7 +212,7 @@ jobs:
           fi
 
           echo "Publishing version $VERSION to '$TAG' channel..."
-          PUBLISH_FLAGS="--access public --tag $TAG"
+          PUBLISH_FLAGS="--access public --tag $TAG --provenance"
 
           # Publish platform packages first (they are optionalDependencies)
           for package in ./packages/pks-cli-cli-{linux,osx,win}-*.tgz; do

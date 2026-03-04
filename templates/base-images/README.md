@@ -21,7 +21,7 @@ A comprehensive base image for fullstack development including:
 - **.NET 8 + .NET 10 SDKs**: Modern .NET development with latest and LTS versions
 - **Playwright**: Browser automation and testing with Chromium pre-installed
 - **DevTunnel CLI**: Secure tunneling for local development
-- **Git Credential Manager**: Azure DevOps authentication with device code flow
+- **Git Credential Manager**: Pre-installed binary for Azure DevOps authentication (opt-in, not configured by default)
 - **.NET Aspire CLI**: Cloud-native application development
 - **Claude Code**: AI-powered development assistant
 - **Development Tools**: git-delta, fzf, zsh with powerline10k, FFmpeg, and more

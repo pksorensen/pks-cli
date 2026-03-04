@@ -50,7 +50,7 @@ public class GitHubIntegrationTests : IDisposable
             ApiBaseUrl = "https://api.github.com"
         };
 
-        _authService = new GitHubAuthenticationService(_httpClient, _configService, config);
+        _authService = new GitHubAuthenticationService(_httpClient, _configService, new LoggerFactory().CreateLogger<GitHubAuthenticationService>(), config);
         _apiClient = new GitHubApiClient(_httpClient, config);
         _issuesService = new GitHubIssuesService(_apiClient, _authService);
 

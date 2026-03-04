@@ -7,7 +7,9 @@ public interface IRunnerDaemonService
     /// <summary>
     /// Start the daemon loop. Blocks until cancellation is requested.
     /// </summary>
-    Task RunAsync(CancellationToken cancellationToken = default);
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <param name="credentialSocketPath">Optional path to Unix socket for git credential server</param>
+    Task RunAsync(CancellationToken cancellationToken = default, string? credentialSocketPath = null);
 
     /// <summary>
     /// Get current daemon status

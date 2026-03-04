@@ -18,6 +18,7 @@ public interface IRunnerContainerService
     /// <param name="encodedJitConfig">Base64-encoded JIT runner configuration</param>
     /// <param name="onProgress">Optional callback for progress reporting</param>
     /// <param name="cancellationToken">Cancellation token</param>
+    /// <param name="credentialSocketPath">Optional path to Unix socket for git credential server</param>
     /// <returns>The final job state</returns>
     Task<RunnerJobState> ExecuteJobAsync(
         RunnerRegistration registration,
@@ -26,7 +27,8 @@ public interface IRunnerContainerService
         string accessToken,
         string encodedJitConfig,
         Action<string>? onProgress = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        string? credentialSocketPath = null);
 
     /// <summary>
     /// Execute a full job lifecycle with a named container that persists after the job.
@@ -40,7 +42,8 @@ public interface IRunnerContainerService
         string encodedJitConfig,
         Action<string>? onProgress,
         CancellationToken cancellationToken,
-        string? containerName);
+        string? containerName,
+        string? credentialSocketPath = null);
 
     /// <summary>
     /// Execute a job in an existing named container. Skips clone and devcontainer up.
@@ -56,7 +59,8 @@ public interface IRunnerContainerService
         string containerName,
         string encodedJitConfig,
         Action<string>? onProgress = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        string? credentialSocketPath = null);
 
     /// <summary>
     /// Cleanup a job's resources (container and clone directory)
