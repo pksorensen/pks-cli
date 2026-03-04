@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [5.1.0-rc.28](https://github.com/pksorensen/pks-cli/compare/v5.0.3-rc.28...v5.1.0-rc.28) (2026-03-04)
+
+
+### Features
+
+* **cli:** show refresh token status in ado status command ([9d88021](https://github.com/pksorensen/pks-cli/commit/9d88021f8060dd57165de5f28c6ebec7835777a3))
+
 ## [5.0.3-rc.28](https://github.com/pksorensen/pks-cli/compare/v5.0.2-rc.28...v5.0.3-rc.28) (2026-03-04)
 
 
