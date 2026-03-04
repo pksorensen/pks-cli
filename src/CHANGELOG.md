@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [5.0.1-rc.28](https://github.com/pksorensen/pks-cli/compare/v5.0.0-rc.28...v5.0.1-rc.28) (2026-03-04)
+
+
+### Bug Fixes
+
+* **cli:** correct npm publish to use OIDC trusted publishing ([793d141](https://github.com/pksorensen/pks-cli/commit/793d14190974e7808be3dec61598da51bfd49322))
+
 ## [5.0.0-rc.28](https://github.com/pksorensen/pks-cli/compare/v4.0.0-rc.28...v5.0.0-rc.28) (2026-03-04)
 
 
