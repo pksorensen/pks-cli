@@ -1,5 +1,20 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS dotnet
 
+# Build pks-cli as a self-contained binary
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS pks-build
+WORKDIR /src
+COPY src/pks-cli.csproj .
+RUN dotnet restore -r linux-x64
+COPY src/ .
+COPY templates/ ../templates/
+RUN dotnet publish -c Release -r linux-x64 \
+    -p:PublishSelfContained=true \
+    -p:PublishSingleFile=true \
+    -p:PublishTrimmed=false \
+    -p:PublishReadyToRun=true \
+    -p:EmbedTemplates=true \
+    -o /out
+
 FROM node:20
 
 ARG TZ
@@ -196,6 +211,66 @@ RUN set -e && \
     chmod +x ~/.local/bin/git-credential-manager && \
     rm -rf /tmp/gcm.tar.gz /tmp/git-credential-manager-* && \
     echo "✓ Git Credential Manager installed (not configured — enable manually if needed)"
+# ============================================================================
+
+# ============================================================================
+# PKS CLI Installation + Privilege Separation
+# ============================================================================
+# Dedicated pks user owns the token cache — node can execute pks via sudo
+# but cannot read the stored credentials directly.
+#
+# For Azure DevOps auth (interactive devcontainer):
+#   sudo -u pks pks ado init        # one-time browser auth
+#   sudo -u pks pks ado status      # check auth state
+#   git clone https://dev.azure.com/org/project/_git/repo  # just works
+#
+# The credential helper is scoped to dev.azure.com only — GitHub uses
+# VS Code's injected credentials or the runner's socket-based helper.
+
+USER root
+
+# Create pks system user with home directory for token storage
+RUN adduser --system --home /home/pks --shell /bin/false pks && \
+    mkdir -p /home/pks/.pks-cli && \
+    chown -R pks:nogroup /home/pks/.pks-cli && \
+    chmod 700 /home/pks/.pks-cli
+
+# Install pks-cli binary
+COPY --from=pks-build /out/pks-cli /usr/local/bin/pks
+RUN chmod 755 /usr/local/bin/pks
+
+# Credential helper wrapper script (implements git credential protocol)
+RUN cat > /usr/local/bin/pks-ado-credential <<'SCRIPT'
+#!/bin/sh
+# Git credential helper for Azure DevOps via pks-cli
+# Delegates to pks git askpass running as the pks user
+case "$1" in
+  get)
+    # Read and discard stdin (git sends protocol/host)
+    cat > /dev/null
+    TOKEN=$(sudo -n -u pks /usr/local/bin/pks git askpass "Password" 2>/dev/null)
+    if [ $? -eq 0 ] && [ -n "$TOKEN" ]; then
+      echo "username=pks"
+      echo "password=$TOKEN"
+    fi
+    ;;
+  store|erase)
+    # No-op — pks manages its own token lifecycle
+    ;;
+esac
+SCRIPT
+RUN chmod 755 /usr/local/bin/pks-ado-credential
+
+# Sudoers: node can run pks as pks user without password
+RUN echo "node ALL=(pks) NOPASSWD: /usr/local/bin/pks" > /etc/sudoers.d/pks-cli && \
+    chmod 440 /etc/sudoers.d/pks-cli
+
+# Configure git credential helper for dev.azure.com only (system-level)
+# No system-level default helper is set (incoming change removed GCM from system config)
+# so this URL-scoped helper is the only system credential config.
+RUN git config --system credential.https://dev.azure.com.helper "!/usr/local/bin/pks-ado-credential"
+
+USER node
 # ============================================================================
 
 # ============================================================================

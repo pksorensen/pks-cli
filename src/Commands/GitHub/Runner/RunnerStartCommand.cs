@@ -135,7 +135,8 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
             await using var credentialServer = new GitCredentialServer(
                 _authService,
                 firstRegistration.Id,
-                msg => {
+                msg =>
+                {
                     try { File.AppendAllText(logPath, $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}] [cred-server] {msg}\n"); } catch { }
                 });
             await credentialServer.StartAsync();

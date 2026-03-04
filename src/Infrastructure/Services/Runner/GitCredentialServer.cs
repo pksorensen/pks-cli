@@ -73,12 +73,15 @@ public class GitCredentialServer : IAsyncDisposable
         await _app.StartAsync(ct);
 
         // Make socket world-accessible so container users (e.g. 'node') can connect
-        if (File.Exists(_socketPath))
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
         {
-            File.SetUnixFileMode(_socketPath,
-                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
-                UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
-                UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+            if (File.Exists(_socketPath))
+            {
+                File.SetUnixFileMode(_socketPath,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                    UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
+                    UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+            }
         }
     }
 

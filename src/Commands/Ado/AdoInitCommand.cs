@@ -7,7 +7,9 @@ using Spectre.Console.Cli;
 namespace PKS.Commands.Ado;
 
 /// <summary>
-/// Interactive Azure DevOps authentication via OAuth2 authorization code + PKCE
+/// Interactive Azure DevOps authentication via OAuth2 authorization code + PKCE.
+/// Opens browser for user consent, exchanges code for tokens, and stores
+/// credentials for use with git credential helper.
 /// </summary>
 [Description("Authenticate with Azure DevOps")]
 public class AdoInitCommand : Command<AdoInitCommand.Settings>
