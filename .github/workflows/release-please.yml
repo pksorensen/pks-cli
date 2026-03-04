@@ -181,7 +181,6 @@ jobs:
     needs: [release-please, create-npm-packages]
     if: needs.release-please.outputs.cli_release_created == 'true'
     runs-on: ubuntu-latest
-    environment: npm
     permissions:
       contents: read
       id-token: write
@@ -192,6 +191,8 @@ jobs:
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
+        env:
+          NODE_AUTH_TOKEN: ''
 
       - name: Download npm packages
         uses: actions/download-artifact@v4
