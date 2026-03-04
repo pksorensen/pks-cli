@@ -212,7 +212,7 @@ jobs:
           fi
 
           echo "Publishing version $VERSION to '$TAG' channel..."
-          PUBLISH_FLAGS="--access public --tag $TAG"
+          PUBLISH_FLAGS="--access public --tag $TAG --provenance"
 
           # Publish platform packages first (they are optionalDependencies)
           for package in ./packages/pks-cli-cli-{linux,osx,win}-*.tgz; do
