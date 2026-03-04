@@ -6,7 +6,8 @@ using Spectre.Console.Cli;
 namespace PKS.Commands.Ado;
 
 /// <summary>
-/// Display current Azure DevOps authentication status
+/// Displays current Azure DevOps authentication status including user profile,
+/// selected organization, and token refresh timestamps.
 /// </summary>
 [Description("Show Azure DevOps authentication status")]
 public class AdoStatusCommand : Command<AdoSettings>
