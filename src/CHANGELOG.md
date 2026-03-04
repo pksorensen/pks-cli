@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [5.1.4-rc.28](https://github.com/pksorensen/pks-cli/compare/v5.1.3-rc.28...v5.1.4-rc.28) (2026-03-04)
+
+
+### Bug Fixes
+
+* **cli:** resolve formatting and platform compatibility issues ([6ec9d8e](https://github.com/pksorensen/pks-cli/commit/6ec9d8e13e9277c90614237550256ce1c3f7697d))
+
 ## [5.1.3-rc.28](https://github.com/pksorensen/pks-cli/compare/v5.1.2-rc.28...v5.1.3-rc.28) (2026-03-04)
 
 
