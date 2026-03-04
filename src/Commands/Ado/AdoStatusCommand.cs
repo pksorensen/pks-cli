@@ -50,7 +50,8 @@ public class AdoStatusCommand : Command<AdoSettings>
         table.AddRow("Org URL", Markup.Escape($"https://dev.azure.com/{credentials.SelectedOrg}"));
         table.AddRow("Authenticated", credentials.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss UTC"));
         table.AddRow("Last Refreshed", credentials.LastRefreshedAt.ToString("yyyy-MM-dd HH:mm:ss UTC"));
-        table.AddRow("Refresh Token", string.IsNullOrEmpty(credentials.RefreshToken) ? "[red]Missing[/]" : "[green]Present[/]");
+        var tokenStatus = string.IsNullOrEmpty(credentials.RefreshToken) ? "[red]Missing[/]" : "[green]Present[/]";
+        table.AddRow("Refresh Token", tokenStatus);
 
         _console.Write(table);
         return 0;
