@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [5.1.2-rc.28](https://github.com/pksorensen/pks-cli/compare/v5.1.1-rc.28...v5.1.2-rc.28) (2026-03-04)
+
+
+### Bug Fixes
+
+* **cli:** add XML doc comment to AdoSettings class ([d3d514d](https://github.com/pksorensen/pks-cli/commit/d3d514d52cbc9b48ac7b64423ed805269e5b635e))
+
 ## [5.1.1-rc.28](https://github.com/pksorensen/pks-cli/compare/v5.1.0-rc.28...v5.1.1-rc.28) (2026-03-04)
 
 
