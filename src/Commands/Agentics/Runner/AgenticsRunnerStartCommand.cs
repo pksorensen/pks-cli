@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -23,12 +24,36 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
+    // Track active job resources for cleanup on shutdown
+    private readonly List<ActiveJobContext> _activeJobs = new();
+    private readonly object _activeJobsLock = new();
+
+    private record ActiveJobContext(
+        string JobId,
+        string VibecastTmuxSession,
+        string? StreamingSession,
+        string? ControlSocket,
+        string? WorkTreePath,
+        string? VibecastHome);
+
     public class Settings : AgenticsRunnerSettings
     {
         [CommandOption("--polling-interval <SECONDS>")]
         [Description("Polling interval in seconds (default: 10)")]
         [DefaultValue(10)]
         public int PollingInterval { get; set; } = 10;
+
+        [CommandOption("--inprocess")]
+        [Description("Execute jobs in-process instead of spawning devcontainers (for testing)")]
+        public bool InProcess { get; set; }
+
+        [CommandOption("--work-dir <PATH>")]
+        [Description("Base work directory (default: .agentics/_work)")]
+        public string? WorkDir { get; set; }
+
+        [CommandOption("--vibecast-binary <PATH>")]
+        [Description("Path to vibecast binary (default: uses VIBECAST_BINARY env or 'npx vibecast')")]
+        public string? VibecastBinary { get; set; }
     }
 
     public AgenticsRunnerStartCommand(
@@ -79,22 +104,43 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             DisplayInfo("Press Ctrl+C to stop.");
             _console.WriteLine();
 
-            // Start credential server (serves locally stored device-code OAuth token)
-            await using var credentialServer = new GitCredentialServer(_githubAuth, registration.Id);
-            await credentialServer.StartAsync();
-
-            if (settings.Verbose)
+            GitCredentialServer? credentialServer = null;
+            if (!settings.InProcess)
             {
-                DisplayInfo($"Credential server started at: {credentialServer.SocketPath}");
+                // Start credential server (serves locally stored device-code OAuth token)
+                credentialServer = new GitCredentialServer(_githubAuth, registration.Id);
+                await credentialServer.StartAsync();
+
+                if (settings.Verbose)
+                {
+                    DisplayInfo($"Credential server started at: {credentialServer.SocketPath}");
+                }
+            }
+            else
+            {
+                DisplayInfo("Running in [yellow]--inprocess[/] mode (no devcontainer spawning)");
             }
 
-            // Set up cancellation
+            try
+            {
+
+            // Set up cancellation (handle both SIGINT via Ctrl+C and SIGTERM via Aspire/process exit)
             using var cts = new CancellationTokenSource();
             System.Console.CancelKeyPress += (_, e) =>
             {
                 e.Cancel = true;
-                DisplayInfo("Shutdown requested...");
+                DisplayInfo("Shutdown requested (SIGINT)...");
                 cts.Cancel();
+            };
+            AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+            {
+                if (!cts.IsCancellationRequested)
+                {
+                    DisplayInfo("Process exit signal received (SIGTERM)...");
+                    cts.Cancel();
+                    // Block briefly to allow cleanup to run
+                    CleanupAllActiveJobsAsync().GetAwaiter().GetResult();
+                }
             };
 
             // Polling loop
@@ -108,23 +154,32 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                     {
                         _console.MarkupLine($"[green]Job received:[/] {job.Id}");
 
-                        var spawnOptions = BuildSpawnOptions(job, credentialServer.SocketPath);
-                        var spawnResult = await _spawnerService.SpawnLocalAsync(spawnOptions, msg =>
+                        if (settings.InProcess)
                         {
-                            if (settings.Verbose)
-                                _console.MarkupLine($"[dim]{msg.EscapeMarkup()}[/]");
-                        });
-
-                        if (spawnResult.Success)
-                        {
+                            await ExecuteInProcessAsync(registration, job, settings, cts.Token);
                             jobsProcessed++;
-                            _console.MarkupLine($"[green]Job completed successfully.[/] Container: {spawnResult.ContainerId}");
+                            _console.MarkupLine($"[green]InProcess job completed.[/]");
                         }
                         else
                         {
-                            _console.MarkupLine($"[red]Job failed:[/] {spawnResult.Message.EscapeMarkup()}");
-                            foreach (var err in spawnResult.Errors)
-                                _console.MarkupLine($"  [red]- {err.EscapeMarkup()}[/]");
+                            var spawnOptions = BuildSpawnOptions(job, credentialServer!.SocketPath, registration);
+                            var spawnResult = await _spawnerService.SpawnLocalAsync(spawnOptions, msg =>
+                            {
+                                if (settings.Verbose)
+                                    _console.MarkupLine($"[dim]{msg.EscapeMarkup()}[/]");
+                            });
+
+                            if (spawnResult.Success)
+                            {
+                                jobsProcessed++;
+                                _console.MarkupLine($"[green]Job completed successfully.[/] Container: {spawnResult.ContainerId}");
+                            }
+                            else
+                            {
+                                _console.MarkupLine($"[red]Job failed:[/] {spawnResult.Message.EscapeMarkup()}");
+                                foreach (var err in spawnResult.Errors)
+                                    _console.MarkupLine($"  [red]- {err.EscapeMarkup()}[/]");
+                            }
                         }
                     }
                     else
@@ -153,7 +208,18 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             }
 
             _console.WriteLine();
+
+            // Clean up all active jobs on shutdown
+            await CleanupAllActiveJobsAsync();
+
             DisplaySuccess($"Runner daemon stopped. Jobs processed: {jobsProcessed}");
+
+            }
+            finally
+            {
+                if (credentialServer != null)
+                    await credentialServer.DisposeAsync();
+            }
             return 0;
         }
         catch (Exception ex)
@@ -192,14 +258,708 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         if (string.IsNullOrWhiteSpace(json) || json == "null")
             return null;
 
-        return JsonSerializer.Deserialize<RunnerJob>(json, JsonOptions);
+        var pollResponse = JsonSerializer.Deserialize<PollResponse>(json, JsonOptions);
+        if (pollResponse?.Jobs == null || pollResponse.Jobs.Count == 0)
+            return null;
+
+        return pollResponse.Jobs[0];
     }
 
-    private static DevcontainerSpawnOptions BuildSpawnOptions(RunnerJob job, string credentialSocketPath)
+    private async Task ExecuteInProcessAsync(AgenticsRunnerRegistration registration, RunnerJob job, Settings settings, CancellationToken ct)
+    {
+        using var client = _httpClientFactory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", registration.Token);
+
+        var baseUrl = $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}";
+
+        // 1. Claim via generate-jitconfig
+        _console.MarkupLine($"[cyan]InProcess: claiming job {job.Id}...[/]");
+        var claimResponse = await client.PostAsJsonAsync(
+            $"{baseUrl}/runners/generate-jitconfig",
+            new { jobId = job.Id, name = "inprocess-runner" },
+            ct);
+        claimResponse.EnsureSuccessStatusCode();
+
+        var claimJson = await claimResponse.Content.ReadAsStringAsync(ct);
+        var claimData = JsonSerializer.Deserialize<JsonElement>(claimJson, JsonOptions);
+        var runId = claimData.GetProperty("runId").GetString()!;
+
+        // 2. Set up work directory
+        var workDir = await ResolveWorkDirAsync(settings.WorkDir, ct);
+        string? jobWorkTree = null;
+
+        try
+        {
+            jobWorkTree = await SetupJobWorkTreeAsync(
+                workDir, registration, job, settings.Verbose, ct);
+
+            // 3. PATCH to in_progress
+            _console.MarkupLine($"[cyan]InProcess: executing job {job.Id} in {jobWorkTree}...[/]");
+            var patchInProgress = new HttpRequestMessage(HttpMethod.Patch, $"{baseUrl}/runs/{runId}/jobs/{job.Id}");
+            patchInProgress.Content = JsonContent.Create(new { status = "in_progress" });
+            patchInProgress.Headers.Authorization = new AuthenticationHeaderValue("Bearer", registration.Token);
+            var res1 = await client.SendAsync(patchInProgress, ct);
+            res1.EnsureSuccessStatusCode();
+
+            // 4. Resolve vibecast binary
+            var vibecastBin = ResolveVibecastBinary(settings.VibecastBinary);
+            _console.MarkupLine($"[cyan]Using vibecast: {vibecastBin}[/]");
+
+            // 5. Resolve AGENTIC_SERVER from registration
+            var serverUri = new Uri(registration.Server);
+            var agenticServer = $"{serverUri.Host}:{serverUri.Port}";
+
+            // 6. Create isolated HOME for this vibecast instance so control socket doesn't conflict
+            var vibecastHome = Path.Combine(Path.GetTempPath(), $"vibecast-job-{job.Id}");
+            Directory.CreateDirectory(vibecastHome);
+
+            // 7. Start vibecast as a background process in the worktree directory
+            var vibecastTmux = $"vibecast-job-{job.Id[..8]}";
+            _console.MarkupLine($"[cyan]Starting vibecast in tmux session '{vibecastTmux}'...[/]");
+
+            // Kill any stale session
+            await RunProcessAsync("tmux", $"kill-session -t {vibecastTmux}", null, ct);
+
+            // Start vibecast in a detached tmux session
+            var startPsi = new ProcessStartInfo("tmux")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            startPsi.ArgumentList.Add("new-session");
+            startPsi.ArgumentList.Add("-d");
+            startPsi.ArgumentList.Add("-s");
+            startPsi.ArgumentList.Add(vibecastTmux);
+            startPsi.ArgumentList.Add("-x");
+            startPsi.ArgumentList.Add("200");
+            startPsi.ArgumentList.Add("-y");
+            startPsi.ArgumentList.Add("50");
+            startPsi.ArgumentList.Add("bash");
+            startPsi.ArgumentList.Add("-c");
+            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={vibecastHome} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} {vibecastBin}");
+
+            var startProc = Process.Start(startPsi);
+            if (startProc != null)
+            {
+                await startProc.WaitForExitAsync(ct);
+                if (startProc.ExitCode != 0)
+                {
+                    var stderr = await startProc.StandardError.ReadToEndAsync(ct);
+                    _console.MarkupLine($"[red]Failed to start vibecast tmux session: {stderr.EscapeMarkup()}[/]");
+                    throw new InvalidOperationException($"tmux new-session failed (exit {startProc.ExitCode})");
+                }
+            }
+
+            // Track this job for cleanup on shutdown
+            var activeJob = new ActiveJobContext(
+                job.Id, vibecastTmux, null, null, jobWorkTree, vibecastHome);
+            lock (_activeJobsLock) { _activeJobs.Add(activeJob); }
+
+            // 8. Wait for vibecast control socket to be ready
+            var controlSocket = Path.Combine(vibecastHome, ".vibecast", "control.sock");
+            _console.MarkupLine($"[cyan]Waiting for vibecast control socket at {controlSocket}...[/]");
+            for (var i = 0; i < 30; i++)
+            {
+                if (File.Exists(controlSocket))
+                {
+                    _console.MarkupLine($"[green]Control socket ready after {i}s[/]");
+                    break;
+                }
+                await Task.Delay(1000, ct);
+            }
+
+            if (!File.Exists(controlSocket))
+            {
+                _console.MarkupLine("[red]Control socket not found after 30s[/]");
+                throw new InvalidOperationException("vibecast control socket not found");
+            }
+
+            // Small delay for control server to fully initialize
+            await Task.Delay(1000, ct);
+
+            // 9. Trigger start-stream via control socket
+            _console.MarkupLine("[cyan]Triggering start-stream...[/]");
+            await SendControlSocketRequestAsync(controlSocket, "POST", "/start-stream",
+                """{"promptSharing":true,"shareProjectInfo":true}""", ct);
+
+            // 10. Wait for streaming session to be created (vibecast-<streamId>)
+            _console.MarkupLine("[cyan]Waiting for streaming session...[/]");
+            string? streamingSession = null;
+            string? streamIdValue = null;
+            for (var i = 0; i < 30; i++)
+            {
+                // Check /status on control socket to get streamId
+                var statusJson = await SendControlSocketRequestAsync(controlSocket, "GET", "/status", null, ct);
+                if (statusJson != null)
+                {
+                    var statusData = JsonSerializer.Deserialize<JsonElement>(statusJson, JsonOptions);
+                    if (statusData.TryGetProperty("streamId", out var sid) && sid.GetString() is { Length: > 0 } sId)
+                    {
+                        if (statusData.TryGetProperty("phase", out var phaseEl) && phaseEl.GetString() == "live")
+                        {
+                            streamIdValue = sId;
+                            streamingSession = $"vibecast-{sId}";
+                            _console.MarkupLine($"[green]Streaming live! Session: {streamingSession}[/]");
+                            break;
+                        }
+                    }
+                }
+                await Task.Delay(1000, ct);
+            }
+
+            // Update tracked job with streaming session and control socket
+            lock (_activeJobsLock)
+            {
+                var idx = _activeJobs.FindIndex(j => j.JobId == job.Id);
+                if (idx >= 0)
+                    _activeJobs[idx] = activeJob with { StreamingSession = streamingSession, ControlSocket = controlSocket };
+            }
+
+            if (streamingSession == null)
+            {
+                _console.MarkupLine("[yellow]Streaming session not detected, will try to paste prompt anyway...[/]");
+            }
+
+            // 11. Update job with streamId and link stream to project
+            if (streamIdValue != null)
+            {
+                _console.MarkupLine($"[cyan]Updating job with streamId: {streamIdValue}[/]");
+                var patchStream = new HttpRequestMessage(HttpMethod.Patch, $"{baseUrl}/runs/{runId}/jobs/{job.Id}");
+                patchStream.Content = JsonContent.Create(new { status = "in_progress", streamId = streamIdValue });
+                patchStream.Headers.Authorization = new AuthenticationHeaderValue("Bearer", registration.Token);
+                await client.SendAsync(patchStream, ct);
+
+                // Link stream to the task so the task card glows when live
+                if (job.AgentDef?.TaskId != null && job.AgentDef?.StageId != null)
+                {
+                    try
+                    {
+                        var linkReq = new HttpRequestMessage(HttpMethod.Post,
+                            $"{baseUrl}/stages/{job.AgentDef.StageId}/tasks/{job.AgentDef.TaskId}/streams");
+                        linkReq.Content = JsonContent.Create(new { streamId = streamIdValue });
+                        linkReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", registration.Token);
+                        await client.SendAsync(linkReq, ct);
+                        _console.MarkupLine($"[green]Stream linked to task {job.AgentDef.TaskId}[/]");
+                    }
+                    catch (Exception ex)
+                    {
+                        _console.MarkupLine($"[yellow]Failed to link stream to task: {ex.Message.EscapeMarkup()}[/]");
+                    }
+                }
+            }
+
+            // 12. Switch to the "main" window so viewers see Claude Code (not the info screen)
+            if (streamingSession != null)
+            {
+                _console.MarkupLine("[cyan]Switching to main window...[/]");
+                await RunProcessAsync("tmux", $"select-window -t {streamingSession}:main", null, ct);
+            }
+
+            // 13. Wait for Claude to be ready in the main pane
+            await Task.Delay(3000, ct);
+
+            // 14. Paste the prompt into Claude Code via tmux send-keys
+            var prompt = job.AgentDef?.Prompt ?? "No prompt provided";
+            _console.MarkupLine($"[cyan]Sending prompt to Claude: {prompt.EscapeMarkup()[..Math.Min(prompt.Length, 80)]}...[/]");
+
+            if (streamingSession != null)
+            {
+                // Send to the streaming session's main pane (top pane = .0)
+                await TmuxSendKeysAsync($"{streamingSession}:main.0", prompt, ct);
+            }
+
+            // 14. Wait for job to complete (5 min timeout for now)
+            var jobTimeout = TimeSpan.FromMinutes(5);
+            _console.MarkupLine($"[cyan]Waiting up to {jobTimeout.TotalMinutes} minutes for job to complete...[/]");
+
+            var startTime = DateTime.UtcNow;
+            while (DateTime.UtcNow - startTime < jobTimeout)
+            {
+                // Check if the streaming session still exists
+                if (streamingSession != null)
+                {
+                    var checkPsi = new ProcessStartInfo("tmux", $"has-session -t {streamingSession}")
+                    {
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                    };
+                    var checkProc = Process.Start(checkPsi);
+                    if (checkProc != null)
+                    {
+                        await checkProc.WaitForExitAsync(ct);
+                        if (checkProc.ExitCode != 0)
+                        {
+                            _console.MarkupLine("[yellow]Streaming session ended, completing job.[/]");
+                            break;
+                        }
+                    }
+                }
+
+                if (ct.IsCancellationRequested) break;
+                await Task.Delay(5000, ct);
+
+                var elapsed = DateTime.UtcNow - startTime;
+                if ((int)elapsed.TotalSeconds % 60 == 0)
+                    _console.MarkupLine($"[dim]{elapsed.Minutes}m elapsed...[/]");
+            }
+
+            // 15. Stop vibecast streaming
+            _console.MarkupLine("[cyan]Stopping vibecast session...[/]");
+            await SendControlSocketRequestAsync(controlSocket, "POST", "/stop-broadcast", null, ct);
+            await Task.Delay(2000, ct);
+
+            // Kill the vibecast tmux session
+            await RunProcessAsync("tmux", $"kill-session -t {vibecastTmux}", null, ct);
+
+            // 16. PATCH job to completed
+            _console.MarkupLine("[cyan]Marking job as completed...[/]");
+            var patchCompleted = new HttpRequestMessage(HttpMethod.Patch, $"{baseUrl}/runs/{runId}/jobs/{job.Id}");
+            patchCompleted.Content = JsonContent.Create(new
+            {
+                status = "completed",
+                conclusion = "success",
+                logs = $"Job completed after {(DateTime.UtcNow - startTime).TotalMinutes:F1} minutes in {jobWorkTree}"
+            });
+            patchCompleted.Headers.Authorization = new AuthenticationHeaderValue("Bearer", registration.Token);
+            await client.SendAsync(patchCompleted, ct);
+
+            _console.MarkupLine($"[green]Job {job.Id} completed.[/]");
+
+            // Remove from active tracking (normal completion)
+            lock (_activeJobsLock) { _activeJobs.RemoveAll(j => j.JobId == job.Id); }
+        }
+        finally
+        {
+            if (jobWorkTree != null)
+            {
+                await CleanupWorkTreeAsync(jobWorkTree, settings.Verbose, ct);
+            }
+        }
+    }
+
+    private static string ResolveVibecastBinary(string? explicitPath)
+    {
+        // 1. Explicit path from --vibecast-binary flag
+        if (!string.IsNullOrEmpty(explicitPath) && File.Exists(explicitPath))
+            return explicitPath;
+
+        // 2. VIBECAST_BINARY environment variable
+        var envPath = Environment.GetEnvironmentVariable("VIBECAST_BINARY");
+        if (!string.IsNullOrEmpty(envPath) && File.Exists(envPath))
+            return envPath;
+
+        // 3. Fallback to npx
+        return "npx vibecast";
+    }
+
+    private static async Task<string?> SendControlSocketRequestAsync(
+        string socketPath, string method, string path, string? body, CancellationToken ct)
+    {
+        try
+        {
+            var socket = new System.Net.Sockets.Socket(
+                System.Net.Sockets.AddressFamily.Unix,
+                System.Net.Sockets.SocketType.Stream,
+                System.Net.Sockets.ProtocolType.Unspecified);
+            await socket.ConnectAsync(new System.Net.Sockets.UnixDomainSocketEndPoint(socketPath), ct);
+
+            using var networkStream = new System.Net.Sockets.NetworkStream(socket, ownsSocket: true);
+            using var writer = new StreamWriter(networkStream, leaveOpen: true);
+            using var reader = new StreamReader(networkStream, leaveOpen: true);
+
+            // Write HTTP request
+            await writer.WriteAsync($"{method} {path} HTTP/1.1\r\n");
+            await writer.WriteAsync("Host: localhost\r\n");
+            if (body != null)
+            {
+                await writer.WriteAsync("Content-Type: application/json\r\n");
+                await writer.WriteAsync($"Content-Length: {System.Text.Encoding.UTF8.GetByteCount(body)}\r\n");
+            }
+            await writer.WriteAsync("Connection: close\r\n");
+            await writer.WriteAsync("\r\n");
+            if (body != null)
+                await writer.WriteAsync(body);
+            await writer.FlushAsync(ct);
+
+            // Read response
+            var response = await reader.ReadToEndAsync(ct);
+
+            // Extract body (after blank line)
+            var bodyStart = response.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            if (bodyStart >= 0)
+                return response[(bodyStart + 4)..];
+
+            return response;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static async Task TmuxSendKeysAsync(string target, string text, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo("tmux")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        psi.ArgumentList.Add("send-keys");
+        psi.ArgumentList.Add("-t");
+        psi.ArgumentList.Add(target);
+        psi.ArgumentList.Add(text);
+        psi.ArgumentList.Add("Enter");
+
+        var proc = Process.Start(psi);
+        if (proc != null)
+            await proc.WaitForExitAsync(ct);
+    }
+
+    private static async Task RunProcessAsync(string cmd, string args, string? workDir, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo(cmd, args)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            if (workDir != null)
+                psi.WorkingDirectory = workDir;
+            var proc = Process.Start(psi);
+            if (proc != null)
+                await proc.WaitForExitAsync(ct);
+        }
+        catch { /* ignore */ }
+    }
+
+    private async Task<string> ResolveWorkDirAsync(string? workDir, CancellationToken ct)
+    {
+        if (!string.IsNullOrEmpty(workDir))
+            return Path.GetFullPath(workDir);
+
+        // Use git repo root so .agentics/_work/ is at the workspace level
+        var repoRoot = await GetGitToplevelAsync(ct);
+        if (repoRoot != null)
+            return Path.Combine(repoRoot, ".agentics", "_work");
+
+        return Path.GetFullPath(Path.Combine(".agentics", "_work"));
+    }
+
+    private async Task<string> SetupJobWorkTreeAsync(
+        string workDir, AgenticsRunnerRegistration registration,
+        RunnerJob job, bool verbose, CancellationToken ct)
+    {
+        var owner = registration.Owner;
+        var project = registration.Project;
+        var repository = job.AgentDef?.Repository;
+        var branch = job.AgentDef?.Branch ?? "main";
+
+        // Find git repo root and its remote URL for same-repo detection
+        var repoRoot = await GetGitToplevelAsync(ct);
+        var currentRepoUrl = await GetCurrentRepoUrlAsync(ct);
+
+        // Same-repo: if no repository specified, or if it matches the current workspace repo
+        var isSameRepo = string.IsNullOrEmpty(repository)
+            || (!string.IsNullOrEmpty(currentRepoUrl)
+                && NormalizeGitUrl(repository) == NormalizeGitUrl(currentRepoUrl));
+
+        string sourceDir;
+
+        if (!isSameRepo)
+        {
+            // External repo: clone to _work/<owner>/<project>/<branch>/
+            var cloneDir = Path.Combine(workDir, owner, project, branch);
+            if (!Directory.Exists(Path.Combine(cloneDir, ".git")))
+            {
+                _console.MarkupLine($"[cyan]Cloning {repository} → {cloneDir}...[/]");
+                Directory.CreateDirectory(Path.GetDirectoryName(cloneDir)!);
+                var cloneResult = await RunGitAsync(
+                    $"clone --branch {branch} {repository} {cloneDir}",
+                    null, verbose, ct);
+                if (cloneResult != 0)
+                    throw new InvalidOperationException($"git clone failed (exit {cloneResult})");
+            }
+            else
+            {
+                // Pull latest
+                if (verbose) _console.MarkupLine($"[dim]Pulling latest in {cloneDir}...[/]");
+                await RunGitAsync("pull --ff-only", cloneDir, verbose, ct);
+            }
+            sourceDir = cloneDir;
+        }
+        else
+        {
+            // Same repo: use the git repo root (not CWD which may be a subdirectory)
+            sourceDir = repoRoot ?? Directory.GetCurrentDirectory();
+            if (verbose) _console.MarkupLine($"[dim]Using local repo at {sourceDir}[/]");
+        }
+
+        // Create worktree at _work/<owner>/<project>/jobs/<jobId>/
+        // (or _work/jobs/<jobId>/ for same-repo)
+        string worktreePath;
+        if (!isSameRepo)
+            worktreePath = Path.Combine(workDir, owner, project, "jobs", job.Id);
+        else
+            worktreePath = Path.Combine(workDir, "jobs", job.Id);
+
+        _console.MarkupLine($"[cyan]Creating worktree at {worktreePath}...[/]");
+        Directory.CreateDirectory(Path.GetDirectoryName(worktreePath)!);
+
+        var worktreeResult = await RunGitAsync(
+            $"worktree add {worktreePath} -b job/{job.Id} {branch}",
+            sourceDir, verbose, ct);
+
+        if (worktreeResult != 0)
+        {
+            // Branch might already exist or detached HEAD - try without -b
+            worktreeResult = await RunGitAsync(
+                $"worktree add --detach {worktreePath} {branch}",
+                sourceDir, verbose, ct);
+            if (worktreeResult != 0)
+                throw new InvalidOperationException($"git worktree add failed (exit {worktreeResult})");
+        }
+
+        return worktreePath;
+    }
+
+    private static async Task<string?> GetGitToplevelAsync(CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git", "rev-parse --show-toplevel")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            var proc = Process.Start(psi);
+            if (proc == null) return null;
+            var output = await proc.StandardOutput.ReadToEndAsync(ct);
+            await proc.WaitForExitAsync(ct);
+            return proc.ExitCode == 0 ? output.Trim() : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task CleanupWorkTreeAsync(string worktreePath, bool verbose, CancellationToken ct)
+    {
+        if (!Directory.Exists(worktreePath)) return;
+
+        try
+        {
+            // Find the parent repo to run worktree remove from
+            var gitDir = await GetGitDirForWorktreeAsync(worktreePath, ct);
+            if (gitDir != null)
+            {
+                if (verbose) _console.MarkupLine($"[dim]Removing worktree {worktreePath}...[/]");
+                await RunGitAsync($"worktree remove --force {worktreePath}", gitDir, verbose, ct);
+            }
+            else
+            {
+                // Fallback: just delete the directory
+                Directory.Delete(worktreePath, true);
+            }
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[yellow]Warning: worktree cleanup failed: {ex.Message.EscapeMarkup()}[/]");
+        }
+    }
+
+    private async Task CleanupAllActiveJobsAsync()
+    {
+        List<ActiveJobContext> jobs;
+        lock (_activeJobsLock)
+        {
+            jobs = new List<ActiveJobContext>(_activeJobs);
+            _activeJobs.Clear();
+        }
+
+        if (jobs.Count == 0) return;
+
+        _console.MarkupLine($"[yellow]Cleaning up {jobs.Count} active job(s)...[/]");
+
+        foreach (var job in jobs)
+        {
+            try
+            {
+                // 1. Stop vibecast via control socket (graceful)
+                if (job.ControlSocket != null && File.Exists(job.ControlSocket))
+                {
+                    _console.MarkupLine($"[dim]Stopping vibecast for job {job.JobId[..8]}...[/]");
+                    await SendControlSocketRequestAsync(job.ControlSocket, "POST", "/stop-broadcast", null, CancellationToken.None);
+                    await Task.Delay(500);
+                }
+
+                // 2. Kill the streaming session (vibecast-<streamId>) and its ttyd group sessions
+                if (job.StreamingSession != null)
+                {
+                    // Kill ttyd group sessions (vibecast-<streamId>-ttyd-*)
+                    var listOut = await GetProcessOutputAsync("tmux", "list-sessions -F #{session_name}");
+                    if (listOut != null)
+                    {
+                        var prefix = job.StreamingSession + "-ttyd-";
+                        foreach (var line in listOut.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                        {
+                            if (line.Trim().StartsWith(prefix))
+                                await RunProcessAsync("tmux", $"kill-session -t {line.Trim()}", null, CancellationToken.None);
+                        }
+                    }
+                    await RunProcessAsync("tmux", $"kill-session -t {job.StreamingSession}", null, CancellationToken.None);
+                }
+
+                // 3. Kill the runner's vibecast tmux session
+                await RunProcessAsync("tmux", $"kill-session -t {job.VibecastTmuxSession}", null, CancellationToken.None);
+
+                // 4. Clean up worktree
+                if (job.WorkTreePath != null)
+                    await CleanupWorkTreeAsync(job.WorkTreePath, false, CancellationToken.None);
+
+                // 5. Clean up isolated HOME
+                if (job.VibecastHome != null && Directory.Exists(job.VibecastHome))
+                {
+                    try { Directory.Delete(job.VibecastHome, true); }
+                    catch { /* ignore */ }
+                }
+
+                _console.MarkupLine($"[green]Cleaned up job {job.JobId[..8]}[/]");
+            }
+            catch (Exception ex)
+            {
+                _console.MarkupLine($"[yellow]Warning: cleanup failed for job {job.JobId[..8]}: {ex.Message.EscapeMarkup()}[/]");
+            }
+        }
+    }
+
+    private static async Task<string?> GetProcessOutputAsync(string cmd, string args)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo(cmd, args)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            var proc = Process.Start(psi);
+            if (proc == null) return null;
+            var output = await proc.StandardOutput.ReadToEndAsync();
+            await proc.WaitForExitAsync();
+            return proc.ExitCode == 0 ? output : null;
+        }
+        catch { return null; }
+    }
+
+    private static async Task<string?> GetGitDirForWorktreeAsync(string worktreePath, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git", "rev-parse --git-common-dir")
+            {
+                WorkingDirectory = worktreePath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            var proc = Process.Start(psi);
+            if (proc == null) return null;
+            var output = await proc.StandardOutput.ReadToEndAsync(ct);
+            await proc.WaitForExitAsync(ct);
+            if (proc.ExitCode != 0) return null;
+            var commonDir = output.Trim();
+            // The common dir is the .git directory of the main repo
+            return Path.GetDirectoryName(Path.GetFullPath(Path.Combine(worktreePath, commonDir)));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static async Task<string?> GetCurrentRepoUrlAsync(CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git", "config --get remote.origin.url")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            var proc = Process.Start(psi);
+            if (proc == null) return null;
+            var output = await proc.StandardOutput.ReadToEndAsync(ct);
+            await proc.WaitForExitAsync(ct);
+            return proc.ExitCode == 0 ? output.Trim() : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string NormalizeGitUrl(string url)
+    {
+        // Normalize git URLs for comparison:
+        // https://github.com/owner/repo.git → github.com/owner/repo
+        // git@github.com:owner/repo.git → github.com/owner/repo
+        url = url.Trim().TrimEnd('/');
+        if (url.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+            url = url[..^4];
+        // SSH format
+        if (url.StartsWith("git@", StringComparison.OrdinalIgnoreCase))
+            url = url["git@".Length..].Replace(':', '/');
+        // HTTPS format
+        foreach (var prefix in new[] { "https://", "http://" })
+        {
+            if (url.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                url = url[prefix.Length..];
+                break;
+            }
+        }
+        return url.ToLowerInvariant();
+    }
+
+    private async Task<int> RunGitAsync(string args, string? workingDir, bool verbose, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+
+        // Use ArgumentList for proper quoting
+        foreach (var arg in args.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            psi.ArgumentList.Add(arg);
+
+        if (workingDir != null)
+            psi.WorkingDirectory = workingDir;
+
+        var proc = Process.Start(psi);
+        if (proc == null) return -1;
+
+        var stdout = await proc.StandardOutput.ReadToEndAsync(ct);
+        var stderr = await proc.StandardError.ReadToEndAsync(ct);
+        await proc.WaitForExitAsync(ct);
+
+        if (verbose || proc.ExitCode != 0)
+        {
+            if (!string.IsNullOrWhiteSpace(stdout))
+                _console.MarkupLine($"[dim]{stdout.Trim().EscapeMarkup()}[/]");
+            if (!string.IsNullOrWhiteSpace(stderr))
+                _console.MarkupLine($"[dim]{stderr.Trim().EscapeMarkup()}[/]");
+        }
+
+        return proc.ExitCode;
+    }
+
+    private static DevcontainerSpawnOptions BuildSpawnOptions(RunnerJob job, string credentialSocketPath, AgenticsRunnerRegistration registration)
     {
         return new DevcontainerSpawnOptions
         {
-            ProjectName = job.ProjectName ?? job.Id,
+            ProjectName = job.ProjectName ?? $"{registration.Owner}-{registration.Project}-{job.Id[..8]}",
             ProjectPath = job.ProjectPath ?? "/tmp",
             DevcontainerPath = job.DevcontainerPath ?? string.Empty,
             LaunchVsCode = false,
@@ -227,12 +987,33 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
     private void DisplayInfo(string message) =>
         _console.MarkupLine($"[cyan]{message}[/]");
 
+    /// <summary>Response wrapper for the /runners/jobs poll endpoint.</summary>
+    private class PollResponse
+    {
+        public List<RunnerJob> Jobs { get; set; } = new();
+    }
+
     /// <summary>Minimal job model returned by the server's /runners/jobs endpoint.</summary>
     private class RunnerJob
     {
         public string Id { get; set; } = "";
+        public string? RunId { get; set; }
         public string? ProjectName { get; set; }
         public string? ProjectPath { get; set; }
         public string? DevcontainerPath { get; set; }
+        public RunnerAgentDefinition? AgentDefinition { get; set; }
+
+        /// <summary>Convenience accessor for agentDefinition.</summary>
+        public RunnerAgentDefinition? AgentDef => AgentDefinition;
+    }
+
+    private class RunnerAgentDefinition
+    {
+        public string? Repository { get; set; }
+        public string? Branch { get; set; }
+        public string? Prompt { get; set; }
+        public List<string> Labels { get; set; } = new();
+        public string? TaskId { get; set; }
+        public string? StageId { get; set; }
     }
 }

@@ -56,12 +56,20 @@ public class AgenticsRunnerRegisterCommand(
                 ?? Environment.GetEnvironmentVariable("AGENTIC_SERVER")
                 ?? "agentics.dk";
 
-            var scheme = serverHost.StartsWith("localhost", StringComparison.OrdinalIgnoreCase) ||
-                         serverHost.StartsWith("127.0.0.1")
-                ? "http"
-                : "https";
-
-            var serverUrl = $"{scheme}://{serverHost}";
+            string serverUrl;
+            if (serverHost.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                serverHost.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                serverUrl = serverHost.TrimEnd('/');
+            }
+            else
+            {
+                var scheme = serverHost.StartsWith("localhost", StringComparison.OrdinalIgnoreCase) ||
+                             serverHost.StartsWith("127.0.0.1")
+                    ? "http"
+                    : "https";
+                serverUrl = $"{scheme}://{serverHost}";
+            }
 
             // 3. Resolve runner name
             var runnerName = settings.Name ?? System.Net.Dns.GetHostName();
