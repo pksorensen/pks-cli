@@ -310,7 +310,8 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             var serverUri = new Uri(registration.Server);
             var agenticServer = $"{serverUri.Host}:{serverUri.Port}";
 
-            // 6. Create isolated HOME for this vibecast instance so control socket doesn't conflict
+            // 6. Create isolated VIBECAST_HOME for this instance so control socket/sessions don't conflict
+            // We use VIBECAST_HOME (not HOME) so Claude Code's settings/hooks still resolve from real HOME
             var vibecastHome = Path.Combine(Path.GetTempPath(), $"vibecast-job-{job.Id}");
             Directory.CreateDirectory(vibecastHome);
 
@@ -337,7 +338,10 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             startPsi.ArgumentList.Add("50");
             startPsi.ArgumentList.Add("bash");
             startPsi.ArgumentList.Add("-c");
-            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={vibecastHome} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} {vibecastBin}");
+            // Reset HOME to the real user home (runner overrides HOME for its own config isolation)
+            // so that Claude Code finds its settings in ~/.claude/
+            var realHome = await GetRealHomeDirectoryAsync(ct);
+            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} {vibecastBin}");
 
             var startProc = Process.Start(startPsi);
             if (startProc != null)
@@ -851,6 +855,33 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             return proc.ExitCode == 0 ? output : null;
         }
         catch { return null; }
+    }
+
+    private static async Task<string> GetRealHomeDirectoryAsync(CancellationToken ct)
+    {
+        // On Linux, HOME may be overridden by the runner. Get the real home from getent passwd.
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+        {
+            try
+            {
+                var psi = new ProcessStartInfo("sh", $"-c \"getent passwd $(whoami) | cut -d: -f6\"")
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                };
+                var proc = Process.Start(psi);
+                if (proc != null)
+                {
+                    var output = await proc.StandardOutput.ReadToEndAsync(ct);
+                    await proc.WaitForExitAsync(ct);
+                    var home = output.Trim();
+                    if (proc.ExitCode == 0 && !string.IsNullOrEmpty(home))
+                        return home;
+                }
+            }
+            catch { /* fallback below */ }
+        }
+        return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
     }
 
     private static async Task<string?> GetGitDirForWorktreeAsync(string worktreePath, CancellationToken ct)
