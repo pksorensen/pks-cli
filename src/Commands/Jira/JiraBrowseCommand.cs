@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text;
 using System.Text.RegularExpressions;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
@@ -10,6 +11,7 @@ namespace PKS.Commands.Jira;
 /// <summary>
 /// Interactive TUI for browsing Jira tickets in a navigable tree structure.
 /// Displays epics, stories, bugs, and tasks with parent-child hierarchy.
+/// Supports multi-select and markdown export.
 /// </summary>
 [Description("Browse Jira issues in a tree view")]
 public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
@@ -44,6 +46,10 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         [CommandOption("--name")]
         [Description("Name for the saved filter")]
         public string? Name { get; set; }
+
+        [CommandOption("--output|-o")]
+        [Description("Output directory for exported markdown files (default: .jira)")]
+        public string OutputDir { get; set; } = ".jira";
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -239,8 +245,17 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         // 4. Build tree
         var roots = BuildIssueTree(allIssues);
 
-        // 5. Interactive tree browser
-        return BrowseTree(roots);
+        // 5. Interactive tree browser with multi-select
+        var selectedIssues = SelectIssues(roots, allIssues);
+
+        if (selectedIssues.Count == 0)
+        {
+            _console.MarkupLine("[yellow]No issues selected.[/]");
+            return 0;
+        }
+
+        // 6. Export selected issues to markdown
+        return ExportToMarkdown(selectedIssues, settings.OutputDir);
     }
 
     /// <summary>
@@ -267,63 +282,179 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         return roots;
     }
 
-    private int BrowseTree(List<JiraIssue> roots)
+    private List<JiraIssue> SelectIssues(List<JiraIssue> roots, List<JiraIssue> allIssues)
     {
-        var navigationStack = new Stack<List<JiraIssue>>();
-        var currentItems = roots;
+        var prompt = new MultiSelectionPrompt<string>()
+            .Title("[cyan]Select issues to export[/] [dim](space=select, enter=confirm)[/]")
+            .PageSize(25)
+            .MoreChoicesText("[grey]Move up/down to see more issues[/]")
+            .InstructionsText("[grey](Press [blue]<space>[/] to toggle, [green]<enter>[/] to export selected)[/]");
 
-        while (true)
+        AddIssuesToPrompt(prompt, roots);
+
+        var selected = _console.Prompt(prompt);
+
+        // Map selected labels back to JiraIssue objects
+        var selectedIssues = new List<JiraIssue>();
+        foreach (var label in selected)
         {
-            var choices = new List<string>();
-
-            foreach (var issue in currentItems)
+            // Extract the key from the label (format: "icon KEY: summary (status)")
+            var match = Regex.Match(label, @"([A-Z]+-\d+):");
+            if (match.Success)
             {
-                choices.Add(FormatIssue(issue));
-            }
-
-            if (navigationStack.Count > 0)
-            {
-                choices.Add("\u2190 Back");
-            }
-
-            choices.Add("Exit");
-
-            var selection = _console.Prompt(
-                new SelectionPrompt<string>()
-                    .Title("[cyan]Browse issues:[/]")
-                    .PageSize(20)
-                    .AddChoices(choices));
-
-            if (selection == "Exit")
-            {
-                return 0;
-            }
-
-            if (selection == "\u2190 Back")
-            {
-                currentItems = navigationStack.Pop();
-                continue;
-            }
-
-            // Find selected issue by matching the formatted string
-            var selectedIndex = choices.IndexOf(selection);
-            if (selectedIndex >= 0 && selectedIndex < currentItems.Count)
-            {
-                var selectedIssue = currentItems[selectedIndex];
-
-                if (selectedIssue.Children.Count > 0)
-                {
-                    // Navigate into children
-                    navigationStack.Push(currentItems);
-                    currentItems = selectedIssue.Children;
-                }
-                else
-                {
-                    // Show detail panel for leaf issue
-                    ShowIssueDetail(selectedIssue);
-                }
+                var key = match.Groups[1].Value;
+                var issue = allIssues.FirstOrDefault(i => i.Key == key);
+                if (issue != null)
+                    selectedIssues.Add(issue);
             }
         }
+
+        return selectedIssues;
+    }
+
+    private void AddIssuesToPrompt(MultiSelectionPrompt<string> prompt, List<JiraIssue> roots)
+    {
+        foreach (var root in roots)
+        {
+            var rootLabel = FormatIssue(root);
+            if (root.Children.Count > 0)
+            {
+                var childLabels = new List<string>();
+                CollectLabels(root.Children, childLabels);
+                prompt.AddChoiceGroup(rootLabel, childLabels);
+            }
+            else
+            {
+                prompt.AddChoice(rootLabel);
+            }
+        }
+    }
+
+    private void CollectLabels(List<JiraIssue> issues, List<string> labels)
+    {
+        foreach (var issue in issues)
+        {
+            labels.Add(FormatIssue(issue));
+            // Note: deeper nesting flattened under the parent group
+            CollectLabels(issue.Children, labels);
+        }
+    }
+
+    private int ExportToMarkdown(List<JiraIssue> issues, string outputDir)
+    {
+        if (issues.Count == 0)
+        {
+            _console.MarkupLine("[yellow]No issues selected.[/]");
+            return 0;
+        }
+
+        var created = 0;
+        var updated = 0;
+
+        foreach (var issue in issues)
+        {
+            // Create folder: outputDir/ProjectKey/
+            var projectDir = Path.Combine(outputDir, issue.ProjectKey);
+            Directory.CreateDirectory(projectDir);
+
+            var filePath = Path.Combine(projectDir, $"{issue.Key}.md");
+            var isUpdate = File.Exists(filePath);
+
+            var content = GenerateMarkdown(issue);
+            File.WriteAllText(filePath, content);
+
+            if (isUpdate) updated++; else created++;
+        }
+
+        // Show summary
+        _console.MarkupLine($"[green]Exported {issues.Count} issues to {Markup.Escape(outputDir)}/[/]");
+        if (created > 0) _console.MarkupLine($"  [green]Created:[/] {created} files");
+        if (updated > 0) _console.MarkupLine($"  [yellow]Updated:[/] {updated} files");
+
+        // Show tree of exported files
+        var tree = new Tree($"[dim]{Markup.Escape(outputDir)}[/]");
+        foreach (var group in issues.GroupBy(i => i.ProjectKey))
+        {
+            var projectNode = tree.AddNode($"[cyan]{Markup.Escape(group.Key)}[/]");
+            foreach (var issue in group)
+            {
+                projectNode.AddNode($"[dim]{Markup.Escape(issue.Key)}.md[/]");
+            }
+        }
+        _console.Write(tree);
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Generates markdown content with YAML frontmatter for a Jira issue.
+    /// </summary>
+    public static string GenerateMarkdown(JiraIssue issue)
+    {
+        var sb = new StringBuilder();
+
+        // YAML frontmatter
+        sb.AppendLine("---");
+        sb.AppendLine($"key: {issue.Key}");
+        sb.AppendLine($"summary: \"{EscapeYaml(issue.Summary)}\"");
+        sb.AppendLine($"type: {issue.IssueType}");
+        sb.AppendLine($"status: \"{EscapeYaml(issue.Status)}\"");
+        sb.AppendLine($"priority: {issue.Priority}");
+
+        if (!string.IsNullOrEmpty(issue.Assignee))
+            sb.AppendLine($"assignee: \"{EscapeYaml(issue.Assignee)}\"");
+        if (!string.IsNullOrEmpty(issue.Reporter))
+            sb.AppendLine($"reporter: \"{EscapeYaml(issue.Reporter)}\"");
+        if (!string.IsNullOrEmpty(issue.Resolution))
+            sb.AppendLine($"resolution: \"{EscapeYaml(issue.Resolution)}\"");
+
+        if (!string.IsNullOrEmpty(issue.ParentKey))
+            sb.AppendLine($"parent: {issue.ParentKey}");
+
+        sb.AppendLine($"project: {issue.ProjectKey}");
+
+        if (issue.Labels.Count > 0)
+            sb.AppendLine($"labels: [{string.Join(", ", issue.Labels.Select(l => $"\"{EscapeYaml(l)}\""))}]");
+        if (issue.Components.Count > 0)
+            sb.AppendLine($"components: [{string.Join(", ", issue.Components.Select(c => $"\"{EscapeYaml(c)}\""))}]");
+
+        if (!string.IsNullOrEmpty(issue.OriginalEstimate))
+            sb.AppendLine($"estimate: \"{issue.OriginalEstimate}\"");
+        if (issue.OriginalEstimateSeconds.HasValue)
+            sb.AppendLine($"estimate_seconds: {issue.OriginalEstimateSeconds}");
+
+        if (!string.IsNullOrEmpty(issue.TimeSpent))
+            sb.AppendLine($"time_spent: \"{issue.TimeSpent}\"");
+        if (issue.TimeSpentSeconds.HasValue)
+            sb.AppendLine($"time_spent_seconds: {issue.TimeSpentSeconds}");
+
+        if (issue.StoryPoints.HasValue)
+            sb.AppendLine($"story_points: {issue.StoryPoints}");
+
+        if (issue.Created.HasValue)
+            sb.AppendLine($"created: {issue.Created.Value:yyyy-MM-dd}");
+        if (issue.Updated.HasValue)
+            sb.AppendLine($"updated: {issue.Updated.Value:yyyy-MM-dd}");
+
+        sb.AppendLine("---");
+        sb.AppendLine();
+
+        // Markdown body
+        sb.AppendLine($"# {issue.Key}: {issue.Summary}");
+        sb.AppendLine();
+
+        if (!string.IsNullOrEmpty(issue.Description))
+        {
+            sb.AppendLine(issue.Description);
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
+    }
+
+    private static string EscapeYaml(string value)
+    {
+        return value.Replace("\\", "\\\\").Replace("\"", "\\\"");
     }
 
     private static string FormatIssue(JiraIssue issue)
@@ -339,27 +470,5 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         };
 
         return $"{icon} {Markup.Escape(issue.Key ?? string.Empty)}: {Markup.Escape(issue.Summary ?? string.Empty)} ({Markup.Escape(issue.Status ?? string.Empty)})";
-    }
-
-    private void ShowIssueDetail(JiraIssue issue)
-    {
-        var table = new Table()
-            .Border(TableBorder.None)
-            .HideHeaders()
-            .AddColumn("Field")
-            .AddColumn("Value");
-
-        table.AddRow("[bold]Type:[/]", Markup.Escape(issue.IssueType));
-        table.AddRow("[bold]Status:[/]", Markup.Escape(issue.Status));
-        table.AddRow("[bold]Priority:[/]", Markup.Escape(issue.Priority));
-        table.AddRow("[bold]Assignee:[/]", Markup.Escape(issue.Assignee ?? "Unassigned"));
-
-        var panel = new Panel(table)
-            .Header($"[bold]{Markup.Escape(issue.Key)}: {Markup.Escape(issue.Summary)}[/]")
-            .Border(BoxBorder.Rounded)
-            .Padding(1, 0);
-
-        _console.Write(panel);
-        _console.WriteLine();
     }
 }

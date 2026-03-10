@@ -280,7 +280,11 @@ public class JiraService : IJiraService
         if (credentials == null)
             throw new InvalidOperationException("Not authenticated with Jira");
 
-        var fields = new[] { "summary", "status", "issuetype", "priority", "assignee", "parent", "project" };
+        var fields = new[] {
+            "summary", "status", "issuetype", "priority", "assignee", "parent", "project",
+            "description", "labels", "components", "timeoriginalestimate", "timespent",
+            "story_points", "customfield_10016", "reporter", "resolution", "created", "updated"
+        };
         var requestBody = credentials.DeploymentType == JiraDeploymentType.Cloud
             ? JsonSerializer.Serialize(new
             {
@@ -351,7 +355,7 @@ public class JiraService : IJiraService
 
         var apiBaseUrl = GetApiBaseUrl(credentials);
         var request = new HttpRequestMessage(HttpMethod.Get,
-            $"{apiBaseUrl}/issue/{Uri.EscapeDataString(issueKey)}?fields=summary,status,issuetype,priority,assignee,parent,project");
+            $"{apiBaseUrl}/issue/{Uri.EscapeDataString(issueKey)}?fields=summary,status,issuetype,priority,assignee,parent,project,description,labels,components,timeoriginalestimate,timespent,customfield_10016,story_points,reporter,resolution,created,updated");
         ApplyAuth(request, credentials);
 
         var response = await SendWithDebugAsync(request);
@@ -573,6 +577,66 @@ public class JiraService : IJiraService
             }
         }
 
+        // Description (can be ADF in v3, plain text in v2)
+        if (fields.TryGetProperty("description", out var desc))
+        {
+            if (desc.ValueKind == JsonValueKind.String)
+                issue.Description = desc.GetString();
+            else if (desc.ValueKind == JsonValueKind.Object)
+            {
+                // Atlassian Document Format (ADF) — extract text content
+                issue.Description = ExtractTextFromAdf(desc);
+            }
+        }
+
+        // Labels
+        if (fields.TryGetProperty("labels", out var labels) && labels.ValueKind == JsonValueKind.Array)
+        {
+            issue.Labels = labels.EnumerateArray()
+                .Where(l => l.ValueKind == JsonValueKind.String)
+                .Select(l => l.GetString() ?? "")
+                .Where(l => !string.IsNullOrEmpty(l))
+                .ToList();
+        }
+
+        // Components
+        if (fields.TryGetProperty("components", out var components) && components.ValueKind == JsonValueKind.Array)
+        {
+            issue.Components = components.EnumerateArray()
+                .Where(c => c.ValueKind == JsonValueKind.Object)
+                .Select(c => c.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "")
+                .Where(c => !string.IsNullOrEmpty(c))
+                .ToList();
+        }
+
+        // Time tracking
+        if (fields.TryGetProperty("timeoriginalestimate", out var origEst) && origEst.ValueKind == JsonValueKind.Number)
+            issue.OriginalEstimateSeconds = origEst.GetInt32();
+        if (fields.TryGetProperty("timespent", out var spent) && spent.ValueKind == JsonValueKind.Number)
+            issue.TimeSpentSeconds = spent.GetInt32();
+
+        // Format time strings
+        issue.OriginalEstimate = FormatSeconds(issue.OriginalEstimateSeconds);
+        issue.TimeSpent = FormatSeconds(issue.TimeSpentSeconds);
+
+        // Story points (try customfield_10016 first, then story_points)
+        if (fields.TryGetProperty("customfield_10016", out var sp10016) && sp10016.ValueKind == JsonValueKind.Number)
+            issue.StoryPoints = sp10016.GetDouble();
+        else if (fields.TryGetProperty("story_points", out var spField) && spField.ValueKind == JsonValueKind.Number)
+            issue.StoryPoints = spField.GetDouble();
+
+        // Reporter
+        issue.Reporter = GetNestedDisplayName(fields, "reporter");
+
+        // Resolution
+        issue.Resolution = GetNestedName(fields, "resolution");
+
+        // Dates
+        if (fields.TryGetProperty("created", out var createdProp) && createdProp.ValueKind == JsonValueKind.String)
+            issue.Created = DateTime.TryParse(createdProp.GetString(), out var c) ? c : null;
+        if (fields.TryGetProperty("updated", out var updatedProp) && updatedProp.ValueKind == JsonValueKind.String)
+            issue.Updated = DateTime.TryParse(updatedProp.GetString(), out var u) ? u : null;
+
         return issue;
     }
 
@@ -611,5 +675,66 @@ public class JiraService : IJiraService
                 return key.GetString() ?? string.Empty;
         }
         return string.Empty;
+    }
+
+    private static string? FormatSeconds(int? seconds)
+    {
+        if (seconds == null || seconds == 0) return null;
+        var s = seconds.Value;
+        var days = s / 28800; // 8h work day
+        var hours = (s % 28800) / 3600;
+        var minutes = (s % 3600) / 60;
+
+        var parts = new List<string>();
+        if (days > 0) parts.Add($"{days}d");
+        if (hours > 0) parts.Add($"{hours}h");
+        if (minutes > 0) parts.Add($"{minutes}m");
+        return parts.Count > 0 ? string.Join(" ", parts) : null;
+    }
+
+    /// <summary>
+    /// Extracts plain text from Atlassian Document Format (ADF) JSON.
+    /// ADF is used in Jira Cloud API v3 for rich text fields.
+    /// </summary>
+    private static string? ExtractTextFromAdf(JsonElement adf)
+    {
+        try
+        {
+            var sb = new StringBuilder();
+            ExtractAdfText(adf, sb);
+            var result = sb.ToString().Trim();
+            return string.IsNullOrEmpty(result) ? null : result;
+        }
+        catch { return null; }
+    }
+
+    private static void ExtractAdfText(JsonElement element, StringBuilder sb)
+    {
+        if (element.TryGetProperty("type", out var type) && type.GetString() == "text"
+            && element.TryGetProperty("text", out var text))
+        {
+            sb.Append(text.GetString());
+        }
+
+        if (element.TryGetProperty("type", out var nodeType))
+        {
+            var t = nodeType.GetString();
+            if (t == "paragraph" || t == "heading" || t == "bulletList" || t == "orderedList")
+            {
+                if (sb.Length > 0 && sb[^1] != '\n') sb.AppendLine();
+            }
+            if (t == "listItem")
+            {
+                sb.Append("- ");
+            }
+        }
+
+        if (element.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var child in content.EnumerateArray())
+            {
+                ExtractAdfText(child, sb);
+            }
+        }
     }
 }

@@ -72,6 +72,18 @@ public class JiraIssue
     public string Priority { get; set; } = string.Empty;
     public string? Assignee { get; set; }
     public string ProjectKey { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public List<string> Labels { get; set; } = new();
+    public List<string> Components { get; set; } = new();
+    public string? OriginalEstimate { get; set; } // e.g. "2d", "8h"
+    public int? OriginalEstimateSeconds { get; set; }
+    public string? TimeSpent { get; set; } // e.g. "1d 4h"
+    public int? TimeSpentSeconds { get; set; }
+    public double? StoryPoints { get; set; }
+    public string? Reporter { get; set; }
+    public string? Resolution { get; set; }
+    public DateTime? Created { get; set; }
+    public DateTime? Updated { get; set; }
     public List<JiraIssue> Children { get; set; } = new();
 }
 
