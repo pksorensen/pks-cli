@@ -246,18 +246,13 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         // 4. Build tree from initial results
         var roots = BuildIssueTree(allIssues);
 
-        // 5. Fetch children for parent-type issues (epics, stories, tasks with subtasks)
-        await _console.Status()
-            .Spinner(Spinner.Known.Dots)
-            .StartAsync("[cyan]Loading child issues...[/]", async ctx =>
-            {
-                await LoadChildrenRecursiveAsync(roots, allIssues, ctx, maxDepth: 3);
-            });
+        // 5. Load local cache to detect changed issues
+        var localCache = LoadLocalCache(settings.OutputDir);
+        if (localCache.Count > 0)
+            _console.MarkupLine($"[dim]Found {localCache.Count} previously exported issues[/]");
 
-        _console.MarkupLine($"[dim]Loaded {allIssues.Count} issues total[/]");
-
-        // 6. Interactive tree browser with multi-select
-        var selectedIssues = SelectIssues(roots, allIssues);
+        // 6. Interactive tree browser with lazy child loading
+        var selectedIssues = await SelectIssuesAsync(roots, allIssues, localCache);
 
         if (selectedIssues.Count == 0)
         {
@@ -265,7 +260,7 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
             return 0;
         }
 
-        // 6. Export selected issues to markdown
+        // 7. Export selected issues to markdown
         return await ExportToMarkdown(selectedIssues, settings.OutputDir);
     }
 
@@ -294,67 +289,102 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
     }
 
     /// <summary>
-    /// Recursively fetches child issues for all issues at the current level
-    /// that don't already have children loaded. Adds discovered children to
-    /// allIssues for later selection/export.
+    /// Reads previously exported JSON files from the output directory to build
+    /// a cache of last-known Updated timestamps per issue key.
     /// </summary>
-    private async Task LoadChildrenRecursiveAsync(
-        List<JiraIssue> issues, List<JiraIssue> allIssues,
-        StatusContext ctx, int maxDepth, int depth = 0)
+    private static Dictionary<string, DateTime?> LoadLocalCache(string outputDir)
     {
-        if (depth >= maxDepth) return;
+        var cache = new Dictionary<string, DateTime?>();
+        if (!Directory.Exists(outputDir)) return cache;
 
-        var knownKeys = new HashSet<string>(allIssues.Select(i => i.Key));
-
-        foreach (var issue in issues)
+        foreach (var jsonFile in Directory.EnumerateFiles(outputDir, "*.json", SearchOption.AllDirectories))
         {
-            // Skip if children already loaded from the initial query
-            if (issue.Children.Count > 0) continue;
-
-            // Types that typically have children
-            var type = issue.IssueType.ToLowerInvariant();
-            if (type is not ("epic" or "story" or "task" or "feature" or "initiative")) continue;
-
-            ctx.Status($"[cyan]Loading children of {Markup.Escape(issue.Key)}...[/]");
             try
             {
-                var children = await _jiraService.GetIssuesByParentAsync(issue.Key);
-                foreach (var child in children)
+                var json = File.ReadAllText(jsonFile);
+                var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+
+                if (root.TryGetProperty("Key", out var keyProp))
                 {
-                    if (!knownKeys.Contains(child.Key))
-                    {
-                        knownKeys.Add(child.Key);
-                        allIssues.Add(child);
-                    }
-                    issue.Children.Add(child);
+                    var key = keyProp.GetString();
+                    if (key == null) continue;
+
+                    DateTime? updated = null;
+                    if (root.TryGetProperty("Updated", out var updProp) && updProp.ValueKind == JsonValueKind.String
+                        && DateTime.TryParse(updProp.GetString(), out var u))
+                        updated = u;
+
+                    cache[key] = updated;
                 }
             }
-            catch
-            {
-                // Skip if fetching children fails (e.g. permissions)
-            }
+            catch { /* skip unreadable files */ }
         }
 
-        // Recurse into newly loaded children
-        foreach (var issue in issues)
-        {
-            if (issue.Children.Count > 0)
-            {
-                await LoadChildrenRecursiveAsync(issue.Children, allIssues, ctx, maxDepth, depth + 1);
-            }
-        }
+        return cache;
     }
 
     /// <summary>
-    /// Interactive drill-down tree browser. Arrow keys navigate, Enter drills
-    /// into children or toggles selection on leaf items. Supports unlimited depth.
+    /// Determines the change status indicator for an issue relative to local cache.
     /// </summary>
-    private List<JiraIssue> SelectIssues(List<JiraIssue> roots, List<JiraIssue> allIssues)
+    private static string GetChangeIndicator(JiraIssue issue, Dictionary<string, DateTime?> localCache)
+    {
+        if (!localCache.TryGetValue(issue.Key, out var cachedUpdated))
+            return "\U0001f195"; // 🆕 new — not in local cache
+
+        if (issue.Updated.HasValue && cachedUpdated.HasValue && issue.Updated.Value > cachedUpdated.Value)
+            return "\u26a1"; // ⚡ changed since last export
+
+        return "\u2500"; // ─ unchanged
+    }
+
+    /// <summary>
+    /// Lazy-loads children for an issue when the user drills into it.
+    /// </summary>
+    private async Task LazyLoadChildrenAsync(JiraIssue issue, List<JiraIssue> allIssues)
+    {
+        // Already loaded children (from initial query linking or previous drill-down)
+        if (issue.Children.Count > 0) return;
+
+        var knownKeys = new HashSet<string>(allIssues.Select(i => i.Key));
+
+        await _console.Status()
+            .Spinner(Spinner.Known.Dots)
+            .StartAsync($"[cyan]Loading children of {Markup.Escape(issue.Key)}...[/]", async _ =>
+            {
+                try
+                {
+                    var children = await _jiraService.GetIssuesByParentAsync(issue.Key);
+                    foreach (var child in children)
+                    {
+                        if (!knownKeys.Contains(child.Key))
+                        {
+                            knownKeys.Add(child.Key);
+                            allIssues.Add(child);
+                        }
+                        issue.Children.Add(child);
+                    }
+                }
+                catch { /* skip on failure */ }
+            });
+    }
+
+    /// <summary>
+    /// Interactive drill-down tree browser with lazy child loading.
+    /// Arrow keys navigate, Enter drills into children (loading them on demand)
+    /// or toggles selection on leaf items. Change indicators show which issues
+    /// have been modified since last export.
+    /// </summary>
+    private async Task<List<JiraIssue>> SelectIssuesAsync(
+        List<JiraIssue> roots, List<JiraIssue> allIssues,
+        Dictionary<string, DateTime?> localCache)
     {
         var selectedKeys = new HashSet<string>();
         var navStack = new Stack<(List<JiraIssue> items, string title)>();
         var currentItems = roots;
         var currentTitle = "All issues";
+        // Track which issues we've already tried to load children for
+        var childrenLoaded = new HashSet<string>();
 
         while (true)
         {
@@ -368,13 +398,17 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
             foreach (var item in currentItems)
             {
                 var sel = selectedKeys.Contains(item.Key) ? "\u25cf" : "\u25cb";
-                var suffix = item.Children.Count > 0 ? $" \u25b8 ({item.Children.Count})" : "";
-                choices.Add($"{sel} {FormatIssueLabel(item)}{suffix}");
+                var change = localCache.Count > 0 ? $" {GetChangeIndicator(item, localCache)}" : "";
+                var canExpand = CanHaveChildren(item) && !childrenLoaded.Contains(item.Key);
+                var childInfo = item.Children.Count > 0
+                    ? $" \u25b8 ({item.Children.Count})"
+                    : canExpand ? " \u25b8 ..." : "";
+                choices.Add($"{sel}{change} {FormatIssueLabel(item)}{childInfo}");
             }
 
             // Select all / deselect all
             var currentKeys = currentItems.Select(i => i.Key).ToList();
-            var allSelected = currentKeys.All(k => selectedKeys.Contains(k));
+            var allSelected = currentKeys.Count > 0 && currentKeys.All(k => selectedKeys.Contains(k));
             choices.Add(allSelected ? "\u2612 Deselect all at this level" : "\u2610 Select all at this level");
 
             // Export action
@@ -425,23 +459,38 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
             var issue = allIssues.FirstOrDefault(i => i.Key == key);
             if (issue == null) continue;
 
+            // Lazy-load children if not yet attempted
+            if (!childrenLoaded.Contains(key) && CanHaveChildren(issue))
+            {
+                await LazyLoadChildrenAsync(issue, allIssues);
+                childrenLoaded.Add(key);
+            }
+
             if (issue.Children.Count > 0)
             {
                 // Drill into children — push current level onto stack
                 navStack.Push((currentItems, currentTitle));
-                // Show the parent as a toggleable item + its children
                 currentItems = new List<JiraIssue> { issue }.Concat(issue.Children).ToList();
                 currentTitle = $"{issue.Key}: {issue.Summary}";
             }
             else
             {
-                // Toggle selection on leaf
+                // Toggle selection
                 if (!selectedKeys.Remove(key))
                     selectedKeys.Add(key);
             }
         }
 
         return allIssues.Where(i => selectedKeys.Contains(i.Key)).ToList();
+    }
+
+    /// <summary>
+    /// Returns true for issue types that commonly have child issues.
+    /// </summary>
+    private static bool CanHaveChildren(JiraIssue issue)
+    {
+        var type = issue.IssueType.ToLowerInvariant();
+        return type is "epic" or "story" or "task" or "feature" or "initiative";
     }
 
     private async Task<int> ExportToMarkdown(List<JiraIssue> issues, string outputDir)
@@ -584,7 +633,9 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         if (issue.Created.HasValue)
             sb.AppendLine($"created: {issue.Created.Value:yyyy-MM-dd}");
         if (issue.Updated.HasValue)
-            sb.AppendLine($"updated: {issue.Updated.Value:yyyy-MM-dd}");
+            sb.AppendLine($"updated: {issue.Updated.Value:yyyy-MM-ddTHH:mm:ssZ}");
+
+        sb.AppendLine($"last_exported: {DateTime.UtcNow:yyyy-MM-ddTHH:mm:ssZ}");
 
         sb.AppendLine("---");
         sb.AppendLine();
