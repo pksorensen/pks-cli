@@ -202,7 +202,7 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
             _ => "\u2022"
         };
 
-        return $"{icon} {Markup.Escape(issue.Key)}: {Markup.Escape(issue.Summary)} [{Markup.Escape(issue.Status)}]";
+        return $"{icon} {Markup.Escape(issue.Key ?? string.Empty)}: {Markup.Escape(issue.Summary ?? string.Empty)} ({Markup.Escape(issue.Status ?? string.Empty)})";
     }
 
     private void ShowIssueDetail(JiraIssue issue)

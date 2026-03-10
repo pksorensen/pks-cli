@@ -110,17 +110,17 @@ public class JiraService : IJiraService
     {
         var normalized = NormalizeCredentials(credentials);
 
-        await _configurationService.SetAsync(KeyAuthMethod, normalized.AuthMethod.ToString());
-        await _configurationService.SetAsync(KeyDeploymentType, normalized.DeploymentType.ToString());
-        await _configurationService.SetAsync(KeyBaseUrl, normalized.BaseUrl);
-        await _configurationService.SetAsync(KeyEmail, normalized.Email);
-        await _configurationService.SetAsync(KeyUsername, normalized.Username);
-        await _configurationService.SetAsync(KeyApiToken, normalized.ApiToken, encrypt: true);
-        await _configurationService.SetAsync(KeyAccessToken, normalized.AccessToken, encrypt: true);
-        await _configurationService.SetAsync(KeyRefreshToken, normalized.RefreshToken, encrypt: true);
-        await _configurationService.SetAsync(KeyCloudId, normalized.CloudId);
-        await _configurationService.SetAsync(KeyCreatedAt, normalized.CreatedAt.ToString("O"));
-        await _configurationService.SetAsync(KeyLastRefreshedAt, normalized.LastRefreshedAt.ToString("O"));
+        await _configurationService.SetAsync(KeyAuthMethod, normalized.AuthMethod.ToString(), global: true);
+        await _configurationService.SetAsync(KeyDeploymentType, normalized.DeploymentType.ToString(), global: true);
+        await _configurationService.SetAsync(KeyBaseUrl, normalized.BaseUrl, global: true);
+        await _configurationService.SetAsync(KeyEmail, normalized.Email, global: true);
+        await _configurationService.SetAsync(KeyUsername, normalized.Username, global: true);
+        await _configurationService.SetAsync(KeyApiToken, normalized.ApiToken, global: true, encrypt: false);
+        await _configurationService.SetAsync(KeyAccessToken, normalized.AccessToken, global: true, encrypt: false);
+        await _configurationService.SetAsync(KeyRefreshToken, normalized.RefreshToken, global: true, encrypt: false);
+        await _configurationService.SetAsync(KeyCloudId, normalized.CloudId, global: true);
+        await _configurationService.SetAsync(KeyCreatedAt, normalized.CreatedAt.ToString("O"), global: true);
+        await _configurationService.SetAsync(KeyLastRefreshedAt, normalized.LastRefreshedAt.ToString("O"), global: true);
     }
 
     public async Task ClearCredentialsAsync()
@@ -278,16 +278,28 @@ public class JiraService : IJiraService
         if (credentials == null)
             throw new InvalidOperationException("Not authenticated with Jira");
 
-        var requestBody = JsonSerializer.Serialize(new
-        {
-            jql,
-            startAt,
-            maxResults,
-            fields = new[] { "summary", "status", "issuetype", "priority", "assignee", "parent", "project" }
-        });
+        var fields = new[] { "summary", "status", "issuetype", "priority", "assignee", "parent", "project" };
+        var requestBody = credentials.DeploymentType == JiraDeploymentType.Cloud
+            ? JsonSerializer.Serialize(new
+            {
+                jql,
+                maxResults,
+                fields
+            })
+            : JsonSerializer.Serialize(new
+            {
+                jql,
+                startAt,
+                maxResults,
+                fields
+            });
 
         var apiBaseUrl = GetApiBaseUrl(credentials);
-        var request = new HttpRequestMessage(HttpMethod.Post, $"{apiBaseUrl}/search")
+        var searchPath = credentials.DeploymentType == JiraDeploymentType.Cloud
+            ? "search/jql"
+            : "search";
+
+        var request = new HttpRequestMessage(HttpMethod.Post, $"{apiBaseUrl}/{searchPath}")
         {
             Content = new StringContent(requestBody, Encoding.UTF8, "application/json")
         };
@@ -298,11 +310,15 @@ public class JiraService : IJiraService
 
         var content = await response.Content.ReadAsStringAsync();
         var doc = JsonDocument.Parse(content);
+        var issues = ParseIssues(doc.RootElement);
+        var total = doc.RootElement.TryGetProperty("total", out var totalProp) && totalProp.ValueKind == JsonValueKind.Number
+            ? totalProp.GetInt32()
+            : issues.Count;
 
         var result = new JiraSearchResult
         {
-            Total = doc.RootElement.GetProperty("total").GetInt32(),
-            Issues = ParseIssues(doc.RootElement)
+            Total = total,
+            Issues = issues
         };
 
         return result;
