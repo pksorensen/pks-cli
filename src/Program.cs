@@ -17,6 +17,7 @@ using PKS.Commands.GitHub.Runner;
 using PKS.Commands.Agentics;
 using PKS.Commands.Agentics.Runner;
 using PKS.Commands.Ado;
+using PKS.Commands.Jira;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.Text;
@@ -180,6 +181,10 @@ services.AddSingleton(serviceProvider => new PKS.Infrastructure.Services.Models.
 // Configure Azure DevOps authentication
 services.AddSingleton<PKS.Infrastructure.Services.Models.AzureDevOpsAuthConfig>();
 services.AddHttpClient<IAzureDevOpsAuthService, AzureDevOpsAuthService>();
+
+// Configure Jira integration
+services.AddSingleton<PKS.Infrastructure.Services.Models.JiraAuthConfig>();
+services.AddHttpClient<IJiraService, JiraService>();
 
 // Register GitHub and Project Identity services
 services.AddHttpClient<IGitHubService, GitHubService>();
@@ -439,6 +444,22 @@ app.Configure(config =>
         ado.AddCommand<AdoStatusCommand>("status")
             .WithDescription("Show Azure DevOps authentication status")
             .WithExample(new[] { "ado", "status" });
+    });
+
+    // Add Jira branch command
+    config.AddBranch<JiraSettings>("jira", jira =>
+    {
+        jira.SetDescription("Manage Jira integration and browse tickets");
+
+        jira.AddCommand<JiraInitCommand>("init")
+            .WithDescription("Initialize Jira authentication (API token or OAuth)")
+            .WithExample(new[] { "jira", "init" })
+            .WithExample(new[] { "jira", "init", "--force" });
+
+        jira.AddCommand<JiraBrowseCommand>("browse")
+            .WithDescription("Browse Jira tickets in an interactive tree view")
+            .WithExample(new[] { "jira", "browse" })
+            .WithExample(new[] { "jira", "browse", "--project", "PROJ" });
     });
 
     // Add git branch command (credential helpers)
