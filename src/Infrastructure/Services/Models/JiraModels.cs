@@ -85,6 +85,9 @@ public class JiraIssue
     public DateTime? Created { get; set; }
     public DateTime? Updated { get; set; }
     public List<JiraIssue> Children { get; set; } = new();
+    public List<JiraComment> Comments { get; set; } = new();
+    public List<JiraWorklog> Worklogs { get; set; } = new();
+    public List<JiraAttachment> Attachments { get; set; } = new();
 }
 
 /// <summary>
@@ -105,4 +108,45 @@ public class JiraSavedFilter
     public string Jql { get; set; } = string.Empty;
     public string? SourceUrl { get; set; }
     public DateTime SavedAt { get; set; }
+}
+
+/// <summary>
+/// A comment on a Jira issue
+/// </summary>
+public class JiraComment
+{
+    public string Id { get; set; } = string.Empty;
+    public string Author { get; set; } = string.Empty;
+    public string? AuthorAvatarUrl { get; set; }
+    public string Body { get; set; } = string.Empty;
+    public DateTime Created { get; set; }
+    public DateTime? Updated { get; set; }
+}
+
+/// <summary>
+/// A worklog entry on a Jira issue
+/// </summary>
+public class JiraWorklog
+{
+    public string Id { get; set; } = string.Empty;
+    public string Author { get; set; } = string.Empty;
+    public int TimeSpentSeconds { get; set; }
+    public string TimeSpent { get; set; } = string.Empty; // e.g. "2h 30m"
+    public string? Comment { get; set; }
+    public DateTime Started { get; set; }
+    public DateTime Created { get; set; }
+}
+
+/// <summary>
+/// An attachment on a Jira issue
+/// </summary>
+public class JiraAttachment
+{
+    public string Id { get; set; } = string.Empty;
+    public string Filename { get; set; } = string.Empty;
+    public string Author { get; set; } = string.Empty;
+    public long Size { get; set; }
+    public string MimeType { get; set; } = string.Empty;
+    public string ContentUrl { get; set; } = string.Empty;
+    public DateTime Created { get; set; }
 }

@@ -395,6 +395,167 @@ public class JiraService : IJiraService
         await _configurationService.SetAsync(KeySavedFilters, JsonSerializer.Serialize(filters), global: true);
     }
 
+    public async Task<List<JiraComment>> GetCommentsAsync(string issueKey)
+    {
+        var credentials = await GetStoredCredentialsAsync();
+        if (credentials == null)
+            throw new InvalidOperationException("Not authenticated with Jira");
+
+        var apiBaseUrl = GetApiBaseUrl(credentials);
+        var request = new HttpRequestMessage(HttpMethod.Get,
+            $"{apiBaseUrl}/issue/{Uri.EscapeDataString(issueKey)}/comment?orderBy=created");
+        ApplyAuth(request, credentials);
+
+        var response = await SendWithDebugAsync(request);
+        response.EnsureSuccessStatusCode();
+
+        var content = await response.Content.ReadAsStringAsync();
+        var doc = JsonDocument.Parse(content);
+
+        var comments = new List<JiraComment>();
+        if (doc.RootElement.TryGetProperty("comments", out var commentsArray))
+        {
+            foreach (var element in commentsArray.EnumerateArray())
+            {
+                var body = "";
+                if (element.TryGetProperty("body", out var bodyProp))
+                {
+                    if (bodyProp.ValueKind == JsonValueKind.String)
+                        body = bodyProp.GetString() ?? "";
+                    else if (bodyProp.ValueKind == JsonValueKind.Object)
+                        body = ExtractTextFromAdf(bodyProp) ?? "";
+                }
+
+                string? avatarUrl = null;
+                if (element.TryGetProperty("author", out var authorObj) && authorObj.ValueKind == JsonValueKind.Object)
+                {
+                    if (authorObj.TryGetProperty("avatarUrls", out var avatarUrls) && avatarUrls.ValueKind == JsonValueKind.Object)
+                    {
+                        if (avatarUrls.TryGetProperty("48x48", out var url48))
+                            avatarUrl = url48.GetString();
+                    }
+                }
+
+                comments.Add(new JiraComment
+                {
+                    Id = element.GetProperty("id").GetString() ?? "",
+                    Author = GetNestedDisplayName(element, "author") ?? "Unknown",
+                    AuthorAvatarUrl = avatarUrl,
+                    Body = body,
+                    Created = DateTime.TryParse(element.GetProperty("created").GetString(), out var c) ? c : DateTime.MinValue,
+                    Updated = element.TryGetProperty("updated", out var u) && DateTime.TryParse(u.GetString(), out var up) ? up : null
+                });
+            }
+        }
+        return comments;
+    }
+
+    public async Task<List<JiraWorklog>> GetWorklogsAsync(string issueKey)
+    {
+        var credentials = await GetStoredCredentialsAsync();
+        if (credentials == null)
+            throw new InvalidOperationException("Not authenticated with Jira");
+
+        var apiBaseUrl = GetApiBaseUrl(credentials);
+        var request = new HttpRequestMessage(HttpMethod.Get,
+            $"{apiBaseUrl}/issue/{Uri.EscapeDataString(issueKey)}/worklog");
+        ApplyAuth(request, credentials);
+
+        var response = await SendWithDebugAsync(request);
+        response.EnsureSuccessStatusCode();
+
+        var content = await response.Content.ReadAsStringAsync();
+        var doc = JsonDocument.Parse(content);
+
+        var worklogs = new List<JiraWorklog>();
+        if (doc.RootElement.TryGetProperty("worklogs", out var worklogsArray))
+        {
+            foreach (var element in worklogsArray.EnumerateArray())
+            {
+                string? comment = null;
+                if (element.TryGetProperty("comment", out var commentProp))
+                {
+                    if (commentProp.ValueKind == JsonValueKind.String)
+                        comment = commentProp.GetString();
+                    else if (commentProp.ValueKind == JsonValueKind.Object)
+                        comment = ExtractTextFromAdf(commentProp);
+                }
+
+                worklogs.Add(new JiraWorklog
+                {
+                    Id = element.GetProperty("id").GetString() ?? "",
+                    Author = GetNestedDisplayName(element, "author") ?? "Unknown",
+                    TimeSpentSeconds = element.TryGetProperty("timeSpentSeconds", out var tss) && tss.ValueKind == JsonValueKind.Number
+                        ? tss.GetInt32() : 0,
+                    TimeSpent = element.TryGetProperty("timeSpent", out var ts) && ts.ValueKind == JsonValueKind.String
+                        ? ts.GetString() ?? "" : "",
+                    Comment = comment,
+                    Started = element.TryGetProperty("started", out var st) && DateTime.TryParse(st.GetString(), out var started)
+                        ? started : DateTime.MinValue,
+                    Created = element.TryGetProperty("created", out var cr) && DateTime.TryParse(cr.GetString(), out var created)
+                        ? created : DateTime.MinValue
+                });
+            }
+        }
+        return worklogs;
+    }
+
+    public async Task<List<JiraAttachment>> GetAttachmentsAsync(string issueKey)
+    {
+        var credentials = await GetStoredCredentialsAsync();
+        if (credentials == null)
+            throw new InvalidOperationException("Not authenticated with Jira");
+
+        var apiBaseUrl = GetApiBaseUrl(credentials);
+        var request = new HttpRequestMessage(HttpMethod.Get,
+            $"{apiBaseUrl}/issue/{Uri.EscapeDataString(issueKey)}?fields=attachment");
+        ApplyAuth(request, credentials);
+
+        var response = await SendWithDebugAsync(request);
+        response.EnsureSuccessStatusCode();
+
+        var content = await response.Content.ReadAsStringAsync();
+        var doc = JsonDocument.Parse(content);
+
+        var attachments = new List<JiraAttachment>();
+        if (doc.RootElement.TryGetProperty("fields", out var fields)
+            && fields.TryGetProperty("attachment", out var attachmentArray)
+            && attachmentArray.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var element in attachmentArray.EnumerateArray())
+            {
+                attachments.Add(new JiraAttachment
+                {
+                    Id = element.TryGetProperty("id", out var id) ? id.GetString() ?? "" : "",
+                    Filename = element.TryGetProperty("filename", out var fn) ? fn.GetString() ?? "" : "",
+                    Author = GetNestedDisplayName(element, "author") ?? "Unknown",
+                    Size = element.TryGetProperty("size", out var sz) && sz.ValueKind == JsonValueKind.Number
+                        ? sz.GetInt64() : 0,
+                    MimeType = element.TryGetProperty("mimeType", out var mt) ? mt.GetString() ?? "" : "",
+                    ContentUrl = element.TryGetProperty("content", out var cu) ? cu.GetString() ?? "" : "",
+                    Created = element.TryGetProperty("created", out var cr) && DateTime.TryParse(cr.GetString(), out var created)
+                        ? created : DateTime.MinValue
+                });
+            }
+        }
+        return attachments;
+    }
+
+    public async Task<byte[]> DownloadAttachmentAsync(string contentUrl)
+    {
+        var credentials = await GetStoredCredentialsAsync();
+        if (credentials == null)
+            throw new InvalidOperationException("Not authenticated with Jira");
+
+        var request = new HttpRequestMessage(HttpMethod.Get, contentUrl);
+        ApplyAuth(request, credentials);
+
+        var response = await SendWithDebugAsync(request);
+        response.EnsureSuccessStatusCode();
+
+        return await response.Content.ReadAsByteArrayAsync();
+    }
+
     // ─────────────────────────────────────────────
     //  Private helpers
     // ─────────────────────────────────────────────

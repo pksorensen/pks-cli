@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
@@ -255,7 +256,7 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         }
 
         // 6. Export selected issues to markdown
-        return ExportToMarkdown(selectedIssues, settings.OutputDir);
+        return await ExportToMarkdown(selectedIssues, settings.OutputDir);
     }
 
     /// <summary>
@@ -340,7 +341,7 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         }
     }
 
-    private int ExportToMarkdown(List<JiraIssue> issues, string outputDir)
+    private async Task<int> ExportToMarkdown(List<JiraIssue> issues, string outputDir)
     {
         if (issues.Count == 0)
         {
@@ -348,22 +349,58 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
             return 0;
         }
 
+        // Fetch enriched data for all selected issues
+        await _console.Status()
+            .Spinner(Spinner.Known.Dots)
+            .StartAsync($"[cyan]Fetching details for {issues.Count} issues...[/]", async ctx =>
+            {
+                foreach (var issue in issues)
+                {
+                    ctx.Status($"[cyan]Fetching {Markup.Escape(issue.Key)}...[/]");
+                    try { issue.Comments = await _jiraService.GetCommentsAsync(issue.Key); } catch { /* skip */ }
+                    try { issue.Worklogs = await _jiraService.GetWorklogsAsync(issue.Key); } catch { /* skip */ }
+                    try { issue.Attachments = await _jiraService.GetAttachmentsAsync(issue.Key); } catch { /* skip */ }
+                }
+            });
+
         var created = 0;
         var updated = 0;
+        var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
 
         foreach (var issue in issues)
         {
-            // Create folder: outputDir/ProjectKey/
             var projectDir = Path.Combine(outputDir, issue.ProjectKey);
             Directory.CreateDirectory(projectDir);
 
-            var filePath = Path.Combine(projectDir, $"{issue.Key}.md");
-            var isUpdate = File.Exists(filePath);
-
-            var content = GenerateMarkdown(issue);
-            File.WriteAllText(filePath, content);
-
+            // Write markdown
+            var mdPath = Path.Combine(projectDir, $"{issue.Key}.md");
+            var isUpdate = File.Exists(mdPath);
+            File.WriteAllText(mdPath, GenerateMarkdown(issue));
             if (isUpdate) updated++; else created++;
+
+            // Write JSON dump
+            var jsonPath = Path.Combine(projectDir, $"{issue.Key}.json");
+            File.WriteAllText(jsonPath, JsonSerializer.Serialize(issue, jsonOptions));
+
+            // Download attachments
+            if (issue.Attachments.Count > 0)
+            {
+                var attachDir = Path.Combine(projectDir, "attachments", issue.Key);
+                Directory.CreateDirectory(attachDir);
+                foreach (var att in issue.Attachments)
+                {
+                    try
+                    {
+                        var attPath = Path.Combine(attachDir, att.Filename);
+                        if (!File.Exists(attPath)) // Don't re-download
+                        {
+                            var data = await _jiraService.DownloadAttachmentAsync(att.ContentUrl);
+                            await File.WriteAllBytesAsync(attPath, data);
+                        }
+                    }
+                    catch { /* Skip failed downloads */ }
+                }
+            }
         }
 
         // Show summary
@@ -379,6 +416,15 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
             foreach (var issue in group)
             {
                 projectNode.AddNode($"[dim]{Markup.Escape(issue.Key)}.md[/]");
+                projectNode.AddNode($"[dim]{Markup.Escape(issue.Key)}.json[/]");
+                if (issue.Attachments.Count > 0)
+                {
+                    var attNode = projectNode.AddNode($"[dim]attachments/{Markup.Escape(issue.Key)}/[/]");
+                    foreach (var att in issue.Attachments)
+                    {
+                        attNode.AddNode($"[dim]{Markup.Escape(att.Filename)}[/]");
+                    }
+                }
             }
         }
         _console.Write(tree);
@@ -388,12 +434,13 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
 
     /// <summary>
     /// Generates markdown content with YAML frontmatter for a Jira issue.
+    /// Includes time log, description, conversation (comments), and attachments.
     /// </summary>
     public static string GenerateMarkdown(JiraIssue issue)
     {
         var sb = new StringBuilder();
 
-        // YAML frontmatter
+        // === FRONTMATTER ===
         sb.AppendLine("---");
         sb.AppendLine($"key: {issue.Key}");
         sb.AppendLine($"summary: \"{EscapeYaml(issue.Summary)}\"");
@@ -439,13 +486,72 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         sb.AppendLine("---");
         sb.AppendLine();
 
-        // Markdown body
+        // === TITLE ===
         sb.AppendLine($"# {issue.Key}: {issue.Summary}");
         sb.AppendLine();
 
+        // === TIME LOG ===
+        if (issue.Worklogs.Count > 0)
+        {
+            sb.AppendLine("## Time Log");
+            sb.AppendLine();
+            sb.AppendLine("| Date | Author | Time | Comment |");
+            sb.AppendLine("|------|--------|------|---------|");
+            var totalSeconds = 0;
+            foreach (var wl in issue.Worklogs.OrderBy(w => w.Started))
+            {
+                totalSeconds += wl.TimeSpentSeconds;
+                var comment = (wl.Comment ?? "").Replace("|", "\\|").Replace("\n", " ").Trim();
+                if (comment.Length > 80) comment = comment[..77] + "...";
+                sb.AppendLine($"| {wl.Started:yyyy-MM-dd} | {wl.Author} | {wl.TimeSpent} | {comment} |");
+            }
+            // Total row
+            sb.AppendLine($"| **Total** | | **{FormatSeconds(totalSeconds)}** | |");
+            sb.AppendLine();
+        }
+
+        // === DESCRIPTION ===
+        sb.AppendLine("## Description");
+        sb.AppendLine();
         if (!string.IsNullOrEmpty(issue.Description))
         {
             sb.AppendLine(issue.Description);
+        }
+        else
+        {
+            sb.AppendLine("*No description provided.*");
+        }
+        sb.AppendLine();
+
+        // === CONVERSATION ===
+        if (issue.Comments.Count > 0)
+        {
+            sb.AppendLine("## Conversation");
+            sb.AppendLine();
+            foreach (var comment in issue.Comments.OrderBy(c => c.Created))
+            {
+                sb.AppendLine($"### {comment.Author} \u2014 {comment.Created:yyyy-MM-dd HH:mm}");
+                sb.AppendLine();
+                sb.AppendLine(comment.Body);
+                sb.AppendLine();
+                sb.AppendLine("---");
+                sb.AppendLine();
+            }
+        }
+
+        // === ATTACHMENTS ===
+        if (issue.Attachments.Count > 0)
+        {
+            sb.AppendLine("## Attachments");
+            sb.AppendLine();
+            sb.AppendLine("| File | Author | Size | Date |");
+            sb.AppendLine("|------|--------|------|------|");
+            foreach (var att in issue.Attachments.OrderBy(a => a.Created))
+            {
+                var size = FormatFileSize(att.Size);
+                var relativePath = $"attachments/{issue.Key}/{att.Filename}";
+                sb.AppendLine($"| [{att.Filename}]({relativePath}) | {att.Author} | {size} | {att.Created:yyyy-MM-dd} |");
+            }
             sb.AppendLine();
         }
 
@@ -455,6 +561,32 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
     private static string EscapeYaml(string value)
     {
         return value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    }
+
+    /// <summary>
+    /// Formats seconds into a human-readable duration string (e.g. "1d 2h 30m").
+    /// Uses 8-hour work days.
+    /// </summary>
+    internal static string FormatSeconds(int seconds)
+    {
+        var days = seconds / 28800;
+        var hours = (seconds % 28800) / 3600;
+        var minutes = (seconds % 3600) / 60;
+        var parts = new List<string>();
+        if (days > 0) parts.Add($"{days}d");
+        if (hours > 0) parts.Add($"{hours}h");
+        if (minutes > 0) parts.Add($"{minutes}m");
+        return parts.Count > 0 ? string.Join(" ", parts) : "0m";
+    }
+
+    /// <summary>
+    /// Formats a file size in bytes to a human-readable string.
+    /// </summary>
+    internal static string FormatFileSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        return $"{bytes / (1024.0 * 1024.0):F1} MB";
     }
 
     private static string FormatIssue(JiraIssue issue)
