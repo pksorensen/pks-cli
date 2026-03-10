@@ -80,9 +80,9 @@ public class PrdService : IPrdService
                 return new PrdLoadResult
                 {
                     Success = true,
-                    ProductName = jsonDocument.Configuration.ProjectName,
+                    ProductName = jsonDocument!.Configuration!.ProjectName,
                     Template = "standard",
-                    Sections = jsonDocument.Sections.Select(s => s.Title).ToList(),
+                    Sections = jsonDocument!.Sections.Select(s => s.Title).ToList(),
                     Message = "PRD loaded successfully",
                     Analysis = new PrdAnalysis
                     {

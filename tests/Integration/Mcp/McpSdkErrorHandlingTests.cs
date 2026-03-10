@@ -119,7 +119,7 @@ public class McpSdkErrorHandlingTests : TestBase
             if (!result.Success)
             {
                 result.Error.Should().NotBeNullOrEmpty($"Should provide error for {paramSet.Name}");
-                result.Error.Length.Should().BeLessThan(1000, "Error messages should be reasonable length");
+                result.Error!.Length.Should().BeLessThan(1000, "Error messages should be reasonable length");
             }
 
             // Security check - error should not echo back potentially dangerous content

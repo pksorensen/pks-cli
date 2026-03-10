@@ -150,12 +150,31 @@ public class JiraService : IJiraService
         try
         {
             var normalized = NormalizeCredentials(credentials);
-            var baseUrl = normalized.BaseUrl.Trim().TrimEnd('/');
-            var apiBase = GetApiBase(normalized);
-            var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}{apiBase}/myself");
+            var apiBaseUrl = GetApiBaseUrl(normalized);
+            var request = new HttpRequestMessage(HttpMethod.Get, $"{apiBaseUrl}/myself");
             ApplyAuth(request, normalized);
 
             var response = await SendWithDebugAsync(request);
+
+            // If direct URL fails with 401 on Cloud and we don't have a cloudId yet,
+            // try fetching cloudId and using the gateway URL (needed for scoped tokens)
+            if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized
+                && normalized.DeploymentType == JiraDeploymentType.Cloud
+                && string.IsNullOrEmpty(normalized.CloudId))
+            {
+                DebugWriter?.Invoke("[yellow]Direct URL returned 401 — trying Atlassian gateway with cloudId...[/]");
+                var cloudId = await FetchCloudIdAsync(normalized.BaseUrl);
+                if (!string.IsNullOrEmpty(cloudId))
+                {
+                    normalized.CloudId = cloudId;
+                    credentials.CloudId = cloudId; // propagate back so it gets stored
+                    var gatewayUrl = GetApiBaseUrl(normalized);
+                    var retryRequest = new HttpRequestMessage(HttpMethod.Get, $"{gatewayUrl}/myself");
+                    ApplyAuth(retryRequest, normalized);
+                    response = await SendWithDebugAsync(retryRequest);
+                }
+            }
+
             return response.IsSuccessStatusCode;
         }
         catch (Exception ex)
@@ -203,15 +222,41 @@ public class JiraService : IJiraService
         return JiraDeploymentType.Cloud;
     }
 
+    public async Task<string?> FetchCloudIdAsync(string baseUrl)
+    {
+        try
+        {
+            var url = baseUrl.Trim().TrimEnd('/');
+            var request = new HttpRequestMessage(HttpMethod.Get, $"{url}/_edge/tenant_info");
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+            var response = await SendWithDebugAsync(request);
+            if (response.IsSuccessStatusCode)
+            {
+                var content = await response.Content.ReadAsStringAsync();
+                var doc = JsonDocument.Parse(content);
+                if (doc.RootElement.TryGetProperty("cloudId", out var cloudIdProp))
+                {
+                    return cloudIdProp.GetString();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to fetch cloudId from tenant_info");
+        }
+
+        return null;
+    }
+
     public async Task<List<JiraProject>> GetProjectsAsync()
     {
         var credentials = await GetStoredCredentialsAsync();
         if (credentials == null)
             throw new InvalidOperationException("Not authenticated with Jira");
 
-        var baseUrl = credentials.BaseUrl.Trim().TrimEnd('/');
-        var apiBase = GetApiBase(credentials);
-        var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}{apiBase}/project");
+        var apiBaseUrl = GetApiBaseUrl(credentials);
+        var request = new HttpRequestMessage(HttpMethod.Get, $"{apiBaseUrl}/project");
         ApplyAuth(request, credentials);
 
         var response = await SendWithDebugAsync(request);
@@ -240,7 +285,6 @@ public class JiraService : IJiraService
         if (credentials == null)
             throw new InvalidOperationException("Not authenticated with Jira");
 
-        var baseUrl = credentials.BaseUrl.Trim().TrimEnd('/');
         var requestBody = JsonSerializer.Serialize(new
         {
             jql,
@@ -249,8 +293,8 @@ public class JiraService : IJiraService
             fields = new[] { "summary", "status", "issuetype", "priority", "assignee", "parent", "project" }
         });
 
-        var apiBase = GetApiBase(credentials);
-        var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}{apiBase}/search")
+        var apiBaseUrl = GetApiBaseUrl(credentials);
+        var request = new HttpRequestMessage(HttpMethod.Post, $"{apiBaseUrl}/search")
         {
             Content = new StringContent(requestBody, Encoding.UTF8, "application/json")
         };
@@ -294,10 +338,9 @@ public class JiraService : IJiraService
         if (credentials == null)
             throw new InvalidOperationException("Not authenticated with Jira");
 
-        var baseUrl = credentials.BaseUrl.Trim().TrimEnd('/');
-        var apiBase = GetApiBase(credentials);
+        var apiBaseUrl = GetApiBaseUrl(credentials);
         var request = new HttpRequestMessage(HttpMethod.Get,
-            $"{baseUrl}{apiBase}/issue/{Uri.EscapeDataString(issueKey)}?fields=summary,status,issuetype,priority,assignee,parent,project");
+            $"{apiBaseUrl}/issue/{Uri.EscapeDataString(issueKey)}?fields=summary,status,issuetype,priority,assignee,parent,project");
         ApplyAuth(request, credentials);
 
         var response = await SendWithDebugAsync(request);
@@ -370,14 +413,34 @@ public class JiraService : IJiraService
     }
 
     /// <summary>
-    /// Returns the REST API base path for the given deployment type.
-    /// Cloud uses /rest/api/3, Server/Data Center uses /rest/api/2.
+    /// Returns the REST API version path: /rest/api/3 for Cloud, /rest/api/2 for Server.
     /// </summary>
-    private static string GetApiBase(JiraStoredCredentials credentials)
+    private static string GetApiVersion(JiraStoredCredentials credentials)
     {
         return credentials.DeploymentType == JiraDeploymentType.Server
             ? "/rest/api/2"
             : "/rest/api/3";
+    }
+
+    /// <summary>
+    /// Returns the full API base URL for the given credentials.
+    /// For Cloud with a cloudId (scoped tokens), uses the Atlassian gateway:
+    ///   https://api.atlassian.com/ex/jira/{cloudId}/rest/api/3
+    /// Otherwise uses the direct site URL:
+    ///   https://site.atlassian.net/rest/api/3
+    /// </summary>
+    private static string GetApiBaseUrl(JiraStoredCredentials credentials)
+    {
+        var baseUrl = credentials.BaseUrl.Trim().TrimEnd('/');
+        var apiVersion = GetApiVersion(credentials);
+
+        if (credentials.DeploymentType == JiraDeploymentType.Cloud
+            && !string.IsNullOrEmpty(credentials.CloudId))
+        {
+            return $"https://api.atlassian.com/ex/jira/{credentials.CloudId}{apiVersion}";
+        }
+
+        return $"{baseUrl}{apiVersion}";
     }
 
     private static void ApplyAuth(HttpRequestMessage request, JiraStoredCredentials credentials)

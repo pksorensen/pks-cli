@@ -243,7 +243,7 @@ public class McpSdkComplianceTests : TestBase
                 if (!result.Success)
                 {
                     result.Error.Should().NotBeNullOrEmpty("Failed operations should provide error details");
-                    result.Error.Length.Should().BeLessThan(500, "Error messages should be concise");
+                    result.Error!.Length.Should().BeLessThan(500, "Error messages should be concise");
 
                     // Error should not contain sensitive information
                     result.Error.Should().NotContain("Exception");

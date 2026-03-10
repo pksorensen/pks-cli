@@ -139,7 +139,7 @@ public class PrdLoadCommand : Command<PrdLoadSettings>
         AnsiConsole.MarkupLine($"[bold]Validation Status:[/] [{statusColor}]{statusText}[/]");
         AnsiConsole.MarkupLine($"[bold]Completeness Score:[/] {validation.CompletenessScore:F1}%");
 
-        if (validation.Errors.Any())
+        if (validation.Errors?.Any() == true)
         {
             AnsiConsole.WriteLine();
             AnsiConsole.MarkupLine("[red]Errors:[/]");
@@ -149,7 +149,7 @@ public class PrdLoadCommand : Command<PrdLoadSettings>
             }
         }
 
-        if (validation.Warnings.Any())
+        if (validation.Warnings?.Any() == true)
         {
             AnsiConsole.WriteLine();
             AnsiConsole.MarkupLine("[yellow]Warnings:[/]");
@@ -159,7 +159,7 @@ public class PrdLoadCommand : Command<PrdLoadSettings>
             }
         }
 
-        if (validation.Suggestions.Any())
+        if (validation.Suggestions?.Any() == true)
         {
             AnsiConsole.WriteLine();
             AnsiConsole.MarkupLine("[cyan]Suggestions:[/]");

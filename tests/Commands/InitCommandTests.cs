@@ -52,7 +52,7 @@ namespace PKS.CLI.Tests.Commands
             }
 
             // Replace the default template discovery service with our mock
-            services.AddSingleton<INuGetTemplateDiscoveryService>(_mockTemplateDiscovery.Object);
+            services.AddSingleton<INuGetTemplateDiscoveryService>(_mockTemplateDiscovery!.Object);
             services.AddTransient<InitCommand>();
         }
 

@@ -317,7 +317,7 @@ public class GitHubToolService
                     ["success"] = baseInfo.success,
                     ["repositoryName"] = baseInfo.repositoryName,
                     ["fullName"] = baseInfo.fullName,
-                    ["description"] = baseInfo.description,
+                    ["description"] = baseInfo.description!,
                     ["url"] = baseInfo.url,
                     ["cloneUrl"] = baseInfo.cloneUrl,
                     ["sshUrl"] = baseInfo.sshUrl,

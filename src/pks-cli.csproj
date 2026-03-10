@@ -7,6 +7,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>PKS</RootNamespace>
+    <!-- CS8765: Spectre.Console Command<T>.Execute declares nullable params; our overrides don't need to -->
+    <NoWarn>CS8765</NoWarn>
 
     <!-- Global Tool Configuration -->
     <PackAsTool>true</PackAsTool>

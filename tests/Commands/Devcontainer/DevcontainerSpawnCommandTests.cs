@@ -72,7 +72,7 @@ public class DevcontainerSpawnCommandTests : TestBase
             InitializeMocks();
         }
 
-        services.AddSingleton<IDevcontainerSpawnerService>(_mockSpawnerService.Object);
+        services.AddSingleton<IDevcontainerSpawnerService>(_mockSpawnerService!.Object);
         services.AddSingleton<IAnsiConsole>(_console);
         services.AddTransient<DevcontainerSpawnCommand>();
     }
