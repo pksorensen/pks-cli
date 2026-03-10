@@ -48,26 +48,19 @@ public class JiraService : IJiraService
     public async Task<bool> IsAuthenticatedAsync()
     {
         var baseUrl = await _configurationService.GetAsync(KeyBaseUrl);
-        var token = await _configurationService.GetAsync(KeyApiToken);
-
-        if (string.IsNullOrEmpty(baseUrl) || string.IsNullOrEmpty(token))
+        if (string.IsNullOrEmpty(baseUrl))
             return false;
 
-        var deploymentTypeStr = await _configurationService.GetAsync(KeyDeploymentType);
-        var isServer = Enum.TryParse<JiraDeploymentType>(deploymentTypeStr, out var dt)
-            && dt == JiraDeploymentType.Server;
+        var token = await _configurationService.GetAsync(KeyApiToken);
+        var authMethod = await _configurationService.GetAsync(KeyAuthMethod);
 
-        if (isServer)
-        {
-            // Server PAT auth requires only baseUrl + token; basic auth needs username
-            var username = await _configurationService.GetAsync(KeyUsername);
-            var email = await _configurationService.GetAsync(KeyEmail);
-            return !string.IsNullOrEmpty(username) || !string.IsNullOrEmpty(email);
-        }
+        // If we have a base URL and an auth method was stored, consider authenticated
+        // (tokens may be stored encrypted and read back differently)
+        if (!string.IsNullOrEmpty(authMethod))
+            return true;
 
-        // Cloud requires email
-        var cloudEmail = await _configurationService.GetAsync(KeyEmail);
-        return !string.IsNullOrEmpty(cloudEmail);
+        // Fallback: check for token presence
+        return !string.IsNullOrEmpty(token);
     }
 
     public async Task<JiraStoredCredentials?> GetStoredCredentialsAsync()
