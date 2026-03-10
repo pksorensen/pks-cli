@@ -448,6 +448,7 @@ app.Configure(config =>
 
         git.AddCommand<GitAskPassCommand>("askpass")
             .WithDescription("Git credential helper for Azure DevOps (GIT_ASKPASS)")
+            .WithExample(new[] { "git", "askpass", "--install" })
             .WithExample(new[] { "git", "askpass", "Password for 'https://dev.azure.com':" });
     });
 
