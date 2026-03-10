@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.RegularExpressions;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
@@ -24,6 +25,10 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
 
     public class Settings : JiraSettings
     {
+        [CommandArgument(0, "[url]")]
+        [Description("Jira URL with JQL query")]
+        public string? Url { get; set; }
+
         [CommandOption("--project|-p")]
         [Description("Project key to browse directly")]
         public string? ProjectKey { get; set; }
@@ -31,11 +36,85 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         [CommandOption("--jql")]
         [Description("Custom JQL query")]
         public string? Jql { get; set; }
+
+        [CommandOption("--save")]
+        [Description("Save the JQL filter for future use")]
+        public bool Save { get; set; }
+
+        [CommandOption("--name")]
+        [Description("Name for the saved filter")]
+        public string? Name { get; set; }
     }
 
     public override int Execute(CommandContext context, Settings settings)
     {
         return ExecuteAsync(settings).GetAwaiter().GetResult();
+    }
+
+    /// <summary>
+    /// Extracts JQL from a Jira URL. Supports:
+    ///   https://site.atlassian.net/issues/?jql=...
+    ///   https://site.atlassian.net/browse/PROJ-123?jql=...
+    /// Returns null if no JQL found in the URL.
+    /// </summary>
+    public static string? ExtractJqlFromUrl(string url)
+    {
+        try
+        {
+            var uri = new Uri(url);
+            var queryString = uri.Query.TrimStart('?');
+            var pairs = queryString.Split('&');
+            foreach (var pair in pairs)
+            {
+                var parts = pair.Split('=', 2);
+                if (parts.Length == 2 && parts[0] == "jql")
+                    return Uri.UnescapeDataString(parts[1]);
+            }
+            return null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Creates a human-readable label from a JQL query.
+    /// Examples:
+    ///   "cf[10067] = \"D365\"" -> "Custom field 10067 = D365"
+    ///   "assignee = currentUser() ORDER BY created DESC" -> "My issues (by created)"
+    /// </summary>
+    public static string JqlToLabel(string jql)
+    {
+        var label = jql;
+
+        // Remove ORDER BY clause for the label
+        var orderIdx = label.IndexOf("ORDER BY", StringComparison.OrdinalIgnoreCase);
+        var orderSuffix = "";
+        if (orderIdx > 0)
+        {
+            var orderPart = label[orderIdx..].Trim();
+            // Extract the field name after ORDER BY
+            var orderField = orderPart.Replace("ORDER BY", "", StringComparison.OrdinalIgnoreCase).Trim();
+            orderField = orderField.Split(' ')[0]; // Just the field name
+            orderSuffix = $" (by {orderField})";
+            label = label[..orderIdx].Trim();
+        }
+
+        // Replace cf[NNN] with "Custom field NNN"
+        label = Regex.Replace(label, @"cf\[(\d+)\]", "Custom field $1");
+
+        // Clean up quotes
+        label = label.Replace("\"", "");
+
+        // Replace currentUser() references
+        if (label.Contains("currentUser()", StringComparison.OrdinalIgnoreCase))
+        {
+            label = "My issues";
+        }
+
+        // Truncate if too long
+        if (label.Length > 60)
+            label = label[..57] + "...";
+
+        return (label + orderSuffix).Trim();
     }
 
     private async Task<int> ExecuteAsync(Settings settings)
@@ -53,13 +132,70 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
             return 1;
         }
 
-        // 2. Project selection
-        string projectKey;
-        if (!string.IsNullOrEmpty(settings.ProjectKey))
+        // Resolve JQL from URL argument if provided
+        string? jql = settings.Jql;
+        string? sourceUrl = null;
+
+        if (!string.IsNullOrEmpty(settings.Url))
         {
-            projectKey = settings.ProjectKey;
+            var extracted = ExtractJqlFromUrl(settings.Url);
+            if (extracted != null)
+            {
+                jql = extracted;
+                sourceUrl = settings.Url;
+                _console.MarkupLine($"[dim]Extracted JQL:[/] {Markup.Escape(jql)}");
+            }
+            else
+            {
+                _console.MarkupLine($"[yellow]Could not extract JQL from URL. Using as-is.[/]");
+                jql = settings.Url; // Treat as raw JQL
+            }
         }
-        else
+
+        // If no JQL and no project specified, show saved filters + project list
+        if (string.IsNullOrEmpty(jql) && string.IsNullOrEmpty(settings.ProjectKey))
+        {
+            var savedFilters = await _jiraService.GetSavedFiltersAsync();
+            if (savedFilters.Count > 0)
+            {
+                var choices = new List<string>();
+                choices.AddRange(savedFilters.Select(f => $"\U0001f516 {f.Label}"));
+                choices.Add("\U0001f50d New search (pick project)");
+
+                var choice = _console.Prompt(
+                    new SelectionPrompt<string>()
+                        .Title("[cyan]Select a saved filter or start new search:[/]")
+                        .PageSize(15)
+                        .AddChoices(choices));
+
+                if (choice.StartsWith("\U0001f516"))
+                {
+                    var filterLabel = choice[3..]; // Skip emoji + space
+                    var filter = savedFilters.First(f => f.Label == filterLabel);
+                    jql = filter.Jql;
+                    _console.MarkupLine($"[dim]Using filter:[/] {Markup.Escape(jql)}");
+                }
+                // else: fall through to project selection below
+            }
+        }
+
+        // If --save, save the filter
+        if (settings.Save && !string.IsNullOrEmpty(jql))
+        {
+            var label = settings.Name ?? JqlToLabel(jql);
+            await _jiraService.SaveFilterAsync(new JiraSavedFilter
+            {
+                Label = label,
+                Jql = jql,
+                SourceUrl = sourceUrl,
+                SavedAt = DateTime.UtcNow
+            });
+            _console.MarkupLine($"[green]Filter saved as:[/] {Markup.Escape(label)}");
+        }
+
+        // 2. Project selection (only if no JQL resolved)
+        string? projectKey = settings.ProjectKey;
+        if (string.IsNullOrEmpty(jql) && string.IsNullOrEmpty(projectKey))
         {
             var projects = await _jiraService.GetProjectsAsync();
             if (projects.Count == 0)
@@ -78,12 +214,12 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
 
         // 3. Fetch issues
         List<JiraIssue> allIssues;
-        if (!string.IsNullOrEmpty(settings.Jql))
+        if (!string.IsNullOrEmpty(jql))
         {
             var result = await _console.Status()
                 .Spinner(Spinner.Known.Dots)
                 .StartAsync("[cyan]Loading issues...[/]", async _ =>
-                    await _jiraService.SearchIssuesAsync(settings.Jql));
+                    await _jiraService.SearchIssuesAsync(jql));
             allIssues = result.Issues;
         }
         else
@@ -91,7 +227,7 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
             allIssues = await _console.Status()
                 .Spinner(Spinner.Known.Dots)
                 .StartAsync("[cyan]Loading issues...[/]", async _ =>
-                    await _jiraService.GetProjectIssuesAsync(projectKey));
+                    await _jiraService.GetProjectIssuesAsync(projectKey!));
         }
 
         if (allIssues.Count == 0)

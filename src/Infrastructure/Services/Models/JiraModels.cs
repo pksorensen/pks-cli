@@ -83,3 +83,14 @@ public class JiraSearchResult
     public int Total { get; set; }
     public List<JiraIssue> Issues { get; set; } = new();
 }
+
+/// <summary>
+/// A saved JQL filter with a human-readable label
+/// </summary>
+public class JiraSavedFilter
+{
+    public string Label { get; set; } = string.Empty;
+    public string Jql { get; set; } = string.Empty;
+    public string? SourceUrl { get; set; }
+    public DateTime SavedAt { get; set; }
+}

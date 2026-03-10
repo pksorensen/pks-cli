@@ -1,6 +1,7 @@
 using Xunit;
 using Moq;
 using FluentAssertions;
+using PKS.Commands.Jira;
 using PKS.Infrastructure;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
@@ -693,5 +694,93 @@ public class JiraCommandTests
         allSettings.Should().ContainKey("jira:username");
         allSettings["jira:username"].Should().Be("admin");
         allSettings["jira:base_url"].Should().Be("https://jira.mycompany.com");
+    }
+
+    // ═════════════════════════════════════════════
+    //  5. Saved JQL Filter Tests
+    // ═════════════════════════════════════════════
+
+    [Fact]
+    [Trait("Category", "Jira")]
+    public void ExtractJqlFromUrl_WithValidJiraUrl_ReturnsJql()
+    {
+        // Arrange
+        var url = "https://site.atlassian.net/issues/?jql=cf%5B10067%5D%20%3D%20%22D365%22";
+
+        // Act
+        var result = JiraBrowseCommand.ExtractJqlFromUrl(url);
+
+        // Assert
+        result.Should().Be("cf[10067] = \"D365\"");
+    }
+
+    [Fact]
+    [Trait("Category", "Jira")]
+    public void ExtractJqlFromUrl_WithNoJql_ReturnsNull()
+    {
+        // Arrange
+        var url = "https://site.atlassian.net/browse/PROJ-123";
+
+        // Act
+        var result = JiraBrowseCommand.ExtractJqlFromUrl(url);
+
+        // Assert
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    [Trait("Category", "Jira")]
+    public void ExtractJqlFromUrl_WithInvalidUrl_ReturnsNull()
+    {
+        // Arrange
+        var url = "not-a-url";
+
+        // Act
+        var result = JiraBrowseCommand.ExtractJqlFromUrl(url);
+
+        // Assert
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    [Trait("Category", "Jira")]
+    public void JqlToLabel_WithCustomField_ReturnsReadable()
+    {
+        // Arrange
+        var jql = "cf[10067] = \"D365\"";
+
+        // Act
+        var result = JiraBrowseCommand.JqlToLabel(jql);
+
+        // Assert
+        result.Should().Contain("Custom field 10067");
+    }
+
+    [Fact]
+    [Trait("Category", "Jira")]
+    public void JqlToLabel_WithOrderBy_IncludesSuffix()
+    {
+        // Arrange
+        var jql = "project = PROJ ORDER BY created DESC";
+
+        // Act
+        var result = JiraBrowseCommand.JqlToLabel(jql);
+
+        // Assert
+        result.Should().Contain("(by created)");
+    }
+
+    [Fact]
+    [Trait("Category", "Jira")]
+    public void JqlToLabel_WithCurrentUser_ReturnsMyIssues()
+    {
+        // Arrange
+        var jql = "assignee = currentUser()";
+
+        // Act
+        var result = JiraBrowseCommand.JqlToLabel(jql);
+
+        // Assert
+        result.Should().Be("My issues");
     }
 }

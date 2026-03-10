@@ -24,6 +24,7 @@ public class JiraService : IJiraService
     private const string KeyCloudId = $"{KeyPrefix}cloud_id";
     private const string KeyCreatedAt = $"{KeyPrefix}created_at";
     private const string KeyLastRefreshedAt = $"{KeyPrefix}last_refreshed_at";
+    private const string KeySavedFilters = $"{KeyPrefix}saved_filters";
 
     private readonly HttpClient _httpClient;
     private readonly IConfigurationService _configurationService;
@@ -136,6 +137,7 @@ public class JiraService : IJiraService
         await _configurationService.DeleteAsync(KeyCloudId);
         await _configurationService.DeleteAsync(KeyCreatedAt);
         await _configurationService.DeleteAsync(KeyLastRefreshedAt);
+        await _configurationService.DeleteAsync(KeySavedFilters);
     }
 
     public async Task<bool> ValidateCredentialsAsync(JiraStoredCredentials credentials)
@@ -363,6 +365,30 @@ public class JiraService : IJiraService
         var content = await response.Content.ReadAsStringAsync();
         var doc = JsonDocument.Parse(content);
         return ParseIssue(doc.RootElement);
+    }
+
+    public async Task<List<JiraSavedFilter>> GetSavedFiltersAsync()
+    {
+        var json = await _configurationService.GetAsync(KeySavedFilters);
+        if (string.IsNullOrEmpty(json)) return new();
+        try { return JsonSerializer.Deserialize<List<JiraSavedFilter>>(json) ?? new(); }
+        catch { return new(); }
+    }
+
+    public async Task SaveFilterAsync(JiraSavedFilter filter)
+    {
+        var filters = await GetSavedFiltersAsync();
+        // Replace if same label exists
+        filters.RemoveAll(f => f.Label.Equals(filter.Label, StringComparison.OrdinalIgnoreCase));
+        filters.Add(filter);
+        await _configurationService.SetAsync(KeySavedFilters, JsonSerializer.Serialize(filters), global: true);
+    }
+
+    public async Task DeleteFilterAsync(string label)
+    {
+        var filters = await GetSavedFiltersAsync();
+        filters.RemoveAll(f => f.Label.Equals(label, StringComparison.OrdinalIgnoreCase));
+        await _configurationService.SetAsync(KeySavedFilters, JsonSerializer.Serialize(filters), global: true);
     }
 
     // ─────────────────────────────────────────────
