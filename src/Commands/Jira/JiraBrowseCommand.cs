@@ -40,6 +40,12 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
 
     private async Task<int> ExecuteAsync(Settings settings)
     {
+        // Enable debug output if requested
+        if (settings.Debug && _jiraService is JiraService svc)
+        {
+            svc.DebugWriter = msg => _console.MarkupLine(msg);
+        }
+
         // 1. Check authentication
         if (!await _jiraService.IsAuthenticatedAsync())
         {

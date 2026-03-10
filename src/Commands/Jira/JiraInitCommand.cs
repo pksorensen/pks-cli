@@ -37,6 +37,12 @@ public class JiraInitCommand : Command<JiraInitCommand.Settings>
 
     private async Task<int> ExecuteAsync(Settings settings)
     {
+        // Enable debug output if requested
+        if (settings.Debug && _jiraService is JiraService svc)
+        {
+            svc.DebugWriter = msg => _console.MarkupLine(msg);
+        }
+
         if (!settings.Force && await _jiraService.IsAuthenticatedAsync())
         {
             var existing = await _jiraService.GetStoredCredentialsAsync();

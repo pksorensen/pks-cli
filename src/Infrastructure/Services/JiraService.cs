@@ -29,6 +29,12 @@ public class JiraService : IJiraService
     private readonly IConfigurationService _configurationService;
     private readonly ILogger<JiraService> _logger;
 
+    /// <summary>
+    /// When set, HTTP request/response details are written via this callback.
+    /// Set from commands when --debug flag is used.
+    /// </summary>
+    public Action<string>? DebugWriter { get; set; }
+
     public JiraService(
         HttpClient httpClient,
         IConfigurationService configurationService,
@@ -146,7 +152,7 @@ public class JiraService : IJiraService
             var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}{apiBase}/myself");
             ApplyAuth(request, credentials);
 
-            var response = await _httpClient.SendAsync(request);
+            var response = await SendWithDebugAsync(request);
             return response.IsSuccessStatusCode;
         }
         catch (Exception ex)
@@ -164,7 +170,7 @@ public class JiraService : IJiraService
             var request = new HttpRequestMessage(HttpMethod.Get, $"{url}/rest/api/2/serverInfo");
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-            var response = await _httpClient.SendAsync(request);
+            var response = await SendWithDebugAsync(request);
             if (response.IsSuccessStatusCode)
             {
                 var content = await response.Content.ReadAsStringAsync();
@@ -205,7 +211,7 @@ public class JiraService : IJiraService
         var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}{apiBase}/project");
         ApplyAuth(request, credentials);
 
-        var response = await _httpClient.SendAsync(request);
+        var response = await SendWithDebugAsync(request);
         response.EnsureSuccessStatusCode();
 
         var content = await response.Content.ReadAsStringAsync();
@@ -247,7 +253,7 @@ public class JiraService : IJiraService
         };
         ApplyAuth(request, credentials);
 
-        var response = await _httpClient.SendAsync(request);
+        var response = await SendWithDebugAsync(request);
         response.EnsureSuccessStatusCode();
 
         var content = await response.Content.ReadAsStringAsync();
@@ -291,7 +297,7 @@ public class JiraService : IJiraService
             $"{baseUrl}{apiBase}/issue/{Uri.EscapeDataString(issueKey)}?fields=summary,status,issuetype,priority,assignee,parent,project");
         ApplyAuth(request, credentials);
 
-        var response = await _httpClient.SendAsync(request);
+        var response = await SendWithDebugAsync(request);
         if (!response.IsSuccessStatusCode)
         {
             if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
@@ -307,6 +313,58 @@ public class JiraService : IJiraService
     // ─────────────────────────────────────────────
     //  Private helpers
     // ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Sends an HTTP request. When DebugWriter is set, logs request/response details
+    /// including method, URL, auth header type, status code, and response body (truncated).
+    /// </summary>
+    private async Task<HttpResponseMessage> SendWithDebugAsync(HttpRequestMessage request)
+    {
+        if (DebugWriter != null)
+        {
+            DebugWriter($"[dim]──── HTTP Request ────[/]");
+            DebugWriter($"[cyan]{request.Method}[/] {Spectre.Console.Markup.Escape(request.RequestUri?.ToString() ?? "(null)")}");
+            if (request.Headers.Authorization != null)
+                DebugWriter($"[dim]Authorization:[/] {request.Headers.Authorization.Scheme} {(request.Headers.Authorization.Scheme == "Basic" ? "<redacted>" : request.Headers.Authorization.Parameter?[..Math.Min(20, request.Headers.Authorization.Parameter?.Length ?? 0)] + "...")}");
+            if (request.Content != null)
+            {
+                var body = await request.Content.ReadAsStringAsync();
+                DebugWriter($"[dim]Body:[/] {Spectre.Console.Markup.Escape(body.Length > 500 ? body[..500] + "..." : body)}");
+            }
+        }
+
+        var response = await SendWithDebugAsync(request);
+
+        if (DebugWriter != null)
+        {
+            var statusColor = response.IsSuccessStatusCode ? "green" : "red";
+            DebugWriter($"[dim]──── HTTP Response ────[/]");
+            DebugWriter($"[{statusColor}]{(int)response.StatusCode} {response.StatusCode}[/]");
+            var responseBody = await response.Content.ReadAsStringAsync();
+            if (!string.IsNullOrEmpty(responseBody))
+            {
+                // Pretty-print JSON if possible
+                try
+                {
+                    var doc = JsonDocument.Parse(responseBody);
+                    var pretty = JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true });
+                    var display = pretty.Length > 2000 ? pretty[..2000] + "\n..." : pretty;
+                    DebugWriter($"[dim]{Spectre.Console.Markup.Escape(display)}[/]");
+                }
+                catch
+                {
+                    var display = responseBody.Length > 2000 ? responseBody[..2000] + "..." : responseBody;
+                    DebugWriter($"[dim]{Spectre.Console.Markup.Escape(display)}[/]");
+                }
+            }
+            DebugWriter("");
+
+            // Re-create content since we consumed it (response body can only be read once)
+            response.Content = new StringContent(responseBody, Encoding.UTF8, response.Content.Headers.ContentType?.MediaType ?? "application/json");
+        }
+
+        return response;
+    }
 
     /// <summary>
     /// Returns the REST API base path for the given deployment type.
