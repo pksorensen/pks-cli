@@ -21,13 +21,24 @@ public enum JiraAuthMethod
 }
 
 /// <summary>
+/// Jira deployment type — Cloud vs Server/Data Center (on-premise)
+/// </summary>
+public enum JiraDeploymentType
+{
+    Cloud,
+    Server // Jira Server or Data Center (on-premise)
+}
+
+/// <summary>
 /// Persisted Jira credentials
 /// </summary>
 public class JiraStoredCredentials
 {
     public JiraAuthMethod AuthMethod { get; set; }
+    public JiraDeploymentType DeploymentType { get; set; } = JiraDeploymentType.Cloud;
     public string BaseUrl { get; set; } = string.Empty; // e.g. https://mycompany.atlassian.net
     public string Email { get; set; } = string.Empty;
+    public string Username { get; set; } = string.Empty; // for Server basic auth (username, not email)
     public string ApiToken { get; set; } = string.Empty; // for token auth
     public string AccessToken { get; set; } = string.Empty; // for OAuth
     public string RefreshToken { get; set; } = string.Empty; // for OAuth

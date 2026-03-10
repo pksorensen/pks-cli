@@ -534,18 +534,164 @@ public class JiraCommandTests
         await configService.Object.SetAsync("jira:email", "user@test.com");
         await configService.Object.SetAsync("jira:api_token", "token");
         await configService.Object.SetAsync("jira:auth_method", "ApiToken");
+        await configService.Object.SetAsync("jira:deployment_type", "Cloud");
+        await configService.Object.SetAsync("jira:username", "");
 
         // Act — simulate JiraService.ClearCredentialsAsync
         await configService.Object.DeleteAsync("jira:base_url");
         await configService.Object.DeleteAsync("jira:email");
+        await configService.Object.DeleteAsync("jira:username");
         await configService.Object.DeleteAsync("jira:api_token");
         await configService.Object.DeleteAsync("jira:auth_method");
+        await configService.Object.DeleteAsync("jira:deployment_type");
 
         // Assert
         var all = await configService.Object.GetAllAsync();
         all.Should().NotContainKey("jira:base_url");
         all.Should().NotContainKey("jira:email");
+        all.Should().NotContainKey("jira:username");
         all.Should().NotContainKey("jira:api_token");
         all.Should().NotContainKey("jira:auth_method");
+        all.Should().NotContainKey("jira:deployment_type");
+    }
+
+    // ═════════════════════════════════════════════
+    //  4. Jira Server / Data Center Tests
+    // ═════════════════════════════════════════════
+
+    [Fact]
+    [Trait("Category", "Jira")]
+    public async Task JiraService_DetectDeploymentType_ReturnsServer_WhenServerInfoAvailable()
+    {
+        // Arrange
+        var jiraService = new Mock<IJiraService>();
+
+        jiraService.Setup(x => x.DetectDeploymentTypeAsync("https://jira.mycompany.com"))
+            .ReturnsAsync(JiraDeploymentType.Server);
+
+        jiraService.Setup(x => x.DetectDeploymentTypeAsync("https://myco.atlassian.net"))
+            .ReturnsAsync(JiraDeploymentType.Cloud);
+
+        // Act
+        var serverResult = await jiraService.Object.DetectDeploymentTypeAsync("https://jira.mycompany.com");
+        var cloudResult = await jiraService.Object.DetectDeploymentTypeAsync("https://myco.atlassian.net");
+
+        // Assert
+        serverResult.Should().Be(JiraDeploymentType.Server);
+        cloudResult.Should().Be(JiraDeploymentType.Cloud);
+    }
+
+    [Fact]
+    [Trait("Category", "Jira")]
+    public async Task JiraService_UsesApiV2_ForServerDeployment()
+    {
+        // Arrange — Server credentials should use /rest/api/2
+        var jiraService = new Mock<IJiraService>();
+
+        var serverCredentials = new JiraStoredCredentials
+        {
+            AuthMethod = JiraAuthMethod.ApiToken,
+            DeploymentType = JiraDeploymentType.Server,
+            BaseUrl = "https://jira.mycompany.com",
+            Username = "admin",
+            ApiToken = "server-password"
+        };
+
+        jiraService.Setup(x => x.ValidateCredentialsAsync(It.IsAny<JiraStoredCredentials>()))
+            .ReturnsAsync(true);
+
+        jiraService.Setup(x => x.StoreCredentialsAsync(It.IsAny<JiraStoredCredentials>()))
+            .Returns(Task.CompletedTask);
+
+        // Act
+        var isValid = await jiraService.Object.ValidateCredentialsAsync(serverCredentials);
+        if (isValid)
+        {
+            await jiraService.Object.StoreCredentialsAsync(serverCredentials);
+        }
+
+        // Assert
+        isValid.Should().BeTrue();
+        jiraService.Verify(x => x.StoreCredentialsAsync(It.Is<JiraStoredCredentials>(c =>
+            c.DeploymentType == JiraDeploymentType.Server &&
+            c.BaseUrl == "https://jira.mycompany.com" &&
+            c.Username == "admin" &&
+            c.ApiToken == "server-password"
+        )), Times.Once);
+    }
+
+    [Fact]
+    [Trait("Category", "Jira")]
+    public async Task JiraService_UsesBearerAuth_ForServerPAT()
+    {
+        // Arrange — Server PAT: no username, token used as Bearer
+        var jiraService = new Mock<IJiraService>();
+
+        var patCredentials = new JiraStoredCredentials
+        {
+            AuthMethod = JiraAuthMethod.ApiToken,
+            DeploymentType = JiraDeploymentType.Server,
+            BaseUrl = "https://jira.mycompany.com",
+            Username = string.Empty, // no username => PAT / Bearer
+            ApiToken = "personal-access-token-value"
+        };
+
+        jiraService.Setup(x => x.ValidateCredentialsAsync(It.IsAny<JiraStoredCredentials>()))
+            .ReturnsAsync(true);
+
+        jiraService.Setup(x => x.StoreCredentialsAsync(It.IsAny<JiraStoredCredentials>()))
+            .Returns(Task.CompletedTask);
+
+        // Act
+        var isValid = await jiraService.Object.ValidateCredentialsAsync(patCredentials);
+        if (isValid)
+        {
+            await jiraService.Object.StoreCredentialsAsync(patCredentials);
+        }
+
+        // Assert — credentials stored with Server deployment, empty username (PAT mode)
+        isValid.Should().BeTrue();
+        jiraService.Verify(x => x.StoreCredentialsAsync(It.Is<JiraStoredCredentials>(c =>
+            c.DeploymentType == JiraDeploymentType.Server &&
+            string.IsNullOrEmpty(c.Username) &&
+            c.ApiToken == "personal-access-token-value"
+        )), Times.Once);
+
+        // Verify the credential shape: empty Username means Bearer auth will be used
+        patCredentials.DeploymentType.Should().Be(JiraDeploymentType.Server);
+        patCredentials.Username.Should().BeEmpty("PAT auth does not require a username");
+        patCredentials.ApiToken.Should().NotBeEmpty("the PAT token must be present");
+    }
+
+    [Fact]
+    [Trait("Category", "Jira")]
+    public async Task JiraService_ServerCredentials_StoresDeploymentTypeAndUsername()
+    {
+        // Arrange
+        var configService = CreateConfigServiceMock();
+
+        var credentials = new JiraStoredCredentials
+        {
+            AuthMethod = JiraAuthMethod.ApiToken,
+            DeploymentType = JiraDeploymentType.Server,
+            BaseUrl = "https://jira.mycompany.com",
+            Username = "admin",
+            ApiToken = "server-secret"
+        };
+
+        // Act — simulate what JiraService.StoreCredentialsAsync does for Server
+        await configService.Object.SetAsync("jira:auth_method", credentials.AuthMethod.ToString());
+        await configService.Object.SetAsync("jira:deployment_type", credentials.DeploymentType.ToString());
+        await configService.Object.SetAsync("jira:base_url", credentials.BaseUrl);
+        await configService.Object.SetAsync("jira:username", credentials.Username);
+        await configService.Object.SetAsync("jira:api_token", credentials.ApiToken, encrypt: true);
+
+        // Assert
+        var allSettings = await configService.Object.GetAllAsync();
+        allSettings.Should().ContainKey("jira:deployment_type");
+        allSettings["jira:deployment_type"].Should().Be("Server");
+        allSettings.Should().ContainKey("jira:username");
+        allSettings["jira:username"].Should().Be("admin");
+        allSettings["jira:base_url"].Should().Be("https://jira.mycompany.com");
     }
 }

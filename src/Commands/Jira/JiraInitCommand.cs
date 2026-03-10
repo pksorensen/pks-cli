@@ -50,7 +50,11 @@ public class JiraInitCommand : Command<JiraInitCommand.Settings>
                 table.AddColumn("[bold]Value[/]");
 
                 table.AddRow("Base URL", Markup.Escape(existing.BaseUrl));
-                table.AddRow("Email", Markup.Escape(existing.Email));
+                table.AddRow("Deployment", Markup.Escape(existing.DeploymentType.ToString()));
+                if (!string.IsNullOrEmpty(existing.Email))
+                    table.AddRow("Email", Markup.Escape(existing.Email));
+                if (!string.IsNullOrEmpty(existing.Username))
+                    table.AddRow("Username", Markup.Escape(existing.Username));
                 table.AddRow("Auth Method", Markup.Escape(existing.AuthMethod.ToString()));
 
                 _console.Write(table);
@@ -76,29 +80,100 @@ public class JiraInitCommand : Command<JiraInitCommand.Settings>
             return 1;
         }
 
-        // API Token flow
+        // API Token flow — select deployment type
+        var deploymentChoice = _console.Prompt(
+            new SelectionPrompt<string>()
+                .Title("[cyan]Select your Jira deployment type:[/]")
+                .AddChoices(new[]
+                {
+                    "Jira Cloud (*.atlassian.net)",
+                    "Jira Server / Data Center (on-premise)"
+                }));
+
+        var deploymentType = deploymentChoice.Contains("Cloud")
+            ? JiraDeploymentType.Cloud
+            : JiraDeploymentType.Server;
+
         var baseUrl = _console.Prompt(
-            new TextPrompt<string>("[cyan]Jira base URL[/] (e.g., https://mycompany.atlassian.net):")
+            new TextPrompt<string>(deploymentType == JiraDeploymentType.Cloud
+                    ? "[cyan]Jira base URL[/] (e.g., https://mycompany.atlassian.net):"
+                    : "[cyan]Jira base URL[/] (e.g., https://jira.mycompany.com):")
                 .Validate(url => Uri.TryCreate(url, UriKind.Absolute, out _)
                     ? ValidationResult.Success()
                     : ValidationResult.Error("[red]Please enter a valid URL.[/]")));
 
-        var email = _console.Prompt(
-            new TextPrompt<string>("[cyan]Email:[/]"));
+        JiraStoredCredentials credentials;
 
-        var apiToken = _console.Prompt(
-            new TextPrompt<string>("[cyan]API Token:[/]")
-                .Secret());
-
-        var credentials = new JiraStoredCredentials
+        if (deploymentType == JiraDeploymentType.Cloud)
         {
-            AuthMethod = JiraAuthMethod.ApiToken,
-            BaseUrl = baseUrl,
-            Email = email,
-            ApiToken = apiToken,
-            CreatedAt = DateTime.UtcNow,
-            LastRefreshedAt = DateTime.UtcNow
-        };
+            // Cloud flow: email + API token
+            var email = _console.Prompt(
+                new TextPrompt<string>("[cyan]Email:[/]"));
+
+            var apiToken = _console.Prompt(
+                new TextPrompt<string>("[cyan]API Token:[/]")
+                    .Secret());
+
+            credentials = new JiraStoredCredentials
+            {
+                AuthMethod = JiraAuthMethod.ApiToken,
+                DeploymentType = JiraDeploymentType.Cloud,
+                BaseUrl = baseUrl,
+                Email = email,
+                ApiToken = apiToken,
+                CreatedAt = DateTime.UtcNow,
+                LastRefreshedAt = DateTime.UtcNow
+            };
+        }
+        else
+        {
+            // Server/DC flow: PAT or Username/Password
+            var serverAuthChoice = _console.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("[cyan]Select Server authentication method:[/]")
+                    .AddChoices(new[]
+                    {
+                        "Personal Access Token (PAT)",
+                        "Username / Password"
+                    }));
+
+            if (serverAuthChoice.Contains("PAT"))
+            {
+                var pat = _console.Prompt(
+                    new TextPrompt<string>("[cyan]Personal Access Token:[/]")
+                        .Secret());
+
+                credentials = new JiraStoredCredentials
+                {
+                    AuthMethod = JiraAuthMethod.ApiToken,
+                    DeploymentType = JiraDeploymentType.Server,
+                    BaseUrl = baseUrl,
+                    ApiToken = pat,
+                    CreatedAt = DateTime.UtcNow,
+                    LastRefreshedAt = DateTime.UtcNow
+                };
+            }
+            else
+            {
+                var username = _console.Prompt(
+                    new TextPrompt<string>("[cyan]Username:[/]"));
+
+                var password = _console.Prompt(
+                    new TextPrompt<string>("[cyan]Password:[/]")
+                        .Secret());
+
+                credentials = new JiraStoredCredentials
+                {
+                    AuthMethod = JiraAuthMethod.ApiToken,
+                    DeploymentType = JiraDeploymentType.Server,
+                    BaseUrl = baseUrl,
+                    Username = username,
+                    ApiToken = password,
+                    CreatedAt = DateTime.UtcNow,
+                    LastRefreshedAt = DateTime.UtcNow
+                };
+            }
+        }
 
         var isValid = await _jiraService.ValidateCredentialsAsync(credentials);
         if (!isValid)
@@ -119,8 +194,14 @@ public class JiraInitCommand : Command<JiraInitCommand.Settings>
         successTable.AddColumn("[bold]Value[/]");
 
         successTable.AddRow("Base URL", Markup.Escape(baseUrl));
-        successTable.AddRow("Email", Markup.Escape(email));
-        successTable.AddRow("Auth Method", "API Token");
+        successTable.AddRow("Deployment", Markup.Escape(credentials.DeploymentType.ToString()));
+        if (!string.IsNullOrEmpty(credentials.Email))
+            successTable.AddRow("Email", Markup.Escape(credentials.Email));
+        if (!string.IsNullOrEmpty(credentials.Username))
+            successTable.AddRow("Username", Markup.Escape(credentials.Username));
+        successTable.AddRow("Auth Method", credentials.DeploymentType == JiraDeploymentType.Server && string.IsNullOrEmpty(credentials.Username)
+            ? "Personal Access Token"
+            : "API Token / Basic");
 
         _console.Write(successTable);
 

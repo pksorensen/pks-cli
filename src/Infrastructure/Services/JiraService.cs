@@ -15,8 +15,10 @@ public class JiraService : IJiraService
     private const string KeyPrefix = "jira:";
     private const string KeyBaseUrl = $"{KeyPrefix}base_url";
     private const string KeyEmail = $"{KeyPrefix}email";
+    private const string KeyUsername = $"{KeyPrefix}username";
     private const string KeyApiToken = $"{KeyPrefix}api_token";
     private const string KeyAuthMethod = $"{KeyPrefix}auth_method";
+    private const string KeyDeploymentType = $"{KeyPrefix}deployment_type";
     private const string KeyAccessToken = $"{KeyPrefix}access_token";
     private const string KeyRefreshToken = $"{KeyPrefix}refresh_token";
     private const string KeyCloudId = $"{KeyPrefix}cloud_id";
@@ -40,12 +42,26 @@ public class JiraService : IJiraService
     public async Task<bool> IsAuthenticatedAsync()
     {
         var baseUrl = await _configurationService.GetAsync(KeyBaseUrl);
-        var email = await _configurationService.GetAsync(KeyEmail);
         var token = await _configurationService.GetAsync(KeyApiToken);
 
-        return !string.IsNullOrEmpty(baseUrl)
-            && !string.IsNullOrEmpty(email)
-            && !string.IsNullOrEmpty(token);
+        if (string.IsNullOrEmpty(baseUrl) || string.IsNullOrEmpty(token))
+            return false;
+
+        var deploymentTypeStr = await _configurationService.GetAsync(KeyDeploymentType);
+        var isServer = Enum.TryParse<JiraDeploymentType>(deploymentTypeStr, out var dt)
+            && dt == JiraDeploymentType.Server;
+
+        if (isServer)
+        {
+            // Server PAT auth requires only baseUrl + token; basic auth needs username
+            var username = await _configurationService.GetAsync(KeyUsername);
+            var email = await _configurationService.GetAsync(KeyEmail);
+            return !string.IsNullOrEmpty(username) || !string.IsNullOrEmpty(email);
+        }
+
+        // Cloud requires email
+        var cloudEmail = await _configurationService.GetAsync(KeyEmail);
+        return !string.IsNullOrEmpty(cloudEmail);
     }
 
     public async Task<JiraStoredCredentials?> GetStoredCredentialsAsync()
@@ -61,14 +77,21 @@ public class JiraService : IJiraService
                 ? parsed
                 : JiraAuthMethod.ApiToken;
 
+            var deploymentTypeStr = await _configurationService.GetAsync(KeyDeploymentType);
+            var deploymentType = Enum.TryParse<JiraDeploymentType>(deploymentTypeStr, out var dtParsed)
+                ? dtParsed
+                : JiraDeploymentType.Cloud;
+
             var createdAtStr = await _configurationService.GetAsync(KeyCreatedAt);
             var lastRefreshedStr = await _configurationService.GetAsync(KeyLastRefreshedAt);
 
             return new JiraStoredCredentials
             {
                 AuthMethod = authMethod,
+                DeploymentType = deploymentType,
                 BaseUrl = baseUrl,
                 Email = await _configurationService.GetAsync(KeyEmail) ?? string.Empty,
+                Username = await _configurationService.GetAsync(KeyUsername) ?? string.Empty,
                 ApiToken = await _configurationService.GetAsync(KeyApiToken) ?? string.Empty,
                 AccessToken = await _configurationService.GetAsync(KeyAccessToken) ?? string.Empty,
                 RefreshToken = await _configurationService.GetAsync(KeyRefreshToken) ?? string.Empty,
@@ -87,8 +110,10 @@ public class JiraService : IJiraService
     public async Task StoreCredentialsAsync(JiraStoredCredentials credentials)
     {
         await _configurationService.SetAsync(KeyAuthMethod, credentials.AuthMethod.ToString());
+        await _configurationService.SetAsync(KeyDeploymentType, credentials.DeploymentType.ToString());
         await _configurationService.SetAsync(KeyBaseUrl, credentials.BaseUrl);
         await _configurationService.SetAsync(KeyEmail, credentials.Email);
+        await _configurationService.SetAsync(KeyUsername, credentials.Username);
         await _configurationService.SetAsync(KeyApiToken, credentials.ApiToken, encrypt: true);
         await _configurationService.SetAsync(KeyAccessToken, credentials.AccessToken, encrypt: true);
         await _configurationService.SetAsync(KeyRefreshToken, credentials.RefreshToken, encrypt: true);
@@ -101,8 +126,10 @@ public class JiraService : IJiraService
     {
         await _configurationService.DeleteAsync(KeyBaseUrl);
         await _configurationService.DeleteAsync(KeyEmail);
+        await _configurationService.DeleteAsync(KeyUsername);
         await _configurationService.DeleteAsync(KeyApiToken);
         await _configurationService.DeleteAsync(KeyAuthMethod);
+        await _configurationService.DeleteAsync(KeyDeploymentType);
         await _configurationService.DeleteAsync(KeyAccessToken);
         await _configurationService.DeleteAsync(KeyRefreshToken);
         await _configurationService.DeleteAsync(KeyCloudId);
@@ -115,7 +142,8 @@ public class JiraService : IJiraService
         try
         {
             var baseUrl = credentials.BaseUrl.TrimEnd('/');
-            var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/rest/api/3/myself");
+            var apiBase = GetApiBase(credentials);
+            var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}{apiBase}/myself");
             ApplyAuth(request, credentials);
 
             var response = await _httpClient.SendAsync(request);
@@ -128,6 +156,44 @@ public class JiraService : IJiraService
         }
     }
 
+    public async Task<JiraDeploymentType> DetectDeploymentTypeAsync(string baseUrl)
+    {
+        try
+        {
+            var url = baseUrl.TrimEnd('/');
+            var request = new HttpRequestMessage(HttpMethod.Get, $"{url}/rest/api/2/serverInfo");
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+            var response = await _httpClient.SendAsync(request);
+            if (response.IsSuccessStatusCode)
+            {
+                var content = await response.Content.ReadAsStringAsync();
+                var doc = JsonDocument.Parse(content);
+
+                if (doc.RootElement.TryGetProperty("deploymentType", out var dtProp))
+                {
+                    var dtValue = dtProp.GetString();
+                    if (!string.IsNullOrEmpty(dtValue) &&
+                        dtValue.Equals("Cloud", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return JiraDeploymentType.Cloud;
+                    }
+                    // Server or Data Center
+                    return JiraDeploymentType.Server;
+                }
+
+                // serverInfo responded but no deploymentType — likely Server/DC
+                return JiraDeploymentType.Server;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to detect deployment type from serverInfo, defaulting to Cloud");
+        }
+
+        return JiraDeploymentType.Cloud;
+    }
+
     public async Task<List<JiraProject>> GetProjectsAsync()
     {
         var credentials = await GetStoredCredentialsAsync();
@@ -135,7 +201,8 @@ public class JiraService : IJiraService
             throw new InvalidOperationException("Not authenticated with Jira");
 
         var baseUrl = credentials.BaseUrl.TrimEnd('/');
-        var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/rest/api/3/project");
+        var apiBase = GetApiBase(credentials);
+        var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}{apiBase}/project");
         ApplyAuth(request, credentials);
 
         var response = await _httpClient.SendAsync(request);
@@ -173,7 +240,8 @@ public class JiraService : IJiraService
             fields = new[] { "summary", "status", "issuetype", "priority", "assignee", "parent", "project" }
         });
 
-        var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/rest/api/3/search")
+        var apiBase = GetApiBase(credentials);
+        var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}{apiBase}/search")
         {
             Content = new StringContent(requestBody, Encoding.UTF8, "application/json")
         };
@@ -218,8 +286,9 @@ public class JiraService : IJiraService
             throw new InvalidOperationException("Not authenticated with Jira");
 
         var baseUrl = credentials.BaseUrl.TrimEnd('/');
+        var apiBase = GetApiBase(credentials);
         var request = new HttpRequestMessage(HttpMethod.Get,
-            $"{baseUrl}/rest/api/3/issue/{Uri.EscapeDataString(issueKey)}?fields=summary,status,issuetype,priority,assignee,parent,project");
+            $"{baseUrl}{apiBase}/issue/{Uri.EscapeDataString(issueKey)}?fields=summary,status,issuetype,priority,assignee,parent,project");
         ApplyAuth(request, credentials);
 
         var response = await _httpClient.SendAsync(request);
@@ -239,14 +308,42 @@ public class JiraService : IJiraService
     //  Private helpers
     // ─────────────────────────────────────────────
 
+    /// <summary>
+    /// Returns the REST API base path for the given deployment type.
+    /// Cloud uses /rest/api/3, Server/Data Center uses /rest/api/2.
+    /// </summary>
+    private static string GetApiBase(JiraStoredCredentials credentials)
+    {
+        return credentials.DeploymentType == JiraDeploymentType.Server
+            ? "/rest/api/2"
+            : "/rest/api/3";
+    }
+
     private static void ApplyAuth(HttpRequestMessage request, JiraStoredCredentials credentials)
     {
         if (credentials.AuthMethod == JiraAuthMethod.OAuth && !string.IsNullOrEmpty(credentials.AccessToken))
         {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credentials.AccessToken);
         }
+        else if (credentials.DeploymentType == JiraDeploymentType.Server)
+        {
+            // Server/DC: if username is set, use Basic auth (username:password/token)
+            // otherwise, treat the ApiToken as a Personal Access Token (Bearer)
+            if (!string.IsNullOrEmpty(credentials.Username))
+            {
+                var encoded = Convert.ToBase64String(
+                    Encoding.ASCII.GetBytes($"{credentials.Username}:{credentials.ApiToken}"));
+                request.Headers.Authorization = new AuthenticationHeaderValue("Basic", encoded);
+            }
+            else
+            {
+                // PAT — used as Bearer token on Server/DC
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credentials.ApiToken);
+            }
+        }
         else
         {
+            // Cloud: Basic auth with email:apiToken
             var encoded = Convert.ToBase64String(
                 Encoding.ASCII.GetBytes($"{credentials.Email}:{credentials.ApiToken}"));
             request.Headers.Authorization = new AuthenticationHeaderValue("Basic", encoded);

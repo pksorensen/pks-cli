@@ -12,6 +12,7 @@ public interface IJiraService
     Task StoreCredentialsAsync(JiraStoredCredentials credentials);
     Task ClearCredentialsAsync();
     Task<bool> ValidateCredentialsAsync(JiraStoredCredentials credentials);
+    Task<JiraDeploymentType> DetectDeploymentTypeAsync(string baseUrl);
     Task<List<JiraProject>> GetProjectsAsync();
     Task<JiraSearchResult> SearchIssuesAsync(string jql, int startAt = 0, int maxResults = 50);
     Task<List<JiraIssue>> GetProjectIssuesAsync(string projectKey, string? epicKey = null);
