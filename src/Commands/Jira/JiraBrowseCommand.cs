@@ -243,10 +243,20 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
             return 0;
         }
 
-        // 4. Build tree
+        // 4. Build tree from initial results
         var roots = BuildIssueTree(allIssues);
 
-        // 5. Interactive tree browser with multi-select
+        // 5. Fetch children for parent-type issues (epics, stories, tasks with subtasks)
+        await _console.Status()
+            .Spinner(Spinner.Known.Dots)
+            .StartAsync("[cyan]Loading child issues...[/]", async ctx =>
+            {
+                await LoadChildrenRecursiveAsync(roots, allIssues, ctx, maxDepth: 3);
+            });
+
+        _console.MarkupLine($"[dim]Loaded {allIssues.Count} issues total[/]");
+
+        // 6. Interactive tree browser with multi-select
         var selectedIssues = SelectIssues(roots, allIssues);
 
         if (selectedIssues.Count == 0)
@@ -283,62 +293,155 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         return roots;
     }
 
-    private List<JiraIssue> SelectIssues(List<JiraIssue> roots, List<JiraIssue> allIssues)
+    /// <summary>
+    /// Recursively fetches child issues for all issues at the current level
+    /// that don't already have children loaded. Adds discovered children to
+    /// allIssues for later selection/export.
+    /// </summary>
+    private async Task LoadChildrenRecursiveAsync(
+        List<JiraIssue> issues, List<JiraIssue> allIssues,
+        StatusContext ctx, int maxDepth, int depth = 0)
     {
-        var prompt = new MultiSelectionPrompt<string>()
-            .Title("[cyan]Select issues to export[/] [dim](space=select, enter=confirm)[/]")
-            .PageSize(25)
-            .MoreChoicesText("[grey]Move up/down to see more issues[/]")
-            .InstructionsText("[grey](Press [blue]<space>[/] to toggle, [green]<enter>[/] to export selected)[/]");
+        if (depth >= maxDepth) return;
 
-        AddIssuesToPrompt(prompt, roots);
+        var knownKeys = new HashSet<string>(allIssues.Select(i => i.Key));
 
-        var selected = _console.Prompt(prompt);
-
-        // Map selected labels back to JiraIssue objects
-        var selectedIssues = new List<JiraIssue>();
-        foreach (var label in selected)
+        foreach (var issue in issues)
         {
-            // Extract the key from the label (format: "icon KEY: summary (status)")
-            var match = Regex.Match(label, @"([A-Z]+-\d+):");
-            if (match.Success)
+            // Skip if children already loaded from the initial query
+            if (issue.Children.Count > 0) continue;
+
+            // Types that typically have children
+            var type = issue.IssueType.ToLowerInvariant();
+            if (type is not ("epic" or "story" or "task" or "feature" or "initiative")) continue;
+
+            ctx.Status($"[cyan]Loading children of {Markup.Escape(issue.Key)}...[/]");
+            try
             {
-                var key = match.Groups[1].Value;
-                var issue = allIssues.FirstOrDefault(i => i.Key == key);
-                if (issue != null)
-                    selectedIssues.Add(issue);
+                var children = await _jiraService.GetIssuesByParentAsync(issue.Key);
+                foreach (var child in children)
+                {
+                    if (!knownKeys.Contains(child.Key))
+                    {
+                        knownKeys.Add(child.Key);
+                        allIssues.Add(child);
+                    }
+                    issue.Children.Add(child);
+                }
+            }
+            catch
+            {
+                // Skip if fetching children fails (e.g. permissions)
             }
         }
 
-        return selectedIssues;
+        // Recurse into newly loaded children
+        foreach (var issue in issues)
+        {
+            if (issue.Children.Count > 0)
+            {
+                await LoadChildrenRecursiveAsync(issue.Children, allIssues, ctx, maxDepth, depth + 1);
+            }
+        }
     }
 
-    private void AddIssuesToPrompt(MultiSelectionPrompt<string> prompt, List<JiraIssue> roots)
+    /// <summary>
+    /// Interactive drill-down tree browser. Arrow keys navigate, Enter drills
+    /// into children or toggles selection on leaf items. Supports unlimited depth.
+    /// </summary>
+    private List<JiraIssue> SelectIssues(List<JiraIssue> roots, List<JiraIssue> allIssues)
     {
-        foreach (var root in roots)
+        var selectedKeys = new HashSet<string>();
+        var navStack = new Stack<(List<JiraIssue> items, string title)>();
+        var currentItems = roots;
+        var currentTitle = "All issues";
+
+        while (true)
         {
-            var rootLabel = FormatIssue(root);
-            if (root.Children.Count > 0)
+            var choices = new List<string>();
+
+            // Back navigation
+            if (navStack.Count > 0)
+                choices.Add("\u2190 Back");
+
+            // Current level items
+            foreach (var item in currentItems)
             {
-                var childLabels = new List<string>();
-                CollectLabels(root.Children, childLabels);
-                prompt.AddChoiceGroup(rootLabel, childLabels);
+                var sel = selectedKeys.Contains(item.Key) ? "\u25cf" : "\u25cb";
+                var suffix = item.Children.Count > 0 ? $" \u25b8 ({item.Children.Count})" : "";
+                choices.Add($"{sel} {FormatIssueLabel(item)}{suffix}");
+            }
+
+            // Select all / deselect all
+            var currentKeys = currentItems.Select(i => i.Key).ToList();
+            var allSelected = currentKeys.All(k => selectedKeys.Contains(k));
+            choices.Add(allSelected ? "\u2612 Deselect all at this level" : "\u2610 Select all at this level");
+
+            // Export action
+            choices.Add($"\u2501\u2501 Export {selectedKeys.Count} selected issues \u2501\u2501");
+
+            var choice = _console.Prompt(
+                new SelectionPrompt<string>()
+                    .Title($"[cyan]Browse:[/] [white]{Markup.Escape(currentTitle)}[/] [dim](enter=open/toggle, \u2191\u2193=navigate)[/]")
+                    .HighlightStyle(new Style(Color.Cyan1))
+                    .PageSize(25)
+                    .AddChoices(choices));
+
+            // Handle back
+            if (choice == "\u2190 Back")
+            {
+                var prev = navStack.Pop();
+                currentItems = prev.items;
+                currentTitle = prev.title;
+                continue;
+            }
+
+            // Handle select/deselect all
+            if (choice.StartsWith("\u2610") || choice.StartsWith("\u2612"))
+            {
+                if (allSelected)
+                    foreach (var k in currentKeys) selectedKeys.Remove(k);
+                else
+                    foreach (var k in currentKeys) selectedKeys.Add(k);
+                continue;
+            }
+
+            // Handle export
+            if (choice.StartsWith("\u2501"))
+            {
+                if (selectedKeys.Count == 0)
+                {
+                    _console.MarkupLine("[yellow]No issues selected. Select items first.[/]");
+                    continue;
+                }
+                break;
+            }
+
+            // Find issue from choice
+            var match = Regex.Match(choice, @"([A-Z]+-\d+):");
+            if (!match.Success) continue;
+
+            var key = match.Groups[1].Value;
+            var issue = allIssues.FirstOrDefault(i => i.Key == key);
+            if (issue == null) continue;
+
+            if (issue.Children.Count > 0)
+            {
+                // Drill into children — push current level onto stack
+                navStack.Push((currentItems, currentTitle));
+                // Show the parent as a toggleable item + its children
+                currentItems = new List<JiraIssue> { issue }.Concat(issue.Children).ToList();
+                currentTitle = $"{issue.Key}: {issue.Summary}";
             }
             else
             {
-                prompt.AddChoice(rootLabel);
+                // Toggle selection on leaf
+                if (!selectedKeys.Remove(key))
+                    selectedKeys.Add(key);
             }
         }
-    }
 
-    private void CollectLabels(List<JiraIssue> issues, List<string> labels)
-    {
-        foreach (var issue in issues)
-        {
-            labels.Add(FormatIssue(issue));
-            // Note: deeper nesting flattened under the parent group
-            CollectLabels(issue.Children, labels);
-        }
+        return allIssues.Where(i => selectedKeys.Contains(i.Key)).ToList();
     }
 
     private async Task<int> ExportToMarkdown(List<JiraIssue> issues, string outputDir)
@@ -589,7 +692,10 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         return $"{bytes / (1024.0 * 1024.0):F1} MB";
     }
 
-    private static string FormatIssue(JiraIssue issue)
+    /// <summary>
+    /// Plain-text issue label for SelectionPrompt (no Markup escaping needed).
+    /// </summary>
+    private static string FormatIssueLabel(JiraIssue issue)
     {
         var icon = issue.IssueType.ToLowerInvariant() switch
         {
@@ -597,10 +703,10 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
             "story" => "\U0001f4d6",
             "bug" => "\U0001f41b",
             "task" => "\u2705",
-            "subtask" or "sub-task" => "  \u21b3",
+            "subtask" or "sub-task" => "\u21b3",
             _ => "\u2022"
         };
 
-        return $"{icon} {Markup.Escape(issue.Key ?? string.Empty)}: {Markup.Escape(issue.Summary ?? string.Empty)} ({Markup.Escape(issue.Status ?? string.Empty)})";
+        return $"{icon} {issue.Key}: {issue.Summary} ({issue.Status})";
     }
 }
