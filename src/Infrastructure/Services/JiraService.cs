@@ -115,17 +115,19 @@ public class JiraService : IJiraService
 
     public async Task StoreCredentialsAsync(JiraStoredCredentials credentials)
     {
-        await _configurationService.SetAsync(KeyAuthMethod, credentials.AuthMethod.ToString());
-        await _configurationService.SetAsync(KeyDeploymentType, credentials.DeploymentType.ToString());
-        await _configurationService.SetAsync(KeyBaseUrl, credentials.BaseUrl);
-        await _configurationService.SetAsync(KeyEmail, credentials.Email);
-        await _configurationService.SetAsync(KeyUsername, credentials.Username);
-        await _configurationService.SetAsync(KeyApiToken, credentials.ApiToken, encrypt: true);
-        await _configurationService.SetAsync(KeyAccessToken, credentials.AccessToken, encrypt: true);
-        await _configurationService.SetAsync(KeyRefreshToken, credentials.RefreshToken, encrypt: true);
-        await _configurationService.SetAsync(KeyCloudId, credentials.CloudId);
-        await _configurationService.SetAsync(KeyCreatedAt, credentials.CreatedAt.ToString("O"));
-        await _configurationService.SetAsync(KeyLastRefreshedAt, credentials.LastRefreshedAt.ToString("O"));
+        var normalized = NormalizeCredentials(credentials);
+
+        await _configurationService.SetAsync(KeyAuthMethod, normalized.AuthMethod.ToString());
+        await _configurationService.SetAsync(KeyDeploymentType, normalized.DeploymentType.ToString());
+        await _configurationService.SetAsync(KeyBaseUrl, normalized.BaseUrl);
+        await _configurationService.SetAsync(KeyEmail, normalized.Email);
+        await _configurationService.SetAsync(KeyUsername, normalized.Username);
+        await _configurationService.SetAsync(KeyApiToken, normalized.ApiToken, encrypt: true);
+        await _configurationService.SetAsync(KeyAccessToken, normalized.AccessToken, encrypt: true);
+        await _configurationService.SetAsync(KeyRefreshToken, normalized.RefreshToken, encrypt: true);
+        await _configurationService.SetAsync(KeyCloudId, normalized.CloudId);
+        await _configurationService.SetAsync(KeyCreatedAt, normalized.CreatedAt.ToString("O"));
+        await _configurationService.SetAsync(KeyLastRefreshedAt, normalized.LastRefreshedAt.ToString("O"));
     }
 
     public async Task ClearCredentialsAsync()
@@ -147,10 +149,11 @@ public class JiraService : IJiraService
     {
         try
         {
-            var baseUrl = credentials.BaseUrl.TrimEnd('/');
-            var apiBase = GetApiBase(credentials);
+            var normalized = NormalizeCredentials(credentials);
+            var baseUrl = normalized.BaseUrl.Trim().TrimEnd('/');
+            var apiBase = GetApiBase(normalized);
             var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}{apiBase}/myself");
-            ApplyAuth(request, credentials);
+            ApplyAuth(request, normalized);
 
             var response = await SendWithDebugAsync(request);
             return response.IsSuccessStatusCode;
@@ -166,7 +169,7 @@ public class JiraService : IJiraService
     {
         try
         {
-            var url = baseUrl.TrimEnd('/');
+            var url = baseUrl.Trim().TrimEnd('/');
             var request = new HttpRequestMessage(HttpMethod.Get, $"{url}/rest/api/2/serverInfo");
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
@@ -206,7 +209,7 @@ public class JiraService : IJiraService
         if (credentials == null)
             throw new InvalidOperationException("Not authenticated with Jira");
 
-        var baseUrl = credentials.BaseUrl.TrimEnd('/');
+        var baseUrl = credentials.BaseUrl.Trim().TrimEnd('/');
         var apiBase = GetApiBase(credentials);
         var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}{apiBase}/project");
         ApplyAuth(request, credentials);
@@ -237,7 +240,7 @@ public class JiraService : IJiraService
         if (credentials == null)
             throw new InvalidOperationException("Not authenticated with Jira");
 
-        var baseUrl = credentials.BaseUrl.TrimEnd('/');
+        var baseUrl = credentials.BaseUrl.Trim().TrimEnd('/');
         var requestBody = JsonSerializer.Serialize(new
         {
             jql,
@@ -291,7 +294,7 @@ public class JiraService : IJiraService
         if (credentials == null)
             throw new InvalidOperationException("Not authenticated with Jira");
 
-        var baseUrl = credentials.BaseUrl.TrimEnd('/');
+        var baseUrl = credentials.BaseUrl.Trim().TrimEnd('/');
         var apiBase = GetApiBase(credentials);
         var request = new HttpRequestMessage(HttpMethod.Get,
             $"{baseUrl}{apiBase}/issue/{Uri.EscapeDataString(issueKey)}?fields=summary,status,issuetype,priority,assignee,parent,project");
@@ -333,7 +336,7 @@ public class JiraService : IJiraService
             }
         }
 
-        var response = await SendWithDebugAsync(request);
+        var response = await _httpClient.SendAsync(request);
 
         if (DebugWriter != null)
         {
@@ -379,35 +382,58 @@ public class JiraService : IJiraService
 
     private static void ApplyAuth(HttpRequestMessage request, JiraStoredCredentials credentials)
     {
-        if (credentials.AuthMethod == JiraAuthMethod.OAuth && !string.IsNullOrEmpty(credentials.AccessToken))
+        var email = credentials.Email?.Trim() ?? string.Empty;
+        var username = credentials.Username?.Trim() ?? string.Empty;
+        var apiToken = credentials.ApiToken?.Trim() ?? string.Empty;
+        var accessToken = credentials.AccessToken?.Trim() ?? string.Empty;
+
+        if (credentials.AuthMethod == JiraAuthMethod.OAuth && !string.IsNullOrEmpty(accessToken))
         {
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credentials.AccessToken);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
         }
         else if (credentials.DeploymentType == JiraDeploymentType.Server)
         {
             // Server/DC: if username is set, use Basic auth (username:password/token)
             // otherwise, treat the ApiToken as a Personal Access Token (Bearer)
-            if (!string.IsNullOrEmpty(credentials.Username))
+            if (!string.IsNullOrEmpty(username))
             {
                 var encoded = Convert.ToBase64String(
-                    Encoding.ASCII.GetBytes($"{credentials.Username}:{credentials.ApiToken}"));
+                    Encoding.ASCII.GetBytes($"{username}:{apiToken}"));
                 request.Headers.Authorization = new AuthenticationHeaderValue("Basic", encoded);
             }
             else
             {
                 // PAT — used as Bearer token on Server/DC
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credentials.ApiToken);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiToken);
             }
         }
         else
         {
             // Cloud: Basic auth with email:apiToken
             var encoded = Convert.ToBase64String(
-                Encoding.ASCII.GetBytes($"{credentials.Email}:{credentials.ApiToken}"));
+                Encoding.ASCII.GetBytes($"{email}:{apiToken}"));
             request.Headers.Authorization = new AuthenticationHeaderValue("Basic", encoded);
         }
 
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+    }
+
+    private static JiraStoredCredentials NormalizeCredentials(JiraStoredCredentials credentials)
+    {
+        return new JiraStoredCredentials
+        {
+            AuthMethod = credentials.AuthMethod,
+            DeploymentType = credentials.DeploymentType,
+            BaseUrl = credentials.BaseUrl?.Trim() ?? string.Empty,
+            Email = credentials.Email?.Trim() ?? string.Empty,
+            Username = credentials.Username?.Trim() ?? string.Empty,
+            ApiToken = credentials.ApiToken?.Trim() ?? string.Empty,
+            AccessToken = credentials.AccessToken?.Trim() ?? string.Empty,
+            RefreshToken = credentials.RefreshToken?.Trim() ?? string.Empty,
+            CloudId = credentials.CloudId?.Trim() ?? string.Empty,
+            CreatedAt = credentials.CreatedAt,
+            LastRefreshedAt = credentials.LastRefreshedAt
+        };
     }
 
     private static List<JiraIssue> ParseIssues(JsonElement root)

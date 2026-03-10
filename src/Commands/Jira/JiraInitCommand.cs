@@ -185,6 +185,14 @@ public class JiraInitCommand : Command<JiraInitCommand.Settings>
         if (!isValid)
         {
             _console.MarkupLine("[red]Authentication failed. Please check your credentials.[/]");
+            if (deploymentType == JiraDeploymentType.Cloud)
+            {
+                _console.MarkupLine("[yellow]Troubleshooting for Jira Cloud:[/]");
+                _console.MarkupLine("[dim]- Use an API token from id.atlassian.com (not your account password)[/]");
+                _console.MarkupLine("[dim]- Use your Atlassian account email exactly as shown in your account profile[/]");
+                _console.MarkupLine("[dim]- Re-paste email/token to avoid hidden leading/trailing spaces[/]");
+                _console.MarkupLine("[dim]- Verify this account has Jira product access on the target site[/]");
+            }
             return 1;
         }
 

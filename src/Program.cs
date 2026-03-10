@@ -447,7 +447,7 @@ app.Configure(config =>
     });
 
     // Add Jira branch command
-    config.AddBranch<JiraSettings>("jira", jira =>
+    config.AddBranch("jira", jira =>
     {
         jira.SetDescription("Manage Jira integration and browse tickets");
 
