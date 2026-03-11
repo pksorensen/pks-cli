@@ -246,13 +246,23 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         // 4. Build tree from initial results
         var roots = BuildIssueTree(allIssues);
 
-        // 5. Load local cache to detect changed issues
+        // 5. Load children for parent-type issues so the full tree is available
+        await _console.Status()
+            .Spinner(Spinner.Known.Dots)
+            .StartAsync("[cyan]Loading child issues...[/]", async ctx =>
+            {
+                await LoadChildrenAsync(roots, allIssues, ctx, maxDepth: 3);
+            });
+
+        _console.MarkupLine($"[dim]Loaded {allIssues.Count} issues total[/]");
+
+        // 6. Load local cache to detect changed issues
         var localCache = LoadLocalCache(settings.OutputDir);
         if (localCache.Count > 0)
             _console.MarkupLine($"[dim]Found {localCache.Count} previously exported issues[/]");
 
-        // 6. Interactive tree browser with lazy child loading
-        var selectedIssues = await SelectIssuesAsync(roots, allIssues, localCache);
+        // 7. Multi-select tree — space toggles, selecting parent selects all children
+        var selectedIssues = SelectIssues(roots, allIssues, localCache);
 
         if (selectedIssues.Count == 0)
         {
@@ -286,6 +296,50 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         }
 
         return roots;
+    }
+
+    /// <summary>
+    /// Recursively fetches child issues for parent-type issues.
+    /// Adds discovered children to allIssues for later selection/export.
+    /// </summary>
+    private async Task LoadChildrenAsync(
+        List<JiraIssue> issues, List<JiraIssue> allIssues,
+        StatusContext ctx, int maxDepth, int depth = 0)
+    {
+        if (depth >= maxDepth) return;
+
+        var knownKeys = new HashSet<string>(allIssues.Select(i => i.Key));
+
+        foreach (var issue in issues)
+        {
+            if (issue.Children.Count > 0) continue;
+
+            var type = issue.IssueType.ToLowerInvariant();
+            if (type is not ("epic" or "story" or "task" or "feature" or "initiative")) continue;
+
+            ctx.Status($"[cyan]Loading children of {Markup.Escape(issue.Key)}...[/]");
+            try
+            {
+                var children = await _jiraService.GetIssuesByParentAsync(issue.Key);
+                foreach (var child in children)
+                {
+                    if (!knownKeys.Contains(child.Key))
+                    {
+                        knownKeys.Add(child.Key);
+                        allIssues.Add(child);
+                    }
+                    issue.Children.Add(child);
+                }
+            }
+            catch { /* skip on failure */ }
+        }
+
+        // Recurse into newly loaded children
+        foreach (var issue in issues)
+        {
+            if (issue.Children.Count > 0)
+                await LoadChildrenAsync(issue.Children, allIssues, ctx, maxDepth, depth + 1);
+        }
     }
 
     /// <summary>
@@ -330,167 +384,89 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
     private static string GetChangeIndicator(JiraIssue issue, Dictionary<string, DateTime?> localCache)
     {
         if (!localCache.TryGetValue(issue.Key, out var cachedUpdated))
-            return "\U0001f195"; // 🆕 new — not in local cache
+            return "\U0001f195"; // 🆕 new
 
         if (issue.Updated.HasValue && cachedUpdated.HasValue && issue.Updated.Value > cachedUpdated.Value)
-            return "\u26a1"; // ⚡ changed since last export
+            return "\u26a1"; // ⚡ changed
 
-        return "\u2500"; // ─ unchanged
+        return ""; // unchanged, no indicator
     }
 
     /// <summary>
-    /// Lazy-loads children for an issue when the user drills into it.
+    /// Builds a MultiSelectionPrompt tree where parents show children inline.
+    /// Space toggles selection — selecting a parent auto-selects all children.
+    /// Enter confirms and exports.
     /// </summary>
-    private async Task LazyLoadChildrenAsync(JiraIssue issue, List<JiraIssue> allIssues)
-    {
-        // Already loaded children (from initial query linking or previous drill-down)
-        if (issue.Children.Count > 0) return;
-
-        var knownKeys = new HashSet<string>(allIssues.Select(i => i.Key));
-
-        await _console.Status()
-            .Spinner(Spinner.Known.Dots)
-            .StartAsync($"[cyan]Loading children of {Markup.Escape(issue.Key)}...[/]", async _ =>
-            {
-                try
-                {
-                    var children = await _jiraService.GetIssuesByParentAsync(issue.Key);
-                    foreach (var child in children)
-                    {
-                        if (!knownKeys.Contains(child.Key))
-                        {
-                            knownKeys.Add(child.Key);
-                            allIssues.Add(child);
-                        }
-                        issue.Children.Add(child);
-                    }
-                }
-                catch { /* skip on failure */ }
-            });
-    }
-
-    /// <summary>
-    /// Interactive drill-down tree browser with lazy child loading.
-    /// Arrow keys navigate, Enter drills into children (loading them on demand)
-    /// or toggles selection on leaf items. Change indicators show which issues
-    /// have been modified since last export.
-    /// </summary>
-    private async Task<List<JiraIssue>> SelectIssuesAsync(
+    private List<JiraIssue> SelectIssues(
         List<JiraIssue> roots, List<JiraIssue> allIssues,
         Dictionary<string, DateTime?> localCache)
     {
-        var selectedKeys = new HashSet<string>();
-        var navStack = new Stack<(List<JiraIssue> items, string title)>();
-        var currentItems = roots;
-        var currentTitle = "All issues";
-        // Track which issues we've already tried to load children for
-        var childrenLoaded = new HashSet<string>();
+        var prompt = new MultiSelectionPrompt<string>()
+            .Title("[cyan]Select issues to export[/] [dim](space=toggle, selecting parent selects all children, enter=export)[/]")
+            .PageSize(30)
+            .MoreChoicesText("[grey]Move up/down to see more issues[/]")
+            .InstructionsText("[grey](Press [blue]<space>[/] to toggle, [green]<enter>[/] to export selected)[/]");
 
-        while (true)
+        // Build the tree in the prompt
+        foreach (var root in roots)
         {
-            var choices = new List<string>();
-
-            // Back navigation
-            if (navStack.Count > 0)
-                choices.Add("\u2190 Back");
-
-            // Current level items
-            foreach (var item in currentItems)
+            var rootLabel = FormatIssueWithChange(root, localCache);
+            if (root.Children.Count > 0)
             {
-                var sel = selectedKeys.Contains(item.Key) ? "\u25cf" : "\u25cb";
-                var change = localCache.Count > 0 ? $" {GetChangeIndicator(item, localCache)}" : "";
-                var canExpand = CanHaveChildren(item) && !childrenLoaded.Contains(item.Key);
-                var childInfo = item.Children.Count > 0
-                    ? $" \u25b8 ({item.Children.Count})"
-                    : canExpand ? " \u25b8 ..." : "";
-                choices.Add($"{sel}{change} {FormatIssueLabel(item)}{childInfo}");
-            }
-
-            // Select all / deselect all
-            var currentKeys = currentItems.Select(i => i.Key).ToList();
-            var allSelected = currentKeys.Count > 0 && currentKeys.All(k => selectedKeys.Contains(k));
-            choices.Add(allSelected ? "\u2612 Deselect all at this level" : "\u2610 Select all at this level");
-
-            // Export action
-            choices.Add($"\u2501\u2501 Export {selectedKeys.Count} selected issues \u2501\u2501");
-
-            var choice = _console.Prompt(
-                new SelectionPrompt<string>()
-                    .Title($"[cyan]Browse:[/] [white]{Markup.Escape(currentTitle)}[/] [dim](enter=open/toggle, \u2191\u2193=navigate)[/]")
-                    .HighlightStyle(new Style(Color.Cyan1))
-                    .PageSize(25)
-                    .AddChoices(choices));
-
-            // Handle back
-            if (choice == "\u2190 Back")
-            {
-                var prev = navStack.Pop();
-                currentItems = prev.items;
-                currentTitle = prev.title;
-                continue;
-            }
-
-            // Handle select/deselect all
-            if (choice.StartsWith("\u2610") || choice.StartsWith("\u2612"))
-            {
-                if (allSelected)
-                    foreach (var k in currentKeys) selectedKeys.Remove(k);
-                else
-                    foreach (var k in currentKeys) selectedKeys.Add(k);
-                continue;
-            }
-
-            // Handle export
-            if (choice.StartsWith("\u2501"))
-            {
-                if (selectedKeys.Count == 0)
-                {
-                    _console.MarkupLine("[yellow]No issues selected. Select items first.[/]");
-                    continue;
-                }
-                break;
-            }
-
-            // Find issue from choice
-            var match = Regex.Match(choice, @"([A-Z]+-\d+):");
-            if (!match.Success) continue;
-
-            var key = match.Groups[1].Value;
-            var issue = allIssues.FirstOrDefault(i => i.Key == key);
-            if (issue == null) continue;
-
-            // Lazy-load children if not yet attempted
-            if (!childrenLoaded.Contains(key) && CanHaveChildren(issue))
-            {
-                await LazyLoadChildrenAsync(issue, allIssues);
-                childrenLoaded.Add(key);
-            }
-
-            if (issue.Children.Count > 0)
-            {
-                // Drill into children — push current level onto stack
-                navStack.Push((currentItems, currentTitle));
-                currentItems = new List<JiraIssue> { issue }.Concat(issue.Children).ToList();
-                currentTitle = $"{issue.Key}: {issue.Summary}";
+                var childLabels = new List<string>();
+                CollectChildLabels(root.Children, childLabels, localCache, indent: 0);
+                prompt.AddChoiceGroup(rootLabel, childLabels);
             }
             else
             {
-                // Toggle selection
-                if (!selectedKeys.Remove(key))
-                    selectedKeys.Add(key);
+                prompt.AddChoice(rootLabel);
             }
         }
 
-        return allIssues.Where(i => selectedKeys.Contains(i.Key)).ToList();
+        var selected = _console.Prompt(prompt);
+
+        // Map selected labels back to JiraIssue objects
+        var selectedIssues = new List<JiraIssue>();
+        foreach (var label in selected)
+        {
+            var match = Regex.Match(label, @"([A-Z]+-\d+):");
+            if (match.Success)
+            {
+                var key = match.Groups[1].Value;
+                var issue = allIssues.FirstOrDefault(i => i.Key == key);
+                if (issue != null)
+                    selectedIssues.Add(issue);
+            }
+        }
+
+        return selectedIssues;
     }
 
     /// <summary>
-    /// Returns true for issue types that commonly have child issues.
+    /// Recursively collects child labels for the MultiSelectionPrompt.
+    /// Deeper children are indented with spaces to show hierarchy visually.
     /// </summary>
-    private static bool CanHaveChildren(JiraIssue issue)
+    private static void CollectChildLabels(
+        List<JiraIssue> children, List<string> labels,
+        Dictionary<string, DateTime?> localCache, int indent)
     {
-        var type = issue.IssueType.ToLowerInvariant();
-        return type is "epic" or "story" or "task" or "feature" or "initiative";
+        var prefix = indent > 0 ? new string(' ', indent * 2) : "";
+        foreach (var child in children)
+        {
+            labels.Add($"{prefix}{FormatIssueWithChange(child, localCache)}");
+            if (child.Children.Count > 0)
+                CollectChildLabels(child.Children, labels, localCache, indent + 1);
+        }
+    }
+
+    /// <summary>
+    /// Formats an issue label with change indicator for the selection prompt.
+    /// </summary>
+    private static string FormatIssueWithChange(JiraIssue issue, Dictionary<string, DateTime?> localCache)
+    {
+        var change = localCache.Count > 0 ? GetChangeIndicator(issue, localCache) : "";
+        var changePrefix = string.IsNullOrEmpty(change) ? "" : $"{change} ";
+        return $"{changePrefix}{FormatIssueLabel(issue)}";
     }
 
     private async Task<int> ExportToMarkdown(List<JiraIssue> issues, string outputDir)
