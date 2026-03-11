@@ -366,17 +366,49 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
     /// <summary>
     /// Toggles selection for an issue and all its children recursively.
     /// </summary>
-    private static void ToggleWithChildren(JiraIssue issue, HashSet<string> selectedKeys)
+    /// <summary>
+    /// Toggles selection for an issue and all children recursively.
+    /// When selecting, auto-loads unloaded children so the full subtree is included.
+    /// </summary>
+    private async Task ToggleWithChildrenAsync(
+        JiraIssue issue, HashSet<string> selectedKeys,
+        List<JiraIssue> allIssues, HashSet<string> childrenLoaded)
     {
         var shouldSelect = !selectedKeys.Contains(issue.Key);
-        SetSelectionRecursive(issue, selectedKeys, shouldSelect);
+        await SetSelectionRecursiveAsync(issue, selectedKeys, shouldSelect, allIssues, childrenLoaded);
     }
 
-    private static void SetSelectionRecursive(JiraIssue issue, HashSet<string> selectedKeys, bool select)
+    private async Task SetSelectionRecursiveAsync(
+        JiraIssue issue, HashSet<string> selectedKeys, bool select,
+        List<JiraIssue> allIssues, HashSet<string> childrenLoaded)
     {
         if (select) selectedKeys.Add(issue.Key); else selectedKeys.Remove(issue.Key);
+
+        // When selecting, lazy-load children if not yet fetched
+        if (select && issue.Children.Count == 0
+            && CanHaveChildren(issue) && !childrenLoaded.Contains(issue.Key))
+        {
+            childrenLoaded.Add(issue.Key);
+            try
+            {
+                var knownKeys = new HashSet<string>(allIssues.Select(i => i.Key));
+                var children = await _jiraService.GetIssuesByParentAsync(issue.Key);
+                foreach (var child in children)
+                {
+                    if (!knownKeys.Contains(child.Key))
+                    {
+                        knownKeys.Add(child.Key);
+                        allIssues.Add(child);
+                    }
+                    issue.Children.Add(child);
+                }
+            }
+            catch { /* skip on failure */ }
+        }
+
+        // Cascade to all children
         foreach (var child in issue.Children)
-            SetSelectionRecursive(child, selectedKeys, select);
+            await SetSelectionRecursiveAsync(child, selectedKeys, select, allIssues, childrenLoaded);
     }
 
     /// <summary>
@@ -536,7 +568,13 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
                         break;
 
                     case ConsoleKey.Spacebar:
-                        ToggleWithChildren(rows[cursor].Issue, selectedKeys);
+                        var toggleIssue = rows[cursor].Issue;
+                        if (CanHaveChildren(toggleIssue) && !selectedKeys.Contains(toggleIssue.Key))
+                        {
+                            Console.Write("\x1b[H\x1b[2J");
+                            Console.WriteLine($"Loading subtree for {toggleIssue.Key}...");
+                        }
+                        await ToggleWithChildrenAsync(toggleIssue, selectedKeys, allIssues, childrenLoaded);
                         break;
 
                     case ConsoleKey.A:
@@ -608,36 +646,41 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
                 }
             });
 
+        // Build a tree from selected issues preserving parent-child hierarchy
+        var selectedSet = new HashSet<string>(issues.Select(i => i.Key));
+        var roots = BuildExportTree(issues, selectedSet);
+
         var created = 0;
         var updated = 0;
         var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
 
-        foreach (var issue in issues)
+        // Recursively export the tree to disk
+        async Task ExportNode(JiraIssue issue, string parentDir)
         {
-            var projectDir = Path.Combine(outputDir, issue.ProjectKey);
-            Directory.CreateDirectory(projectDir);
+            var issueDir = Path.Combine(parentDir, issue.Key);
+            Directory.CreateDirectory(issueDir);
 
             // Write markdown
-            var mdPath = Path.Combine(projectDir, $"{issue.Key}.md");
+            var mdPath = Path.Combine(issueDir, $"{issue.Key}.md");
             var isUpdate = File.Exists(mdPath);
             File.WriteAllText(mdPath, GenerateMarkdown(issue));
             if (isUpdate) updated++; else created++;
 
             // Write JSON dump
-            var jsonPath = Path.Combine(projectDir, $"{issue.Key}.json");
+            var jsonPath = Path.Combine(issueDir, $"{issue.Key}.json");
             File.WriteAllText(jsonPath, JsonSerializer.Serialize(issue, jsonOptions));
 
             // Download attachments
             if (issue.Attachments.Count > 0)
             {
-                var attachDir = Path.Combine(projectDir, "attachments", issue.Key);
+                var attachDir = Path.Combine(issueDir, "attachments");
                 Directory.CreateDirectory(attachDir);
                 foreach (var att in issue.Attachments)
                 {
                     try
                     {
                         var attPath = Path.Combine(attachDir, att.Filename);
-                        if (!File.Exists(attPath)) // Don't re-download
+                        if (!File.Exists(attPath))
                         {
                             var data = await _jiraService.DownloadAttachmentAsync(att.ContentUrl);
                             await File.WriteAllBytesAsync(attPath, data);
@@ -645,6 +688,22 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
                     }
                     catch { /* Skip failed downloads */ }
                 }
+            }
+
+            // Export children into subdirectories
+            foreach (var child in issue.Children.Where(c => selectedSet.Contains(c.Key)))
+            {
+                await ExportNode(child, issueDir);
+            }
+        }
+
+        // Group roots by project, export each tree
+        foreach (var group in roots.GroupBy(r => r.ProjectKey))
+        {
+            var projectDir = Path.Combine(outputDir, group.Key);
+            foreach (var root in group)
+            {
+                await ExportNode(root, projectDir);
             }
         }
 
@@ -655,26 +714,41 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
 
         // Show tree of exported files
         var tree = new Tree($"[dim]{Markup.Escape(outputDir)}[/]");
-        foreach (var group in issues.GroupBy(i => i.ProjectKey))
+        foreach (var group in roots.GroupBy(r => r.ProjectKey))
         {
             var projectNode = tree.AddNode($"[cyan]{Markup.Escape(group.Key)}[/]");
-            foreach (var issue in group)
+            void RenderTreeNode(JiraIssue issue, TreeNode parent)
             {
-                projectNode.AddNode($"[dim]{Markup.Escape(issue.Key)}.md[/]");
-                projectNode.AddNode($"[dim]{Markup.Escape(issue.Key)}.json[/]");
+                var node = parent.AddNode($"{Markup.Escape(issue.Key)}/");
+                node.AddNode($"[dim]{Markup.Escape(issue.Key)}.md[/]");
                 if (issue.Attachments.Count > 0)
-                {
-                    var attNode = projectNode.AddNode($"[dim]attachments/{Markup.Escape(issue.Key)}/[/]");
-                    foreach (var att in issue.Attachments)
-                    {
-                        attNode.AddNode($"[dim]{Markup.Escape(att.Filename)}[/]");
-                    }
-                }
+                    node.AddNode($"[dim]attachments/ ({issue.Attachments.Count} files)[/]");
+                foreach (var child in issue.Children.Where(c => selectedSet.Contains(c.Key)))
+                    RenderTreeNode(child, node);
             }
+            foreach (var root in group)
+                RenderTreeNode(root, projectNode);
         }
         _console.Write(tree);
 
         return 0;
+    }
+
+    /// <summary>
+    /// Builds an export tree from a flat list of selected issues.
+    /// Issues whose parent is also selected become children; others become roots.
+    /// </summary>
+    private static List<JiraIssue> BuildExportTree(List<JiraIssue> issues, HashSet<string> selectedSet)
+    {
+        // Use the existing Children relationships from the in-memory tree.
+        // Find roots: issues whose parent is not in the selected set.
+        var roots = new List<JiraIssue>();
+        foreach (var issue in issues)
+        {
+            if (string.IsNullOrEmpty(issue.ParentKey) || !selectedSet.Contains(issue.ParentKey))
+                roots.Add(issue);
+        }
+        return roots;
     }
 
     /// <summary>
@@ -796,7 +870,7 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
             foreach (var att in issue.Attachments.OrderBy(a => a.Created))
             {
                 var size = FormatFileSize(att.Size);
-                var relativePath = $"attachments/{issue.Key}/{att.Filename}";
+                var relativePath = $"attachments/{att.Filename}";
                 sb.AppendLine($"| [{att.Filename}]({relativePath}) | {att.Author} | {size} | {att.Created:yyyy-MM-dd} |");
             }
             sb.AppendLine();
