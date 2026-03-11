@@ -437,6 +437,13 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         // Reserve lines for header (2) + footer (2) + padding
         var pageSize = Math.Max((Console.WindowHeight > 0 ? Console.WindowHeight : 30) - 6, 10);
 
+        // Header occupies rows 1-2, items start at row 3
+        const int headerLines = 2;
+        var prevCursor = -1;
+        var prevScrollOffset = -1;
+        var prevVisibleCount = -1;
+        var forceFullRedraw = true;
+
         Console.CursorVisible = false;
         try
         {
@@ -450,56 +457,58 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
                 if (cursor < scrollOffset) scrollOffset = cursor;
                 if (cursor >= scrollOffset + pageSize) scrollOffset = cursor - pageSize + 1;
 
-                // --- Render ---
-                Console.Write("\x1b[H\x1b[2J"); // Clear screen, cursor home
-
-                Console.WriteLine("Select issues to export");
-                Console.WriteLine("\u2191\u2193=move  \u2192=expand  \u2190=collapse  space=toggle  a=all  enter=export  esc=cancel");
-
                 var endIdx = Math.Min(rows.Count, scrollOffset + pageSize);
-                for (var i = scrollOffset; i < endIdx; i++)
+                var visibleCount = endIdx - scrollOffset;
+
+                // Determine what needs redrawing
+                var scrollChanged = scrollOffset != prevScrollOffset;
+                var layoutChanged = visibleCount != prevVisibleCount || scrollChanged;
+                var needsFullRedraw = forceFullRedraw || layoutChanged;
+
+                if (needsFullRedraw)
                 {
-                    var (issue, depth) = rows[i];
-                    var indent = new string(' ', depth * 3);
+                    // Full redraw: header + all rows + footer
+                    Console.Write("\x1b[H"); // cursor home
+                    WriteLineCleared("Select issues to export");
+                    WriteLineCleared("\u2191\u2193=move  \u2192=expand  \u2190=collapse  space=toggle  a=all  enter=export  esc=cancel");
 
-                    var isSelected = selectedKeys.Contains(issue.Key);
-
-                    // Change indicator
-                    var change = localCache.Count > 0 ? GetChangeIndicator(issue, localCache) : "";
-                    var changeSuffix = string.IsNullOrEmpty(change) ? "" : $" {change}";
-
-                    // Type icon
-                    var icon = GetTypeIcon(issue);
-
-                    // Child count / expandable hint
-                    var childCount = "";
-                    if (issue.Children.Count > 0 && !expandedKeys.Contains(issue.Key))
-                        childCount = $" ({issue.Children.Count})";
-                    else if (issue.Children.Count == 0 && CanHaveChildren(issue) && !childrenLoaded.Contains(issue.Key))
-                        childCount = " (\u2192)";
-
-                    // Build plain text line for the row
-                    var plainLine = $"{indent}{(isSelected ? "[\u2713]" : "[ ]")} {(issue.Children.Count > 0 ? (expandedKeys.Contains(issue.Key) ? "\u25be " : "\u25b8 ") : "")}{icon} {issue.Key}: {issue.Summary} ({issue.Status}){childCount}{changeSuffix}";
-
-                    if (i == cursor)
+                    for (var i = scrollOffset; i < endIdx; i++)
                     {
-                        // Highlight with ANSI reverse video
-                        Console.Write($"\x1b[7m{plainLine}\x1b[0m");
-                        Console.WriteLine();
+                        var screenRow = (i - scrollOffset) + headerLines + 1;
+                        Console.Write($"\x1b[{screenRow};1H\x1b[2K");
+                        Console.Write(FormatRow(rows[i], i == cursor, selectedKeys, expandedKeys, childrenLoaded, localCache));
                     }
-                    else
+
+                    // Clear stale lines below
+                    var clearFrom = visibleCount + headerLines + 3;
+                    Console.Write($"\x1b[{clearFrom};1H\x1b[J");
+                    forceFullRedraw = false;
+                }
+                else if (prevCursor != cursor)
+                {
+                    // Only cursor moved — update old and new cursor lines
+                    if (prevCursor >= scrollOffset && prevCursor < endIdx)
                     {
-                        Console.WriteLine(plainLine);
+                        var oldScreenRow = (prevCursor - scrollOffset) + headerLines + 1;
+                        Console.Write($"\x1b[{oldScreenRow};1H\x1b[2K");
+                        Console.Write(FormatRow(rows[prevCursor], false, selectedKeys, expandedKeys, childrenLoaded, localCache));
                     }
+                    var newScreenRow = (cursor - scrollOffset) + headerLines + 1;
+                    Console.Write($"\x1b[{newScreenRow};1H\x1b[2K");
+                    Console.Write(FormatRow(rows[cursor], true, selectedKeys, expandedKeys, childrenLoaded, localCache));
                 }
 
-                // Scroll indicator & selection count
+                // Footer (always update — selection count or scroll position may change)
+                var footerRow = visibleCount + headerLines + 1;
+                Console.Write($"\x1b[{footerRow};1H\x1b[2K");
                 if (rows.Count > pageSize)
-                    Console.WriteLine($"  {cursor + 1}/{rows.Count} issues");
-                else
-                    Console.WriteLine();
+                    Console.Write($"  {cursor + 1}/{rows.Count} issues");
+                Console.Write($"\x1b[{footerRow + 1};1H\x1b[2K");
+                Console.Write($"{selectedKeys.Count} selected");
 
-                Console.WriteLine($"{selectedKeys.Count} selected");
+                prevCursor = cursor;
+                prevScrollOffset = scrollOffset;
+                prevVisibleCount = visibleCount;
 
                 // --- Input ---
                 var key = Console.ReadKey(true);
@@ -541,18 +550,18 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
 
                         if (expandIssue.Children.Count > 0)
                             expandedKeys.Add(expandIssue.Key);
+                        forceFullRedraw = true;
                         break;
 
                     case ConsoleKey.LeftArrow:
                         var collapseRow = rows[cursor];
                         if (expandedKeys.Contains(collapseRow.Issue.Key))
                         {
-                            // Collapse this node
                             expandedKeys.Remove(collapseRow.Issue.Key);
+                            forceFullRedraw = true;
                         }
                         else if (collapseRow.Depth > 0)
                         {
-                            // If already collapsed or a leaf, jump to parent
                             for (var j = cursor - 1; j >= 0; j--)
                             {
                                 if (rows[j].Depth < collapseRow.Depth)
@@ -569,7 +578,6 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
                         var willSelect = !selectedKeys.Contains(toggleIssue.Key);
                         if (willSelect && CanHaveChildren(toggleIssue))
                         {
-                            // Show spinner while loading the full subtree
                             await LoadWithSpinnerAsync(cursor, scrollOffset, toggleIssue.Key, async () =>
                             {
                                 await ToggleWithChildrenAsync(toggleIssue, selectedKeys, allIssues, childrenLoaded);
@@ -579,15 +587,16 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
                         {
                             await ToggleWithChildrenAsync(toggleIssue, selectedKeys, allIssues, childrenLoaded);
                         }
+                        forceFullRedraw = true;
                         break;
 
                     case ConsoleKey.A:
-                        // Toggle all
                         var allKeys = allIssues.Select(i => i.Key).ToList();
                         if (allKeys.All(k => selectedKeys.Contains(k)))
                             selectedKeys.Clear();
                         else
                             foreach (var k in allKeys) selectedKeys.Add(k);
+                        forceFullRedraw = true;
                         break;
 
                     case ConsoleKey.Enter:
@@ -606,12 +615,43 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         }
     }
 
-    /// <summary>
-    /// Returns a type icon for the issue type.
-    /// </summary>
+    private static void WriteLineCleared(string text)
+    {
+        Console.Write($"\x1b[2K{text}\n");
+    }
+
+    private static string FormatRow(TreeRow row, bool isCursor,
+        HashSet<string> selectedKeys, HashSet<string> expandedKeys,
+        HashSet<string> childrenLoaded, Dictionary<string, DateTime?> localCache)
+    {
+        var (issue, depth) = row;
+        var indent = new string(' ', depth * 3);
+        var isSelected = selectedKeys.Contains(issue.Key);
+        var checkbox = isSelected ? "[\u2713]" : "[ ]";
+
+        var expandIcon = "";
+        if (issue.Children.Count > 0)
+            expandIcon = expandedKeys.Contains(issue.Key) ? "\u25be " : "\u25b8 ";
+
+        var change = localCache.Count > 0 ? GetChangeIndicator(issue, localCache) : "";
+        var changeSuffix = string.IsNullOrEmpty(change) ? "" : $" {change}";
+
+        var icon = GetTypeIcon(issue);
+
+        var childCount = "";
+        if (issue.Children.Count > 0 && !expandedKeys.Contains(issue.Key))
+            childCount = $" ({issue.Children.Count})";
+        else if (issue.Children.Count == 0 && CanHaveChildren(issue) && !childrenLoaded.Contains(issue.Key))
+            childCount = " (\u2192)";
+
+        var text = $"{indent}{checkbox} {expandIcon}{icon} {issue.Key}: {issue.Summary} ({issue.Status}){childCount}{changeSuffix}";
+
+        return isCursor ? $"\x1b[7m{text}\x1b[0m" : text;
+    }
+
     /// <summary>
     /// Runs an async operation while showing an inline spinner on the current cursor row.
-    /// The rest of the tree remains visible.
+    /// The rest of the tree remains visible — only the spinner line is updated.
     /// </summary>
     private static async Task LoadWithSpinnerAsync(int cursor, int scrollOffset, string issueKey, Func<Task> work)
     {
