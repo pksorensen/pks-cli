@@ -727,7 +727,8 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         // Recursively export the tree to disk
         async Task ExportNode(JiraIssue issue, string parentDir)
         {
-            var issueDir = Path.Combine(parentDir, issue.Key);
+            var slug = Slugify(issue.Key, issue.Summary);
+            var issueDir = Path.Combine(parentDir, slug);
             Directory.CreateDirectory(issueDir);
 
             // Write markdown
@@ -789,7 +790,8 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
             var projectNode = tree.AddNode($"[cyan]{Markup.Escape(group.Key)}[/]");
             void RenderTreeNode(JiraIssue issue, TreeNode parent)
             {
-                var node = parent.AddNode($"{Markup.Escape(issue.Key)}/");
+                var dirName = Slugify(issue.Key, issue.Summary);
+                var node = parent.AddNode($"{Markup.Escape(dirName)}/");
                 node.AddNode($"[dim]{Markup.Escape(issue.Key)}.md[/]");
                 if (issue.Attachments.Count > 0)
                     node.AddNode($"[dim]attachments/ ({issue.Attachments.Count} files)[/]");
@@ -967,6 +969,18 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
     /// Formats seconds into a human-readable duration string (e.g. "1d 2h 30m").
     /// Uses 8-hour work days.
     /// </summary>
+    /// <summary>
+    /// Creates a filesystem-safe slug: "PROJ-1-my-issue-summary" from key + summary.
+    /// </summary>
+    internal static string Slugify(string key, string summary)
+    {
+        // Lowercase, replace non-alphanum with hyphens, collapse multiple hyphens, trim
+        var slug = Regex.Replace(summary.ToLowerInvariant(), @"[^a-z0-9]+", "-").Trim('-');
+        // Truncate to keep paths reasonable
+        if (slug.Length > 60) slug = slug[..60].TrimEnd('-');
+        return string.IsNullOrEmpty(slug) ? key : $"{key}-{slug}";
+    }
+
     internal static string FormatSeconds(int seconds)
     {
         var days = seconds / 28800;
