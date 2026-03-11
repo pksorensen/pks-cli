@@ -713,6 +713,7 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
                     try { issue.Comments = await _jiraService.GetCommentsAsync(issue.Key); } catch { /* skip */ }
                     try { issue.Worklogs = await _jiraService.GetWorklogsAsync(issue.Key); } catch { /* skip */ }
                     try { issue.Attachments = await _jiraService.GetAttachmentsAsync(issue.Key); } catch { /* skip */ }
+                    try { issue.Changelog = await _jiraService.GetChangelogAsync(issue.Key); } catch { /* skip */ }
                 }
             });
 
@@ -922,6 +923,25 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
             sb.AppendLine("## Acceptance Criteria");
             sb.AppendLine();
             sb.AppendLine(issue.AcceptanceCriteria);
+            sb.AppendLine();
+        }
+
+        // === HISTORY (changelog) ===
+        if (issue.Changelog.Count > 0)
+        {
+            sb.AppendLine("## History");
+            sb.AppendLine();
+            sb.AppendLine("| Date | Author | Field | From | To |");
+            sb.AppendLine("|------|--------|-------|------|----|");
+            foreach (var entry in issue.Changelog.OrderBy(e => e.Created))
+            {
+                foreach (var item in entry.Items)
+                {
+                    var from = (item.FromString ?? "").Replace("|", "\\|").Replace("\n", " ");
+                    var to = (item.ToStringValue ?? "").Replace("|", "\\|").Replace("\n", " ");
+                    sb.AppendLine($"| {entry.Created:yyyy-MM-dd HH:mm} | {entry.Author} | {item.Field} | {from} | {to} |");
+                }
+            }
             sb.AppendLine();
         }
 

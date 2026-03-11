@@ -25,5 +25,6 @@ public interface IJiraService
     Task<List<JiraComment>> GetCommentsAsync(string issueKey);
     Task<List<JiraWorklog>> GetWorklogsAsync(string issueKey);
     Task<List<JiraAttachment>> GetAttachmentsAsync(string issueKey);
+    Task<List<JiraChangelogEntry>> GetChangelogAsync(string issueKey);
     Task<byte[]> DownloadAttachmentAsync(string contentUrl);
 }

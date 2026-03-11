@@ -555,6 +555,57 @@ public class JiraService : IJiraService
         return attachments;
     }
 
+    public async Task<List<JiraChangelogEntry>> GetChangelogAsync(string issueKey)
+    {
+        var credentials = await GetStoredCredentialsAsync();
+        if (credentials == null)
+            throw new InvalidOperationException("Not authenticated with Jira");
+
+        var apiBaseUrl = GetApiBaseUrl(credentials);
+        var request = new HttpRequestMessage(HttpMethod.Get,
+            $"{apiBaseUrl}/issue/{Uri.EscapeDataString(issueKey)}?expand=changelog&fields=none");
+        ApplyAuth(request, credentials);
+
+        var response = await SendWithDebugAsync(request);
+        response.EnsureSuccessStatusCode();
+
+        var content = await response.Content.ReadAsStringAsync();
+        var doc = JsonDocument.Parse(content);
+
+        var entries = new List<JiraChangelogEntry>();
+        if (doc.RootElement.TryGetProperty("changelog", out var changelog)
+            && changelog.TryGetProperty("histories", out var histories)
+            && histories.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var history in histories.EnumerateArray())
+            {
+                var entry = new JiraChangelogEntry
+                {
+                    Id = history.TryGetProperty("id", out var id) ? id.GetString() ?? "" : "",
+                    Author = GetNestedDisplayName(history, "author") ?? "Unknown",
+                    Created = history.TryGetProperty("created", out var cr) && DateTime.TryParse(cr.GetString(), out var created)
+                        ? created : DateTime.MinValue
+                };
+
+                if (history.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var item in items.EnumerateArray())
+                    {
+                        entry.Items.Add(new JiraChangelogItem
+                        {
+                            Field = item.TryGetProperty("field", out var f) ? f.GetString() ?? "" : "",
+                            FromString = item.TryGetProperty("fromString", out var fs) ? fs.GetString() : null,
+                            ToStringValue = item.TryGetProperty("toString", out var ts) ? ts.GetString() : null
+                        });
+                    }
+                }
+
+                entries.Add(entry);
+            }
+        }
+        return entries;
+    }
+
     public async Task<byte[]> DownloadAttachmentAsync(string contentUrl)
     {
         var credentials = await GetStoredCredentialsAsync();

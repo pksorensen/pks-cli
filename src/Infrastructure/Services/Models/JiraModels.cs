@@ -89,6 +89,7 @@ public class JiraIssue
     public List<JiraComment> Comments { get; set; } = new();
     public List<JiraWorklog> Worklogs { get; set; } = new();
     public List<JiraAttachment> Attachments { get; set; } = new();
+    public List<JiraChangelogEntry> Changelog { get; set; } = new();
 }
 
 /// <summary>
@@ -150,4 +151,25 @@ public class JiraAttachment
     public string MimeType { get; set; } = string.Empty;
     public string ContentUrl { get; set; } = string.Empty;
     public DateTime Created { get; set; }
+}
+
+/// <summary>
+/// A single field change within a changelog history entry
+/// </summary>
+public class JiraChangelogItem
+{
+    public string Field { get; set; } = string.Empty;
+    public string? FromString { get; set; }
+    public string? ToStringValue { get; set; }
+}
+
+/// <summary>
+/// A changelog history entry — one event that may contain multiple field changes
+/// </summary>
+public class JiraChangelogEntry
+{
+    public string Id { get; set; } = string.Empty;
+    public string Author { get; set; } = string.Empty;
+    public DateTime Created { get; set; }
+    public List<JiraChangelogItem> Items { get; set; } = new();
 }
