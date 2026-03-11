@@ -261,8 +261,8 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         if (localCache.Count > 0)
             _console.MarkupLine($"[dim]Found {localCache.Count} previously exported issues[/]");
 
-        // 7. Multi-select tree — space toggles, selecting parent selects all children
-        var selectedIssues = SelectIssues(roots, allIssues, localCache);
+        // 7. Interactive tree — ▸/▾ expand/collapse, [x] toggle with children
+        var selectedIssues = SelectIssuesInteractive(roots, allIssues, localCache);
 
         if (selectedIssues.Count == 0)
         {
@@ -393,80 +393,224 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
     }
 
     /// <summary>
-    /// Builds a MultiSelectionPrompt tree where parents show children inline.
-    /// Space toggles selection — selecting a parent auto-selects all children.
-    /// Enter confirms and exports.
+    /// A visible row in the interactive tree browser.
     /// </summary>
-    private List<JiraIssue> SelectIssues(
+    private record TreeRow(JiraIssue Issue, int Depth);
+
+    /// <summary>
+    /// Builds the list of currently visible rows by walking the tree
+    /// and only descending into expanded nodes.
+    /// </summary>
+    private static List<TreeRow> BuildVisibleRows(List<JiraIssue> roots, HashSet<string> expandedKeys)
+    {
+        var rows = new List<TreeRow>();
+        void Walk(List<JiraIssue> issues, int depth)
+        {
+            foreach (var issue in issues)
+            {
+                rows.Add(new TreeRow(issue, depth));
+                if (issue.Children.Count > 0 && expandedKeys.Contains(issue.Key))
+                    Walk(issue.Children, depth + 1);
+            }
+        }
+        Walk(roots, 0);
+        return rows;
+    }
+
+    /// <summary>
+    /// Toggles selection for an issue and all its children recursively.
+    /// </summary>
+    private static void ToggleWithChildren(JiraIssue issue, HashSet<string> selectedKeys)
+    {
+        var shouldSelect = !selectedKeys.Contains(issue.Key);
+        SetSelectionRecursive(issue, selectedKeys, shouldSelect);
+    }
+
+    private static void SetSelectionRecursive(JiraIssue issue, HashSet<string> selectedKeys, bool select)
+    {
+        if (select) selectedKeys.Add(issue.Key); else selectedKeys.Remove(issue.Key);
+        foreach (var child in issue.Children)
+            SetSelectionRecursive(child, selectedKeys, select);
+    }
+
+    /// <summary>
+    /// Custom interactive tree browser with expand/collapse, multi-select,
+    /// and change detection. Renders directly to the terminal.
+    ///
+    /// Keys:
+    ///   ↑/↓     Navigate
+    ///   →       Expand children
+    ///   ←       Collapse children
+    ///   Space   Toggle selection (cascades to all children)
+    ///   a       Select/deselect all
+    ///   Enter   Export selected
+    ///   Esc     Cancel
+    /// </summary>
+    private List<JiraIssue> SelectIssuesInteractive(
         List<JiraIssue> roots, List<JiraIssue> allIssues,
         Dictionary<string, DateTime?> localCache)
     {
-        var prompt = new MultiSelectionPrompt<string>()
-            .Title("[cyan]Select issues to export[/] [dim](space=toggle, selecting parent selects all children, enter=export)[/]")
-            .PageSize(30)
-            .MoreChoicesText("[grey]Move up/down to see more issues[/]")
-            .InstructionsText("[grey](Press [blue]<space>[/] to toggle, [green]<enter>[/] to export selected)[/]");
+        var selectedKeys = new HashSet<string>();
+        var expandedKeys = new HashSet<string>();
+        var cursor = 0;
+        var scrollOffset = 0;
 
-        // Build the tree in the prompt
-        foreach (var root in roots)
+        // Reserve lines for header (2) + footer (2) + padding
+        var pageSize = Math.Max((Console.WindowHeight > 0 ? Console.WindowHeight : 30) - 6, 10);
+
+        Console.CursorVisible = false;
+        try
         {
-            var rootLabel = FormatIssueWithChange(root, localCache);
-            if (root.Children.Count > 0)
+            while (true)
             {
-                var childLabels = new List<string>();
-                CollectChildLabels(root.Children, childLabels, localCache, indent: 0);
-                prompt.AddChoiceGroup(rootLabel, childLabels);
-            }
-            else
-            {
-                prompt.AddChoice(rootLabel);
+                var rows = BuildVisibleRows(roots, expandedKeys);
+                if (cursor >= rows.Count) cursor = rows.Count - 1;
+                if (cursor < 0) cursor = 0;
+
+                // Adjust scroll window to keep cursor visible
+                if (cursor < scrollOffset) scrollOffset = cursor;
+                if (cursor >= scrollOffset + pageSize) scrollOffset = cursor - pageSize + 1;
+
+                // --- Render ---
+                Console.Write("\x1b[H\x1b[2J"); // Clear screen, cursor home
+
+                _console.MarkupLine("[cyan bold]Select issues to export[/]");
+                _console.MarkupLine("[dim]\u2191\u2193=move  \u2192=expand  \u2190=collapse  space=toggle  a=all  enter=export  esc=cancel[/]");
+
+                var endIdx = Math.Min(rows.Count, scrollOffset + pageSize);
+                for (var i = scrollOffset; i < endIdx; i++)
+                {
+                    var (issue, depth) = rows[i];
+                    var indent = new string(' ', depth * 3);
+
+                    // Checkbox
+                    var isSelected = selectedKeys.Contains(issue.Key);
+                    var checkbox = isSelected ? "[green][\u2713][/]" : "[dim][ ][/]";
+
+                    // Expand/collapse indicator
+                    var expandIcon = "";
+                    if (issue.Children.Count > 0)
+                    {
+                        expandIcon = expandedKeys.Contains(issue.Key)
+                            ? "[yellow]\u25be[/] "   // ▾ expanded
+                            : "[yellow]\u25b8[/] ";   // ▸ collapsed
+                    }
+
+                    // Change indicator
+                    var change = localCache.Count > 0 ? GetChangeIndicator(issue, localCache) : "";
+                    var changeSuffix = string.IsNullOrEmpty(change) ? "" : $" {change}";
+
+                    // Type icon
+                    var icon = GetTypeIcon(issue);
+
+                    // Child count for collapsed parents
+                    var childCount = issue.Children.Count > 0 && !expandedKeys.Contains(issue.Key)
+                        ? $" [dim]({issue.Children.Count})[/]"
+                        : "";
+
+                    var line = $"{indent}{checkbox} {expandIcon}{icon} {Markup.Escape(issue.Key)}: {Markup.Escape(issue.Summary)} [dim]({Markup.Escape(issue.Status)})[/]{childCount}{changeSuffix}";
+
+                    if (i == cursor)
+                        _console.MarkupLine($"[on grey23]{line}[/]");
+                    else
+                        _console.MarkupLine(line);
+                }
+
+                // Scroll indicator
+                if (rows.Count > pageSize)
+                {
+                    var pos = rows.Count > 0 ? (cursor + 1) : 0;
+                    _console.MarkupLine($"[dim]  {pos}/{rows.Count} issues[/]");
+                }
+                else
+                {
+                    _console.MarkupLine("");
+                }
+
+                _console.MarkupLine($"[dim]{selectedKeys.Count} selected[/]");
+
+                // --- Input ---
+                var key = Console.ReadKey(true);
+                switch (key.Key)
+                {
+                    case ConsoleKey.UpArrow:
+                        if (cursor > 0) cursor--;
+                        break;
+
+                    case ConsoleKey.DownArrow:
+                        if (cursor < rows.Count - 1) cursor++;
+                        break;
+
+                    case ConsoleKey.RightArrow:
+                        var expandIssue = rows[cursor].Issue;
+                        if (expandIssue.Children.Count > 0)
+                            expandedKeys.Add(expandIssue.Key);
+                        break;
+
+                    case ConsoleKey.LeftArrow:
+                        var collapseRow = rows[cursor];
+                        if (expandedKeys.Contains(collapseRow.Issue.Key))
+                        {
+                            // Collapse this node
+                            expandedKeys.Remove(collapseRow.Issue.Key);
+                        }
+                        else if (collapseRow.Depth > 0)
+                        {
+                            // If already collapsed or a leaf, jump to parent
+                            for (var j = cursor - 1; j >= 0; j--)
+                            {
+                                if (rows[j].Depth < collapseRow.Depth)
+                                {
+                                    cursor = j;
+                                    break;
+                                }
+                            }
+                        }
+                        break;
+
+                    case ConsoleKey.Spacebar:
+                        ToggleWithChildren(rows[cursor].Issue, selectedKeys);
+                        break;
+
+                    case ConsoleKey.A:
+                        // Toggle all
+                        var allKeys = allIssues.Select(i => i.Key).ToList();
+                        if (allKeys.All(k => selectedKeys.Contains(k)))
+                            selectedKeys.Clear();
+                        else
+                            foreach (var k in allKeys) selectedKeys.Add(k);
+                        break;
+
+                    case ConsoleKey.Enter:
+                        Console.Write("\x1b[H\x1b[2J");
+                        return allIssues.Where(i => selectedKeys.Contains(i.Key)).ToList();
+
+                    case ConsoleKey.Escape:
+                        Console.Write("\x1b[H\x1b[2J");
+                        return new List<JiraIssue>();
+                }
             }
         }
-
-        var selected = _console.Prompt(prompt);
-
-        // Map selected labels back to JiraIssue objects
-        var selectedIssues = new List<JiraIssue>();
-        foreach (var label in selected)
+        finally
         {
-            var match = Regex.Match(label, @"([A-Z]+-\d+):");
-            if (match.Success)
-            {
-                var key = match.Groups[1].Value;
-                var issue = allIssues.FirstOrDefault(i => i.Key == key);
-                if (issue != null)
-                    selectedIssues.Add(issue);
-            }
+            Console.CursorVisible = true;
         }
-
-        return selectedIssues;
     }
 
     /// <summary>
-    /// Recursively collects child labels for the MultiSelectionPrompt.
-    /// Deeper children are indented with spaces to show hierarchy visually.
+    /// Returns a type icon for the issue type.
     /// </summary>
-    private static void CollectChildLabels(
-        List<JiraIssue> children, List<string> labels,
-        Dictionary<string, DateTime?> localCache, int indent)
+    private static string GetTypeIcon(JiraIssue issue)
     {
-        var prefix = indent > 0 ? new string(' ', indent * 2) : "";
-        foreach (var child in children)
+        return issue.IssueType.ToLowerInvariant() switch
         {
-            labels.Add($"{prefix}{FormatIssueWithChange(child, localCache)}");
-            if (child.Children.Count > 0)
-                CollectChildLabels(child.Children, labels, localCache, indent + 1);
-        }
-    }
-
-    /// <summary>
-    /// Formats an issue label with change indicator for the selection prompt.
-    /// </summary>
-    private static string FormatIssueWithChange(JiraIssue issue, Dictionary<string, DateTime?> localCache)
-    {
-        var change = localCache.Count > 0 ? GetChangeIndicator(issue, localCache) : "";
-        var changePrefix = string.IsNullOrEmpty(change) ? "" : $"{change} ";
-        return $"{changePrefix}{FormatIssueLabel(issue)}";
+            "epic" => "\U0001f4cb",
+            "story" => "\U0001f4d6",
+            "bug" => "\U0001f41b",
+            "task" => "\u2705",
+            "subtask" or "sub-task" => "\u21b3",
+            _ => "\u2022"
+        };
     }
 
     private async Task<int> ExportToMarkdown(List<JiraIssue> issues, string outputDir)
@@ -719,21 +863,4 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         return $"{bytes / (1024.0 * 1024.0):F1} MB";
     }
 
-    /// <summary>
-    /// Plain-text issue label for SelectionPrompt (no Markup escaping needed).
-    /// </summary>
-    private static string FormatIssueLabel(JiraIssue issue)
-    {
-        var icon = issue.IssueType.ToLowerInvariant() switch
-        {
-            "epic" => "\U0001f4cb",
-            "story" => "\U0001f4d6",
-            "bug" => "\U0001f41b",
-            "task" => "\u2705",
-            "subtask" or "sub-task" => "\u21b3",
-            _ => "\u2022"
-        };
-
-        return $"{icon} {issue.Key}: {issue.Summary} ({issue.Status})";
-    }
 }
