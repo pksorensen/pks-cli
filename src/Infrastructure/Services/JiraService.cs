@@ -30,6 +30,10 @@ public class JiraService : IJiraService
     private readonly IConfigurationService _configurationService;
     private readonly ILogger<JiraService> _logger;
 
+    /// <summary>Cached acceptance criteria custom field ID (e.g. "customfield_10035")</summary>
+    private string? _acceptanceCriteriaFieldId;
+    private bool _acFieldDiscovered;
+
     /// <summary>
     /// When set, HTTP request/response details are written via this callback.
     /// Set from commands when --debug flag is used.
@@ -280,11 +284,17 @@ public class JiraService : IJiraService
         if (credentials == null)
             throw new InvalidOperationException("Not authenticated with Jira");
 
-        var fields = new[] {
+        // Discover acceptance criteria field (cached after first call)
+        var acFieldId = await DiscoverAcceptanceCriteriaFieldAsync(credentials);
+
+        var fieldsList = new List<string> {
             "summary", "status", "issuetype", "priority", "assignee", "parent", "project",
             "description", "labels", "components", "timeoriginalestimate", "timespent",
             "story_points", "customfield_10016", "reporter", "resolution", "created", "updated"
         };
+        if (acFieldId != null) fieldsList.Add(acFieldId);
+        var fields = fieldsList.ToArray();
+
         var requestBody = credentials.DeploymentType == JiraDeploymentType.Cloud
             ? JsonSerializer.Serialize(new
             {
@@ -316,7 +326,7 @@ public class JiraService : IJiraService
 
         var content = await response.Content.ReadAsStringAsync();
         var doc = JsonDocument.Parse(content);
-        var issues = ParseIssues(doc.RootElement);
+        var issues = ParseIssues(doc.RootElement, acFieldId);
         var total = doc.RootElement.TryGetProperty("total", out var totalProp) && totalProp.ValueKind == JsonValueKind.Number
             ? totalProp.GetInt32()
             : issues.Count;
@@ -353,9 +363,13 @@ public class JiraService : IJiraService
         if (credentials == null)
             throw new InvalidOperationException("Not authenticated with Jira");
 
+        var acFieldId = await DiscoverAcceptanceCriteriaFieldAsync(credentials);
+        var fields = "summary,status,issuetype,priority,assignee,parent,project,description,labels,components,timeoriginalestimate,timespent,customfield_10016,story_points,reporter,resolution,created,updated";
+        if (acFieldId != null) fields += $",{acFieldId}";
+
         var apiBaseUrl = GetApiBaseUrl(credentials);
         var request = new HttpRequestMessage(HttpMethod.Get,
-            $"{apiBaseUrl}/issue/{Uri.EscapeDataString(issueKey)}?fields=summary,status,issuetype,priority,assignee,parent,project,description,labels,components,timeoriginalestimate,timespent,customfield_10016,story_points,reporter,resolution,created,updated");
+            $"{apiBaseUrl}/issue/{Uri.EscapeDataString(issueKey)}?fields={fields}");
         ApplyAuth(request, credentials);
 
         var response = await SendWithDebugAsync(request);
@@ -368,7 +382,7 @@ public class JiraService : IJiraService
 
         var content = await response.Content.ReadAsStringAsync();
         var doc = JsonDocument.Parse(content);
-        return ParseIssue(doc.RootElement);
+        return ParseIssue(doc.RootElement, acFieldId);
     }
 
     public async Task<List<JiraSavedFilter>> GetSavedFiltersAsync()
@@ -699,20 +713,63 @@ public class JiraService : IJiraService
         };
     }
 
-    private static List<JiraIssue> ParseIssues(JsonElement root)
+    /// <summary>
+    /// Discovers the custom field ID for "Acceptance Criteria" by querying
+    /// the Jira /field endpoint. Caches the result for the lifetime of this service.
+    /// </summary>
+    private async Task<string?> DiscoverAcceptanceCriteriaFieldAsync(JiraStoredCredentials credentials)
+    {
+        if (_acFieldDiscovered) return _acceptanceCriteriaFieldId;
+        _acFieldDiscovered = true;
+
+        try
+        {
+            var apiBaseUrl = GetApiBaseUrl(credentials);
+            var request = new HttpRequestMessage(HttpMethod.Get, $"{apiBaseUrl}/field");
+            ApplyAuth(request, credentials);
+            var response = await SendWithDebugAsync(request);
+            if (!response.IsSuccessStatusCode) return null;
+
+            var content = await response.Content.ReadAsStringAsync();
+            var fields = JsonDocument.Parse(content).RootElement;
+
+            foreach (var field in fields.EnumerateArray())
+            {
+                var name = field.TryGetProperty("name", out var n) ? n.GetString() : null;
+                if (name == null) continue;
+
+                // Match common names: "Acceptance Criteria", "Acceptance criteria", "AC"
+                if (name.Contains("Acceptance Criteria", StringComparison.OrdinalIgnoreCase)
+                    || name.Contains("Acceptance criteria", StringComparison.OrdinalIgnoreCase))
+                {
+                    var id = field.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
+                    if (id != null && id.StartsWith("customfield_"))
+                    {
+                        _acceptanceCriteriaFieldId = id;
+                        return id;
+                    }
+                }
+            }
+        }
+        catch { /* field discovery is best-effort */ }
+
+        return null;
+    }
+
+    private static List<JiraIssue> ParseIssues(JsonElement root, string? acFieldId = null)
     {
         var issues = new List<JiraIssue>();
         if (root.TryGetProperty("issues", out var issuesArray))
         {
             foreach (var element in issuesArray.EnumerateArray())
             {
-                issues.Add(ParseIssue(element));
+                issues.Add(ParseIssue(element, acFieldId));
             }
         }
         return issues;
     }
 
-    private static JiraIssue ParseIssue(JsonElement element)
+    private static JiraIssue ParseIssue(JsonElement element, string? acFieldId = null)
     {
         var fields = element.GetProperty("fields");
 
@@ -797,6 +854,15 @@ public class JiraService : IJiraService
             issue.Created = DateTime.TryParse(createdProp.GetString(), out var c) ? c : null;
         if (fields.TryGetProperty("updated", out var updatedProp) && updatedProp.ValueKind == JsonValueKind.String)
             issue.Updated = DateTime.TryParse(updatedProp.GetString(), out var u) ? u : null;
+
+        // Acceptance Criteria (custom field — ID discovered at runtime)
+        if (acFieldId != null && fields.TryGetProperty(acFieldId, out var acProp))
+        {
+            if (acProp.ValueKind == JsonValueKind.String)
+                issue.AcceptanceCriteria = acProp.GetString();
+            else if (acProp.ValueKind == JsonValueKind.Object)
+                issue.AcceptanceCriteria = ExtractTextFromAdf(acProp);
+        }
 
         return issue;
     }

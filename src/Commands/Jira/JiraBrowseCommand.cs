@@ -870,6 +870,15 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         }
         sb.AppendLine();
 
+        // === ACCEPTANCE CRITERIA ===
+        if (!string.IsNullOrEmpty(issue.AcceptanceCriteria))
+        {
+            sb.AppendLine("## Acceptance Criteria");
+            sb.AppendLine();
+            sb.AppendLine(issue.AcceptanceCriteria);
+            sb.AppendLine();
+        }
+
         // === CONVERSATION ===
         if (issue.Comments.Count > 0)
         {

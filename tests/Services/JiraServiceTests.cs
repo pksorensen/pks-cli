@@ -145,7 +145,7 @@ public class JiraServiceTests
 
                 var result = await service.SearchIssuesAsync("project = UDV ORDER BY created ASC", maxResults: 100);
 
-                handler.SendCount.Should().Be(1);
+                handler.SendCount.Should().Be(2); // 1 for /field discovery + 1 for search
                 handler.LastRequestUri.Should().Be("https://api.atlassian.com/ex/jira/cloud-123/rest/api/3/search/jql");
                 handler.LastRequestBody.Should().NotContain("\"startAt\"");
                 result.Total.Should().Be(1);

@@ -82,6 +82,7 @@ public class JiraIssue
     public double? StoryPoints { get; set; }
     public string? Reporter { get; set; }
     public string? Resolution { get; set; }
+    public string? AcceptanceCriteria { get; set; }
     public DateTime? Created { get; set; }
     public DateTime? Updated { get; set; }
     public List<JiraIssue> Children { get; set; } = new();
