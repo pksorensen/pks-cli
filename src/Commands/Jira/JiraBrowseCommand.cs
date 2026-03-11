@@ -522,10 +522,8 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
                         if (expandIssue.Children.Count == 0 && CanHaveChildren(expandIssue)
                             && !childrenLoaded.Contains(expandIssue.Key))
                         {
-                            Console.Write("\x1b[H\x1b[2J");
-                            Console.WriteLine($"Loading children of {expandIssue.Key}...");
                             childrenLoaded.Add(expandIssue.Key);
-                            try
+                            await LoadWithSpinnerAsync(cursor, scrollOffset, expandIssue.Key, async () =>
                             {
                                 var knownKeys = new HashSet<string>(allIssues.Select(i => i.Key));
                                 var children = await _jiraService.GetIssuesByParentAsync(expandIssue.Key);
@@ -538,8 +536,7 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
                                     }
                                     expandIssue.Children.Add(child);
                                 }
-                            }
-                            catch { /* skip on failure */ }
+                            });
                         }
 
                         if (expandIssue.Children.Count > 0)
@@ -569,12 +566,19 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
 
                     case ConsoleKey.Spacebar:
                         var toggleIssue = rows[cursor].Issue;
-                        if (CanHaveChildren(toggleIssue) && !selectedKeys.Contains(toggleIssue.Key))
+                        var willSelect = !selectedKeys.Contains(toggleIssue.Key);
+                        if (willSelect && CanHaveChildren(toggleIssue))
                         {
-                            Console.Write("\x1b[H\x1b[2J");
-                            Console.WriteLine($"Loading subtree for {toggleIssue.Key}...");
+                            // Show spinner while loading the full subtree
+                            await LoadWithSpinnerAsync(cursor, scrollOffset, toggleIssue.Key, async () =>
+                            {
+                                await ToggleWithChildrenAsync(toggleIssue, selectedKeys, allIssues, childrenLoaded);
+                            });
                         }
-                        await ToggleWithChildrenAsync(toggleIssue, selectedKeys, allIssues, childrenLoaded);
+                        else
+                        {
+                            await ToggleWithChildrenAsync(toggleIssue, selectedKeys, allIssues, childrenLoaded);
+                        }
                         break;
 
                     case ConsoleKey.A:
@@ -605,6 +609,28 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
     /// <summary>
     /// Returns a type icon for the issue type.
     /// </summary>
+    /// <summary>
+    /// Runs an async operation while showing an inline spinner on the current cursor row.
+    /// The rest of the tree remains visible.
+    /// </summary>
+    private static async Task LoadWithSpinnerAsync(int cursor, int scrollOffset, string issueKey, Func<Task> work)
+    {
+        var spinChars = new[] { "\u280b", "\u2819", "\u2839", "\u2838", "\u283c", "\u2834", "\u2826", "\u2827", "\u2807", "\u280f" };
+        var screenRow = cursor - scrollOffset + 3; // +3: 1-based + 2 header lines
+        var task = work();
+        var spinIdx = 0;
+
+        while (!task.IsCompleted)
+        {
+            Console.Write($"\x1b[{screenRow};1H\x1b[2K"); // move to row, clear line
+            Console.Write($"\x1b[7m  {spinChars[spinIdx % spinChars.Length]} Loading {issueKey}...\x1b[0m");
+            spinIdx++;
+            await Task.WhenAny(task, Task.Delay(80));
+        }
+
+        await task; // propagate exceptions
+    }
+
     private static string GetTypeIcon(JiraIssue issue)
     {
         return issue.IssueType.ToLowerInvariant() switch
