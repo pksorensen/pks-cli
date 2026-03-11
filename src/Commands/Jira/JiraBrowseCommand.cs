@@ -421,8 +421,8 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
                 // --- Render ---
                 Console.Write("\x1b[H\x1b[2J"); // Clear screen, cursor home
 
-                _console.MarkupLine("[cyan bold]Select issues to export[/]");
-                _console.MarkupLine("[dim]\u2191\u2193=move  \u2192=expand  \u2190=collapse  space=toggle  a=all  enter=export  esc=cancel[/]");
+                Console.WriteLine("Select issues to export");
+                Console.WriteLine("\u2191\u2193=move  \u2192=expand  \u2190=collapse  space=toggle  a=all  enter=export  esc=cancel");
 
                 var endIdx = Math.Min(rows.Count, scrollOffset + pageSize);
                 for (var i = scrollOffset; i < endIdx; i++)
@@ -430,18 +430,7 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
                     var (issue, depth) = rows[i];
                     var indent = new string(' ', depth * 3);
 
-                    // Checkbox
                     var isSelected = selectedKeys.Contains(issue.Key);
-                    var checkbox = isSelected ? "[green][\u2713][/]" : "[dim][ ][/]";
-
-                    // Expand/collapse indicator
-                    var expandIcon = "";
-                    if (issue.Children.Count > 0)
-                    {
-                        expandIcon = expandedKeys.Contains(issue.Key)
-                            ? "[yellow]\u25be[/] "   // ▾ expanded
-                            : "[yellow]\u25b8[/] ";   // ▸ collapsed
-                    }
 
                     // Change indicator
                     var change = localCache.Count > 0 ? GetChangeIndicator(issue, localCache) : "";
@@ -453,30 +442,32 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
                     // Child count / expandable hint
                     var childCount = "";
                     if (issue.Children.Count > 0 && !expandedKeys.Contains(issue.Key))
-                        childCount = $" [dim]({issue.Children.Count})[/]";
+                        childCount = $" ({issue.Children.Count})";
                     else if (issue.Children.Count == 0 && CanHaveChildren(issue) && !childrenLoaded.Contains(issue.Key))
-                        childCount = " [dim](\u2192 expand)[/]";
+                        childCount = " (\u2192)";
 
-                    var line = $"{indent}{checkbox} {expandIcon}{icon} {Markup.Escape(issue.Key)}: {Markup.Escape(issue.Summary)} [dim]({Markup.Escape(issue.Status)})[/]{childCount}{changeSuffix}";
+                    // Build plain text line for the row
+                    var plainLine = $"{indent}{(isSelected ? "[\u2713]" : "[ ]")} {(issue.Children.Count > 0 ? (expandedKeys.Contains(issue.Key) ? "\u25be " : "\u25b8 ") : "")}{icon} {issue.Key}: {issue.Summary} ({issue.Status}){childCount}{changeSuffix}";
 
                     if (i == cursor)
-                        _console.MarkupLine($"[on grey23]{line}[/]");
+                    {
+                        // Highlight with ANSI reverse video
+                        Console.Write($"\x1b[7m{plainLine}\x1b[0m");
+                        Console.WriteLine();
+                    }
                     else
-                        _console.MarkupLine(line);
+                    {
+                        Console.WriteLine(plainLine);
+                    }
                 }
 
-                // Scroll indicator
+                // Scroll indicator & selection count
                 if (rows.Count > pageSize)
-                {
-                    var pos = rows.Count > 0 ? (cursor + 1) : 0;
-                    _console.MarkupLine($"[dim]  {pos}/{rows.Count} issues[/]");
-                }
+                    Console.WriteLine($"  {cursor + 1}/{rows.Count} issues");
                 else
-                {
-                    _console.MarkupLine("");
-                }
+                    Console.WriteLine();
 
-                _console.MarkupLine($"[dim]{selectedKeys.Count} selected[/]");
+                Console.WriteLine($"{selectedKeys.Count} selected");
 
                 // --- Input ---
                 var key = Console.ReadKey(true);
@@ -500,7 +491,7 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
                             && !childrenLoaded.Contains(expandIssue.Key))
                         {
                             Console.Write("\x1b[H\x1b[2J");
-                            _console.MarkupLine($"[cyan]Loading children of {Markup.Escape(expandIssue.Key)}...[/]");
+                            Console.WriteLine($"Loading children of {expandIssue.Key}...");
                             childrenLoaded.Add(expandIssue.Key);
                             try
                             {
