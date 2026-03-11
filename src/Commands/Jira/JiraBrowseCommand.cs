@@ -246,23 +246,13 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         // 4. Build tree from initial results
         var roots = BuildIssueTree(allIssues);
 
-        // 5. Load children for parent-type issues so the full tree is available
-        await _console.Status()
-            .Spinner(Spinner.Known.Dots)
-            .StartAsync("[cyan]Loading child issues...[/]", async ctx =>
-            {
-                await LoadChildrenAsync(roots, allIssues, ctx, maxDepth: 3);
-            });
-
-        _console.MarkupLine($"[dim]Loaded {allIssues.Count} issues total[/]");
-
-        // 6. Load local cache to detect changed issues
+        // 5. Load local cache to detect changed issues
         var localCache = LoadLocalCache(settings.OutputDir);
         if (localCache.Count > 0)
             _console.MarkupLine($"[dim]Found {localCache.Count} previously exported issues[/]");
 
-        // 7. Interactive tree — ▸/▾ expand/collapse, [x] toggle with children
-        var selectedIssues = SelectIssuesInteractive(roots, allIssues, localCache);
+        // 6. Interactive tree — ▸/▾ expand/collapse, [x] toggle, lazy child loading on →
+        var selectedIssues = await SelectIssuesInteractiveAsync(roots, allIssues, localCache);
 
         if (selectedIssues.Count == 0)
         {
@@ -296,50 +286,6 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         }
 
         return roots;
-    }
-
-    /// <summary>
-    /// Recursively fetches child issues for parent-type issues.
-    /// Adds discovered children to allIssues for later selection/export.
-    /// </summary>
-    private async Task LoadChildrenAsync(
-        List<JiraIssue> issues, List<JiraIssue> allIssues,
-        StatusContext ctx, int maxDepth, int depth = 0)
-    {
-        if (depth >= maxDepth) return;
-
-        var knownKeys = new HashSet<string>(allIssues.Select(i => i.Key));
-
-        foreach (var issue in issues)
-        {
-            if (issue.Children.Count > 0) continue;
-
-            var type = issue.IssueType.ToLowerInvariant();
-            if (type is not ("epic" or "story" or "task" or "feature" or "initiative")) continue;
-
-            ctx.Status($"[cyan]Loading children of {Markup.Escape(issue.Key)}...[/]");
-            try
-            {
-                var children = await _jiraService.GetIssuesByParentAsync(issue.Key);
-                foreach (var child in children)
-                {
-                    if (!knownKeys.Contains(child.Key))
-                    {
-                        knownKeys.Add(child.Key);
-                        allIssues.Add(child);
-                    }
-                    issue.Children.Add(child);
-                }
-            }
-            catch { /* skip on failure */ }
-        }
-
-        // Recurse into newly loaded children
-        foreach (var issue in issues)
-        {
-            if (issue.Children.Count > 0)
-                await LoadChildrenAsync(issue.Children, allIssues, ctx, maxDepth, depth + 1);
-        }
     }
 
     /// <summary>
@@ -446,12 +392,13 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
     ///   Enter   Export selected
     ///   Esc     Cancel
     /// </summary>
-    private List<JiraIssue> SelectIssuesInteractive(
+    private async Task<List<JiraIssue>> SelectIssuesInteractiveAsync(
         List<JiraIssue> roots, List<JiraIssue> allIssues,
         Dictionary<string, DateTime?> localCache)
     {
         var selectedKeys = new HashSet<string>();
         var expandedKeys = new HashSet<string>();
+        var childrenLoaded = new HashSet<string>();
         var cursor = 0;
         var scrollOffset = 0;
 
@@ -503,10 +450,12 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
                     // Type icon
                     var icon = GetTypeIcon(issue);
 
-                    // Child count for collapsed parents
-                    var childCount = issue.Children.Count > 0 && !expandedKeys.Contains(issue.Key)
-                        ? $" [dim]({issue.Children.Count})[/]"
-                        : "";
+                    // Child count / expandable hint
+                    var childCount = "";
+                    if (issue.Children.Count > 0 && !expandedKeys.Contains(issue.Key))
+                        childCount = $" [dim]({issue.Children.Count})[/]";
+                    else if (issue.Children.Count == 0 && CanHaveChildren(issue) && !childrenLoaded.Contains(issue.Key))
+                        childCount = " [dim](\u2192 expand)[/]";
 
                     var line = $"{indent}{checkbox} {expandIcon}{icon} {Markup.Escape(issue.Key)}: {Markup.Escape(issue.Summary)} [dim]({Markup.Escape(issue.Status)})[/]{childCount}{changeSuffix}";
 
@@ -543,6 +492,33 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
 
                     case ConsoleKey.RightArrow:
                         var expandIssue = rows[cursor].Issue;
+                        if (expandedKeys.Contains(expandIssue.Key))
+                            break; // already expanded
+
+                        // Lazy-load children on first expand
+                        if (expandIssue.Children.Count == 0 && CanHaveChildren(expandIssue)
+                            && !childrenLoaded.Contains(expandIssue.Key))
+                        {
+                            Console.Write("\x1b[H\x1b[2J");
+                            _console.MarkupLine($"[cyan]Loading children of {Markup.Escape(expandIssue.Key)}...[/]");
+                            childrenLoaded.Add(expandIssue.Key);
+                            try
+                            {
+                                var knownKeys = new HashSet<string>(allIssues.Select(i => i.Key));
+                                var children = await _jiraService.GetIssuesByParentAsync(expandIssue.Key);
+                                foreach (var child in children)
+                                {
+                                    if (!knownKeys.Contains(child.Key))
+                                    {
+                                        knownKeys.Add(child.Key);
+                                        allIssues.Add(child);
+                                    }
+                                    expandIssue.Children.Add(child);
+                                }
+                            }
+                            catch { /* skip on failure */ }
+                        }
+
                         if (expandIssue.Children.Count > 0)
                             expandedKeys.Add(expandIssue.Key);
                         break;
@@ -611,6 +587,12 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
             "subtask" or "sub-task" => "\u21b3",
             _ => "\u2022"
         };
+    }
+
+    private static bool CanHaveChildren(JiraIssue issue)
+    {
+        var type = issue.IssueType.ToLowerInvariant();
+        return type is "epic" or "story" or "task" or "feature" or "initiative";
     }
 
     private async Task<int> ExportToMarkdown(List<JiraIssue> issues, string outputDir)
