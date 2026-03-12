@@ -19,6 +19,7 @@ public interface IJiraService
     Task<List<JiraIssue>> GetProjectIssuesAsync(string projectKey, string? epicKey = null);
     Task<List<JiraIssue>> GetIssuesByParentAsync(string parentKey);
     Task<JiraIssue?> GetIssueAsync(string issueKey);
+    Task<JiraIssue?> GetIssueWithAllFieldsAsync(string issueKey);
     Task<List<JiraSavedFilter>> GetSavedFiltersAsync();
     Task SaveFilterAsync(JiraSavedFilter filter);
     Task DeleteFilterAsync(string label);

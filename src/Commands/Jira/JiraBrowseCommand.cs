@@ -710,6 +710,13 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
                 foreach (var issue in issues)
                 {
                     ctx.Status($"[cyan]Fetching {Markup.Escape(issue.Key)}...[/]");
+                    try
+                    {
+                        var fullIssue = await _jiraService.GetIssueWithAllFieldsAsync(issue.Key);
+                        if (fullIssue != null)
+                            issue.RawFields = fullIssue.RawFields;
+                    }
+                    catch { /* skip */ }
                     try { issue.Comments = await _jiraService.GetCommentsAsync(issue.Key); } catch { /* skip */ }
                     try { issue.Worklogs = await _jiraService.GetWorklogsAsync(issue.Key); } catch { /* skip */ }
                     try { issue.Attachments = await _jiraService.GetAttachmentsAsync(issue.Key); } catch { /* skip */ }

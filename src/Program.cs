@@ -460,6 +460,11 @@ app.Configure(config =>
             .WithDescription("Browse Jira tickets in an interactive tree view")
             .WithExample(new[] { "jira", "browse" })
             .WithExample(new[] { "jira", "browse", "--project", "PROJ" });
+
+        jira.AddCommand<JiraConfigCommand>("config")
+            .WithDescription("View or set Jira field mappings")
+            .WithExample(new[] { "jira", "config" })
+            .WithExample(new[] { "jira", "config", "--ac-field", "customfield_10064" });
     });
 
     // Add git branch command (credential helpers)

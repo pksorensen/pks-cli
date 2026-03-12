@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace PKS.Infrastructure.Services.Models;
 
 /// <summary>
@@ -90,6 +92,7 @@ public class JiraIssue
     public List<JiraWorklog> Worklogs { get; set; } = new();
     public List<JiraAttachment> Attachments { get; set; } = new();
     public List<JiraChangelogEntry> Changelog { get; set; } = new();
+    public Dictionary<string, JsonElement>? RawFields { get; set; }
 }
 
 /// <summary>

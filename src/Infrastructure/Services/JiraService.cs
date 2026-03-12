@@ -25,6 +25,7 @@ public class JiraService : IJiraService
     private const string KeyCreatedAt = $"{KeyPrefix}created_at";
     private const string KeyLastRefreshedAt = $"{KeyPrefix}last_refreshed_at";
     private const string KeySavedFilters = $"{KeyPrefix}saved_filters";
+    private const string KeyAcFieldId = $"{KeyPrefix}ac_field_id";
 
     private readonly HttpClient _httpClient;
     private readonly IConfigurationService _configurationService;
@@ -142,6 +143,7 @@ public class JiraService : IJiraService
         await _configurationService.DeleteAsync(KeyCreatedAt);
         await _configurationService.DeleteAsync(KeyLastRefreshedAt);
         await _configurationService.DeleteAsync(KeySavedFilters);
+        await _configurationService.DeleteAsync(KeyAcFieldId);
     }
 
     public async Task<bool> ValidateCredentialsAsync(JiraStoredCredentials credentials)
@@ -383,6 +385,44 @@ public class JiraService : IJiraService
         var content = await response.Content.ReadAsStringAsync();
         var doc = JsonDocument.Parse(content);
         return ParseIssue(doc.RootElement, acFieldId);
+    }
+
+    public async Task<JiraIssue?> GetIssueWithAllFieldsAsync(string issueKey)
+    {
+        var credentials = await GetStoredCredentialsAsync();
+        if (credentials == null)
+            throw new InvalidOperationException("Not authenticated with Jira");
+
+        var acFieldId = await DiscoverAcceptanceCriteriaFieldAsync(credentials);
+
+        var apiBaseUrl = GetApiBaseUrl(credentials);
+        var request = new HttpRequestMessage(HttpMethod.Get,
+            $"{apiBaseUrl}/issue/{Uri.EscapeDataString(issueKey)}");
+        ApplyAuth(request, credentials);
+
+        var response = await SendWithDebugAsync(request);
+        if (!response.IsSuccessStatusCode)
+        {
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                return null;
+            response.EnsureSuccessStatusCode();
+        }
+
+        var content = await response.Content.ReadAsStringAsync();
+        var doc = JsonDocument.Parse(content);
+        var issue = ParseIssue(doc.RootElement, acFieldId);
+
+        // Capture ALL fields from the raw JSON into the RawFields dictionary
+        if (doc.RootElement.TryGetProperty("fields", out var fieldsElement))
+        {
+            issue.RawFields = new Dictionary<string, JsonElement>();
+            foreach (var prop in fieldsElement.EnumerateObject())
+            {
+                issue.RawFields[prop.Name] = prop.Value.Clone();
+            }
+        }
+
+        return issue;
     }
 
     public async Task<List<JiraSavedFilter>> GetSavedFiltersAsync()
@@ -768,43 +808,118 @@ public class JiraService : IJiraService
     /// Discovers the custom field ID for "Acceptance Criteria" by querying
     /// the Jira /field endpoint. Caches the result for the lifetime of this service.
     /// </summary>
+    /// <summary>
+    /// Well-known field name patterns for acceptance criteria across Jira instances.
+    /// Checked case-insensitively. Order matters — first match wins.
+    /// </summary>
+    private static readonly string[] AcceptanceCriteriaPatterns =
+    {
+        "acceptance criteria",
+        "acceptance criterion",
+        "acceptance_criteria",
+        "ac criteria",
+        "definition of done",
+    };
+
     private async Task<string?> DiscoverAcceptanceCriteriaFieldAsync(JiraStoredCredentials credentials)
     {
         if (_acFieldDiscovered) return _acceptanceCriteriaFieldId;
         _acFieldDiscovered = true;
 
+        // 1. Check for a manually configured or previously persisted field ID
+        try
+        {
+            var stored = await _configurationService.GetAsync(KeyAcFieldId);
+            if (!string.IsNullOrEmpty(stored))
+            {
+                _acceptanceCriteriaFieldId = stored;
+                DebugWriter?.Invoke($"[green]Acceptance criteria field (stored): {stored}[/]");
+                return stored;
+            }
+        }
+        catch { /* continue with discovery */ }
+
+        // 2. Auto-discover from field metadata
         try
         {
             var apiBaseUrl = GetApiBaseUrl(credentials);
             var request = new HttpRequestMessage(HttpMethod.Get, $"{apiBaseUrl}/field");
             ApplyAuth(request, credentials);
             var response = await SendWithDebugAsync(request);
-            if (!response.IsSuccessStatusCode) return null;
+            if (!response.IsSuccessStatusCode)
+            {
+                DebugWriter?.Invoke($"[yellow]Field discovery failed: {(int)response.StatusCode}[/]");
+                return null;
+            }
 
             var content = await response.Content.ReadAsStringAsync();
             var fields = JsonDocument.Parse(content).RootElement;
 
+            // Collect candidates: custom fields whose name matches any known pattern
+            var candidates = new List<(string id, string name)>();
+
             foreach (var field in fields.EnumerateArray())
             {
                 var name = field.TryGetProperty("name", out var n) ? n.GetString() : null;
-                if (name == null) continue;
+                var id = field.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
+                if (name == null || id == null) continue;
 
-                // Match common names: "Acceptance Criteria", "Acceptance criteria", "AC"
-                if (name.Contains("Acceptance Criteria", StringComparison.OrdinalIgnoreCase)
-                    || name.Contains("Acceptance criteria", StringComparison.OrdinalIgnoreCase))
+                // Only consider custom fields
+                if (!id.StartsWith("customfield_")) continue;
+
+                var nameLower = name.ToLowerInvariant();
+                foreach (var pattern in AcceptanceCriteriaPatterns)
                 {
-                    var id = field.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
-                    if (id != null && id.StartsWith("customfield_"))
+                    if (nameLower.Contains(pattern))
                     {
-                        _acceptanceCriteriaFieldId = id;
-                        return id;
+                        candidates.Add((id, name));
+                        break;
                     }
                 }
             }
+
+            if (candidates.Count > 0)
+            {
+                _acceptanceCriteriaFieldId = candidates[0].id;
+                DebugWriter?.Invoke($"[green]Acceptance criteria field: {candidates[0].name} ({candidates[0].id})[/]");
+                if (candidates.Count > 1)
+                    DebugWriter?.Invoke($"[dim]Other candidates: {string.Join(", ", candidates.Skip(1).Select(c => $"{c.name} ({c.id})"))}[/]");
+
+                // Persist so it survives across sessions
+                try { await _configurationService.SetAsync(KeyAcFieldId, _acceptanceCriteriaFieldId, global: true); }
+                catch { /* best-effort persist */ }
+
+                return _acceptanceCriteriaFieldId;
+            }
+
+            DebugWriter?.Invoke("[yellow]No acceptance criteria custom field found. Use 'pks jira config --ac-field customfield_NNNNN' to set manually.[/]");
         }
-        catch { /* field discovery is best-effort */ }
+        catch (Exception ex)
+        {
+            DebugWriter?.Invoke($"[yellow]Field discovery error: {Spectre.Console.Markup.Escape(ex.Message)}[/]");
+        }
 
         return null;
+    }
+
+    /// <summary>
+    /// Sets the acceptance criteria custom field ID manually. Use when auto-discovery
+    /// doesn't find the right field (e.g. field has a non-standard name).
+    /// </summary>
+    public async Task SetAcceptanceCriteriaFieldAsync(string fieldId)
+    {
+        await _configurationService.SetAsync(KeyAcFieldId, fieldId, global: true);
+        _acceptanceCriteriaFieldId = fieldId;
+        _acFieldDiscovered = true;
+    }
+
+    /// <summary>
+    /// Gets the currently configured acceptance criteria field ID (stored or discovered).
+    /// Returns null if not yet configured.
+    /// </summary>
+    public async Task<string?> GetAcceptanceCriteriaFieldAsync()
+    {
+        return await _configurationService.GetAsync(KeyAcFieldId);
     }
 
     private static List<JiraIssue> ParseIssues(JsonElement root, string? acFieldId = null)
@@ -913,6 +1028,23 @@ public class JiraService : IJiraService
                 issue.AcceptanceCriteria = acProp.GetString();
             else if (acProp.ValueKind == JsonValueKind.Object)
                 issue.AcceptanceCriteria = ExtractTextFromAdf(acProp);
+            else if (acProp.ValueKind == JsonValueKind.Array)
+            {
+                // Some plugins store AC as an array of ADF blocks or strings
+                var parts = new List<string>();
+                foreach (var item in acProp.EnumerateArray())
+                {
+                    if (item.ValueKind == JsonValueKind.String)
+                        parts.Add(item.GetString() ?? "");
+                    else if (item.ValueKind == JsonValueKind.Object)
+                    {
+                        var text = ExtractTextFromAdf(item);
+                        if (text != null) parts.Add(text);
+                    }
+                }
+                if (parts.Count > 0)
+                    issue.AcceptanceCriteria = string.Join("\n", parts);
+            }
         }
 
         return issue;
