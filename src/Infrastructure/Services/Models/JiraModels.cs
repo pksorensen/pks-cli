@@ -93,6 +93,7 @@ public class JiraIssue
     public List<JiraAttachment> Attachments { get; set; } = new();
     public List<JiraChangelogEntry> Changelog { get; set; } = new();
     public Dictionary<string, JsonElement>? RawFields { get; set; }
+    public List<JiraIssueLink> IssueLinks { get; set; } = new();
 }
 
 /// <summary>
@@ -154,6 +155,21 @@ public class JiraAttachment
     public string MimeType { get; set; } = string.Empty;
     public string ContentUrl { get; set; } = string.Empty;
     public DateTime Created { get; set; }
+}
+
+/// <summary>
+/// A link between two Jira issues (e.g. "relates to", "blocks", "is blocked by")
+/// </summary>
+public class JiraIssueLink
+{
+    public string Id { get; set; } = string.Empty;
+    public string LinkType { get; set; } = string.Empty;
+    public string Direction { get; set; } = string.Empty;
+    public string DirectionLabel { get; set; } = string.Empty;
+    public string LinkedIssueKey { get; set; } = string.Empty;
+    public string? LinkedIssueSummary { get; set; }
+    public string? LinkedIssueStatus { get; set; }
+    public string? LinkedIssueType { get; set; }
 }
 
 /// <summary>

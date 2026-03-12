@@ -292,7 +292,8 @@ public class JiraService : IJiraService
         var fieldsList = new List<string> {
             "summary", "status", "issuetype", "priority", "assignee", "parent", "project",
             "description", "labels", "components", "timeoriginalestimate", "timespent",
-            "story_points", "customfield_10016", "reporter", "resolution", "created", "updated"
+            "story_points", "customfield_10016", "reporter", "resolution", "created", "updated",
+            "issuelinks"
         };
         if (acFieldId != null) fieldsList.Add(acFieldId);
         var fields = fieldsList.ToArray();
@@ -366,7 +367,7 @@ public class JiraService : IJiraService
             throw new InvalidOperationException("Not authenticated with Jira");
 
         var acFieldId = await DiscoverAcceptanceCriteriaFieldAsync(credentials);
-        var fields = "summary,status,issuetype,priority,assignee,parent,project,description,labels,components,timeoriginalestimate,timespent,customfield_10016,story_points,reporter,resolution,created,updated";
+        var fields = "summary,status,issuetype,priority,assignee,parent,project,description,labels,components,timeoriginalestimate,timespent,customfield_10016,story_points,reporter,resolution,created,updated,issuelinks";
         if (acFieldId != null) fields += $",{acFieldId}";
 
         var apiBaseUrl = GetApiBaseUrl(credentials);
@@ -1044,6 +1045,62 @@ public class JiraService : IJiraService
                 }
                 if (parts.Count > 0)
                     issue.AcceptanceCriteria = string.Join("\n", parts);
+            }
+        }
+
+        // Issue links
+        if (fields.TryGetProperty("issuelinks", out var linksArray) && linksArray.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var link in linksArray.EnumerateArray())
+            {
+                var linkId = link.TryGetProperty("id", out var lid) ? lid.GetString() ?? "" : "";
+                var linkTypeName = "";
+                var inwardLabel = "";
+                var outwardLabel = "";
+                if (link.TryGetProperty("type", out var linkType) && linkType.ValueKind == JsonValueKind.Object)
+                {
+                    linkTypeName = linkType.TryGetProperty("name", out var tn) ? tn.GetString() ?? "" : "";
+                    inwardLabel = linkType.TryGetProperty("inward", out var iw) ? iw.GetString() ?? "" : "";
+                    outwardLabel = linkType.TryGetProperty("outward", out var ow) ? ow.GetString() ?? "" : "";
+                }
+
+                if (link.TryGetProperty("outwardIssue", out var outward) && outward.ValueKind == JsonValueKind.Object)
+                {
+                    var issueLink = new JiraIssueLink
+                    {
+                        Id = linkId,
+                        LinkType = linkTypeName,
+                        Direction = "outward",
+                        DirectionLabel = outwardLabel,
+                        LinkedIssueKey = outward.TryGetProperty("key", out var k) ? k.GetString() ?? "" : ""
+                    };
+                    if (outward.TryGetProperty("fields", out var lf) && lf.ValueKind == JsonValueKind.Object)
+                    {
+                        issueLink.LinkedIssueSummary = GetStringProperty(lf, "summary");
+                        issueLink.LinkedIssueStatus = GetNestedName(lf, "status");
+                        issueLink.LinkedIssueType = GetNestedName(lf, "issuetype");
+                    }
+                    issue.IssueLinks.Add(issueLink);
+                }
+
+                if (link.TryGetProperty("inwardIssue", out var inward) && inward.ValueKind == JsonValueKind.Object)
+                {
+                    var issueLink = new JiraIssueLink
+                    {
+                        Id = linkId,
+                        LinkType = linkTypeName,
+                        Direction = "inward",
+                        DirectionLabel = inwardLabel,
+                        LinkedIssueKey = inward.TryGetProperty("key", out var k) ? k.GetString() ?? "" : ""
+                    };
+                    if (inward.TryGetProperty("fields", out var lf) && lf.ValueKind == JsonValueKind.Object)
+                    {
+                        issueLink.LinkedIssueSummary = GetStringProperty(lf, "summary");
+                        issueLink.LinkedIssueStatus = GetNestedName(lf, "status");
+                        issueLink.LinkedIssueType = GetNestedName(lf, "issuetype");
+                    }
+                    issue.IssueLinks.Add(issueLink);
+                }
             }
         }
 

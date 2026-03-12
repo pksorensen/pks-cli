@@ -412,6 +412,49 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
     }
 
     /// <summary>
+    /// Selects all issues recursively, loading unloaded children and expanding all nodes.
+    /// </summary>
+    private async Task SelectAllRecursiveAsync(
+        List<JiraIssue> issues, HashSet<string> selectedKeys, HashSet<string> expandedKeys,
+        List<JiraIssue> allIssues, HashSet<string> childrenLoaded)
+    {
+        foreach (var issue in issues)
+        {
+            selectedKeys.Add(issue.Key);
+
+            // Lazy-load children if not yet fetched
+            if (issue.Children.Count == 0
+                && CanHaveChildren(issue) && !childrenLoaded.Contains(issue.Key))
+            {
+                childrenLoaded.Add(issue.Key);
+                try
+                {
+                    var knownKeys = new HashSet<string>(allIssues.Select(i => i.Key));
+                    var children = await _jiraService.GetIssuesByParentAsync(issue.Key);
+                    foreach (var child in children)
+                    {
+                        if (!knownKeys.Contains(child.Key))
+                        {
+                            knownKeys.Add(child.Key);
+                            allIssues.Add(child);
+                        }
+                        issue.Children.Add(child);
+                    }
+                }
+                catch { /* skip on failure */ }
+            }
+
+            // Expand if it has children
+            if (issue.Children.Count > 0)
+                expandedKeys.Add(issue.Key);
+
+            // Recurse into children
+            if (issue.Children.Count > 0)
+                await SelectAllRecursiveAsync(issue.Children, selectedKeys, expandedKeys, allIssues, childrenLoaded);
+        }
+    }
+
+    /// <summary>
     /// Custom interactive tree browser with expand/collapse, multi-select,
     /// and change detection. Renders directly to the terminal.
     ///
@@ -591,11 +634,20 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
                         break;
 
                     case ConsoleKey.A:
-                        var allKeys = allIssues.Select(i => i.Key).ToList();
-                        if (allKeys.All(k => selectedKeys.Contains(k)))
+                        // If everything is already selected, deselect all
+                        var allCurrentKeys = allIssues.Select(i => i.Key).ToList();
+                        if (allCurrentKeys.All(k => selectedKeys.Contains(k)) && allCurrentKeys.Count > 0)
+                        {
                             selectedKeys.Clear();
+                        }
                         else
-                            foreach (var k in allKeys) selectedKeys.Add(k);
+                        {
+                            // Select all and recursively load+expand all children
+                            await LoadWithSpinnerAsync(cursor, scrollOffset, "all issues", async () =>
+                            {
+                                await SelectAllRecursiveAsync(roots, selectedKeys, expandedKeys, allIssues, childrenLoaded);
+                            });
+                        }
                         forceFullRedraw = true;
                         break;
 
@@ -930,6 +982,21 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
             sb.AppendLine("## Acceptance Criteria");
             sb.AppendLine();
             sb.AppendLine(issue.AcceptanceCriteria);
+            sb.AppendLine();
+        }
+
+        // === LINKS ===
+        if (issue.IssueLinks.Count > 0)
+        {
+            sb.AppendLine("## Links");
+            sb.AppendLine();
+            sb.AppendLine("| Relationship | Issue | Summary | Status |");
+            sb.AppendLine("|-------------|-------|---------|--------|");
+            foreach (var link in issue.IssueLinks)
+            {
+                var summary = (link.LinkedIssueSummary ?? "").Replace("|", "\\|").Replace("\n", " ");
+                sb.AppendLine($"| {link.DirectionLabel} | {link.LinkedIssueKey} | {summary} | {link.LinkedIssueStatus ?? ""} |");
+            }
             sb.AppendLine();
         }
 
