@@ -261,7 +261,7 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         }
 
         // 7. Export selected issues to markdown
-        return await ExportToMarkdown(selectedIssues, settings.OutputDir);
+        return await ExportToMarkdown(selectedIssues, settings.OutputDir, localCache);
     }
 
     /// <summary>
@@ -336,6 +336,38 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
             return "\u26a1"; // ⚡ changed
 
         return ""; // unchanged, no indicator
+    }
+
+    /// <summary>
+    /// Determines which issues need re-fetching by comparing their Updated timestamp
+    /// against the local cache. Returns only issues whose data has changed or are new.
+    /// </summary>
+    public static List<JiraIssue> GetStaleIssues(List<JiraIssue> issues, Dictionary<string, DateTime?> localCache)
+    {
+        if (localCache.Count == 0)
+            return new List<JiraIssue>(issues);
+
+        var stale = new List<JiraIssue>();
+        foreach (var issue in issues)
+        {
+            if (!localCache.TryGetValue(issue.Key, out var cachedUpdated))
+            {
+                stale.Add(issue); // new issue, not in cache
+                continue;
+            }
+
+            if (issue.Updated.HasValue && cachedUpdated.HasValue && issue.Updated.Value > cachedUpdated.Value)
+            {
+                stale.Add(issue); // updated since last export
+                continue;
+            }
+
+            if (!issue.Updated.HasValue || !cachedUpdated.HasValue)
+            {
+                stale.Add(issue); // can't compare, re-fetch to be safe
+            }
+        }
+        return stale;
     }
 
     /// <summary>
@@ -746,7 +778,7 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         return type is "epic" or "story" or "task" or "feature" or "initiative";
     }
 
-    private async Task<int> ExportToMarkdown(List<JiraIssue> issues, string outputDir)
+    private async Task<int> ExportToMarkdown(List<JiraIssue> issues, string outputDir, Dictionary<string, DateTime?> localCache)
     {
         if (issues.Count == 0)
         {
@@ -754,27 +786,38 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
             return 0;
         }
 
-        // Fetch enriched data for all selected issues
-        await _console.Status()
-            .Spinner(Spinner.Known.Dots)
-            .StartAsync($"[cyan]Fetching details for {issues.Count} issues...[/]", async ctx =>
-            {
-                foreach (var issue in issues)
+        // Determine which issues need re-fetching
+        var staleIssues = GetStaleIssues(issues, localCache);
+        var staleKeys = new HashSet<string>(staleIssues.Select(i => i.Key));
+        var skipped = issues.Count - staleIssues.Count;
+
+        if (skipped > 0)
+            _console.MarkupLine($"[dim]{skipped} issues unchanged, fetching details for {staleIssues.Count} updated issues...[/]");
+
+        // Fetch enriched data ONLY for stale issues
+        if (staleIssues.Count > 0)
+        {
+            await _console.Status()
+                .Spinner(Spinner.Known.Dots)
+                .StartAsync($"[cyan]Fetching details for {staleIssues.Count} issues...[/]", async ctx =>
                 {
-                    ctx.Status($"[cyan]Fetching {Markup.Escape(issue.Key)}...[/]");
-                    try
+                    foreach (var issue in staleIssues)
                     {
-                        var fullIssue = await _jiraService.GetIssueWithAllFieldsAsync(issue.Key);
-                        if (fullIssue != null)
-                            issue.RawFields = fullIssue.RawFields;
+                        ctx.Status($"[cyan]Fetching {Markup.Escape(issue.Key)}...[/]");
+                        try
+                        {
+                            var fullIssue = await _jiraService.GetIssueWithAllFieldsAsync(issue.Key);
+                            if (fullIssue != null)
+                                issue.RawFields = fullIssue.RawFields;
+                        }
+                        catch { /* skip */ }
+                        try { issue.Comments = await _jiraService.GetCommentsAsync(issue.Key); } catch { /* skip */ }
+                        try { issue.Worklogs = await _jiraService.GetWorklogsAsync(issue.Key); } catch { /* skip */ }
+                        try { issue.Attachments = await _jiraService.GetAttachmentsAsync(issue.Key); } catch { /* skip */ }
+                        try { issue.Changelog = await _jiraService.GetChangelogAsync(issue.Key); } catch { /* skip */ }
                     }
-                    catch { /* skip */ }
-                    try { issue.Comments = await _jiraService.GetCommentsAsync(issue.Key); } catch { /* skip */ }
-                    try { issue.Worklogs = await _jiraService.GetWorklogsAsync(issue.Key); } catch { /* skip */ }
-                    try { issue.Attachments = await _jiraService.GetAttachmentsAsync(issue.Key); } catch { /* skip */ }
-                    try { issue.Changelog = await _jiraService.GetChangelogAsync(issue.Key); } catch { /* skip */ }
-                }
-            });
+                });
+        }
 
         // Build a tree from selected issues preserving parent-child hierarchy
         var selectedSet = new HashSet<string>(issues.Select(i => i.Key));
@@ -789,39 +832,45 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         {
             var slug = Slugify(issue.Key, issue.Summary);
             var issueDir = Path.Combine(parentDir, slug);
-            Directory.CreateDirectory(issueDir);
 
-            // Write markdown
-            var mdPath = Path.Combine(issueDir, $"{issue.Key}.md");
-            var isUpdate = File.Exists(mdPath);
-            File.WriteAllText(mdPath, GenerateMarkdown(issue));
-            if (isUpdate) updated++; else created++;
+            var isStale = staleKeys.Contains(issue.Key);
 
-            // Write JSON dump
-            var jsonPath = Path.Combine(issueDir, $"{issue.Key}.json");
-            File.WriteAllText(jsonPath, JsonSerializer.Serialize(issue, jsonOptions));
-
-            // Download attachments
-            if (issue.Attachments.Count > 0)
+            if (isStale)
             {
-                var attachDir = Path.Combine(issueDir, "attachments");
-                Directory.CreateDirectory(attachDir);
-                foreach (var att in issue.Attachments)
+                Directory.CreateDirectory(issueDir);
+
+                // Write markdown
+                var mdPath = Path.Combine(issueDir, $"{issue.Key}.md");
+                var isUpdate = File.Exists(mdPath);
+                File.WriteAllText(mdPath, GenerateMarkdown(issue));
+                if (isUpdate) updated++; else created++;
+
+                // Write JSON dump
+                var jsonPath = Path.Combine(issueDir, $"{issue.Key}.json");
+                File.WriteAllText(jsonPath, JsonSerializer.Serialize(issue, jsonOptions));
+
+                // Download attachments
+                if (issue.Attachments.Count > 0)
                 {
-                    try
+                    var attachDir = Path.Combine(issueDir, "attachments");
+                    Directory.CreateDirectory(attachDir);
+                    foreach (var att in issue.Attachments)
                     {
-                        var attPath = Path.Combine(attachDir, att.Filename);
-                        if (!File.Exists(attPath))
+                        try
                         {
-                            var data = await _jiraService.DownloadAttachmentAsync(att.ContentUrl);
-                            await File.WriteAllBytesAsync(attPath, data);
+                            var attPath = Path.Combine(attachDir, att.Filename);
+                            if (!File.Exists(attPath))
+                            {
+                                var data = await _jiraService.DownloadAttachmentAsync(att.ContentUrl);
+                                await File.WriteAllBytesAsync(attPath, data);
+                            }
                         }
+                        catch { /* Skip failed downloads */ }
                     }
-                    catch { /* Skip failed downloads */ }
                 }
             }
 
-            // Export children into subdirectories
+            // Always recurse into children (they might be stale even if parent isn't)
             foreach (var child in issue.Children.Where(c => selectedSet.Contains(c.Key)))
             {
                 await ExportNode(child, issueDir);
