@@ -808,7 +808,16 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
                         {
                             var fullIssue = await _jiraService.GetIssueWithAllFieldsAsync(issue.Key);
                             if (fullIssue != null)
+                            {
                                 issue.RawFields = fullIssue.RawFields;
+                                issue.RawFieldNames = fullIssue.RawFieldNames;
+                                issue.IssueLinks = fullIssue.IssueLinks;
+                                // Prefer the full issue's parsed fields (fetched without field filter)
+                                if (!string.IsNullOrEmpty(fullIssue.Description))
+                                    issue.Description = fullIssue.Description;
+                                if (!string.IsNullOrEmpty(fullIssue.AcceptanceCriteria))
+                                    issue.AcceptanceCriteria = fullIssue.AcceptanceCriteria;
+                            }
                         }
                         catch { /* skip */ }
                         try { issue.Comments = await _jiraService.GetCommentsAsync(issue.Key); } catch { /* skip */ }

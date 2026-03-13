@@ -428,6 +428,10 @@ app.Configure(config =>
             runner.AddCommand<RunnerStopCommand>("stop")
                 .WithDescription("Gracefully stop the runner daemon")
                 .WithExample(new[] { "github", "runner", "stop" });
+
+            runner.AddCommand<RunnerPruneCommand>("prune")
+                .WithDescription("Remove duplicate registrations, keeping only the most recent per repo")
+                .WithExample(new[] { "github", "runner", "prune" });
         });
     });
 

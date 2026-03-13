@@ -93,6 +93,7 @@ public class JiraIssue
     public List<JiraAttachment> Attachments { get; set; } = new();
     public List<JiraChangelogEntry> Changelog { get; set; } = new();
     public Dictionary<string, JsonElement>? RawFields { get; set; }
+    public Dictionary<string, string>? RawFieldNames { get; set; }
     public List<JiraIssueLink> IssueLinks { get; set; } = new();
 }
 

@@ -150,4 +150,32 @@ public class RunnerConfigurationService : IRunnerConfigurationService
         var config = await LoadAsync();
         return config.Registrations.FirstOrDefault(r => r.Id == registrationId);
     }
+
+    public async Task<List<RunnerRegistration>> PruneRegistrationsAsync()
+    {
+        var config = await LoadAsync();
+        var removed = new List<RunnerRegistration>();
+
+        var groups = config.Registrations
+            .GroupBy(r => $"{r.Owner}/{r.Repository}".ToLowerInvariant());
+
+        foreach (var group in groups)
+        {
+            var duplicates = group.OrderByDescending(r => r.RegisteredAt).Skip(1).ToList();
+            removed.AddRange(duplicates);
+        }
+
+        if (removed.Count > 0)
+        {
+            foreach (var reg in removed)
+            {
+                config.Registrations.Remove(reg);
+            }
+            await SaveAsync(config);
+
+            _logger.LogInformation("Pruned {Count} duplicate registrations", removed.Count);
+        }
+
+        return removed;
+    }
 }

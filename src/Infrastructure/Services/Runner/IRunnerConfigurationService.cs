@@ -36,4 +36,10 @@ public interface IRunnerConfigurationService
     /// Gets a single registration by ID, or null if not found
     /// </summary>
     Task<RunnerRegistration?> GetRegistrationAsync(string registrationId);
+
+    /// <summary>
+    /// Removes duplicate registrations per owner/repository, keeping only the most recent.
+    /// Returns the list of removed registrations.
+    /// </summary>
+    Task<List<RunnerRegistration>> PruneRegistrationsAsync();
 }

@@ -153,6 +153,66 @@ public class JiraRawFieldsTests
         issue.RawFields.Should().BeNull();
     }
 
+    [Fact]
+    public async Task GetIssueWithAllFieldsAsync_ExtractsAcceptanceCriteria_FromStoredFieldId()
+    {
+        // Arrange: AC auto-discovery returns nothing, but config has a stored field ID
+        var issueJson = """
+            {
+              "id": "12345",
+              "key": "TEST-1",
+              "fields": {
+                "summary": "Test issue",
+                "status": { "name": "In Progress" },
+                "issuetype": { "name": "Story" },
+                "priority": { "name": "High" },
+                "assignee": { "displayName": "Alice" },
+                "project": { "key": "TEST" },
+                "description": "A test description",
+                "labels": [],
+                "components": [],
+                "created": "2026-01-10T09:00:00.000+0000",
+                "updated": "2026-01-15T10:00:00.000+0000",
+                "customfield_10064": "AC: User can login successfully",
+                "reporter": { "displayName": "Bob" },
+                "resolution": null
+              }
+            }
+            """;
+
+        var handler = new RoutingMockHttpHandler(new Dictionary<string, string>
+        {
+            { "/field", "[]" },
+            { "/issue/TEST-1", issueJson }
+        });
+        var httpClient = new HttpClient(handler);
+
+        var configMock = new Mock<IConfigurationService>();
+        configMock.Setup(c => c.GetAsync("jira:base_url")).ReturnsAsync("https://test.atlassian.net");
+        configMock.Setup(c => c.GetAsync("jira:email")).ReturnsAsync("test@example.com");
+        configMock.Setup(c => c.GetAsync("jira:api_token")).ReturnsAsync("test-token");
+        configMock.Setup(c => c.GetAsync("jira:auth_method")).ReturnsAsync("ApiToken");
+        configMock.Setup(c => c.GetAsync("jira:deployment_type")).ReturnsAsync("Cloud");
+        configMock.Setup(c => c.GetAsync("jira:cloud_id")).ReturnsAsync("");
+        configMock.Setup(c => c.GetAsync("jira:access_token")).ReturnsAsync("");
+        configMock.Setup(c => c.GetAsync("jira:refresh_token")).ReturnsAsync("");
+        configMock.Setup(c => c.GetAsync("jira:username")).ReturnsAsync("");
+        configMock.Setup(c => c.GetAsync("jira:created_at")).ReturnsAsync(DateTime.UtcNow.ToString("O"));
+        configMock.Setup(c => c.GetAsync("jira:last_refreshed_at")).ReturnsAsync(DateTime.UtcNow.ToString("O"));
+        configMock.Setup(c => c.GetAsync("jira:ac_field_id")).ReturnsAsync("customfield_10064");
+
+        var logger = new Mock<ILogger<JiraService>>();
+        var service = new JiraService(httpClient, configMock.Object, logger.Object);
+
+        // Act
+        var issue = await service.GetIssueWithAllFieldsAsync("TEST-1");
+
+        // Assert
+        issue.Should().NotBeNull();
+        issue!.Key.Should().Be("TEST-1");
+        issue.AcceptanceCriteria.Should().Be("AC: User can login successfully");
+    }
+
     // --- Helpers ---
 
     private static IConfigurationService CreateAuthenticatedConfigService()

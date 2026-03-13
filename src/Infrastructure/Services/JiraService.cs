@@ -34,6 +34,7 @@ public class JiraService : IJiraService
     /// <summary>Cached acceptance criteria custom field ID (e.g. "customfield_10035")</summary>
     private string? _acceptanceCriteriaFieldId;
     private bool _acFieldDiscovered;
+    private Dictionary<string, string>? _fieldNamesCache;
 
     /// <summary>
     /// When set, HTTP request/response details are written via this callback.
@@ -420,6 +421,61 @@ public class JiraService : IJiraService
             foreach (var prop in fieldsElement.EnumerateObject())
             {
                 issue.RawFields[prop.Name] = prop.Value.Clone();
+            }
+
+            // Include field name mapping so consumers can resolve customfield IDs
+            var nameMap = await GetFieldNamesAsync(credentials);
+            if (nameMap != null)
+                issue.RawFieldNames = nameMap;
+
+            // Fallback: if AC wasn't extracted (discovery missed the field name),
+            // try the stored config field ID, then scan RawFields using field metadata
+            if (string.IsNullOrEmpty(issue.AcceptanceCriteria))
+            {
+                // 1. Try stored config field ID
+                try
+                {
+                    var storedAcField = await _configurationService.GetAsync(KeyAcFieldId);
+                    if (!string.IsNullOrEmpty(storedAcField)
+                        && fieldsElement.TryGetProperty(storedAcField, out var acRaw))
+                    {
+                        issue.AcceptanceCriteria = ExtractFieldValue(acRaw);
+                    }
+                }
+                catch { /* best-effort */ }
+
+                // 2. If still null, try to resolve field names from metadata and match
+                if (string.IsNullOrEmpty(issue.AcceptanceCriteria))
+                {
+                    var fieldNames = await GetFieldNamesAsync(credentials);
+                    if (fieldNames != null)
+                    {
+                        foreach (var (fieldId, fieldName) in fieldNames)
+                        {
+                            if (!fieldId.StartsWith("customfield_")) continue;
+                            var nameLower = fieldName.ToLowerInvariant();
+                            // Match broader patterns including "checklist text"
+                            if (nameLower.Contains("acceptance criteria")
+                                || nameLower.Contains("acceptance criterion")
+                                || nameLower.Contains("definition of done")
+                                || nameLower.Contains("checklist text"))
+                            {
+                                if (fieldsElement.TryGetProperty(fieldId, out var acVal))
+                                {
+                                    var extracted = ExtractFieldValue(acVal);
+                                    if (!string.IsNullOrEmpty(extracted))
+                                    {
+                                        issue.AcceptanceCriteria = extracted;
+                                        // Persist for future use so search also picks it up
+                                        try { await _configurationService.SetAsync(KeyAcFieldId, fieldId, global: true); }
+                                        catch { /* best-effort */ }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -904,6 +960,35 @@ public class JiraService : IJiraService
     }
 
     /// <summary>
+    /// Returns a cached mapping of field ID → field name from the Jira /field endpoint.
+    /// </summary>
+    private async Task<Dictionary<string, string>?> GetFieldNamesAsync(JiraStoredCredentials credentials)
+    {
+        if (_fieldNamesCache != null) return _fieldNamesCache;
+        try
+        {
+            var apiBaseUrl = GetApiBaseUrl(credentials);
+            var request = new HttpRequestMessage(HttpMethod.Get, $"{apiBaseUrl}/field");
+            ApplyAuth(request, credentials);
+            var response = await SendWithDebugAsync(request);
+            if (!response.IsSuccessStatusCode) return null;
+
+            var content = await response.Content.ReadAsStringAsync();
+            var fields = JsonDocument.Parse(content).RootElement;
+            _fieldNamesCache = new Dictionary<string, string>();
+            foreach (var field in fields.EnumerateArray())
+            {
+                var id = field.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
+                var name = field.TryGetProperty("name", out var n) ? n.GetString() : null;
+                if (id != null && name != null)
+                    _fieldNamesCache[id] = name;
+            }
+            return _fieldNamesCache;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
     /// Sets the acceptance criteria custom field ID manually. Use when auto-discovery
     /// doesn't find the right field (e.g. field has a non-standard name).
     /// </summary>
@@ -1163,6 +1248,35 @@ public class JiraService : IJiraService
     /// Extracts plain text from Atlassian Document Format (ADF) JSON.
     /// ADF is used in Jira Cloud API v3 for rich text fields.
     /// </summary>
+    /// <summary>
+    /// Extracts a text value from a Jira field that may be a string, ADF object, or array.
+    /// </summary>
+    private static string? ExtractFieldValue(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Null)
+            return null;
+        if (element.ValueKind == JsonValueKind.String)
+            return element.GetString();
+        if (element.ValueKind == JsonValueKind.Object)
+            return ExtractTextFromAdf(element);
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            var parts = new List<string>();
+            foreach (var item in element.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.String)
+                    parts.Add(item.GetString() ?? "");
+                else if (item.ValueKind == JsonValueKind.Object)
+                {
+                    var text = ExtractTextFromAdf(item);
+                    if (text != null) parts.Add(text);
+                }
+            }
+            return parts.Count > 0 ? string.Join("\n", parts) : null;
+        }
+        return element.ToString();
+    }
+
     private static string? ExtractTextFromAdf(JsonElement adf)
     {
         try
