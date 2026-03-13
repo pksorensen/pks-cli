@@ -405,12 +405,12 @@ app.Configure(config =>
 
             runner.AddCommand<RunnerRegisterCommand>("register")
                 .WithDescription("Register a repository for devcontainer-based runner")
-                .WithExample(new[] { "github", "runner", "register", "--repo", "owner/repo" })
-                .WithExample(new[] { "github", "runner", "register", "--repo", "owner/repo", "--labels", "custom-label" });
+                .WithExample(new[] { "github", "runner", "register", "owner/repo" })
+                .WithExample(new[] { "github", "runner", "register", "owner/repo", "--labels", "custom-label" });
 
             runner.AddCommand<RunnerUnregisterCommand>("unregister")
                 .WithDescription("Unregister a repository from the runner")
-                .WithExample(new[] { "github", "runner", "unregister", "--repo", "owner/repo" });
+                .WithExample(new[] { "github", "runner", "unregister", "owner/repo" });
 
             runner.AddCommand<RunnerListCommand>("list")
                 .WithDescription("List registered repositories")
@@ -419,7 +419,7 @@ app.Configure(config =>
             runner.AddCommand<RunnerStartCommand>("start")
                 .WithDescription("Start the runner daemon to process workflow jobs")
                 .WithExample(new[] { "github", "runner", "start" })
-                .WithExample(new[] { "github", "runner", "start", "--repo", "owner/repo" });
+                .WithExample(new[] { "github", "runner", "start", "owner/repo" });
 
             runner.AddCommand<RunnerStatusCommand>("status")
                 .WithDescription("Show runner daemon status and active jobs")

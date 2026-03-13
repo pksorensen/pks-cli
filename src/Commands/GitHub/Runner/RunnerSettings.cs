@@ -5,7 +5,7 @@ namespace PKS.Commands.GitHub.Runner;
 
 public class RunnerSettings : GitHubSettings
 {
-    [CommandOption("-r|--repo <REPO>")]
+    [CommandArgument(0, "[REPO]")]
     [Description("Repository in owner/repo format")]
     public string? Repository { get; set; }
 }
