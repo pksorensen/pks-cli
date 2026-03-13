@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.1.0](https://github.com/pksorensen/pks-cli/compare/v6.0.0...v6.1.0) (2026-03-13)
+
+
+### Features
+
+* enhance Agentics runner with idle timeout and completion signal checks ([62ccfb0](https://github.com/pksorensen/pks-cli/commit/62ccfb0c850db9a449f32f0c6edf9c19fe098d3d))
+
 ## [6.0.0](https://github.com/pksorensen/pks-cli/compare/v5.0.0...v6.0.0) (2026-03-04)
 
 
