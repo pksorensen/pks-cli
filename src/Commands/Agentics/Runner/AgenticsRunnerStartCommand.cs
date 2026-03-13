@@ -341,7 +341,11 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             // Reset HOME to the real user home (runner overrides HOME for its own config isolation)
             // so that Claude Code finds its settings in ~/.claude/
             var realHome = await GetRealHomeDirectoryAsync(ct);
-            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} {vibecastBin}");
+            var appendPrompt = "When you have completed the assigned task, use the stop_broadcast MCP tool with a message summarizing what you accomplished and conclusion 'success'. If you encounter an unrecoverable error, call stop_broadcast with conclusion 'failure' and describe the issue.";
+            // Inherit VIBECAST_KEYBOARD_PIN from environment if set
+            var keyboardPin = Environment.GetEnvironmentVariable("VIBECAST_KEYBOARD_PIN");
+            var keyboardPinEnv = !string.IsNullOrEmpty(keyboardPin) ? $" VIBECAST_KEYBOARD_PIN={keyboardPin}" : "";
+            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id}{keyboardPinEnv} VIBECAST_APPEND_SYSTEM_PROMPT='{appendPrompt}' {vibecastBin}");
 
             var startProc = Process.Start(startPsi);
             if (startProc != null)
@@ -473,13 +477,22 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 await TmuxSendKeysAsync($"{streamingSession}:main.0", prompt, ct);
             }
 
-            // 14. Wait for job to complete (5 min timeout for now)
-            var jobTimeout = TimeSpan.FromMinutes(5);
-            _console.MarkupLine($"[cyan]Waiting up to {jobTimeout.TotalMinutes} minutes for job to complete...[/]");
+            // 14. Wait for job to complete with activity-based timeout
+            var idleTimeoutMs = (job.AgentDef?.IdleTimeoutMinutes ?? 2) * 60 * 1000;
+            var maxTimeout = TimeSpan.FromMinutes(job.AgentDef?.MaxTimeoutMinutes ?? 60);
+            _console.MarkupLine($"[cyan]Waiting up to {maxTimeout.TotalMinutes} minutes (idle threshold: {idleTimeoutMs / 60000} min)...[/]");
 
             var startTime = DateTime.UtcNow;
-            while (DateTime.UtcNow - startTime < jobTimeout)
+            while (DateTime.UtcNow - startTime < maxTimeout)
             {
+                // Check for task completion signal file
+                var completionSignal = Path.Combine(jobWorkTree, ".task-complete");
+                if (File.Exists(completionSignal))
+                {
+                    _console.MarkupLine("[green]Task completion signal detected![/]");
+                    break;
+                }
+
                 // Check if the streaming session still exists
                 if (streamingSession != null)
                 {
@@ -500,11 +513,37 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                     }
                 }
 
+                // Poll activity endpoint to detect idle agent
+                if (streamIdValue != null)
+                {
+                    try
+                    {
+                        var scheme = serverUri.Scheme;
+                        var activityUrl = $"{scheme}://{serverUri.Host}:{serverUri.Port}/api/lives/activity?streamId={streamIdValue}&idleThresholdMs={idleTimeoutMs}";
+                        var actResp = await client.GetAsync(activityUrl, ct);
+                        if (actResp.IsSuccessStatusCode)
+                        {
+                            var actData = JsonSerializer.Deserialize<JsonElement>(
+                                await actResp.Content.ReadAsStringAsync(ct), JsonOptions);
+                            if (actData.TryGetProperty("isActive", out var isActive) && !isActive.GetBoolean())
+                            {
+                                var idleSince = actData.TryGetProperty("idleSinceMs", out var idleMs) ? idleMs.GetInt64() / 1000 : 0;
+                                _console.MarkupLine($"[yellow]Agent idle for {idleSince}s, completing job.[/]");
+                                break;
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Activity check is best-effort; continue waiting
+                    }
+                }
+
                 if (ct.IsCancellationRequested) break;
-                await Task.Delay(5000, ct);
+                await Task.Delay(30_000, ct);
 
                 var elapsed = DateTime.UtcNow - startTime;
-                if ((int)elapsed.TotalSeconds % 60 == 0)
+                if ((int)elapsed.TotalSeconds % 60 < 30)
                     _console.MarkupLine($"[dim]{elapsed.Minutes}m elapsed...[/]");
             }
 
@@ -1046,5 +1085,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         public List<string> Labels { get; set; } = new();
         public string? TaskId { get; set; }
         public string? StageId { get; set; }
+        public int? IdleTimeoutMinutes { get; set; }
+        public int? MaxTimeoutMinutes { get; set; }
     }
 }
