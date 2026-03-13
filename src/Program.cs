@@ -565,7 +565,7 @@ static void DisplayWelcomeBanner()
     AnsiConsole.MarkupLine($"[cyan]Version {version}[/]");
     AnsiConsole.MarkupLine($"[dim].NET Runtime {runtimeVersion}[/]");
     AnsiConsole.WriteLine();
-    AnsiConsole.MarkupLine("[dim]Type 'pks --help' to get started with your agentic development journey![/]");
+    AnsiConsole.MarkupLine("[dim]Type 'dotnet dnx pks-cli -- --help' to get started with your agentic development journey![/]");
     AnsiConsole.WriteLine();
 }
 
