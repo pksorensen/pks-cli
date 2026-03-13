@@ -16,16 +16,16 @@ public class RunnerContainerService : IRunnerContainerService
     private const string RunnerInstallPath = "/tmp/actions-runner";
 
     private readonly IProcessRunner _processRunner;
+    private readonly ICoolifyLookupService _coolifyLookup;
     private readonly ILogger<RunnerContainerService> _logger;
 
-    /// <summary>
-    /// Initializes a new instance of the <see cref="RunnerContainerService"/> class
-    /// </summary>
-    /// <param name="processRunner">Abstraction for running external processes</param>
-    /// <param name="logger">Logger for diagnostic output</param>
-    public RunnerContainerService(IProcessRunner processRunner, ILogger<RunnerContainerService> logger)
+    public RunnerContainerService(
+        IProcessRunner processRunner,
+        ICoolifyLookupService coolifyLookup,
+        ILogger<RunnerContainerService> logger)
     {
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
+        _coolifyLookup = coolifyLookup ?? throw new ArgumentNullException(nameof(coolifyLookup));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -163,6 +163,27 @@ public class RunnerContainerService : IRunnerContainerService
                 baseArgs += $" --mount type=bind,source={credentialSocketPath},target=/var/run/pks-creds";
                 baseArgs += " --remote-env GIT_ASKPASS=/tmp/git-askpass.sh";
                 _logger.LogInformation("Credential socket dir mounted: {SocketDir} -> /var/run/pks-creds, GIT_ASKPASS=/tmp/git-askpass.sh", credentialSocketPath);
+            }
+
+            // Auto-inject Coolify env vars if a matching application is found
+            try
+            {
+                var coolifyApp = await _coolifyLookup.FindAppAsync(registration.Owner, registration.Repository, branch);
+                if (coolifyApp != null)
+                {
+                    baseArgs += $" --remote-env COOLIFY_WEBHOOK={coolifyApp.WebhookUrl}";
+                    baseArgs += $" --remote-env COOLIFY_TOKEN={coolifyApp.Token}";
+                    baseArgs += $" --remote-env COOLIFY_APP_FQDN={coolifyApp.Fqdn}";
+                    onProgress?.Invoke($"Coolify env injected for {coolifyApp.Name} ({coolifyApp.Fqdn})");
+                    _logger.LogInformation("Injected Coolify env vars for app {AppName} (uuid={Uuid}, fqdn={Fqdn})",
+                        coolifyApp.Name, coolifyApp.Uuid, coolifyApp.Fqdn);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Coolify lookup failed for {Owner}/{Repo}@{Branch} — skipping env injection",
+                    registration.Owner, registration.Repository, branch);
+                onProgress?.Invoke($"Warning: Coolify lookup failed: {ex.Message}");
             }
 
             var devcontainerArgs = containerName != null
