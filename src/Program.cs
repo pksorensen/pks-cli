@@ -203,6 +203,8 @@ services.AddSingleton<IGitHubIssuesService, GitHubIssuesService>();
 services.AddSingleton<EnhancedGitHubService>();
 
 // Register GitHub Runner services
+services.AddSingleton<ICoolifyConfigurationService, CoolifyConfigurationService>();
+services.AddSingleton<ICoolifyLookupService, CoolifyLookupService>();
 services.AddSingleton<IRunnerConfigurationService, RunnerConfigurationService>();
 services.AddSingleton<IAgenticsRunnerConfigurationService, AgenticsRunnerConfigurationService>();
 services.AddSingleton<IGitHubActionsService, GitHubActionsService>();
@@ -433,6 +435,20 @@ app.Configure(config =>
                 .WithDescription("Remove duplicate registrations, keeping only the most recent per repo")
                 .WithExample(new[] { "github", "runner", "prune" });
         });
+    });
+
+    // Add coolify branch command
+    config.AddBranch<PKS.Commands.Coolify.CoolifySettings>("coolify", coolify =>
+    {
+        coolify.SetDescription("Manage Coolify deployment integration");
+
+        coolify.AddCommand<PKS.Commands.Coolify.CoolifyRegisterCommand>("register")
+            .WithDescription("Register a Coolify instance for auto-deployment")
+            .WithExample(new[] { "coolify", "register", "https://projects.si14agents.com" });
+
+        coolify.AddCommand<PKS.Commands.Coolify.CoolifyListCommand>("list")
+            .WithDescription("List registered Coolify instances")
+            .WithExample(new[] { "coolify", "list" });
     });
 
     // Add Azure DevOps branch command
