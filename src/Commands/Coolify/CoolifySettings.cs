@@ -12,4 +12,8 @@ public class CoolifySettings : CommandSettings
     [CommandOption("-v|--verbose")]
     [Description("Show verbose output")]
     public bool Verbose { get; set; }
+
+    [CommandOption("--debug")]
+    [Description("Dump raw API responses for debugging")]
+    public bool Debug { get; set; }
 }

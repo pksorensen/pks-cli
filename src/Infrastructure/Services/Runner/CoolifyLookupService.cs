@@ -18,25 +18,30 @@ public interface ICoolifyLookupService
 {
     /// <summary>
     /// Find the Coolify application matching a GitHub repository and branch.
+    /// When <paramref name="environment"/> is provided, prefer applications whose
+    /// Coolify environment name matches the GitHub environment name.
     /// Returns null if no match found, throws if multiple matches found.
     /// </summary>
-    Task<CoolifyAppMatch?> FindAppAsync(string owner, string repo, string branch);
+    Task<CoolifyAppMatch?> FindAppAsync(string owner, string repo, string branch, string? environment = null);
 }
 
 public class CoolifyLookupService : ICoolifyLookupService
 {
     private readonly ICoolifyConfigurationService _configService;
+    private readonly ICoolifyApiService _apiService;
     private readonly ILogger<CoolifyLookupService> _logger;
 
     public CoolifyLookupService(
         ICoolifyConfigurationService configService,
+        ICoolifyApiService apiService,
         ILogger<CoolifyLookupService> logger)
     {
         _configService = configService;
+        _apiService = apiService;
         _logger = logger;
     }
 
-    public async Task<CoolifyAppMatch?> FindAppAsync(string owner, string repo, string branch)
+    public async Task<CoolifyAppMatch?> FindAppAsync(string owner, string repo, string branch, string? environment = null)
     {
         var instances = await _configService.ListInstancesAsync();
         if (!instances.Any())
@@ -46,48 +51,21 @@ public class CoolifyLookupService : ICoolifyLookupService
         }
 
         var fullRepo = $"{owner}/{repo}";
-        var matches = new List<CoolifyAppMatch>();
+        var matches = new List<(CoolifyAppMatch Match, string? EnvironmentName)>();
 
         foreach (var instance in instances)
         {
             try
             {
-                var apps = await FetchApplicationsAsync(instance);
-
-                foreach (var app in apps)
+                if (!string.IsNullOrEmpty(environment))
                 {
-                    var gitRepo = app.GetProperty("git_repository").GetString() ?? "";
-                    var gitBranch = app.GetProperty("git_branch").GetString() ?? "";
-                    var uuid = app.GetProperty("uuid").GetString() ?? "";
-
-                    // Match by repo (could be full URL or owner/repo format)
-                    var repoMatch = gitRepo.Contains(fullRepo, StringComparison.OrdinalIgnoreCase);
-                    var branchMatch = string.Equals(gitBranch, branch, StringComparison.OrdinalIgnoreCase);
-
-                    if (repoMatch && branchMatch)
-                    {
-                        var fqdn = "";
-                        if (app.TryGetProperty("fqdn", out var fqdnProp))
-                            fqdn = fqdnProp.GetString() ?? "";
-
-                        var name = "";
-                        if (app.TryGetProperty("name", out var nameProp))
-                            name = nameProp.GetString() ?? "";
-
-                        matches.Add(new CoolifyAppMatch
-                        {
-                            Uuid = uuid,
-                            Name = name,
-                            Fqdn = fqdn,
-                            WebhookUrl = $"{instance.Url}/api/v1/deploy?uuid={uuid}&force=false",
-                            InstanceUrl = instance.Url,
-                            Token = instance.Token
-                        });
-
-                        _logger.LogInformation(
-                            "Coolify match: {Name} (uuid={Uuid}) on {Instance} fqdn={Fqdn}",
-                            name, uuid, instance.Url, fqdn);
-                    }
+                    // Environment-aware lookup: use projects API to find apps within matching environments
+                    await FindAppsViaProjectsAsync(instance, fullRepo, branch, environment, matches);
+                }
+                else
+                {
+                    // No environment specified: use flat applications list (original behavior)
+                    await FindAppsViaFlatListAsync(instance, fullRepo, branch, matches);
                 }
             }
             catch (Exception ex)
@@ -98,8 +76,38 @@ public class CoolifyLookupService : ICoolifyLookupService
 
         if (matches.Count == 0)
         {
-            _logger.LogDebug("No Coolify app found for {Repo}@{Branch}", fullRepo, branch);
+            _logger.LogDebug("No Coolify app found for {Repo}@{Branch} (environment={Environment})",
+                fullRepo, branch, environment ?? "(any)");
             return null;
+        }
+
+        // When environment is provided and we have multiple matches, prefer the environment-matched one
+        if (matches.Count > 1 && !string.IsNullOrEmpty(environment))
+        {
+            var envMatches = matches
+                .Where(m => string.Equals(m.EnvironmentName, environment, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (envMatches.Count == 1)
+            {
+                _logger.LogInformation(
+                    "Resolved ambiguity: selected app {Name} in environment '{Env}' (out of {Total} matches)",
+                    envMatches[0].Match.Name, environment, matches.Count);
+                return envMatches[0].Match;
+            }
+
+            if (envMatches.Count > 1)
+            {
+                _logger.LogError(
+                    "Multiple Coolify apps match {Repo}@{Branch} in environment '{Env}': {Apps}",
+                    fullRepo, branch, environment,
+                    string.Join(", ", envMatches.Select(m => $"{m.Match.Name} ({m.Match.Uuid})")));
+                throw new InvalidOperationException(
+                    $"Ambiguous: {envMatches.Count} Coolify apps match {fullRepo}@{branch} in environment '{environment}'. " +
+                    "Ensure only one application points at this repository and branch per environment.");
+            }
+
+            // No exact environment match found among multiple matches — fall through to original error
         }
 
         if (matches.Count > 1)
@@ -107,13 +115,146 @@ public class CoolifyLookupService : ICoolifyLookupService
             _logger.LogError(
                 "Multiple Coolify apps match {Repo}@{Branch}: {Apps}",
                 fullRepo, branch,
-                string.Join(", ", matches.Select(m => $"{m.Name} ({m.Uuid})")));
+                string.Join(", ", matches.Select(m => $"{m.Match.Name} ({m.Match.Uuid})")));
             throw new InvalidOperationException(
                 $"Ambiguous: {matches.Count} Coolify apps match {fullRepo}@{branch}. " +
                 "Ensure only one application points at this repository and branch.");
         }
 
-        return matches[0];
+        return matches[0].Match;
+    }
+
+    /// <summary>
+    /// Environment-aware lookup using the projects API to resolve applications within
+    /// Coolify environments that match the GitHub environment name.
+    /// </summary>
+    private async Task FindAppsViaProjectsAsync(
+        CoolifyInstance instance,
+        string fullRepo,
+        string branch,
+        string environment,
+        List<(CoolifyAppMatch Match, string? EnvironmentName)> matches)
+    {
+        var projects = await _apiService.GetProjectsWithResourcesAsync(instance);
+
+        // Also fetch the flat applications list to get git_repository/git_branch details
+        // since the projects API resources don't include git info
+        var apps = await FetchApplicationsAsync(instance);
+        var appsByUuid = new Dictionary<string, JsonElement>();
+        foreach (var app in apps)
+        {
+            var uuid = app.GetProperty("uuid").GetString() ?? "";
+            if (!string.IsNullOrEmpty(uuid))
+                appsByUuid[uuid] = app;
+        }
+
+        // Now walk projects -> environments -> applications to find matches with environment context
+        foreach (var project in projects)
+        {
+            try
+            {
+                // Fetch project detail to get environments with their resources
+                var rawJson = await _apiService.GetRawProjectsJsonAsync(instance, project.Uuid);
+                var doc = JsonDocument.Parse(rawJson);
+
+                if (doc.RootElement.TryGetProperty("environments", out var envsProp) &&
+                    envsProp.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var env in envsProp.EnumerateArray())
+                    {
+                        var envName = env.TryGetProperty("name", out var envNameProp)
+                            ? envNameProp.GetString() ?? "" : "";
+
+                        // Extract application UUIDs from this environment
+                        if (!env.TryGetProperty("applications", out var envApps) ||
+                            envApps.ValueKind != JsonValueKind.Array)
+                            continue;
+
+                        foreach (var envApp in envApps.EnumerateArray())
+                        {
+                            var appUuid = envApp.TryGetProperty("uuid", out var uuidProp)
+                                ? uuidProp.GetString() ?? "" : "";
+
+                            if (string.IsNullOrEmpty(appUuid) || !appsByUuid.TryGetValue(appUuid, out var fullApp))
+                                continue;
+
+                            var gitRepo = fullApp.GetProperty("git_repository").GetString() ?? "";
+                            var gitBranch = fullApp.GetProperty("git_branch").GetString() ?? "";
+
+                            var repoMatch = gitRepo.Contains(fullRepo, StringComparison.OrdinalIgnoreCase);
+                            var branchMatch = string.Equals(gitBranch, branch, StringComparison.OrdinalIgnoreCase);
+
+                            if (repoMatch && branchMatch)
+                            {
+                                var match = BuildAppMatch(fullApp, instance, appUuid);
+                                matches.Add((match, envName));
+
+                                _logger.LogInformation(
+                                    "Coolify match: {Name} (uuid={Uuid}) in environment '{Env}' on {Instance} fqdn={Fqdn}",
+                                    match.Name, match.Uuid, envName, instance.Url, match.Fqdn);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to fetch environments for project {Uuid}", project.Uuid);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Original flat lookup using GET /api/v1/applications (no environment context).
+    /// </summary>
+    private async Task FindAppsViaFlatListAsync(
+        CoolifyInstance instance,
+        string fullRepo,
+        string branch,
+        List<(CoolifyAppMatch Match, string? EnvironmentName)> matches)
+    {
+        var apps = await FetchApplicationsAsync(instance);
+
+        foreach (var app in apps)
+        {
+            var gitRepo = app.GetProperty("git_repository").GetString() ?? "";
+            var gitBranch = app.GetProperty("git_branch").GetString() ?? "";
+            var uuid = app.GetProperty("uuid").GetString() ?? "";
+
+            var repoMatch = gitRepo.Contains(fullRepo, StringComparison.OrdinalIgnoreCase);
+            var branchMatch = string.Equals(gitBranch, branch, StringComparison.OrdinalIgnoreCase);
+
+            if (repoMatch && branchMatch)
+            {
+                var match = BuildAppMatch(app, instance, uuid);
+                matches.Add((match, null));
+
+                _logger.LogInformation(
+                    "Coolify match: {Name} (uuid={Uuid}) on {Instance} fqdn={Fqdn}",
+                    match.Name, match.Uuid, instance.Url, match.Fqdn);
+            }
+        }
+    }
+
+    private static CoolifyAppMatch BuildAppMatch(JsonElement app, CoolifyInstance instance, string uuid)
+    {
+        var fqdn = "";
+        if (app.TryGetProperty("fqdn", out var fqdnProp))
+            fqdn = fqdnProp.GetString() ?? "";
+
+        var name = "";
+        if (app.TryGetProperty("name", out var nameProp))
+            name = nameProp.GetString() ?? "";
+
+        return new CoolifyAppMatch
+        {
+            Uuid = uuid,
+            Name = name,
+            Fqdn = fqdn,
+            WebhookUrl = $"{instance.Url}/api/v1/deploy?uuid={uuid}&force=false",
+            InstanceUrl = instance.Url,
+            Token = instance.Token
+        };
     }
 
     private async Task<List<JsonElement>> FetchApplicationsAsync(CoolifyInstance instance)

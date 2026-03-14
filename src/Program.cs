@@ -205,6 +205,7 @@ services.AddSingleton<EnhancedGitHubService>();
 // Register GitHub Runner services
 services.AddSingleton<ICoolifyConfigurationService, CoolifyConfigurationService>();
 services.AddSingleton<ICoolifyLookupService, CoolifyLookupService>();
+services.AddSingleton<ICoolifyApiService, CoolifyApiService>();
 services.AddSingleton<IRunnerConfigurationService, RunnerConfigurationService>();
 services.AddSingleton<IAgenticsRunnerConfigurationService, AgenticsRunnerConfigurationService>();
 services.AddSingleton<IGitHubActionsService, GitHubActionsService>();
@@ -449,6 +450,10 @@ app.Configure(config =>
         coolify.AddCommand<PKS.Commands.Coolify.CoolifyListCommand>("list")
             .WithDescription("List registered Coolify instances")
             .WithExample(new[] { "coolify", "list" });
+
+        coolify.AddCommand<PKS.Commands.Coolify.CoolifyStatusCommand>("status")
+            .WithDescription("Test connectivity and show projects with resource health status")
+            .WithExample(new[] { "coolify", "status" });
     });
 
     // Add Azure DevOps branch command

@@ -156,6 +156,7 @@ public class WorkflowJob
     public string Status { get; set; } = string.Empty;
     public string? Conclusion { get; set; }
     public List<string> Labels { get; set; } = new();
+    public string? Environment { get; set; }
     public string HtmlUrl { get; set; } = string.Empty;
     public DateTime? StartedAt { get; set; }
 }
