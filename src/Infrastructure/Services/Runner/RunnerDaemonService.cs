@@ -507,7 +507,8 @@ public class RunnerDaemonService : IRunnerDaemonService
                     accessToken, encodedJitConfig,
                     progress => OnStatusChanged($"Run {run.Id}: {progress}"),
                     cancellationToken,
-                    credentialSocketPath: _credentialSocketPath);
+                    credentialSocketPath: _credentialSocketPath,
+                    environment: job.Environment);
             }
 
             jobState.Status = result.Status;
@@ -600,7 +601,8 @@ public class RunnerDaemonService : IRunnerDaemonService
             progress => OnStatusChanged($"Run {run.Id}: {progress}"),
             cancellationToken,
             containerName: containerName,
-            credentialSocketPath: _credentialSocketPath);
+            credentialSocketPath: _credentialSocketPath,
+            environment: job.Environment);
 
         // Register in pool (labels were already set via --id-label during devcontainer up)
         if (!string.IsNullOrEmpty(result.ContainerId))

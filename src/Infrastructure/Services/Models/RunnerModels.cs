@@ -158,6 +158,10 @@ public class WorkflowJob
     public List<string> Labels { get; set; } = new();
     public string HtmlUrl { get; set; } = string.Empty;
     public DateTime? StartedAt { get; set; }
+    /// <summary>
+    /// GitHub Actions environment name (e.g. "staging", "production") if the job uses one.
+    /// </summary>
+    public string? Environment { get; set; }
 }
 
 /// <summary>

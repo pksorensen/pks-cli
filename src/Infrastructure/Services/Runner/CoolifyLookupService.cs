@@ -9,6 +9,7 @@ public class CoolifyAppMatch
     public string Uuid { get; set; } = "";
     public string Name { get; set; } = "";
     public string Fqdn { get; set; } = "";
+    public string EnvironmentName { get; set; } = "";
     public string WebhookUrl { get; set; } = "";
     public string InstanceUrl { get; set; } = "";
     public string Token { get; set; } = "";
@@ -18,9 +19,10 @@ public interface ICoolifyLookupService
 {
     /// <summary>
     /// Find the Coolify application matching a GitHub repository and branch.
+    /// When environment is specified, filters by Coolify environment name.
     /// Returns null if no match found, throws if multiple matches found.
     /// </summary>
-    Task<CoolifyAppMatch?> FindAppAsync(string owner, string repo, string branch);
+    Task<CoolifyAppMatch?> FindAppAsync(string owner, string repo, string branch, string? environment = null);
 }
 
 public class CoolifyLookupService : ICoolifyLookupService
@@ -36,7 +38,7 @@ public class CoolifyLookupService : ICoolifyLookupService
         _logger = logger;
     }
 
-    public async Task<CoolifyAppMatch?> FindAppAsync(string owner, string repo, string branch)
+    public async Task<CoolifyAppMatch?> FindAppAsync(string owner, string repo, string branch, string? environment = null)
     {
         var instances = await _configService.ListInstancesAsync();
         if (!instances.Any())
@@ -74,25 +76,52 @@ public class CoolifyLookupService : ICoolifyLookupService
                         if (app.TryGetProperty("name", out var nameProp))
                             name = nameProp.GetString() ?? "";
 
+                        // Extract Coolify environment name from the nested environment object
+                        var envName = "";
+                        if (app.TryGetProperty("environment", out var envProp) && envProp.ValueKind == JsonValueKind.Object)
+                        {
+                            if (envProp.TryGetProperty("name", out var envNameProp))
+                                envName = envNameProp.GetString() ?? "";
+                        }
+
                         matches.Add(new CoolifyAppMatch
                         {
                             Uuid = uuid,
                             Name = name,
                             Fqdn = fqdn,
+                            EnvironmentName = envName,
                             WebhookUrl = $"{instance.Url}/api/v1/deploy?uuid={uuid}&force=false",
                             InstanceUrl = instance.Url,
                             Token = instance.Token
                         });
 
                         _logger.LogInformation(
-                            "Coolify match: {Name} (uuid={Uuid}) on {Instance} fqdn={Fqdn}",
-                            name, uuid, instance.Url, fqdn);
+                            "Coolify match: {Name} (uuid={Uuid}) on {Instance} fqdn={Fqdn} env={Env}",
+                            name, uuid, instance.Url, fqdn, envName);
                     }
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to query Coolify instance {Url}", instance.Url);
+            }
+        }
+
+        // Filter by environment if specified
+        if (!string.IsNullOrEmpty(environment) && matches.Count > 1)
+        {
+            var envFiltered = matches.Where(m =>
+                string.Equals(m.EnvironmentName, environment, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (envFiltered.Count > 0)
+            {
+                _logger.LogInformation("Filtered {Total} matches to {Filtered} by environment '{Env}'",
+                    matches.Count, envFiltered.Count, environment);
+                matches = envFiltered;
+            }
+            else
+            {
+                _logger.LogWarning("No matches for environment '{Env}', falling back to all {Count} matches",
+                    environment, matches.Count);
             }
         }
 
@@ -107,10 +136,10 @@ public class CoolifyLookupService : ICoolifyLookupService
             _logger.LogError(
                 "Multiple Coolify apps match {Repo}@{Branch}: {Apps}",
                 fullRepo, branch,
-                string.Join(", ", matches.Select(m => $"{m.Name} ({m.Uuid})")));
+                string.Join(", ", matches.Select(m => $"{m.Name} ({m.Uuid}) env={m.EnvironmentName}")));
             throw new InvalidOperationException(
                 $"Ambiguous: {matches.Count} Coolify apps match {fullRepo}@{branch}. " +
-                "Ensure only one application points at this repository and branch.");
+                "Ensure only one application points at this repository and branch, or use GitHub Actions environments to disambiguate.");
         }
 
         return matches[0];

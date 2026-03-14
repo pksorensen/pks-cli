@@ -96,8 +96,9 @@ public class RunnerContainerService : IRunnerContainerService
         string encodedJitConfig,
         Action<string>? onProgress = null,
         CancellationToken cancellationToken = default,
-        string? credentialSocketPath = null)
-        => ExecuteJobAsync(registration, runId, branch, accessToken, encodedJitConfig, onProgress, cancellationToken, containerName: null, credentialSocketPath: credentialSocketPath);
+        string? credentialSocketPath = null,
+        string? environment = null)
+        => ExecuteJobAsync(registration, runId, branch, accessToken, encodedJitConfig, onProgress, cancellationToken, containerName: null, credentialSocketPath: credentialSocketPath, environment: environment);
 
     /// <summary>
     /// Execute a full job lifecycle with optional container name for reuse.
@@ -112,7 +113,8 @@ public class RunnerContainerService : IRunnerContainerService
         Action<string>? onProgress,
         CancellationToken cancellationToken,
         string? containerName,
-        string? credentialSocketPath = null)
+        string? credentialSocketPath = null,
+        string? environment = null)
     {
         var job = new RunnerJobState
         {
@@ -168,15 +170,16 @@ public class RunnerContainerService : IRunnerContainerService
             // Auto-inject Coolify env vars if a matching application is found
             try
             {
-                var coolifyApp = await _coolifyLookup.FindAppAsync(registration.Owner, registration.Repository, branch);
+                var coolifyApp = await _coolifyLookup.FindAppAsync(registration.Owner, registration.Repository, branch, environment);
                 if (coolifyApp != null)
                 {
                     baseArgs += $" --remote-env COOLIFY_WEBHOOK={coolifyApp.WebhookUrl}";
                     baseArgs += $" --remote-env COOLIFY_TOKEN={coolifyApp.Token}";
                     baseArgs += $" --remote-env COOLIFY_APP_FQDN={coolifyApp.Fqdn}";
-                    onProgress?.Invoke($"Coolify env injected for {coolifyApp.Name} ({coolifyApp.Fqdn})");
-                    _logger.LogInformation("Injected Coolify env vars for app {AppName} (uuid={Uuid}, fqdn={Fqdn})",
-                        coolifyApp.Name, coolifyApp.Uuid, coolifyApp.Fqdn);
+                    var envLabel = !string.IsNullOrEmpty(coolifyApp.EnvironmentName) ? $" environment={coolifyApp.EnvironmentName}" : "";
+                    onProgress?.Invoke($"Coolify env injected for {coolifyApp.Name} ({coolifyApp.Fqdn}){envLabel}");
+                    _logger.LogInformation("Injected Coolify env vars for app {AppName} (uuid={Uuid}, fqdn={Fqdn}, env={Env})",
+                        coolifyApp.Name, coolifyApp.Uuid, coolifyApp.Fqdn, coolifyApp.EnvironmentName);
                 }
             }
             catch (Exception ex)
