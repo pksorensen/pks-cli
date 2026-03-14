@@ -37,15 +37,8 @@ public class CoolifyTokenStore : ICoolifyTokenStore
         if (!_store.TryGetValue(jobId, out var list) || list.Count == 0)
             return null;
 
-        var match = list.FirstOrDefault(a => string.Equals(a.EnvironmentName, environment, StringComparison.OrdinalIgnoreCase));
-        if (match != null)
-            return match;
-
-        var production = list.FirstOrDefault(a => string.Equals(a.EnvironmentName, "production", StringComparison.OrdinalIgnoreCase));
-        if (production != null)
-            return production;
-
-        return list[0];
+        // Strict match only — no fallback to prevent accidental deployments to wrong environment
+        return list.FirstOrDefault(a => string.Equals(a.EnvironmentName, environment, StringComparison.OrdinalIgnoreCase));
     }
 
     public CoolifyAppMatch? GetByAppUuid(string appUuid)

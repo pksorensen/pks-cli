@@ -167,15 +167,60 @@ public class CoolifyLookupService : ICoolifyLookupService
             return new List<CoolifyAppMatch>();
 
         var fullRepo = $"{owner}/{repo}";
-        var matches = new List<(CoolifyAppMatch Match, string? EnvironmentName)>();
+        var result = new List<CoolifyAppMatch>();
 
         foreach (var instance in instances)
         {
             try
             {
-                await FindAppsViaProjectsAsync(instance, fullRepo, branch, null, matches);
-                if (matches.Count == 0)
-                    await FindAppsViaFlatListAsync(instance, fullRepo, branch, matches);
+                // Step 1: Find all matching apps via flat list (reliable, always has git info)
+                var apps = await FetchApplicationsAsync(instance);
+                var matchedApps = new List<CoolifyAppMatch>();
+
+                foreach (var app in apps)
+                {
+                    var gitRepo = app.GetProperty("git_repository").GetString() ?? "";
+                    var gitBranch = app.GetProperty("git_branch").GetString() ?? "";
+                    var uuid = app.GetProperty("uuid").GetString() ?? "";
+
+                    if (gitRepo.Contains(fullRepo, StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(gitBranch, branch, StringComparison.OrdinalIgnoreCase))
+                    {
+                        matchedApps.Add(BuildAppMatch(app, instance, uuid));
+                    }
+                }
+
+                if (matchedApps.Count == 0)
+                    continue;
+
+                // Step 2: Map environment_id → environment name
+                // The flat API has environment_id but not the name; the projects API has the names
+                var envIdToName = await BuildEnvironmentIdMapAsync(instance);
+
+                var appsByUuid = new Dictionary<string, JsonElement>();
+                foreach (var app in apps)
+                {
+                    var uuid = app.GetProperty("uuid").GetString() ?? "";
+                    if (!string.IsNullOrEmpty(uuid))
+                        appsByUuid[uuid] = app;
+                }
+
+                foreach (var match in matchedApps)
+                {
+                    if (appsByUuid.TryGetValue(match.Uuid, out var appJson) &&
+                        appJson.TryGetProperty("environment_id", out var envIdProp) &&
+                        envIdProp.TryGetInt32(out var envId) &&
+                        envIdToName.TryGetValue(envId, out var envName))
+                    {
+                        match.EnvironmentName = envName;
+                    }
+
+                    _logger.LogInformation(
+                        "Coolify match: {Name} (uuid={Uuid}, env={Env}) on {Instance} fqdn={Fqdn}",
+                        match.Name, match.Uuid, match.EnvironmentName, instance.Url, match.Fqdn);
+                }
+
+                result.AddRange(matchedApps);
             }
             catch (Exception ex)
             {
@@ -183,13 +228,59 @@ public class CoolifyLookupService : ICoolifyLookupService
             }
         }
 
-        // Set EnvironmentName on each match
-        foreach (var (match, envName) in matches)
+        return result;
+    }
+
+    /// <summary>
+    /// Builds a map of environment ID → environment name by walking all projects.
+    /// The flat /api/v1/applications response has environment_id but not the name.
+    /// </summary>
+    private async Task<Dictionary<int, string>> BuildEnvironmentIdMapAsync(CoolifyInstance instance)
+    {
+        var map = new Dictionary<int, string>();
+
+        try
         {
-            match.EnvironmentName = envName ?? "";
+            var projects = await _apiService.GetProjectsWithResourcesAsync(instance);
+
+            foreach (var project in projects)
+            {
+                try
+                {
+                    var rawJson = await _apiService.GetRawProjectsJsonAsync(instance, project.Uuid);
+                    var doc = JsonDocument.Parse(rawJson);
+
+                    if (!doc.RootElement.TryGetProperty("environments", out var envsProp) ||
+                        envsProp.ValueKind != JsonValueKind.Array)
+                        continue;
+
+                    foreach (var env in envsProp.EnumerateArray())
+                    {
+                        var envName = env.TryGetProperty("name", out var envNameProp)
+                            ? envNameProp.GetString() ?? "" : "";
+                        var envId = env.TryGetProperty("id", out var envIdProp) && envIdProp.TryGetInt32(out var id)
+                            ? id : -1;
+
+                        if (envId >= 0 && !string.IsNullOrEmpty(envName))
+                        {
+                            map[envId] = envName;
+                            _logger.LogInformation("Environment map: id={Id} → {Name} (project={Project})",
+                                envId, envName, project.Name);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to fetch environments for project {Uuid}", project.Uuid);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to build environment name map from projects API");
         }
 
-        return matches.Select(m => m.Match).ToList();
+        return map;
     }
 
     /// <summary>

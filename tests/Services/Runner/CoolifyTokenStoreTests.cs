@@ -163,7 +163,7 @@ public class CoolifyTokenStoreTests
     }
 
     [Fact]
-    public void GetByJobIdAndEnvironment_FallsBackToProduction()
+    public void GetByJobIdAndEnvironment_UnknownEnvironment_ReturnsNull()
     {
         // Arrange
         var sut = new CoolifyTokenStore();
@@ -177,31 +177,27 @@ public class CoolifyTokenStoreTests
         // Act — request an environment that doesn't exist
         var result = sut.GetByJobIdAndEnvironment("job-1", "preview");
 
-        // Assert — falls back to production
-        result.Should().NotBeNull();
-        result!.Uuid.Should().Be("uuid-prod");
-        result.EnvironmentName.Should().Be("production");
+        // Assert — strict match, no fallback to prevent accidental deployments
+        result.Should().BeNull();
     }
 
     [Fact]
-    public void GetByJobIdAndEnvironment_FallsBackToFirst_WhenNoProductionMatch()
+    public void GetByJobIdAndEnvironment_CaseInsensitive()
     {
         // Arrange
         var sut = new CoolifyTokenStore();
         var apps = new[]
         {
-            CreateAppMatch(uuid: "uuid-stg", name: "app", environment: "staging"),
-            CreateAppMatch(uuid: "uuid-dev", name: "app", environment: "development")
+            CreateAppMatch(uuid: "uuid-stg", name: "app", environment: "Staging")
         };
         sut.RegisterAll("job-1", apps);
 
-        // Act — request an environment that doesn't exist, and no production entry
-        var result = sut.GetByJobIdAndEnvironment("job-1", "preview");
+        // Act
+        var result = sut.GetByJobIdAndEnvironment("job-1", "staging");
 
-        // Assert — falls back to first entry
+        // Assert
         result.Should().NotBeNull();
         result!.Uuid.Should().Be("uuid-stg");
-        result.EnvironmentName.Should().Be("staging");
     }
 
     [Fact]

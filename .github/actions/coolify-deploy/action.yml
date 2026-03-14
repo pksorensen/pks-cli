@@ -71,22 +71,38 @@ runs:
           echo "environment=$ENV" >> "$GITHUB_OUTPUT"
 
           # Fetch app info from proxy
-          APP_INFO=$(curl -sf --unix-socket "$SOCKET" \
+          HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" --unix-socket "$SOCKET" \
             -H "Authorization: Bearer $PKS_TOKEN" \
-            "http://localhost/coolify/token?environment=${ENV}" 2>/dev/null)
+            "http://localhost/coolify/token?environment=${ENV}")
+          HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -1)
+          APP_INFO=$(echo "$HTTP_RESPONSE" | head -n -1)
 
-          if [ -z "$APP_INFO" ]; then
-            echo "::error::Failed to fetch app info from proxy. Ensure PKS runner credential server is running."
+          if [ "$HTTP_CODE" -ne 200 ]; then
+            echo "::error::Proxy returned HTTP $HTTP_CODE for environment '$ENV'"
+            echo "Response: $APP_INFO"
+            # Show available environments if the proxy returned them
+            echo "$APP_INFO" | jq -r '.available[]? | "  Available: \(.name) (env=\(.environment), uuid=\(.uuid))"' 2>/dev/null
             exit 1
           fi
 
           WEBHOOK=$(echo "$APP_INFO" | jq -r '.webhook_url // empty')
           FQDN=$(echo "$APP_INFO" | jq -r '.fqdn // empty')
+          RESOLVED_ENV=$(echo "$APP_INFO" | jq -r '.environment // empty')
+          RESOLVED_FROM=$(echo "$APP_INFO" | jq -r '.resolved_from // "unknown"')
+
+          # Show available environments for debugging
+          echo "Available environments:"
+          echo "$APP_INFO" | jq -r '.available_environments[]? | "  - \(.name) (env=\(.environment), uuid=\(.uuid))"'
+          echo "Resolved: env=$RESOLVED_ENV ($RESOLVED_FROM match for requested '$ENV')"
+
+          if [ "$RESOLVED_FROM" = "fallback" ] && [ "$RESOLVED_ENV" != "$ENV" ]; then
+            echo "::warning::Requested environment '$ENV' not found. Fell back to '$RESOLVED_ENV'. Check Coolify environment names."
+          fi
 
           echo "webhook=$WEBHOOK" >> "$GITHUB_OUTPUT"
           echo "production_url=$FQDN" >> "$GITHUB_OUTPUT"
           echo "socket=$SOCKET" >> "$GITHUB_OUTPUT"
-          echo "Proxy mode: webhook=$WEBHOOK, fqdn=$FQDN, environment=$ENV"
+          echo "Proxy mode: webhook=$WEBHOOK, fqdn=$FQDN, environment=$RESOLVED_ENV (requested=$ENV, match=$RESOLVED_FROM)"
         else
           echo "mode=direct" >> "$GITHUB_OUTPUT"
 
@@ -292,6 +308,23 @@ runs:
 
         if [ "$BUILD_RESULT" != "finished" ]; then
           echo "::error::Deployment ended with status: $BUILD_RESULT"
+
+          # Fetch deployment logs for debugging
+          echo "=== Deployment Logs ==="
+          DEPLOY_DETAIL=$(api_get "/coolify/deployments/${DEPLOY_UUID}")
+          LOGS=$(echo "$DEPLOY_DETAIL" | jq -r '.logs // empty')
+          if [ -n "$LOGS" ]; then
+            echo "$LOGS" | tail -50
+          else
+            # Try getting logs from the full deployment detail
+            echo "$DEPLOY_DETAIL" | jq -r '
+              if .log then (.log | split("\n") | .[-50:] | join("\n"))
+              elif .logs then (.logs | split("\n") | .[-50:] | join("\n"))
+              else "No logs available in deployment response"
+              end' 2>/dev/null || echo "Could not parse deployment logs"
+          fi
+          echo "=== End Deployment Logs ==="
+
           echo "result=failure" >> "$GITHUB_OUTPUT"
           echo "status_message=Build ${BUILD_RESULT}" >> "$GITHUB_OUTPUT"
           exit 1

@@ -77,11 +77,12 @@ public class CoolifyStatusCommand : Command<CoolifySettings>
                                 var puuid = u.GetString();
                                 if (string.IsNullOrEmpty(puuid)) continue;
 
+                                var pname = p.TryGetProperty("name", out var pn) ? pn.GetString() : puuid;
                                 var detailJson = await _apiService.GetRawProjectsJsonAsync(instance, puuid);
+                                _console.MarkupLine($"\n[bold yellow]Project: {pname?.EscapeMarkup()}[/] [dim]({puuid})[/]");
                                 _console.MarkupLine($"[dim]GET /api/v1/projects/{puuid}:[/]");
                                 _console.WriteLine(detailJson);
 
-                                // Try first environment
                                 var detailDoc = System.Text.Json.JsonDocument.Parse(detailJson);
                                 if (detailDoc.RootElement.TryGetProperty("environments", out var envs) &&
                                     envs.ValueKind == System.Text.Json.JsonValueKind.Array)
@@ -91,20 +92,27 @@ public class CoolifyStatusCommand : Command<CoolifySettings>
                                         var envName = env.TryGetProperty("name", out var n) ? n.GetString() : null;
                                         if (string.IsNullOrEmpty(envName)) continue;
 
-                                        try
+                                        // Show app UUIDs in this environment
+                                        if (env.TryGetProperty("applications", out var apps) &&
+                                            apps.ValueKind == System.Text.Json.JsonValueKind.Array)
                                         {
-                                            var envJson = await _apiService.GetRawProjectsJsonAsync(instance, $"{puuid}/{envName}");
-                                            _console.MarkupLine($"[dim]GET /api/v1/projects/{puuid}/{envName}:[/]");
-                                            _console.WriteLine(envJson);
+                                            foreach (var app in apps.EnumerateArray())
+                                            {
+                                                var appUuid = app.TryGetProperty("uuid", out var au) ? au.GetString() : "?";
+                                                var appName = app.TryGetProperty("name", out var an) ? an.GetString() : "?";
+                                                _console.MarkupLine($"  [green]env={envName?.EscapeMarkup()}[/] → [cyan]{appName?.EscapeMarkup()}[/] [dim](uuid={appUuid})[/]");
+                                            }
                                         }
-                                        catch (Exception ex)
+                                        else
                                         {
-                                            _console.MarkupLine($"[dim]GET /api/v1/projects/{puuid}/{envName}: {ex.Message.EscapeMarkup()}[/]");
+                                            _console.MarkupLine($"  [green]env={envName?.EscapeMarkup()}[/] → [dim]no applications array[/]");
                                         }
-                                        break;
                                     }
                                 }
-                                break;
+                                else
+                                {
+                                    _console.MarkupLine($"  [dim]no environments array[/]");
+                                }
                             }
                         }
                     }

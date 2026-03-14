@@ -109,12 +109,26 @@ public class GitCredentialServer : IAsyncDisposable
             if (claims == null)
                 return Results.Json(new { error = "unauthorized" }, statusCode: 401);
 
+            var requestedEnv = request.Query["environment"].FirstOrDefault() ?? "(none)";
+
+            // Log all available apps for this job for debugging
+            var allApps = _tokenStore?.GetAllByJobId(claims.JobId) ?? new List<CoolifyAppMatch>();
+            _onLog?.Invoke($"Token request: job={claims.JobId}, requested_env={requestedEnv}, available_apps=[{string.Join(", ", allApps.Select(a => $"{a.Name}(uuid={a.Uuid}, env={a.EnvironmentName})"))}]");
+
             var app = ResolveApp(claims, request);
             if (app == null)
-                return Results.Json(new { error = "app not found" }, statusCode: 404);
+                return Results.Json(new { error = "app not found", requested_environment = requestedEnv, available = allApps.Select(a => new { a.Name, a.Uuid, environment = a.EnvironmentName }) }, statusCode: 404);
 
-            _onLog?.Invoke($"Coolify token info served for app {claims.AppUuid} (job {claims.JobId})");
-            return Results.Json(new { webhook_url = app.WebhookUrl, fqdn = app.Fqdn, environment = app.EnvironmentName });
+            var resolved = app.EnvironmentName == requestedEnv ? "exact" : "fallback";
+            _onLog?.Invoke($"Resolved: {app.Name} (uuid={app.Uuid}, env={app.EnvironmentName}) [{resolved} match for '{requestedEnv}']");
+            return Results.Json(new
+            {
+                webhook_url = app.WebhookUrl,
+                fqdn = app.Fqdn,
+                environment = app.EnvironmentName,
+                resolved_from = resolved,
+                available_environments = allApps.Select(a => new { a.Name, environment = a.EnvironmentName, a.Uuid })
+            });
         });
 
         _app.MapPost("/coolify/deploy", async (HttpRequest request) =>
