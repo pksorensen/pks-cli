@@ -64,8 +64,23 @@ runs:
           SOCKET="${PKS_TOKEN_URL:-/var/run/pks-creds/creds.sock}"
           echo "Using proxy mode via Unix socket: $SOCKET"
 
-          # Resolve environment: input > env var > default
+          # Resolve environment: input > GitHub OIDC token > env var > default
           ENV="${{ inputs.environment }}"
+
+          # Try GitHub OIDC token if no explicit environment given
+          if [ -z "$ENV" ] && [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+            OIDC_TOKEN=$(curl -sf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=pks-cli" 2>/dev/null | jq -r '.value // empty')
+            if [ -n "$OIDC_TOKEN" ]; then
+              # Decode JWT payload (base64url → base64, then decode)
+              PAYLOAD=$(echo "$OIDC_TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null)
+              ENV=$(echo "$PAYLOAD" | jq -r '.environment // empty' 2>/dev/null)
+              if [ -n "$ENV" ]; then
+                echo "Environment from GitHub OIDC token: $ENV"
+              fi
+            fi
+          fi
+
           [ -z "$ENV" ] && ENV="$COOLIFY_ENVIRONMENT"
           [ -z "$ENV" ] && ENV="production"
           echo "environment=$ENV" >> "$GITHUB_OUTPUT"
