@@ -1,0 +1,53 @@
+name: 'Release Please PR'
+description: 'Extract PR branch from release-please outputs and optionally rebase the PR branch onto the base branch.'
+
+inputs:
+  prs:
+    description: 'The prs JSON output from release-please-action (steps.release.outputs.prs)'
+    required: true
+  prs-created:
+    description: 'The prs_created output from release-please-action (steps.release.outputs.prs_created)'
+    required: true
+  update-branch:
+    description: 'Whether to rebase the PR branch onto the base branch (default: true)'
+    required: false
+    default: 'true'
+  token:
+    description: 'GitHub token for updating PR branches. Falls back to GITHUB_TOKEN env var.'
+    required: false
+    default: ''
+
+outputs:
+  pr-number:
+    description: 'The PR number created by release-please'
+    value: ${{ steps.pr.outputs.number }}
+  pr-branch:
+    description: 'The head branch name of the release-please PR'
+    value: ${{ steps.pr.outputs.branch }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Extract PR info
+      id: pr
+      if: inputs.prs-created == 'true'
+      shell: bash
+      run: |
+        PRS='${{ inputs.prs }}'
+        PR_NUMBER=$(echo "$PRS" | jq -r '.[0].number // empty')
+        BRANCH=$(echo "$PRS" | jq -r '.[0].headBranchName // empty')
+        if [ -n "$PR_NUMBER" ] && [ -n "$BRANCH" ]; then
+          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "PR #$PR_NUMBER branch: $BRANCH"
+        fi
+
+    - name: Update PR branch with latest base
+      if: inputs.update-branch == 'true' && steps.pr.outputs.number != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token || env.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}
+      run: |
+        echo "Updating PR #${{ steps.pr.outputs.number }} branch with latest base..."
+        gh pr update-branch "${{ steps.pr.outputs.number }}" --rebase || echo "Branch already up to date"
