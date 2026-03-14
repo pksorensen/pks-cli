@@ -17,15 +17,21 @@ public class RunnerContainerService : IRunnerContainerService
 
     private readonly IProcessRunner _processRunner;
     private readonly ICoolifyLookupService _coolifyLookup;
+    private readonly IJobTokenService _jobTokenService;
+    private readonly ICoolifyTokenStore _coolifyTokenStore;
     private readonly ILogger<RunnerContainerService> _logger;
 
     public RunnerContainerService(
         IProcessRunner processRunner,
         ICoolifyLookupService coolifyLookup,
+        IJobTokenService jobTokenService,
+        ICoolifyTokenStore coolifyTokenStore,
         ILogger<RunnerContainerService> logger)
     {
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
         _coolifyLookup = coolifyLookup ?? throw new ArgumentNullException(nameof(coolifyLookup));
+        _jobTokenService = jobTokenService ?? throw new ArgumentNullException(nameof(jobTokenService));
+        _coolifyTokenStore = coolifyTokenStore ?? throw new ArgumentNullException(nameof(coolifyTokenStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -167,26 +173,36 @@ public class RunnerContainerService : IRunnerContainerService
                 _logger.LogInformation("Credential socket dir mounted: {SocketDir} -> /var/run/pks-creds, GIT_ASKPASS=/tmp/git-askpass.sh", credentialSocketPath);
             }
 
-            // Auto-inject Coolify env vars if a matching application is found
+            // Auto-inject Coolify env vars if matching applications are found
             try
             {
-                onProgress?.Invoke($"Coolify lookup: {registration.Owner}/{registration.Repository}@{branch} environment={environment ?? "(none)"}");
-                var coolifyApp = await _coolifyLookup.FindAppAsync(registration.Owner, registration.Repository, branch, environment);
-                if (coolifyApp != null)
+                onProgress?.Invoke($"Coolify lookup: {registration.Owner}/{registration.Repository}@{branch} (all environments)");
+                var allApps = await _coolifyLookup.FindAllAppsAsync(registration.Owner, registration.Repository, branch);
+                if (allApps.Count > 0)
                 {
-                    baseArgs += $" --remote-env COOLIFY_WEBHOOK={coolifyApp.WebhookUrl}";
-                    baseArgs += $" --remote-env COOLIFY_TOKEN={coolifyApp.Token}";
-                    baseArgs += $" --remote-env COOLIFY_APP_FQDN={coolifyApp.Fqdn}";
-                    baseArgs += $" --remote-env COOLIFY_ENVIRONMENT={environment ?? "production"}";
-                    onProgress?.Invoke($"Coolify env injected for {coolifyApp.Name} ({coolifyApp.Fqdn}) environment={environment ?? "production"}");
-                    _logger.LogInformation("Injected Coolify env vars for app {AppName} (uuid={Uuid}, fqdn={Fqdn}, environment={Environment})",
-                        coolifyApp.Name, coolifyApp.Uuid, coolifyApp.Fqdn, environment ?? "production");
+                    var jobId = $"{runId}-{Guid.NewGuid():N}";
+                    _coolifyTokenStore.RegisterAll(jobId, allApps);
+                    var pksToken = _jobTokenService.CreateToken(
+                        registration.Owner, registration.Repository, branch,
+                        "", "", jobId);
+
+                    var defaultApp = allApps.FirstOrDefault(a =>
+                        string.Equals(a.EnvironmentName, "production", StringComparison.OrdinalIgnoreCase))
+                        ?? allApps[0];
+
+                    baseArgs += $" --remote-env PKS_TOKEN={pksToken}";
+                    baseArgs += $" --remote-env PKS_TOKEN_URL=/var/run/pks-creds/creds.sock";
+                    baseArgs += $" --remote-env COOLIFY_APP_FQDN={defaultApp.Fqdn}";
+                    baseArgs += $" --remote-env COOLIFY_ENVIRONMENT={defaultApp.EnvironmentName}";
+                    onProgress?.Invoke($"Coolify proxy configured for {allApps.Count} app(s) across environments [scoped JWT]");
+                    _logger.LogInformation("Injected scoped PKS_TOKEN for {Count} app(s) matching {Owner}/{Repo}@{Branch} (jobId={JobId})",
+                        allApps.Count, registration.Owner, registration.Repository, branch, jobId);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Coolify lookup failed for {Owner}/{Repo}@{Branch} (environment={Environment}) — skipping env injection",
-                    registration.Owner, registration.Repository, branch, environment ?? "(any)");
+                _logger.LogWarning(ex, "Coolify lookup failed for {Owner}/{Repo}@{Branch} — skipping env injection",
+                    registration.Owner, registration.Repository, branch);
                 onProgress?.Invoke($"Warning: Coolify lookup failed: {ex.Message}");
             }
 

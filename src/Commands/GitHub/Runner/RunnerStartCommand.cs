@@ -16,12 +16,16 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
     private readonly IRunnerContainerService _containerService;
     private readonly IRunnerConfigurationService _configService;
     private readonly IGitHubAuthenticationService _authService;
+    private readonly IJobTokenService _jobTokenService;
+    private readonly ICoolifyTokenStore _coolifyTokenStore;
 
     public RunnerStartCommand(
         IRunnerDaemonService daemonService,
         IRunnerContainerService containerService,
         IRunnerConfigurationService configService,
         IGitHubAuthenticationService authService,
+        IJobTokenService jobTokenService,
+        ICoolifyTokenStore coolifyTokenStore,
         IAnsiConsole console)
         : base(console)
     {
@@ -29,6 +33,8 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
         _containerService = containerService ?? throw new ArgumentNullException(nameof(containerService));
         _configService = configService ?? throw new ArgumentNullException(nameof(configService));
         _authService = authService ?? throw new ArgumentNullException(nameof(authService));
+        _jobTokenService = jobTokenService ?? throw new ArgumentNullException(nameof(jobTokenService));
+        _coolifyTokenStore = coolifyTokenStore ?? throw new ArgumentNullException(nameof(coolifyTokenStore));
     }
 
     public class Settings : RunnerSettings
@@ -204,7 +210,9 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
                 msg =>
                 {
                     try { File.AppendAllText(logPath, $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}] [cred-server] {msg}\n"); } catch { }
-                });
+                },
+                _jobTokenService,
+                _coolifyTokenStore);
             await credentialServer.StartAsync();
             DisplaySuccess($"Credential server started: {credentialServer.SocketPath}");
             DisplayInfo($"Detailed logs: {logPath}");

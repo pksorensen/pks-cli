@@ -16,9 +16,16 @@ public class GitCredentialServer : IAsyncDisposable
     private readonly string _socketPath;
     private readonly IGitHubAuthenticationService _githubAuth;
     private readonly Action<string>? _onLog;
+    private readonly IJobTokenService? _tokenService;
+    private readonly ICoolifyTokenStore? _tokenStore;
     private WebApplication? _app;
 
-    public GitCredentialServer(IGitHubAuthenticationService githubAuth, string socketId, Action<string>? onLog = null)
+    public GitCredentialServer(
+        IGitHubAuthenticationService githubAuth,
+        string socketId,
+        Action<string>? onLog = null,
+        IJobTokenService? tokenService = null,
+        ICoolifyTokenStore? tokenStore = null)
     {
         // Use a stable directory so we can bind-mount the directory (not the file).
         // Directory mounts survive socket file recreation across runner restarts.
@@ -26,6 +33,8 @@ public class GitCredentialServer : IAsyncDisposable
         _socketPath = Path.Combine(_socketDir, "creds.sock");
         _githubAuth = githubAuth;
         _onLog = onLog;
+        _tokenService = tokenService;
+        _tokenStore = tokenStore;
     }
 
     /// <summary>
@@ -35,6 +44,30 @@ public class GitCredentialServer : IAsyncDisposable
     public string SocketDirectory => _socketDir;
 
     public string SocketPath => _socketPath;
+
+    private JobTokenClaims? ValidateRequest(HttpRequest request)
+    {
+        if (_tokenService == null) return null;
+        var authHeader = request.Headers.Authorization.FirstOrDefault();
+        if (authHeader == null || !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            return null;
+        return _tokenService.ValidateToken(authHeader["Bearer ".Length..]);
+    }
+
+    private CoolifyAppMatch? ResolveApp(JobTokenClaims claims, HttpRequest request)
+    {
+        // Legacy path: token has a specific app_uuid
+        if (!string.IsNullOrEmpty(claims.AppUuid))
+            return _tokenStore?.GetByAppUuid(claims.AppUuid);
+
+        // New path: resolve by job + environment query param
+        var env = request.Query["environment"].FirstOrDefault();
+        if (!string.IsNullOrEmpty(env))
+            return _tokenStore?.GetByJobIdAndEnvironment(claims.JobId, env);
+
+        // Fallback: first registered app for this job
+        return _tokenStore?.GetByJobId(claims.JobId);
+    }
 
     public async Task StartAsync(CancellationToken ct = default)
     {
@@ -68,6 +101,107 @@ public class GitCredentialServer : IAsyncDisposable
             return Results.Problem(
                 "No git credential available — run 'pks github runner register' first",
                 statusCode: (int)HttpStatusCode.ServiceUnavailable);
+        });
+
+        _app.MapGet("/coolify/token", (HttpRequest request) =>
+        {
+            var claims = ValidateRequest(request);
+            if (claims == null)
+                return Results.Json(new { error = "unauthorized" }, statusCode: 401);
+
+            var app = ResolveApp(claims, request);
+            if (app == null)
+                return Results.Json(new { error = "app not found" }, statusCode: 404);
+
+            _onLog?.Invoke($"Coolify token info served for app {claims.AppUuid} (job {claims.JobId})");
+            return Results.Json(new { webhook_url = app.WebhookUrl, fqdn = app.Fqdn, environment = app.EnvironmentName });
+        });
+
+        _app.MapPost("/coolify/deploy", async (HttpRequest request) =>
+        {
+            var claims = ValidateRequest(request);
+            if (claims == null)
+                return Results.Json(new { error = "unauthorized" }, statusCode: 401);
+
+            var app = ResolveApp(claims, request);
+            if (app == null)
+                return Results.Json(new { error = "app not found" }, statusCode: 404);
+
+            _onLog?.Invoke($"Proxying deploy for app {claims.AppUuid} (job {claims.JobId})");
+
+            try
+            {
+                using var httpClient = new HttpClient();
+                var deployUrl = app.WebhookUrl;
+                using var deployRequest = new HttpRequestMessage(HttpMethod.Get, deployUrl);
+                deployRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", app.Token);
+                var response = await httpClient.SendAsync(deployRequest);
+                var body = await response.Content.ReadAsStringAsync();
+
+                _onLog?.Invoke($"Deploy proxy response: {(int)response.StatusCode} for app {claims.AppUuid}");
+                return Results.Text(body, "application/json", statusCode: (int)response.StatusCode);
+            }
+            catch (Exception ex)
+            {
+                _onLog?.Invoke($"Deploy proxy error for app {claims.AppUuid}: {ex.Message}");
+                return Results.Json(new { error = $"proxy error: {ex.Message}" }, statusCode: 502);
+            }
+        });
+
+        _app.MapGet("/coolify/deployments/{uuid}", async (string uuid, HttpRequest request) =>
+        {
+            var claims = ValidateRequest(request);
+            if (claims == null)
+                return Results.Json(new { error = "unauthorized" }, statusCode: 401);
+
+            var app = ResolveApp(claims, request);
+            if (app == null)
+                return Results.Json(new { error = "app not found" }, statusCode: 404);
+
+            try
+            {
+                using var httpClient = new HttpClient();
+                var baseUrl = app.InstanceUrl.TrimEnd('/');
+                using var statusRequest = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/v1/deployments/{uuid}");
+                statusRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", app.Token);
+                var response = await httpClient.SendAsync(statusRequest);
+                var body = await response.Content.ReadAsStringAsync();
+
+                return Results.Text(body, "application/json", statusCode: (int)response.StatusCode);
+            }
+            catch (Exception ex)
+            {
+                _onLog?.Invoke($"Deployment status proxy error: {ex.Message}");
+                return Results.Json(new { error = $"proxy error: {ex.Message}" }, statusCode: 502);
+            }
+        });
+
+        _app.MapGet("/coolify/applications/{uuid}", async (string uuid, HttpRequest request) =>
+        {
+            var claims = ValidateRequest(request);
+            if (claims == null)
+                return Results.Json(new { error = "unauthorized" }, statusCode: 401);
+
+            var app = ResolveApp(claims, request);
+            if (app == null)
+                return Results.Json(new { error = "app not found" }, statusCode: 404);
+
+            try
+            {
+                using var httpClient = new HttpClient();
+                var baseUrl = app.InstanceUrl.TrimEnd('/');
+                using var healthRequest = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/v1/applications/{uuid}");
+                healthRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", app.Token);
+                var response = await httpClient.SendAsync(healthRequest);
+                var body = await response.Content.ReadAsStringAsync();
+
+                return Results.Text(body, "application/json", statusCode: (int)response.StatusCode);
+            }
+            catch (Exception ex)
+            {
+                _onLog?.Invoke($"Application status proxy error: {ex.Message}");
+                return Results.Json(new { error = $"proxy error: {ex.Message}" }, statusCode: 502);
+            }
         });
 
         await _app.StartAsync(ct);

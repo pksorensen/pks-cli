@@ -58,75 +58,108 @@ runs:
       id: config
       shell: bash
       run: |
-        # Resolve token: input > env var
-        TOKEN="${{ inputs.token }}"
-        [ -z "$TOKEN" ] && TOKEN="$COOLIFY_TOKEN"
-        if [ -z "$TOKEN" ]; then
-          echo "::error::No Coolify token. Set the 'token' input or ensure COOLIFY_TOKEN env var is set by the pks runner."
-          exit 1
-        fi
-        echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+        # Detect proxy mode (PKS_TOKEN = scoped JWT from pks runner)
+        if [ -n "$PKS_TOKEN" ]; then
+          echo "mode=proxy" >> "$GITHUB_OUTPUT"
+          SOCKET="${PKS_TOKEN_URL:-/var/run/pks-creds/creds.sock}"
+          echo "Using proxy mode via Unix socket: $SOCKET"
 
-        # Resolve environment: input > env var > default to production
-        ENV="${{ inputs.environment }}"
-        [ -z "$ENV" ] && ENV="$COOLIFY_ENVIRONMENT"
-        [ -z "$ENV" ] && ENV="production"
-        echo "environment=$ENV" >> "$GITHUB_OUTPUT"
-        echo "Coolify environment: $ENV"
+          # Resolve environment: input > env var > default
+          ENV="${{ inputs.environment }}"
+          [ -z "$ENV" ] && ENV="$COOLIFY_ENVIRONMENT"
+          [ -z "$ENV" ] && ENV="production"
+          echo "environment=$ENV" >> "$GITHUB_OUTPUT"
 
-        # Resolve webhook: input > env var > auto-discover by environment
-        WEBHOOK="${{ inputs.webhook }}"
-        [ -z "$WEBHOOK" ] && WEBHOOK="$COOLIFY_WEBHOOK"
+          # Fetch app info from proxy
+          APP_INFO=$(curl -sf --unix-socket "$SOCKET" \
+            -H "Authorization: Bearer $PKS_TOKEN" \
+            "http://localhost/coolify/token?environment=${ENV}" 2>/dev/null)
 
-        # If no webhook but we have a token and base URL, try to find the app by environment
-        if [ -z "$WEBHOOK" ] && [ -n "$COOLIFY_TOKEN" ]; then
-          COOLIFY_BASE=""
-          # Derive base URL from any injected env var or try known pattern
-          if [ -n "$COOLIFY_WEBHOOK" ]; then
-            COOLIFY_BASE=$(echo "$COOLIFY_WEBHOOK" | sed 's|/api/v1/.*||')
+          if [ -z "$APP_INFO" ]; then
+            echo "::error::Failed to fetch app info from proxy. Ensure PKS runner credential server is running."
+            exit 1
           fi
 
-          if [ -n "$COOLIFY_BASE" ]; then
-            echo "Looking up app in environment '$ENV' via Coolify API..."
-            REPO_SLUG="${{ github.repository }}"
+          WEBHOOK=$(echo "$APP_INFO" | jq -r '.webhook_url // empty')
+          FQDN=$(echo "$APP_INFO" | jq -r '.fqdn // empty')
 
-            # Fetch all applications and find the one matching our repo + environment
-            APPS_JSON=$(curl -sf \
-              --header "Authorization: Bearer $TOKEN" \
-              "${COOLIFY_BASE}/api/v1/applications" 2>/dev/null || echo "[]")
+          echo "webhook=$WEBHOOK" >> "$GITHUB_OUTPUT"
+          echo "production_url=$FQDN" >> "$GITHUB_OUTPUT"
+          echo "socket=$SOCKET" >> "$GITHUB_OUTPUT"
+          echo "Proxy mode: webhook=$WEBHOOK, fqdn=$FQDN, environment=$ENV"
+        else
+          echo "mode=direct" >> "$GITHUB_OUTPUT"
 
-            APP_UUID=$(echo "$APPS_JSON" | jq -r --arg repo "$REPO_SLUG" --arg env "$ENV" '
-              [ .[] | select(
-                (.git_repository // "" | test($repo; "i")) and
-                ((.environment.name // "") == $env)
-              ) ] | .[0].uuid // empty')
+          # Resolve token: input > env var
+          TOKEN="${{ inputs.token }}"
+          [ -z "$TOKEN" ] && TOKEN="$COOLIFY_TOKEN"
+          if [ -z "$TOKEN" ]; then
+            echo "::error::No Coolify token. Set the 'token' input or ensure COOLIFY_TOKEN env var is set by the pks runner."
+            exit 1
+          fi
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
 
-            if [ -n "$APP_UUID" ]; then
-              WEBHOOK="${COOLIFY_BASE}/api/v1/deploy?uuid=${APP_UUID}&force=false"
-              FQDN=$(echo "$APPS_JSON" | jq -r --arg uuid "$APP_UUID" '
-                [ .[] | select(.uuid == $uuid) ] | .[0].fqdn // empty')
-              echo "Found app ${APP_UUID} in environment '$ENV' (fqdn: ${FQDN})"
-              echo "production_url=$FQDN" >> "$GITHUB_OUTPUT"
-            else
-              echo "::warning::Could not find app for ${REPO_SLUG} in environment '$ENV'"
+          # Resolve environment: input > env var > default to production
+          ENV="${{ inputs.environment }}"
+          [ -z "$ENV" ] && ENV="$COOLIFY_ENVIRONMENT"
+          [ -z "$ENV" ] && ENV="production"
+          echo "environment=$ENV" >> "$GITHUB_OUTPUT"
+          echo "Coolify environment: $ENV"
+
+          # Resolve webhook: input > env var > auto-discover by environment
+          WEBHOOK="${{ inputs.webhook }}"
+          [ -z "$WEBHOOK" ] && WEBHOOK="$COOLIFY_WEBHOOK"
+
+          # If no webhook but we have a token and base URL, try to find the app by environment
+          if [ -z "$WEBHOOK" ] && [ -n "$COOLIFY_TOKEN" ]; then
+            COOLIFY_BASE=""
+            # Derive base URL from any injected env var or try known pattern
+            if [ -n "$COOLIFY_WEBHOOK" ]; then
+              COOLIFY_BASE=$(echo "$COOLIFY_WEBHOOK" | sed 's|/api/v1/.*||')
+            fi
+
+            if [ -n "$COOLIFY_BASE" ]; then
+              echo "Looking up app in environment '$ENV' via Coolify API..."
+              REPO_SLUG="${{ github.repository }}"
+
+              # Fetch all applications and find the one matching our repo + environment
+              APPS_JSON=$(curl -sf \
+                --header "Authorization: Bearer $TOKEN" \
+                "${COOLIFY_BASE}/api/v1/applications" 2>/dev/null || echo "[]")
+
+              APP_UUID=$(echo "$APPS_JSON" | jq -r --arg repo "$REPO_SLUG" --arg env "$ENV" '
+                [ .[] | select(
+                  (.git_repository // "" | test($repo; "i")) and
+                  ((.environment.name // "") == $env)
+                ) ] | .[0].uuid // empty')
+
+              if [ -n "$APP_UUID" ]; then
+                WEBHOOK="${COOLIFY_BASE}/api/v1/deploy?uuid=${APP_UUID}&force=false"
+                FQDN=$(echo "$APPS_JSON" | jq -r --arg uuid "$APP_UUID" '
+                  [ .[] | select(.uuid == $uuid) ] | .[0].fqdn // empty')
+                echo "Found app ${APP_UUID} in environment '$ENV' (fqdn: ${FQDN})"
+                echo "production_url=$FQDN" >> "$GITHUB_OUTPUT"
+              else
+                echo "::warning::Could not find app for ${REPO_SLUG} in environment '$ENV'"
+              fi
             fi
           fi
-        fi
 
-        if [ -z "$WEBHOOK" ]; then
-          echo "::error::No Coolify webhook URL. Set the 'webhook' input, ensure COOLIFY_WEBHOOK env var is set, or specify 'environment' to auto-discover."
-          exit 1
-        fi
-        echo "webhook=$WEBHOOK" >> "$GITHUB_OUTPUT"
+          if [ -z "$WEBHOOK" ]; then
+            echo "::error::No Coolify webhook URL. Set the 'webhook' input, ensure COOLIFY_WEBHOOK env var is set, or specify 'environment' to auto-discover."
+            exit 1
+          fi
+          echo "webhook=$WEBHOOK" >> "$GITHUB_OUTPUT"
 
-        # Resolve production URL: input > env var > auto-discovered
-        PROD_URL="${{ inputs.production-url }}"
-        [ -z "$PROD_URL" ] && PROD_URL="$COOLIFY_APP_FQDN"
-        # If still empty, check if we set it during discovery above
-        if [ -z "$PROD_URL" ]; then
-          PROD_URL=$(grep "^production_url=" "$GITHUB_OUTPUT" 2>/dev/null | tail -1 | cut -d= -f2-)
+          # Resolve production URL: input > env var > auto-discovered
+          PROD_URL="${{ inputs.production-url }}"
+          [ -z "$PROD_URL" ] && PROD_URL="$COOLIFY_APP_FQDN"
+          # If still empty, check if we set it during discovery above
+          if [ -z "$PROD_URL" ]; then
+            PROD_URL=$(grep "^production_url=" "$GITHUB_OUTPUT" 2>/dev/null | tail -1 | cut -d= -f2-)
+          fi
+          echo "production_url=$PROD_URL" >> "$GITHUB_OUTPUT"
         fi
-        echo "production_url=$PROD_URL" >> "$GITHUB_OUTPUT"
 
     - name: Trigger Coolify deploy
       id: trigger
@@ -134,9 +167,21 @@ runs:
       run: |
         echo "Deploying ${{ inputs.app-name }} v${{ inputs.version }}..."
 
-        response=$(curl -s -w "\n%{http_code}" \
-          --request GET "${{ steps.config.outputs.webhook }}" \
-          --header "Authorization: Bearer ${{ steps.config.outputs.token }}")
+        if [ "${{ steps.config.outputs.mode }}" = "proxy" ]; then
+          # Proxy mode: deploy through Unix socket
+          SOCKET="${{ steps.config.outputs.socket }}"
+          response=$(curl -s -w "\n%{http_code}" \
+            --unix-socket "$SOCKET" \
+            --request POST \
+            -H "Authorization: Bearer $PKS_TOKEN" \
+            "http://localhost/coolify/deploy?environment=${{ steps.config.outputs.environment }}")
+        else
+          # Direct mode: call Coolify API directly
+          response=$(curl -s -w "\n%{http_code}" \
+            --request GET "${{ steps.config.outputs.webhook }}" \
+            --header "Authorization: Bearer ${{ steps.config.outputs.token }}")
+        fi
+
         http_code=$(echo "$response" | tail -1)
         body=$(echo "$response" | head -n -1)
         echo "Response ($http_code): $body"
@@ -166,9 +211,31 @@ runs:
       run: |
         DEPLOY_UUID="${{ steps.trigger.outputs.deployment_uuid }}"
         APP_UUID="${{ steps.trigger.outputs.resource_uuid }}"
-        COOLIFY_BASE=$(echo "${{ steps.config.outputs.webhook }}" | sed 's|/api/v1/.*||')
+        MODE="${{ steps.config.outputs.mode }}"
         BUILD_TIMEOUT=${{ inputs.build-timeout }}
         HEALTH_TIMEOUT=${{ inputs.health-timeout }}
+        ENVIRONMENT="${{ steps.config.outputs.environment }}"
+
+        if [ "$MODE" = "proxy" ]; then
+          SOCKET="${{ steps.config.outputs.socket }}"
+          AUTH_HEADER="Authorization: Bearer $PKS_TOKEN"
+        else
+          COOLIFY_BASE=$(echo "${{ steps.config.outputs.webhook }}" | sed 's|/api/v1/.*||')
+          AUTH_HEADER="Authorization: Bearer ${{ steps.config.outputs.token }}"
+        fi
+
+        # Helper function for API calls
+        api_get() {
+          local path="$1"
+          if [ "$MODE" = "proxy" ]; then
+            local sep="?"
+            [[ "$path" == *"?"* ]] && sep="&"
+            curl -s --unix-socket "$SOCKET" -H "$AUTH_HEADER" \
+              "http://localhost${path}${sep}environment=${ENVIRONMENT}"
+          else
+            curl -s -H "$AUTH_HEADER" "${COOLIFY_BASE}${path}"
+          fi
+        }
 
         # Phase 1: Wait for build to finish
         echo "=== Phase 1: Waiting for build to complete (timeout: ${BUILD_TIMEOUT}s) ==="
@@ -180,35 +247,39 @@ runs:
           ATTEMPT=$((ATTEMPT + 1))
           echo "Build poll $ATTEMPT/$MAX_ATTEMPTS..."
 
-          status_response=$(curl -s \
-            --request GET "${COOLIFY_BASE}/api/v1/deployments?appId=${APP_UUID}&limit=10" \
-            --header "Authorization: Bearer ${{ steps.config.outputs.token }}")
+          status_response=$(api_get "/coolify/deployments/${DEPLOY_UUID}")
 
-          our_deploy=$(echo "$status_response" | jq -r --arg uuid "$DEPLOY_UUID" '
-            if type == "array" then map(select(.deployment_uuid == $uuid)) | .[0] // empty
-            elif .deployment_uuid == $uuid then .
-            else empty end')
-          status=$(echo "$our_deploy" | jq -r '.status // "not_found"')
+          if [ "$MODE" = "direct" ]; then
+            # Direct mode: try list endpoint first, then single deployment
+            status_response=$(api_get "/api/v1/deployments?appId=${APP_UUID}&limit=10")
+            our_deploy=$(echo "$status_response" | jq -r --arg uuid "$DEPLOY_UUID" '
+              if type == "array" then map(select(.deployment_uuid == $uuid)) | .[0] // empty
+              elif .deployment_uuid == $uuid then .
+              else empty end')
+            status=$(echo "$our_deploy" | jq -r '.status // "not_found"')
+
+            if [ "$status" = "not_found" ] || [ -z "$our_deploy" ] || [ "$our_deploy" = "null" ]; then
+              direct_response=$(api_get "/api/v1/deployments/${DEPLOY_UUID}")
+              status=$(echo "$direct_response" | jq -r '.status // "unknown"')
+            fi
+          else
+            # Proxy mode: single deployment endpoint
+            status=$(echo "$status_response" | jq -r '.status // "unknown"')
+          fi
+
           echo "Build status: $status"
 
-          if [ "$status" = "not_found" ] || [ -z "$our_deploy" ] || [ "$our_deploy" = "null" ]; then
-            direct_response=$(curl -s \
-              --request GET "${COOLIFY_BASE}/api/v1/deployments/${DEPLOY_UUID}" \
-              --header "Authorization: Bearer ${{ steps.config.outputs.token }}")
-            direct_status=$(echo "$direct_response" | jq -r '.status // "unknown"')
-
-            case "$direct_status" in
-              finished) BUILD_RESULT="finished"; break ;;
-              failed|cancelled|error) BUILD_RESULT="$direct_status"; break ;;
-              unknown) BUILD_RESULT="unknown"; break ;;
-              *) echo "Status: $direct_status, polling..." ;;
-            esac
-          else
-            case "$status" in
-              finished) BUILD_RESULT="finished"; break ;;
-              failed|cancelled|error) BUILD_RESULT="$status"; break ;;
-            esac
-          fi
+          case "$status" in
+            finished) BUILD_RESULT="finished"; break ;;
+            failed|cancelled|error) BUILD_RESULT="$status"; break ;;
+            unknown)
+              if [ "$MODE" = "direct" ]; then
+                BUILD_RESULT="unknown"; break
+              fi
+              echo "Status: $status, polling..."
+              ;;
+            *) echo "Status: $status, polling..." ;;
+          esac
 
           sleep 15
         done
@@ -235,9 +306,11 @@ runs:
           ATTEMPT=$((ATTEMPT + 1))
           echo "Health poll $ATTEMPT/$MAX_HEALTH..."
 
-          app_response=$(curl -s \
-            --request GET "${COOLIFY_BASE}/api/v1/applications/${APP_UUID}" \
-            --header "Authorization: Bearer ${{ steps.config.outputs.token }}")
+          if [ "$MODE" = "proxy" ]; then
+            app_response=$(api_get "/coolify/applications/${APP_UUID}")
+          else
+            app_response=$(api_get "/api/v1/applications/${APP_UUID}")
+          fi
           app_status=$(echo "$app_response" | jq -r '.status // "unknown"')
           echo "Application status: $app_status"
 

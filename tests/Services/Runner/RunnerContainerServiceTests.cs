@@ -11,6 +11,8 @@ public class RunnerContainerServiceTests : IDisposable
 {
     private readonly Mock<IProcessRunner> _mockProcessRunner;
     private readonly Mock<ICoolifyLookupService> _mockCoolifyLookup;
+    private readonly Mock<IJobTokenService> _mockJobTokenService;
+    private readonly Mock<ICoolifyTokenStore> _mockCoolifyTokenStore;
     private readonly Mock<ILogger<RunnerContainerService>> _mockLogger;
     private readonly RunnerContainerService _service;
     private readonly RunnerRegistration _testRegistration;
@@ -19,8 +21,10 @@ public class RunnerContainerServiceTests : IDisposable
     {
         _mockProcessRunner = new Mock<IProcessRunner>();
         _mockCoolifyLookup = new Mock<ICoolifyLookupService>();
+        _mockJobTokenService = new Mock<IJobTokenService>();
+        _mockCoolifyTokenStore = new Mock<ICoolifyTokenStore>();
         _mockLogger = new Mock<ILogger<RunnerContainerService>>();
-        _service = new RunnerContainerService(_mockProcessRunner.Object, _mockCoolifyLookup.Object, _mockLogger.Object);
+        _service = new RunnerContainerService(_mockProcessRunner.Object, _mockCoolifyLookup.Object, _mockJobTokenService.Object, _mockCoolifyTokenStore.Object, _mockLogger.Object);
         _testRegistration = new RunnerRegistration
         {
             Owner = "testowner",

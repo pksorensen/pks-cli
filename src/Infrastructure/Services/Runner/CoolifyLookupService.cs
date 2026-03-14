@@ -24,6 +24,12 @@ public interface ICoolifyLookupService
     /// Returns null if no match found, throws if multiple matches found.
     /// </summary>
     Task<CoolifyAppMatch?> FindAppAsync(string owner, string repo, string branch, string? environment = null);
+
+    /// <summary>
+    /// Find ALL Coolify applications matching a GitHub repository and branch,
+    /// across all environments, without filtering or disambiguation.
+    /// </summary>
+    Task<List<CoolifyAppMatch>> FindAllAppsAsync(string owner, string repo, string branch);
 }
 
 public class CoolifyLookupService : ICoolifyLookupService
@@ -152,6 +158,38 @@ public class CoolifyLookupService : ICoolifyLookupService
         }
 
         return matches[0].Match;
+    }
+
+    public async Task<List<CoolifyAppMatch>> FindAllAppsAsync(string owner, string repo, string branch)
+    {
+        var instances = await _configService.ListInstancesAsync();
+        if (!instances.Any())
+            return new List<CoolifyAppMatch>();
+
+        var fullRepo = $"{owner}/{repo}";
+        var matches = new List<(CoolifyAppMatch Match, string? EnvironmentName)>();
+
+        foreach (var instance in instances)
+        {
+            try
+            {
+                await FindAppsViaProjectsAsync(instance, fullRepo, branch, null, matches);
+                if (matches.Count == 0)
+                    await FindAppsViaFlatListAsync(instance, fullRepo, branch, matches);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to query Coolify instance {Url}", instance.Url);
+            }
+        }
+
+        // Set EnvironmentName on each match
+        foreach (var (match, envName) in matches)
+        {
+            match.EnvironmentName = envName ?? "";
+        }
+
+        return matches.Select(m => m.Match).ToList();
     }
 
     /// <summary>

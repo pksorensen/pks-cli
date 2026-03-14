@@ -16,6 +16,7 @@ public class RunnerDaemonServiceTests : IDisposable
     private readonly Mock<IGitHubAuthenticationService> _mockAuthService;
     private readonly Mock<IGitHubApiClient> _mockApiClient;
     private readonly Mock<INamedContainerPool> _mockContainerPool;
+    private readonly Mock<ICoolifyTokenStore> _mockCoolifyTokenStore;
     private readonly Mock<ILogger<RunnerDaemonService>> _mockLogger;
     private readonly RunnerDaemonService _service;
 
@@ -68,6 +69,8 @@ public class RunnerDaemonServiceTests : IDisposable
             .Setup(p => p.GetAll())
             .Returns(new List<NamedContainerEntry>().AsReadOnly());
 
+        _mockCoolifyTokenStore = new Mock<ICoolifyTokenStore>();
+
         _service = new RunnerDaemonService(
             _mockConfigService.Object,
             _mockActionsService.Object,
@@ -75,6 +78,7 @@ public class RunnerDaemonServiceTests : IDisposable
             _mockAuthService.Object,
             _mockApiClient.Object,
             _mockContainerPool.Object,
+            _mockCoolifyTokenStore.Object,
             _mockLogger.Object);
     }
 
@@ -242,6 +246,7 @@ public class RunnerDaemonServiceTests : IDisposable
                 It.IsAny<Action<string>?>(),
                 It.IsAny<CancellationToken>(),
                 "my-app-dev",
+                It.IsAny<string?>(),
                 It.IsAny<string?>()))
             .ReturnsAsync(new RunnerJobState
             {

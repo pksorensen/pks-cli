@@ -213,6 +213,8 @@ services.AddSingleton<IProcessRunner, ProcessRunner>();
 services.AddSingleton<IRunnerContainerService, RunnerContainerService>();
 services.AddSingleton<INamedContainerPool, NamedContainerPool>();
 services.AddSingleton<IRunnerDaemonService, RunnerDaemonService>();
+services.AddSingleton<IJobTokenService, JobTokenService>();
+services.AddSingleton<ICoolifyTokenStore, CoolifyTokenStore>();
 
 // Register System Information service
 services.AddSingleton<ISystemInformationService, SystemInformationService>();
