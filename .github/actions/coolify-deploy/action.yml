@@ -55,7 +55,7 @@ runs:
       shell: bash
       run: |
         # Resolve webhook: input > env var
-        WEBHOOK="${{ steps.config.outputs.webhook }}"
+        WEBHOOK="${{ inputs.webhook }}"
         [ -z "$WEBHOOK" ] && WEBHOOK="$COOLIFY_WEBHOOK"
         if [ -z "$WEBHOOK" ]; then
           echo "::error::No Coolify webhook URL. Set the 'webhook' input or ensure COOLIFY_WEBHOOK env var is set by the pks runner."
@@ -64,7 +64,7 @@ runs:
         echo "webhook=$WEBHOOK" >> "$GITHUB_OUTPUT"
 
         # Resolve token: input > env var
-        TOKEN="${{ steps.config.outputs.token }}"
+        TOKEN="${{ inputs.token }}"
         [ -z "$TOKEN" ] && TOKEN="$COOLIFY_TOKEN"
         if [ -z "$TOKEN" ]; then
           echo "::error::No Coolify token. Set the 'token' input or ensure COOLIFY_TOKEN env var is set by the pks runner."
@@ -73,7 +73,7 @@ runs:
         echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
 
         # Resolve production URL: input > env var
-        PROD_URL="${{ steps.config.outputs.production_url }}"
+        PROD_URL="${{ inputs.production-url }}"
         [ -z "$PROD_URL" ] && PROD_URL="$COOLIFY_APP_FQDN"
         echo "production_url=$PROD_URL" >> "$GITHUB_OUTPUT"
 

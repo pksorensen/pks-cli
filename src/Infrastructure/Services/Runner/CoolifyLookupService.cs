@@ -9,6 +9,7 @@ public class CoolifyAppMatch
     public string Uuid { get; set; } = "";
     public string Name { get; set; } = "";
     public string Fqdn { get; set; } = "";
+    public string EnvironmentName { get; set; } = "";
     public string WebhookUrl { get; set; } = "";
     public string InstanceUrl { get; set; } = "";
     public string Token { get; set; } = "";
@@ -74,6 +75,24 @@ public class CoolifyLookupService : ICoolifyLookupService
             }
         }
 
+        // Filter by environment if specified
+        if (!string.IsNullOrEmpty(environment) && matches.Count > 1)
+        {
+            var envFiltered = matches.Where(m =>
+                string.Equals(m.EnvironmentName, environment, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (envFiltered.Count > 0)
+            {
+                _logger.LogInformation("Filtered {Total} matches to {Filtered} by environment '{Env}'",
+                    matches.Count, envFiltered.Count, environment);
+                matches = envFiltered;
+            }
+            else
+            {
+                _logger.LogWarning("No matches for environment '{Env}', falling back to all {Count} matches",
+                    environment, matches.Count);
+            }
+        }
+
         if (matches.Count == 0)
         {
             _logger.LogDebug("No Coolify app found for {Repo}@{Branch} (environment={Environment})",
@@ -118,7 +137,7 @@ public class CoolifyLookupService : ICoolifyLookupService
                 string.Join(", ", matches.Select(m => $"{m.Match.Name} ({m.Match.Uuid})")));
             throw new InvalidOperationException(
                 $"Ambiguous: {matches.Count} Coolify apps match {fullRepo}@{branch}. " +
-                "Ensure only one application points at this repository and branch.");
+                "Ensure only one application points at this repository and branch, or use GitHub Actions environments to disambiguate.");
         }
 
         return matches[0].Match;
