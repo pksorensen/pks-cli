@@ -58,14 +58,12 @@ public class CoolifyLookupService : ICoolifyLookupService
         {
             try
             {
-                if (!string.IsNullOrEmpty(environment))
+                // Always use projects API to get environment context for each match
+                await FindAppsViaProjectsAsync(instance, fullRepo, branch, environment, matches);
+
+                // Fallback to flat list if projects API found nothing (backward compat)
+                if (matches.Count == 0)
                 {
-                    // Environment-aware lookup: use projects API to find apps within matching environments
-                    await FindAppsViaProjectsAsync(instance, fullRepo, branch, environment, matches);
-                }
-                else
-                {
-                    // No environment specified: use flat applications list (original behavior)
                     await FindAppsViaFlatListAsync(instance, fullRepo, branch, matches);
                 }
             }
@@ -131,13 +129,26 @@ public class CoolifyLookupService : ICoolifyLookupService
 
         if (matches.Count > 1)
         {
-            _logger.LogError(
-                "Multiple Coolify apps match {Repo}@{Branch}: {Apps}",
+            // No environment from GitHub — try defaulting to "production"
+            var prodMatches = matches
+                .Where(m => string.Equals(m.EnvironmentName, "production", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (prodMatches.Count == 1)
+            {
+                _logger.LogInformation(
+                    "Multiple matches for {Repo}@{Branch}, defaulting to production environment: {Name} ({Uuid})",
+                    fullRepo, branch, prodMatches[0].Match.Name, prodMatches[0].Match.Uuid);
+                return prodMatches[0].Match;
+            }
+
+            // Still ambiguous — warn and pick the first one instead of throwing
+            _logger.LogWarning(
+                "Multiple Coolify apps match {Repo}@{Branch}: {Apps}. Using first match. " +
+                "Use GitHub Actions 'environment:' to disambiguate.",
                 fullRepo, branch,
-                string.Join(", ", matches.Select(m => $"{m.Match.Name} ({m.Match.Uuid})")));
-            throw new InvalidOperationException(
-                $"Ambiguous: {matches.Count} Coolify apps match {fullRepo}@{branch}. " +
-                "Ensure only one application points at this repository and branch, or use GitHub Actions environments to disambiguate.");
+                string.Join(", ", matches.Select(m => $"{m.Match.Name} ({m.Match.Uuid}) env={m.EnvironmentName}")));
+            return matches[0].Match;
         }
 
         return matches[0].Match;

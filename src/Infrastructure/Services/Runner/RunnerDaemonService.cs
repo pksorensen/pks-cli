@@ -325,6 +325,8 @@ public class RunnerDaemonService : IRunnerDaemonService
                 if (_shutdownRequested)
                     break;
 
+                OnStatusChanged($"Job {job.Id} for run {run.Id}: name={job.Name}, environment={job.Environment ?? "(none)"}, labels=[{string.Join(",", job.Labels)}]");
+
                 // Skip if already dispatched
                 lock (_lock)
                 {

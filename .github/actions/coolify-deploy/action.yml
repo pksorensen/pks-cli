@@ -38,6 +38,10 @@ inputs:
     description: 'Max seconds to wait for health check (default: 180 = 3 min)'
     required: false
     default: '180'
+  environment:
+    description: 'Coolify environment name (e.g. staging, production). Falls back to COOLIFY_ENVIRONMENT env var. Used to find the correct app when multiple environments exist.'
+    required: false
+    default: ''
 
 outputs:
   result:
@@ -54,15 +58,6 @@ runs:
       id: config
       shell: bash
       run: |
-        # Resolve webhook: input > env var
-        WEBHOOK="${{ inputs.webhook }}"
-        [ -z "$WEBHOOK" ] && WEBHOOK="$COOLIFY_WEBHOOK"
-        if [ -z "$WEBHOOK" ]; then
-          echo "::error::No Coolify webhook URL. Set the 'webhook' input or ensure COOLIFY_WEBHOOK env var is set by the pks runner."
-          exit 1
-        fi
-        echo "webhook=$WEBHOOK" >> "$GITHUB_OUTPUT"
-
         # Resolve token: input > env var
         TOKEN="${{ inputs.token }}"
         [ -z "$TOKEN" ] && TOKEN="$COOLIFY_TOKEN"
@@ -72,9 +67,65 @@ runs:
         fi
         echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
 
-        # Resolve production URL: input > env var
+        # Resolve environment: input > env var > default to production
+        ENV="${{ inputs.environment }}"
+        [ -z "$ENV" ] && ENV="$COOLIFY_ENVIRONMENT"
+        [ -z "$ENV" ] && ENV="production"
+        echo "environment=$ENV" >> "$GITHUB_OUTPUT"
+        echo "Coolify environment: $ENV"
+
+        # Resolve webhook: input > env var > auto-discover by environment
+        WEBHOOK="${{ inputs.webhook }}"
+        [ -z "$WEBHOOK" ] && WEBHOOK="$COOLIFY_WEBHOOK"
+
+        # If no webhook but we have a token and base URL, try to find the app by environment
+        if [ -z "$WEBHOOK" ] && [ -n "$COOLIFY_TOKEN" ]; then
+          COOLIFY_BASE=""
+          # Derive base URL from any injected env var or try known pattern
+          if [ -n "$COOLIFY_WEBHOOK" ]; then
+            COOLIFY_BASE=$(echo "$COOLIFY_WEBHOOK" | sed 's|/api/v1/.*||')
+          fi
+
+          if [ -n "$COOLIFY_BASE" ]; then
+            echo "Looking up app in environment '$ENV' via Coolify API..."
+            REPO_SLUG="${{ github.repository }}"
+
+            # Fetch all applications and find the one matching our repo + environment
+            APPS_JSON=$(curl -sf \
+              --header "Authorization: Bearer $TOKEN" \
+              "${COOLIFY_BASE}/api/v1/applications" 2>/dev/null || echo "[]")
+
+            APP_UUID=$(echo "$APPS_JSON" | jq -r --arg repo "$REPO_SLUG" --arg env "$ENV" '
+              [ .[] | select(
+                (.git_repository // "" | test($repo; "i")) and
+                ((.environment.name // "") == $env)
+              ) ] | .[0].uuid // empty')
+
+            if [ -n "$APP_UUID" ]; then
+              WEBHOOK="${COOLIFY_BASE}/api/v1/deploy?uuid=${APP_UUID}&force=false"
+              FQDN=$(echo "$APPS_JSON" | jq -r --arg uuid "$APP_UUID" '
+                [ .[] | select(.uuid == $uuid) ] | .[0].fqdn // empty')
+              echo "Found app ${APP_UUID} in environment '$ENV' (fqdn: ${FQDN})"
+              echo "production_url=$FQDN" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::Could not find app for ${REPO_SLUG} in environment '$ENV'"
+            fi
+          fi
+        fi
+
+        if [ -z "$WEBHOOK" ]; then
+          echo "::error::No Coolify webhook URL. Set the 'webhook' input, ensure COOLIFY_WEBHOOK env var is set, or specify 'environment' to auto-discover."
+          exit 1
+        fi
+        echo "webhook=$WEBHOOK" >> "$GITHUB_OUTPUT"
+
+        # Resolve production URL: input > env var > auto-discovered
         PROD_URL="${{ inputs.production-url }}"
         [ -z "$PROD_URL" ] && PROD_URL="$COOLIFY_APP_FQDN"
+        # If still empty, check if we set it during discovery above
+        if [ -z "$PROD_URL" ]; then
+          PROD_URL=$(grep "^production_url=" "$GITHUB_OUTPUT" 2>/dev/null | tail -1 | cut -d= -f2-)
+        fi
         echo "production_url=$PROD_URL" >> "$GITHUB_OUTPUT"
 
     - name: Trigger Coolify deploy

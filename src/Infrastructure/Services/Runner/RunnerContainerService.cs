@@ -170,6 +170,7 @@ public class RunnerContainerService : IRunnerContainerService
             // Auto-inject Coolify env vars if a matching application is found
             try
             {
+                onProgress?.Invoke($"Coolify lookup: {registration.Owner}/{registration.Repository}@{branch} environment={environment ?? "(none)"}");
                 var coolifyApp = await _coolifyLookup.FindAppAsync(registration.Owner, registration.Repository, branch, environment);
                 if (coolifyApp != null)
                 {
