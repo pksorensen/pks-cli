@@ -4,6 +4,13 @@ All notable changes to the PKS Fullstack template will be documented in this fil
 
 This template follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [4.1.0](https://github.com/pksorensen/pks-cli/compare/pks-fullstack-v4.0.0...pks-fullstack-v4.1.0) (2026-03-15)
+
+
+### Features
+
+* add GIT_ASKPASS installation command and update Dockerfiles for tmux support ([be810e4](https://github.com/pksorensen/pks-cli/commit/be810e45370a73c5c199ec48bcfc5aa5595496d1))
+
 ## [4.0.0](https://github.com/pksorensen/pks-cli/compare/pks-fullstack-v3.0.0...pks-fullstack-v4.0.0) (2026-03-04)
 
 
