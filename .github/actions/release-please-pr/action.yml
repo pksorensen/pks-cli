@@ -20,34 +20,52 @@ inputs:
 outputs:
   pr-number:
     description: 'The PR number created by release-please'
-    value: ${{ steps.pr.outputs.number }}
+    value: ${{ steps.pr.outputs.number || steps.pr-fallback.outputs.number }}
   pr-branch:
     description: 'The head branch name of the release-please PR'
-    value: ${{ steps.pr.outputs.branch }}
+    value: ${{ steps.pr.outputs.branch || steps.pr-fallback.outputs.branch }}
 
 runs:
   using: 'composite'
   steps:
     - name: Extract PR info
       id: pr
-      if: inputs.prs-created == 'true'
       shell: bash
       run: |
         PRS='${{ inputs.prs }}'
-        PR_NUMBER=$(echo "$PRS" | jq -r '.[0].number // empty')
-        BRANCH=$(echo "$PRS" | jq -r '.[0].headBranchName // empty')
-        if [ -n "$PR_NUMBER" ] && [ -n "$BRANCH" ]; then
-          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
-          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
-          echo "PR #$PR_NUMBER branch: $BRANCH"
+        if [ -n "$PRS" ] && [ "$PRS" != "[]" ]; then
+          PR_NUMBER=$(echo "$PRS" | jq -r '.[0].number // empty')
+          BRANCH=$(echo "$PRS" | jq -r '.[0].headBranchName // empty')
+          if [ -n "$PR_NUMBER" ] && [ -n "$BRANCH" ]; then
+            echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+            echo "PR #$PR_NUMBER branch: $BRANCH"
+          fi
         fi
 
-    - name: Update PR branch with latest base
-      if: inputs.update-branch == 'true' && steps.pr.outputs.number != ''
+    - name: Find open release PR (fallback)
+      id: pr-fallback
+      if: steps.pr.outputs.number == ''
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token || env.GITHUB_TOKEN }}
         GH_REPO: ${{ github.repository }}
       run: |
-        echo "Updating PR #${{ steps.pr.outputs.number }} branch with latest base..."
-        gh pr update-branch "${{ steps.pr.outputs.number }}" --rebase || echo "Branch already up to date"
+        PR_NUMBER=$(gh pr list --head "release-please--branches--main" --json number,headRefName -q '.[0].number // empty')
+        BRANCH=$(gh pr list --head "release-please--branches--main" --json number,headRefName -q '.[0].headRefName // empty')
+        if [ -n "$PR_NUMBER" ] && [ -n "$BRANCH" ]; then
+          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "Fallback: found PR #$PR_NUMBER branch: $BRANCH"
+        fi
+
+    - name: Update PR branch with latest base
+      if: inputs.update-branch == 'true' && (steps.pr.outputs.number != '' || steps.pr-fallback.outputs.number != '')
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token || env.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}
+      run: |
+        PR_NUM="${{ steps.pr.outputs.number || steps.pr-fallback.outputs.number }}"
+        echo "Updating PR #$PR_NUM branch with latest base..."
+        gh pr update-branch "$PR_NUM" --rebase || echo "Branch already up to date"
