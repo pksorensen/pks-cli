@@ -291,7 +291,7 @@ public class CoolifyLookupService : ICoolifyLookupService
         CoolifyInstance instance,
         string fullRepo,
         string branch,
-        string environment,
+        string? environment,
         List<(CoolifyAppMatch Match, string? EnvironmentName)> matches)
     {
         var projects = await _apiService.GetProjectsWithResourcesAsync(instance);
