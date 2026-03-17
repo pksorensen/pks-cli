@@ -17,6 +17,7 @@ using PKS.Commands.GitHub.Runner;
 using PKS.Commands.Agentics;
 using PKS.Commands.Agentics.Runner;
 using PKS.Commands.Ado;
+using PKS.Commands.Foundry;
 using PKS.Commands.Jira;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -181,6 +182,10 @@ services.AddSingleton(serviceProvider => new PKS.Infrastructure.Services.Models.
 // Configure Azure DevOps authentication
 services.AddSingleton<PKS.Infrastructure.Services.Models.AzureDevOpsAuthConfig>();
 services.AddHttpClient<IAzureDevOpsAuthService, AzureDevOpsAuthService>();
+
+// Configure Azure AI Foundry authentication
+services.AddSingleton<PKS.Infrastructure.Services.Models.AzureFoundryAuthConfig>();
+services.AddHttpClient<IAzureFoundryAuthService, AzureFoundryAuthService>();
 
 // Configure Jira integration
 services.AddSingleton<PKS.Infrastructure.Services.Models.JiraAuthConfig>();
@@ -492,6 +497,31 @@ app.Configure(config =>
             .WithDescription("View or set Jira field mappings")
             .WithExample(new[] { "jira", "config" })
             .WithExample(new[] { "jira", "config", "--ac-field", "customfield_10064" });
+    });
+
+    // Add Azure AI Foundry branch command
+    config.AddBranch<FoundrySettings>("foundry", foundry =>
+    {
+        foundry.SetDescription("Manage Azure AI Foundry authentication and model selection");
+
+        foundry.AddCommand<FoundryInitCommand>("init")
+            .WithDescription("Sign in to Azure AI Foundry and select default resource/model")
+            .WithExample(new[] { "foundry", "init" })
+            .WithExample(new[] { "foundry", "init", "--force" })
+            .WithExample(new[] { "foundry", "init", "--tenant", "my-tenant-id" });
+
+        foundry.AddCommand<FoundrySelectCommand>("select")
+            .WithDescription("Switch Foundry resource or model without re-authenticating")
+            .WithExample(new[] { "foundry", "select" });
+
+        foundry.AddCommand<FoundryTokenCommand>("token")
+            .WithDescription("Print access token for the configured Foundry resource")
+            .WithExample(new[] { "foundry", "token" })
+            .WithExample(new[] { "foundry", "token", "--scope", "https://management.azure.com/.default" });
+
+        foundry.AddCommand<FoundryStatusCommand>("status")
+            .WithDescription("Show current Foundry authentication status")
+            .WithExample(new[] { "foundry", "status" });
     });
 
     // Add git branch command (credential helpers)
