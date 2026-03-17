@@ -351,7 +351,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
         _logger.LogDebug("Search returned {PackageCount} packages from source: {Source}",
             packages?.Count() ?? 0, source);
 
-        foreach (var package in packages)
+        foreach (var package in packages ?? Enumerable.Empty<NuGet.Protocol.Core.Types.IPackageSearchMetadata>())
         {
             var template = new NuGetDevcontainerTemplate
             {
@@ -591,7 +591,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
             // Parse the nuspec XML to extract metadata
             var doc = System.Xml.Linq.XDocument.Parse(nuspecContent);
             var ns = doc.Root?.GetDefaultNamespace();
-            var metadata = doc.Root?.Element(ns + "metadata");
+            var metadata = doc.Root?.Element(ns! + "metadata");
 
             if (metadata == null)
             {
@@ -599,15 +599,15 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
                 return null;
             }
 
-            var packageId = metadata.Element(ns + "id")?.Value;
-            var version = metadata.Element(ns + "version")?.Value;
-            var title = metadata.Element(ns + "title")?.Value ?? packageId;
-            var description = metadata.Element(ns + "description")?.Value ?? "";
-            var authors = metadata.Element(ns + "authors")?.Value ?? "";
-            var tagsValue = metadata.Element(ns + "tags")?.Value ?? "";
-            var projectUrl = metadata.Element(ns + "projectUrl")?.Value ?? "";
-            var licenseUrl = metadata.Element(ns + "licenseUrl")?.Value ?? "";
-            var iconUrl = metadata.Element(ns + "iconUrl")?.Value ?? "";
+            var packageId = metadata.Element(ns! + "id")?.Value;
+            var version = metadata.Element(ns! + "version")?.Value;
+            var title = metadata.Element(ns! + "title")?.Value ?? packageId;
+            var description = metadata.Element(ns! + "description")?.Value ?? "";
+            var authors = metadata.Element(ns! + "authors")?.Value ?? "";
+            var tagsValue = metadata.Element(ns! + "tags")?.Value ?? "";
+            var projectUrl = metadata.Element(ns! + "projectUrl")?.Value ?? "";
+            var licenseUrl = metadata.Element(ns! + "licenseUrl")?.Value ?? "";
+            var iconUrl = metadata.Element(ns! + "iconUrl")?.Value ?? "";
 
             if (string.IsNullOrEmpty(packageId) || string.IsNullOrEmpty(version))
             {
@@ -633,7 +633,7 @@ public class NuGetTemplateDiscoveryService : INuGetTemplateDiscoveryService
             {
                 PackageId = packageId,
                 Version = version,
-                Title = title,
+                Title = title!,
                 Description = description,
                 Authors = authors,
                 Tags = tags,

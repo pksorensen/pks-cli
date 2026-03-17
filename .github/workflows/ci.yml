@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, vnext]
+  push:
+    branches: [main, vnext]
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_NOLOGO: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    name: Build and Test
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Cache .NET packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Check formatting
+      run: |
+        dotnet format pks-cli.sln --verify-no-changes --verbosity diagnostic || {
+          echo "Code formatting issues found. Please run 'dotnet format' locally."
+          exit 1
+        }
+
+    - name: Build
+      run: dotnet build pks-cli.sln --configuration Release --warnaserror --nowarn:CS8618,CS8602,CS8604,CS8619,CS8625,CS8601,CS8765,CS1998,CS0219
+
+    - name: Run Core Tests
+      working-directory: ./tests
+      run: |
+        dotnet test --configuration Release --no-build --settings .runsettings \
+          --filter "Category=Core&Reliability!=Unstable" \
+          --logger "console;verbosity=normal" \
+          --logger "trx;LogFileName=core-tests.trx" \
+          --results-directory ../test-artifacts/results \
+          --collect "XPlat Code Coverage"
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results
+        path: test-artifacts/results/*
+        retention-days: 30
+
+    - name: Upload coverage to Codecov
+      if: github.event_name == 'push'
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.cobertura.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+
+  hooks-validation:
+    runs-on: ubuntu-latest
+    name: Hooks Validation
+    needs: build-and-test
+    if: github.event_name == 'pull_request'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Build
+      run: dotnet build pks-cli.sln --configuration Release
+
+    - name: Test Hooks Integration
+      working-directory: ./src/bin/Release/net10.0
+      run: |
+        echo "Testing hook commands..."
+
+        ./pks-cli hooks pre-tool-use --json || true
+        ./pks-cli hooks post-tool-use --json || true
+        ./pks-cli hooks user-prompt-submit --json || true
+        ./pks-cli hooks notification --json || true
+        ./pks-cli hooks stop --json || true
+        ./pks-cli hooks subagent-stop --json || true
+        ./pks-cli hooks pre-compact --json || true
+
+    - name: Validate Hooks Initialization
+      working-directory: ./src/bin/Release/net10.0
+      run: |
+        mkdir -p test-hooks-init
+        cd test-hooks-init
+
+        ../pks-cli hooks init --force
+
+        if [ -f ".claude/settings.json" ]; then
+          if grep -q '"PreToolUse"' .claude/settings.json && \
+             grep -q '"PostToolUse"' .claude/settings.json && \
+             grep -q '"UserPromptSubmit"' .claude/settings.json && \
+             grep -q '"Notification"' .claude/settings.json && \
+             grep -q '"Stop"' .claude/settings.json && \
+             grep -q '"SubagentStop"' .claude/settings.json && \
+             grep -q '"PreCompact"' .claude/settings.json; then
+            echo "All 7 hook types found with correct PascalCase naming"
+          else
+            echo "Missing or incorrectly named hooks"
+            cat .claude/settings.json
+            exit 1
+          fi
+        else
+          echo "Settings file not created"
+          exit 1
+        fi

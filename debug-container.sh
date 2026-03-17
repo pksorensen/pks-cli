@@ -1,0 +1,1 @@
+docker exec 10b856abb188 sh -c "echo '=== Socket mount ===' && ls -la /tmp/pks-creds.sock 2>&1 && echo '=== Askpass script ===' && cat /tmp/git-askpass.sh 2>&1 && echo '=== Git config ===' && git config --global --list 2>&1 && echo '=== Curl available? ===' && which curl 2>&1 && echo '=== Test askpass script ===' && /tmp/git-askpass.sh 2>&1 && echo '=== Whoami ===' && whoami"

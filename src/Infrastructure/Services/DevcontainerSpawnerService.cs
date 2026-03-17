@@ -1315,7 +1315,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
             throw new InvalidOperationException("VS Code is not installed");
         }
 
-        await LaunchVsCodeAsync(vsCodeUri, vsCodeInfo.ExecutablePath);
+        await LaunchVsCodeAsync(vsCodeUri, vsCodeInfo.ExecutablePath!);
     }
 
     private async Task<bool> LaunchVsCodeAsync(string uri, string vsCodePath)
@@ -2480,7 +2480,7 @@ DEVCONTAINER_EOF";
         _logger.LogDebug("devcontainer up output: {Output}", result.Output);
 
         // Parse JSON output from last line that starts with {
-        var lines = result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var lines = result.Output!.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         var jsonLine = lines.LastOrDefault(line => line.TrimStart().StartsWith("{"));
 
         if (string.IsNullOrEmpty(jsonLine))

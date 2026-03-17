@@ -17,9 +17,9 @@ namespace PKS.CLI.Tests.Commands.Mcp;
 /// </summary>
 public class McpServerTests : TestBase
 {
-    private Mock<IMcpHostingService> _mockMcpService;
-    private Mock<IOptions<McpConfiguration>> _mockConfiguration;
-    private McpCommand _command;
+    private Mock<IMcpHostingService> _mockMcpService = default!;
+    private Mock<IOptions<McpConfiguration>> _mockConfiguration = default!;
+    private McpCommand _command = default!;
 
     public McpServerTests()
     {

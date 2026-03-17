@@ -28,7 +28,8 @@ public interface IRunnerContainerService
         string encodedJitConfig,
         Action<string>? onProgress = null,
         CancellationToken cancellationToken = default,
-        string? credentialSocketPath = null);
+        string? credentialSocketPath = null,
+        string? environment = null);
 
     /// <summary>
     /// Execute a full job lifecycle with a named container that persists after the job.
@@ -43,7 +44,8 @@ public interface IRunnerContainerService
         Action<string>? onProgress,
         CancellationToken cancellationToken,
         string? containerName,
-        string? credentialSocketPath = null);
+        string? credentialSocketPath = null,
+        string? environment = null);
 
     /// <summary>
     /// Execute a job in an existing named container. Skips clone and devcontainer up.

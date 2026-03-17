@@ -1,0 +1,1 @@
+echo "=== Devcontainer up logs ===" && ls -la ~/.pks-cli/devcontainer-logs/ 2>&1 && echo "=== Latest log ===" && cat $(ls -t ~/.pks-cli/devcontainer-logs/*.log 2>/dev/null | head -1) 2>&1 && echo "=== Credential socket on host ===" && ls -la /tmp/pks-credentials-*.sock 2>&1
