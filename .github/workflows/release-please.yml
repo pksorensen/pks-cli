@@ -148,6 +148,27 @@ jobs:
           retention-days: 30
 
   # ============================================================
+  # Publish Tool Docs to Agentic Live
+  # ============================================================
+  publish-tool-docs:
+    name: Publish Tool Docs
+    needs: release-please
+    if: needs.release-please.outputs.cli_release_created == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.cli_tag_name }}
+
+      - name: Publish tool docs
+        uses: ./.github/actions/publish-tool-docs
+        with:
+          component: pks
+          version: ${{ needs.release-please.outputs.cli_version }}
+
+  # ============================================================
   # npm Release: Build binaries, create packages, publish to npm
   # npm version follows CLI version
   # ============================================================
