@@ -306,7 +306,7 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
   -x
 
 # Configure tmux mouse scroll support
-COPY .tmux.conf /home/node/.tmux.conf
+COPY templates/base-images/pks-fullstack-base/.tmux.conf /home/node/.tmux.conf
 
 # Install Claude Code (supports: "latest", "stable", or specific version like "1.0.58")
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- ${CLAUDE_CODE_VERSION}
