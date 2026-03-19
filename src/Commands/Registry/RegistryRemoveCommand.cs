@@ -9,7 +9,7 @@ namespace PKS.Commands.Registry;
 /// Remove a registered container registry.
 /// Usage: pks registry remove &lt;hostname&gt;
 /// </summary>
-public class RegistryRemoveCommand : Command<RegistryRemoveCommand.Settings>
+public class RegistryRemoveCommand : Command<RegistrySettings>
 {
     private readonly IRegistryConfigurationService _configService;
     private readonly IAnsiConsole _console;
@@ -20,20 +20,19 @@ public class RegistryRemoveCommand : Command<RegistryRemoveCommand.Settings>
         _console = console;
     }
 
-    public class Settings : CommandSettings
-    {
-        [CommandArgument(0, "<hostname>")]
-        [Description("Registry hostname to remove (e.g. registry.kjeldager.io)")]
-        public string Hostname { get; set; } = "";
-    }
-
-    public override int Execute(CommandContext context, Settings settings)
+    public override int Execute(CommandContext context, RegistrySettings settings)
     {
         return ExecuteAsync(context, settings).GetAwaiter().GetResult();
     }
 
-    private async Task<int> ExecuteAsync(CommandContext context, Settings settings)
+    private async Task<int> ExecuteAsync(CommandContext context, RegistrySettings settings)
     {
+        if (string.IsNullOrEmpty(settings.Hostname))
+        {
+            _console.MarkupLine("[red]Hostname is required.[/]");
+            return 1;
+        }
+
         var entry = await _configService.GetByHostnameAsync(settings.Hostname);
         if (entry == null)
         {
