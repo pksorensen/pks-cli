@@ -162,6 +162,7 @@ services.AddTransient<PrdBranchCommand>();
 services.AddSingleton(serviceProvider => new PKS.Infrastructure.Services.Models.GitHubAuthConfig
 {
     ClientId = "Iv23liFv43zosMUb8t9y", // Agentics Live GitHub App (si14agents org)
+    AppSlug = "agentics-live",
     DefaultScopes = new[] { "repo", "user:email", "write:packages" },
     DeviceCodeUrl = "https://github.com/login/device/code",
     TokenUrl = "https://github.com/login/oauth/access_token",

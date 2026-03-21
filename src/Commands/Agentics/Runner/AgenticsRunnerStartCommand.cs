@@ -287,12 +287,13 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
         // 2. Set up work directory
         var workDir = await ResolveWorkDirAsync(settings.WorkDir, ct);
+        var gitEnv = await PrepareGitCredentialsAsync(ct);
         string? jobWorkTree = null;
 
         try
         {
             jobWorkTree = await SetupJobWorkTreeAsync(
-                workDir, registration, job, settings.Verbose, ct);
+                workDir, registration, job, settings.Verbose, ct, gitEnv);
 
             // 3. PATCH to in_progress
             _console.MarkupLine($"[cyan]InProcess: executing job {job.Id} in {jobWorkTree}...[/]");
@@ -692,7 +693,8 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
     private async Task<string> SetupJobWorkTreeAsync(
         string workDir, AgenticsRunnerRegistration registration,
-        RunnerJob job, bool verbose, CancellationToken ct)
+        RunnerJob job, bool verbose, CancellationToken ct,
+        Dictionary<string, string>? gitEnv = null)
     {
         var owner = registration.Owner;
         var project = registration.Project;
@@ -720,7 +722,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 Directory.CreateDirectory(Path.GetDirectoryName(cloneDir)!);
                 var cloneResult = await RunGitAsync(
                     $"clone --branch {branch} {repository} {cloneDir}",
-                    null, verbose, ct);
+                    null, verbose, ct, gitEnv);
                 if (cloneResult != 0)
                     throw new InvalidOperationException($"git clone failed (exit {cloneResult})");
             }
@@ -728,7 +730,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             {
                 // Pull latest
                 if (verbose) _console.MarkupLine($"[dim]Pulling latest in {cloneDir}...[/]");
-                await RunGitAsync("pull --ff-only", cloneDir, verbose, ct);
+                await RunGitAsync("pull --ff-only", cloneDir, verbose, ct, gitEnv);
             }
             sourceDir = cloneDir;
         }
@@ -992,7 +994,51 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         return url.ToLowerInvariant();
     }
 
-    private async Task<int> RunGitAsync(string args, string? workingDir, bool verbose, CancellationToken ct)
+    private async Task<Dictionary<string, string>> PrepareGitCredentialsAsync(CancellationToken ct)
+    {
+        // If the environment already has a working GIT_ASKPASS (e.g. VS Code devcontainer
+        // injects one with a gho_ token), don't override it — our stored App token may not
+        // have access to repos the user's own credentials do.
+        var existingAskPass = Environment.GetEnvironmentVariable("GIT_ASKPASS");
+        if (!string.IsNullOrEmpty(existingAskPass) && File.Exists(existingAskPass))
+        {
+            if (_console != null)
+                _console.MarkupLine("[dim]Using existing GIT_ASKPASS from environment.[/]");
+            return new Dictionary<string, string> { ["GIT_TERMINAL_PROMPT"] = "0" };
+        }
+
+        try
+        {
+            var stored = await _githubAuth.GetStoredTokenAsync();
+            if (stored == null || string.IsNullOrEmpty(stored.AccessToken))
+                return new Dictionary<string, string>();
+
+            // Write a GIT_ASKPASS script that provides the token non-interactively
+            var scriptPath = Path.Combine(Path.GetTempPath(), $"git-askpass-{Guid.NewGuid():N}.sh");
+            var token = stored.AccessToken;
+            await File.WriteAllTextAsync(scriptPath,
+                $"#!/bin/sh\ncase \"$1\" in\n  *Username*) echo \"x-access-token\" ;;\n  *Password*) echo \"{token}\" ;;\n  *) echo \"\" ;;\nesac\n", ct);
+
+            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            {
+                File.SetUnixFileMode(scriptPath,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+
+            return new Dictionary<string, string>
+            {
+                ["GIT_ASKPASS"] = scriptPath,
+                ["GIT_TERMINAL_PROMPT"] = "0",
+            };
+        }
+        catch
+        {
+            return new Dictionary<string, string>();
+        }
+    }
+
+    private async Task<int> RunGitAsync(string args, string? workingDir, bool verbose, CancellationToken ct,
+        Dictionary<string, string>? extraEnv = null)
     {
         var psi = new ProcessStartInfo("git")
         {
@@ -1006,6 +1052,12 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
         if (workingDir != null)
             psi.WorkingDirectory = workingDir;
+
+        if (extraEnv != null)
+        {
+            foreach (var (key, value) in extraEnv)
+                psi.Environment[key] = value;
+        }
 
         var proc = Process.Start(psi);
         if (proc == null) return -1;

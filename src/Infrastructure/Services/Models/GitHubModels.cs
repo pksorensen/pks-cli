@@ -396,6 +396,8 @@ public class GitHubTokenResponse
 public class GitHubAuthConfig
 {
     public string ClientId { get; set; } = string.Empty;
+    /// <summary>The GitHub App slug (URL name), used to build the installation URL shown when access is missing.</summary>
+    public string AppSlug { get; set; } = string.Empty;
     public string[] DefaultScopes { get; set; } = { "repo", "user:email", "write:packages" };
     public string DeviceCodeUrl { get; set; } = "https://github.com/login/device/code";
     public string TokenUrl { get; set; } = "https://github.com/login/oauth/access_token";

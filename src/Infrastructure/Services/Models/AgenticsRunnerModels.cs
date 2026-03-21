@@ -8,6 +8,7 @@ public class AgenticsRunnerRegistration
     public string Owner { get; set; } = "";
     public string Project { get; set; } = "";
     public string Server { get; set; } = "";
+    public string? GitUrl { get; set; }
     public DateTime RegisteredAt { get; set; }
 }
 
