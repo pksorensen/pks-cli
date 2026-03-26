@@ -346,7 +346,24 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             // Inherit VIBECAST_KEYBOARD_PIN from environment if set
             var keyboardPin = Environment.GetEnvironmentVariable("VIBECAST_KEYBOARD_PIN");
             var keyboardPinEnv = !string.IsNullOrEmpty(keyboardPin) ? $" VIBECAST_KEYBOARD_PIN={keyboardPin}" : "";
-            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id}{keyboardPinEnv} VIBECAST_APPEND_SYSTEM_PROMPT='{appendPrompt}' {vibecastBin}");
+
+            // Write the job prompt to a file so vibecast can pass it to Claude as a positional arg.
+            // This avoids tmux send-keys timing issues (prompt sent before Claude is ready)
+            // and multi-line escaping issues.
+            var promptFile = Path.Combine(vibecastHome, "initial-prompt.txt");
+            var jobPrompt = job.AgentDef?.Prompt ?? "";
+            await File.WriteAllTextAsync(promptFile, jobPrompt, ct);
+            var initialPromptEnv = !string.IsNullOrEmpty(jobPrompt) ? $" VIBECAST_INITIAL_PROMPT_FILE={promptFile}" : "";
+
+            // Stage git credentials and isolated stage dir (inside vibecastHome so it's job-scoped)
+            var stageGitUrl = job.AgentDef?.StageGitUrl ?? "";
+            var stageGitToken = job.AgentDef?.StageGitToken ?? "";
+            var stageDir = Path.Combine(vibecastHome, "stage");
+            var stageGitEnv = !string.IsNullOrEmpty(stageGitUrl)
+                ? $" STAGE_GIT_URL={stageGitUrl} STAGE_GIT_TOKEN={stageGitToken} STAGE_DIR={stageDir}"
+                : "";
+
+            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id}{keyboardPinEnv}{initialPromptEnv}{stageGitEnv} VIBECAST_APPEND_SYSTEM_PROMPT='{appendPrompt}' {vibecastBin}");
 
             var startProc = Process.Start(startPsi);
             if (startProc != null)
@@ -465,20 +482,11 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 await RunProcessAsync("tmux", $"select-window -t {streamingSession}:main", null, ct);
             }
 
-            // 13. Wait for Claude to be ready in the main pane
-            await Task.Delay(3000, ct);
+            // Note: the job prompt is injected via VIBECAST_INITIAL_PROMPT_FILE which vibecast
+            // passes directly to Claude as a positional argument at startup. No send-keys needed.
+            _console.MarkupLine($"[green]Prompt will be delivered via VIBECAST_INITIAL_PROMPT_FILE ({promptFile})[/]");
 
-            // 14. Paste the prompt into Claude Code via tmux send-keys
-            var prompt = job.AgentDef?.Prompt ?? "No prompt provided";
-            _console.MarkupLine($"[cyan]Sending prompt to Claude: {prompt.EscapeMarkup()[..Math.Min(prompt.Length, 80)]}...[/]");
-
-            if (streamingSession != null)
-            {
-                // Send to the streaming session's main pane (top pane = .0)
-                await TmuxSendKeysAsync($"{streamingSession}:main.0", prompt, ct);
-            }
-
-            // 14. Wait for job to complete with activity-based timeout
+            // 13. Wait for job to complete with activity-based timeout
             var idleTimeoutMs = (job.AgentDef?.IdleTimeoutMinutes ?? 2) * 60 * 1000;
             var maxTimeout = TimeSpan.FromMinutes(job.AgentDef?.MaxTimeoutMinutes ?? 60);
             _console.MarkupLine($"[cyan]Waiting up to {maxTimeout.TotalMinutes} minutes (idle threshold: {idleTimeoutMs / 60000} min)...[/]");
@@ -1139,5 +1147,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         public string? StageId { get; set; }
         public int? IdleTimeoutMinutes { get; set; }
         public int? MaxTimeoutMinutes { get; set; }
+        public string? StageGitUrl { get; set; }
+        public string? StageGitToken { get; set; }
     }
 }
