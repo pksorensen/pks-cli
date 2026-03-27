@@ -79,7 +79,6 @@ if [ "$SCOPE" = "all" ]; then
             ((updated_count++))
         fi
     done
-    echo "$VERSION" > "${REPO_ROOT}/version.txt"
 else
     if update_package "$SCOPE"; then
         ((updated_count++))

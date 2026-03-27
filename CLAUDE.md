@@ -107,8 +107,8 @@ PKS CLI is published to NuGet.org as a .NET global tool:
 # Install stable release
 dotnet tool install -g pks-cli
 
-# Install prerelease (vnext/develop)
-dotnet tool install -g pks-cli --version 1.0.0-rc.1 --prerelease
+# Install preview (latest CI build)
+dotnet tool install -g pks-cli --prerelease
 
 # Update to latest
 dotnet tool update -g pks-cli
@@ -119,8 +119,8 @@ dotnet tool run --prerelease pks-cli init MyProject -- --agentic --mcp
 ```
 
 **Release Channels:**
-- Stable versions: `dotnet tool install -g pks-cli`
-- Prereleases: Use `--prerelease` flag with specific version
+- Stable: `dotnet tool install -g pks-cli`
+- Preview (CI builds): `dotnet tool install -g pks-cli --prerelease`
 
 ### npm Installation (Cross-Platform)
 
@@ -130,22 +130,17 @@ For users without .NET SDK, PKS CLI is also available via npm with multi-channel
 # Stable release (recommended)
 npm install -g @pks-cli/pks
 
-# Release candidate (testing)
-npm install -g @pks-cli/pks@rc
-
-# Development version (bleeding edge)
+# Preview build (latest from main)
 npm install -g @pks-cli/pks@dev
 
 # Or use with npx (no installation required)
 npx @pks-cli/pks init MyProject
-npx @pks-cli/pks@rc init MyProject
 npx @pks-cli/pks@dev init MyProject
 ```
 
 **Release Channels:**
-- `@latest` (main branch) - Stable production releases
-- `@rc` (vnext branch) - Release candidates for testing
-- `@dev` (develop branch) - Development builds
+- `@latest` - Stable production releases
+- `@dev` - Preview CI builds from main
 
 **Platform Support:**
 - Linux x64 & ARM64
@@ -156,7 +151,6 @@ npx @pks-cli/pks@dev init MyProject
 - No .NET SDK required
 - Single-file self-contained binaries
 - Automatic platform detection
-- Multi-channel support matching NuGet
 - Ideal for CI/CD environments without .NET
 
 **What you get:**
@@ -657,19 +651,16 @@ PKS CLI uses [Release Please](https://github.com/googleapis/release-please) for 
 
 ### How It Works
 
-Release Please operates in **manifest mode** with two configuration files:
-- `release-please-config.json` (or `release-please-config.vnext.json` for vnext) - Package definitions and release settings
+Release Please operates in **manifest mode** with:
+- `release-please-config.json` - Package definitions and release settings
 - `.release-please-manifest.json` - Current version state for each package
 
 **Workflow:**
-1. Push conventional commits to main/vnext
-2. Release Please creates/updates a **Release PR** with changelog preview
-3. Review the Release PR to see exactly what will release
-4. Merge the Release PR to trigger the actual release (NuGet publish, npm publish, GitHub Release)
-
-**Branch Configs:**
-- `release-please-config.json` - main branch (stable releases)
-- `release-please-config.vnext.json` - vnext branch (rc prereleases)
+1. Push conventional commits to main (via merged PRs)
+2. CI publishes preview packages automatically
+3. Release Please creates/updates a **Release PR** with changelog preview
+4. Review the Release PR to see exactly what will release
+5. Merge the Release PR to trigger the stable release (NuGet publish, npm publish, GitHub Release)
 
 ### Per-Package Versioning
 
@@ -698,17 +689,15 @@ feat: broad change                   # All affected packages
 
 | File | Purpose |
 |------|---------|
-| `release-please-config.json` | Package definitions for stable releases (main) |
-| `release-please-config.vnext.json` | Package definitions for rc prereleases (vnext) |
+| `release-please-config.json` | Package definitions and release settings |
 | `.release-please-manifest.json` | Current version state per package |
-| `version.txt` | Root version file (CLI version) |
 
 ### CI/CD Workflows
 
 | Workflow | Triggers | Purpose |
 |----------|----------|---------|
-| `ci.yml` | PR + push to main/vnext | Format check, build, test, hooks validation |
-| `release-please.yml` | Push to main/vnext | Release orchestration, NuGet/npm publish |
+| `ci.yml` | PR + push to main | Format check, build, test, hooks validation, preview packages |
+| `release-please.yml` | Push to main | Release orchestration, NuGet/npm stable publish |
 | `build-base-images.yml` | Changes to base-images | Container infrastructure |
 
 ### Commit Messages

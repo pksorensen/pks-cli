@@ -14,11 +14,14 @@ runs:
       run: |
         REGISTRY="${{ inputs.registry }}"
         SOCKET="${PKS_TOKEN_URL:-/var/run/pks-creds/creds.sock}"
-        RESPONSE=$(curl -sf --unix-socket "$SOCKET" \
+        HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" --unix-socket "$SOCKET" \
           -H "Authorization: Bearer $PKS_TOKEN" \
           "http://localhost/registry/credential?hostname=${REGISTRY}")
-        if [ $? -ne 0 ]; then
-          echo "::error::Failed to fetch registry credentials from pks socket. Run 'pks registry init ${REGISTRY}' on this runner."
+        HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -1)
+        RESPONSE=$(echo "$HTTP_RESPONSE" | head -n -1)
+        if [ "$HTTP_CODE" -ne 200 ]; then
+          echo "::error::Registry credential request failed (HTTP $HTTP_CODE): $RESPONSE"
+          echo "Ensure 'pks registry init ${REGISTRY}' has been run on this runner."
           exit 1
         fi
         USER=$(echo "$RESPONSE" | jq -r '.username')
