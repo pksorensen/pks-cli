@@ -1277,4 +1277,11 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         public string? StageGitUrl { get; set; }
         public string? StageGitToken { get; set; }
     }
+
+    private class RegisterRunnerResponse
+    {
+        public string? Id { get; set; }
+        public string? Name { get; set; }
+        public string? Token { get; set; }
+    }
 }

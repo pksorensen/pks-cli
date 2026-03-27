@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <!-- CS8765: Spectre.Console override nullability; CS8619/CS8604/CS8625: test code null patterns -->
-    <NoWarn>CS8765;CS8619;CS8604;CS8625;CS0219</NoWarn>
+    <NoWarn>CS8765;CS8619;CS8604;CS8625;CS0219;NU1510;NU1902</NoWarn>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
@@ -48,7 +48,8 @@
 
   <ItemGroup>
     <ProjectReference Include="../src/pks-cli.csproj" />
-    <ProjectReference Include="Aspire/AppHost/AspireTestAppHost.csproj" />
+    <!-- Aspire/AppHost/AspireTestAppHost.csproj - excluded until Aspire test project is added to repo -->
+    <!-- <ProjectReference Include="Aspire/AppHost/AspireTestAppHost.csproj" /> -->
   </ItemGroup>
 
 </Project>
