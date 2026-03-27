@@ -354,11 +354,52 @@ jobs:
           retention-days: 30
 
   # ============================================================
+  # Promote Base Images: retag :vnext → :latest and :main
+  # ============================================================
+  promote-base-images:
+    name: Promote Base Images
+    needs: release-please
+    if: needs.release-please.outputs.cli_release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote images to stable tags
+        run: |
+          VERSION="${{ needs.release-please.outputs.cli_version }}"
+          REGISTRY="ghcr.io/${{ github.repository_owner }}"
+
+          for IMAGE_NAME in $(jq -r '.images[].name' templates/base-images/base-images.json); do
+            SOURCE="${REGISTRY}/${IMAGE_NAME}:vnext"
+            echo "Promoting ${IMAGE_NAME} → :latest, :main, :v${VERSION}"
+
+            docker pull "$SOURCE" || { echo "No :vnext image found for ${IMAGE_NAME}, skipping"; continue; }
+            docker tag "$SOURCE" "${REGISTRY}/${IMAGE_NAME}:latest"
+            docker tag "$SOURCE" "${REGISTRY}/${IMAGE_NAME}:main"
+            docker tag "$SOURCE" "${REGISTRY}/${IMAGE_NAME}:v${VERSION}"
+            docker push "${REGISTRY}/${IMAGE_NAME}:latest"
+            docker push "${REGISTRY}/${IMAGE_NAME}:main"
+            docker push "${REGISTRY}/${IMAGE_NAME}:v${VERSION}"
+          done
+
+  # ============================================================
   # Summary
   # ============================================================
   summary:
     name: Release Summary
-    needs: [release-please, release-cli, publish-npm, release-templates]
+    needs: [release-please, release-cli, publish-npm, release-templates, promote-base-images]
     if: always() && needs.release-please.outputs.releases_created == 'true'
     runs-on: ubuntu-latest
 
