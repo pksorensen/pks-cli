@@ -55,7 +55,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         [Description("Path to vibecast binary (default: uses VIBECAST_BINARY env or 'npx vibecast')")]
         public string? VibecastBinary { get; set; }
 
-        [CommandOption("--project <OWNER/PROJECT>")]
+        [CommandOption("--project <owner-project>")]
         [Description("Project to run for in owner/project format. Auto-registers if not already registered. Without this, uses first saved registration.")]
         public string? Project { get; set; }
 
