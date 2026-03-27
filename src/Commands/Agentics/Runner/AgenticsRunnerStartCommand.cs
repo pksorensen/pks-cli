@@ -54,6 +54,14 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         [CommandOption("--vibecast-binary <PATH>")]
         [Description("Path to vibecast binary (default: uses VIBECAST_BINARY env or 'npx vibecast')")]
         public string? VibecastBinary { get; set; }
+
+        [CommandOption("--project <OWNER/PROJECT>")]
+        [Description("Project to run for in owner/project format. Auto-registers if not already registered. Without this, uses first saved registration.")]
+        public string? Project { get; set; }
+
+        [CommandOption("--server <SERVER>")]
+        [Description("Agentics server URL (falls back to AGENTIC_SERVER env, then agentics.dk). Used when auto-registering with --project.")]
+        public string? Server { get; set; }
     }
 
     public AgenticsRunnerStartCommand(
@@ -81,15 +89,22 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         {
             DisplayBanner();
 
-            // Load first/default registration
-            var registrations = await _configService.ListRegistrationsAsync();
-            if (registrations.Count == 0)
+            // Resolve registration: --project auto-registers if needed, otherwise use first saved
+            AgenticsRunnerRegistration registration;
+            if (!string.IsNullOrEmpty(settings.Project))
             {
-                DisplayError("No runner registrations found. Run 'pks agentics runner register <owner/project>' first.");
-                return 1;
+                registration = await ResolveOrRegisterAsync(settings.Project, settings.Server, settings.Verbose);
             }
-
-            var registration = registrations[0];
+            else
+            {
+                var registrations = await _configService.ListRegistrationsAsync();
+                if (registrations.Count == 0)
+                {
+                    DisplayError("No runner registrations found. Use --project owner/project to auto-register, or run 'pks agentics runner register <owner/project>' first.");
+                    return 1;
+                }
+                registration = registrations[0];
+            }
 
             if (settings.Verbose)
             {
@@ -229,6 +244,89 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 _console.WriteException(ex);
             return 1;
         }
+    }
+
+    /// <summary>
+    /// Finds an existing local registration for the given owner/project, or auto-registers
+    /// against the server and saves it. This lets 'start --project owner/proj' be self-contained.
+    /// </summary>
+    private async Task<AgenticsRunnerRegistration> ResolveOrRegisterAsync(
+        string ownerProject, string? serverOverride, bool verbose)
+    {
+        var parts = ownerProject.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2)
+            throw new InvalidOperationException($"--project must be in owner/project format, got: '{ownerProject}'");
+
+        var owner = parts[0];
+        var project = parts[1];
+
+        // Check if we already have a saved registration for this project
+        var registrations = await _configService.ListRegistrationsAsync();
+        var existing = registrations.FirstOrDefault(r =>
+            string.Equals(r.Owner, owner, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(r.Project, project, StringComparison.OrdinalIgnoreCase));
+
+        if (existing != null)
+        {
+            if (verbose)
+                DisplayInfo($"Found existing registration for {owner}/{project} (id: {existing.Id})");
+            return existing;
+        }
+
+        // No saved registration — auto-register
+        DisplayInfo($"No saved registration for [cyan]{owner}/{project}[/], registering now...");
+
+        var serverHost = serverOverride
+            ?? Environment.GetEnvironmentVariable("AGENTIC_SERVER")
+            ?? "agentics.dk";
+
+        string serverUrl;
+        if (serverHost.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            serverHost.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            serverUrl = serverHost.TrimEnd('/');
+        }
+        else
+        {
+            var scheme = serverHost.StartsWith("localhost", StringComparison.OrdinalIgnoreCase) ||
+                         serverHost.StartsWith("127.0.0.1")
+                ? "http"
+                : "https";
+            serverUrl = $"{scheme}://{serverHost}";
+        }
+
+        var runnerName = System.Net.Dns.GetHostName();
+
+        using var httpClient = new HttpClient();
+        var requestBody = new { name = runnerName, labels = Array.Empty<string>() };
+        var httpResponse = await httpClient.PostAsJsonAsync(
+            $"{serverUrl}/api/owners/{owner}/projects/{project}/runners",
+            requestBody);
+
+        if (!httpResponse.IsSuccessStatusCode)
+        {
+            var errorBody = await httpResponse.Content.ReadAsStringAsync();
+            throw new InvalidOperationException($"Auto-registration failed ({(int)httpResponse.StatusCode}): {errorBody}");
+        }
+
+        var json = await httpResponse.Content.ReadAsStringAsync();
+        var resp = System.Text.Json.JsonSerializer.Deserialize<RegisterRunnerResponse>(json, JsonOptions)
+            ?? throw new InvalidOperationException("Failed to parse registration response");
+
+        var registration = new AgenticsRunnerRegistration
+        {
+            Id = resp.Id ?? Guid.NewGuid().ToString(),
+            Name = resp.Name ?? runnerName,
+            Token = resp.Token ?? "",
+            Owner = owner,
+            Project = project,
+            Server = serverUrl,
+            RegisteredAt = DateTime.UtcNow
+        };
+
+        await _configService.AddRegistrationAsync(registration);
+        DisplayInfo($"[green]Registered runner '{registration.Name}' for {owner}/{project}[/]");
+        return registration;
     }
 
     private async Task<RunnerJob?> PollForJobAsync(AgenticsRunnerRegistration registration, CancellationToken ct)
@@ -1005,14 +1103,43 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
     private async Task<Dictionary<string, string>> PrepareGitCredentialsAsync(CancellationToken ct)
     {
         // If the environment already has a working GIT_ASKPASS (e.g. VS Code devcontainer
-        // injects one with a gho_ token), don't override it — our stored App token may not
-        // have access to repos the user's own credentials do.
+        // injects one with a gho_ token), verify it actually works before trusting it.
+        // VS Code's GIT_ASKPASS connects to a Unix socket (/tmp/vscode-git-*.sock) that may
+        // be stale/dead if the VS Code session that created it is gone.
         var existingAskPass = Environment.GetEnvironmentVariable("GIT_ASKPASS");
         if (!string.IsNullOrEmpty(existingAskPass) && File.Exists(existingAskPass))
         {
+            try
+            {
+                var testPsi = new ProcessStartInfo(existingAskPass)
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                };
+                testPsi.ArgumentList.Add("Password:");
+                testPsi.Environment["GIT_TERMINAL_PROMPT"] = "0";
+                using var testCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                testCts.CancelAfter(TimeSpan.FromSeconds(3));
+                var testProc = Process.Start(testPsi);
+                if (testProc != null)
+                {
+                    var output = await testProc.StandardOutput.ReadToEndAsync(testCts.Token);
+                    await testProc.WaitForExitAsync(testCts.Token);
+                    if (testProc.ExitCode == 0 && !string.IsNullOrWhiteSpace(output))
+                    {
+                        if (_console != null)
+                            _console.MarkupLine("[dim]Using existing GIT_ASKPASS from environment.[/]");
+                        return new Dictionary<string, string> { ["GIT_TERMINAL_PROMPT"] = "0" };
+                    }
+                }
+            }
+            catch
+            {
+                // GIT_ASKPASS script failed (e.g. stale VS Code socket) — fall through to stored token
+            }
+
             if (_console != null)
-                _console.MarkupLine("[dim]Using existing GIT_ASKPASS from environment.[/]");
-            return new Dictionary<string, string> { ["GIT_TERMINAL_PROMPT"] = "0" };
+                _console.MarkupLine("[yellow]Existing GIT_ASKPASS is not functional (stale socket?), falling back to stored token.[/]");
         }
 
         try
