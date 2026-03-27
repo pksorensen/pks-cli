@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - vnext
 
 permissions:
   contents: write
@@ -45,25 +44,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Determine config file
-        id: config
-        run: |
-          case "${{ github.ref_name }}" in
-            main)
-              echo "config-file=release-please-config.json" >> $GITHUB_OUTPUT
-              ;;
-            vnext)
-              echo "config-file=release-please-config.vnext.json" >> $GITHUB_OUTPUT
-              ;;
-          esac
-
       - name: Run Release Please
         id: release
         uses: googleapis/release-please-action@v4
         with:
-          config-file: ${{ steps.config.outputs.config-file }}
+          config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-          target-branch: ${{ github.ref_name }}
+          target-branch: main
 
   # ============================================================
   # CLI Release: Build, pack, and publish NuGet package
@@ -216,14 +203,7 @@ jobs:
         run: |
           VERSION="${{ needs.release-please.outputs.cli_version }}"
 
-          # Determine npm dist-tag based on version
-          if [[ "$VERSION" == *"-rc."* ]]; then
-            TAG="rc"
-          elif [[ "$VERSION" == *"-dev."* ]]; then
-            TAG="dev"
-          else
-            TAG="latest"
-          fi
+          TAG="latest"
 
           echo "Publishing version $VERSION to '$TAG' channel..."
           PUBLISH_FLAGS="--access public --tag $TAG --provenance"

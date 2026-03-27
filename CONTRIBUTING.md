@@ -1,10 +1,66 @@
 # Contributing to PKS CLI
 
+Thank you for contributing to PKS CLI! This guide covers the development workflow, release process, and conventions.
+
+## Branch Strategy
+
+PKS CLI uses a **single-branch model** with `main` as the only long-lived branch:
+
+- All PRs target **main**
+- Every push to main publishes **preview packages** automatically (`X.Y.Z-preview.{build}`)
+- [Release Please](https://github.com/googleapis/release-please) creates **Release PRs** on main
+- Merging a Release PR publishes **stable releases** to NuGet and npm
+
+```
+feature branch → PR to main → merge
+                                 ↓
+              CI publishes preview package (6.3.0-preview.42)
+              Release Please updates the Release PR
+                                 ↓
+              When ready: merge the Release PR
+                                 ↓
+              Stable release published (6.3.0)
+```
+
+The Release PR is your gate. Features accumulate on main, Release Please keeps updating the PR with the changelog, and you merge it when you're ready to cut a release.
+
+## Getting Started
+
+```bash
+# Clone the repository
+git clone https://github.com/pksorensen/pks-cli.git
+cd pks-cli
+
+# Build and test
+dotnet build PKS.CLI.sln
+dotnet test
+
+# Run locally without installing
+cd src
+dotnet run -- [command] [options]
+```
+
+## Making Changes
+
+```bash
+# 1. Create feature branch from main
+git checkout main
+git pull origin main
+git checkout -b feat/my-feature
+
+# 2. Develop with conventional commits
+git commit -m "feat(init): add Blazor template support"
+
+# 3. Push and open PR against main
+git push origin feat/my-feature
+gh pr create --base main --title "feat(init): add Blazor template support"
+```
+
 ## Commit Message Convention
 
-This project uses [Conventional Commits](https://www.conventionalcommits.org/) to enable automatic versioning and release notes generation.
+This project uses [Conventional Commits](https://www.conventionalcommits.org/) to drive automatic versioning and changelog generation.
 
-### Commit Message Format
+### Format
 
 ```
 <type>(<scope>): <subject>
@@ -16,149 +72,158 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/) t
 
 ### Types
 
-- **feat**: A new feature (triggers minor version bump)
-- **fix**: A bug fix (triggers patch version bump)
-- **docs**: Documentation only changes
-- **style**: Changes that do not affect code functionality (formatting, missing semicolons, etc.)
-- **refactor**: Code changes that neither fix bugs nor add features
-- **perf**: Performance improvements (triggers patch version bump)
-- **test**: Adding or modifying tests
-- **build**: Changes to the build system or dependencies
-- **ci**: Changes to CI configuration files and scripts
-- **chore**: Other changes that don't modify src or test files
-- **revert**: Reverts a previous commit (triggers patch version bump)
+| Type | Description | Version Bump |
+|------|-------------|-------------|
+| `feat` | New feature | Minor (1.0.0 → 1.1.0) |
+| `fix` | Bug fix | Patch (1.0.0 → 1.0.1) |
+| `perf` | Performance improvement | Patch |
+| `docs` | Documentation only | No bump |
+| `style` | Formatting, no code change | No bump |
+| `refactor` | Code restructuring | No bump |
+| `test` | Adding/modifying tests | No bump |
+| `build` | Build system/dependencies | No bump |
+| `ci` | CI configuration | No bump |
+| `chore` | Maintenance | No bump |
+| `revert` | Revert a commit | Patch |
 
 ### Breaking Changes
 
-Breaking changes trigger a major version bump. They can be indicated in two ways:
+Breaking changes trigger a **major** version bump:
 
-1. Add `BREAKING CHANGE:` in the commit footer:
-   ```
-   feat: remove deprecated API endpoints
-   
-   BREAKING CHANGE: The /api/v1/* endpoints have been removed.
-   Use /api/v2/* instead.
-   ```
+```bash
+# Using ! after type/scope
+feat!: change configuration file format
 
-2. Add `!` after the type/scope:
-   ```
-   feat!: change configuration file format
-   ```
+# Or using BREAKING CHANGE footer
+feat: remove deprecated API endpoints
 
-### Examples
-
-#### Feature
-```
-feat(init): add support for Blazor templates
-
-Added new Blazor WebAssembly and Blazor Server templates
-to the project initialization options.
+BREAKING CHANGE: The /api/v1/* endpoints have been removed.
+Use /api/v2/* instead.
 ```
 
-#### Bug Fix
-```
-fix(mcp): resolve connection timeout in SSE transport
+### Scopes
 
-Increased default timeout from 30s to 60s to handle
-slower network connections.
+Scopes map to Release Please package components:
 
-Fixes #123
-```
-
-#### Breaking Change
-```
-feat(api)!: change authentication method to OAuth 2.0
-
-BREAKING CHANGE: Basic authentication is no longer supported.
-All API requests must now use OAuth 2.0 tokens.
-
-Migration guide: https://docs.example.com/migration
-```
-
-#### Documentation
-```
-docs(readme): update installation instructions
-
-Added instructions for macOS and Windows users.
-```
-
-### Scope Examples
-
-Common scopes for PKS CLI:
-
-- **init**: Project initialization command
-- **agent**: Agent management features
-- **mcp**: Model Context Protocol integration
-- **deploy**: Deployment features
-- **hooks**: Git hooks integration
-- **prd**: Product Requirements Document features
-- **cli**: General CLI functionality
-- **templates**: Project templates
-- **docs**: Documentation
-- **tests**: Test suite
-- **ci**: CI/CD pipeline
+| Scope | Package | Example |
+|-------|---------|---------|
+| `cli` | pks-cli (main CLI) | `feat(cli): add status command` |
+| `init` | CLI init command | `fix(init): handle spaces in project name` |
+| `agent` | Agent management | `feat(agent): add list subcommand` |
+| `mcp` | MCP integration | `fix(mcp): resolve SSE timeout` |
+| `deploy` | Deployment features | `feat(deploy): add Coolify support` |
+| `hooks` | Git hooks | `fix(hooks): correct validation logic` |
+| `devcontainer` | DevContainer template | `feat(devcontainer): add Node.js support` |
+| `claude-dotnet-9` | Claude .NET 9 template | `fix(claude-dotnet-9): update base image` |
+| `claude-dotnet-10-full` | Claude .NET 10 template | `feat(claude-dotnet-10-full): add Aspire` |
+| `pks-fullstack` | Fullstack template | `feat(pks-fullstack): add Blazor frontend` |
+| `templates` | All templates | `fix(templates): normalize line endings` |
 
 ### Tips
 
 1. Keep the subject line under 50 characters
-2. Use the imperative mood ("add feature" not "added feature")
+2. Use imperative mood ("add feature" not "added feature")
 3. Don't end the subject line with a period
 4. Separate subject from body with a blank line
-5. Use the body to explain what and why, not how
-6. Reference issues and PRs in the footer
+5. Use the body to explain *what* and *why*, not *how*
+6. Reference issues in the footer (`Closes #42`)
 
-## Pull Request Guidelines
+## Pull Request Workflow
 
-1. **For new features**: Create branches from relevant `release/*` branch
-2. **For hotfixes**: Create branches from `main` or create new `release/*` branch
-3. Name branches descriptively: `feat/add-blazor-templates` or `fix/connection-timeout`
-4. Ensure all tests pass before submitting PR
-5. Update documentation if needed
-6. Follow the commit message convention for all commits
+1. Open PRs against **main**
+2. CI runs automatically: format check, build, tests, hooks validation
+3. Get at least one review approval
+4. Squash merge preferred for clean commit history
+5. Delete your feature branch after merge
 
-## Development Workflow
+### CI Checks
 
-### Standard Feature Development
+Every PR must pass:
 
-1. **Choose target release**: Create or checkout `release/X.Y.Z` branch
-2. **Create feature branch**: `git checkout -b feat/amazing-feature`
-3. **Develop and commit**: Using conventional commit format
-4. **Push feature branch**: `git push origin feat/amazing-feature`
-5. **Open PR to release branch**: `feat/amazing-feature` → `release/X.Y.Z`
-6. **Test pre-release**: Use generated `vX.Y.Z-pre.N` package
-7. **Production release**: Merge `release/X.Y.Z` → `main` when ready
+- `dotnet format --verify-no-changes` — code formatting
+- `dotnet build --warnaserror` — clean build
+- `dotnet test --filter "Category=Core&Reliability!=Unstable"` — core tests
+- Hooks validation (PR only)
 
-### Hotfix Workflow
+## How Release Please Works
 
-1. **Create release branch**: `git checkout -b release/X.Y.Z` from main
-2. **Create hotfix branch**: `git checkout -b fix/critical-issue`
-3. **Fix and commit**: Using conventional commit format
-4. **PR to release branch**: Test with pre-release
-5. **PR to main**: Deploy hotfix to production
+PKS CLI uses Release Please in **manifest mode** with per-package versioning.
 
-See [docs/BRANCHING-STRATEGY.md](docs/BRANCHING-STRATEGY.md) for detailed workflow information.
+### Packages
 
-## Semantic Release Process
+| Package | Path | Tag Format | NuGet ID |
+|---------|------|------------|----------|
+| pks-cli | `src/` | `v6.2.0` | `pks-cli` |
+| DevContainer | `templates/devcontainer/` | `devcontainer-v5.0.0` | `PKS.Templates.DevContainer` |
+| Claude .NET 9 | `templates/claude-dotnet-9/` | `claude-dotnet-9-v4.0.0` | `PKS.Templates.ClaudeDotNet9` |
+| Claude .NET 10 Full | `templates/claude-dotnet-10-full/` | `claude-dotnet-10-full-v5.0.0` | `PKS.Templates.ClaudeDotNet10.Full` |
+| PksFullstack | `templates/pks-fullstack/` | `pks-fullstack-v4.1.0` | `PKS.Templates.PksFullstack` |
 
-This project uses automated semantic release:
+### Configuration Files
 
-1. Commits to `main` trigger the release workflow
-2. Commit messages are analyzed to determine version bump
-3. Version is automatically updated in all project files
-4. CHANGELOG.md is generated/updated
-5. GitHub release is created with release notes
-6. NuGet packages are published (if configured)
+| File | Purpose |
+|------|---------|
+| `release-please-config.json` | Package definitions and release settings |
+| `.release-please-manifest.json` | Per-package version tracking |
+| `src/version.txt` | CLI version (managed by Release Please) |
+| `templates/*/version.txt` | Template versions (managed by Release Please) |
 
-### Version Bumping Rules
+### The Release Cycle
 
-| Commit Type | Version Bump |
-|-------------|--------------|
-| `feat` | Minor (1.0.0 → 1.1.0) |
-| `fix` | Patch (1.0.0 → 1.0.1) |
-| `perf` | Patch (1.0.0 → 1.0.1) |
-| `BREAKING CHANGE` | Major (1.0.0 → 2.0.0) |
-| Others | No bump |
+```
+1. Merge PRs with conventional commits into main
+       ↓
+2. CI publishes preview NuGet packages (X.Y.Z-preview.{build})
+       ↓
+3. Release Please creates/updates a Release PR with changelog
+       ↓
+4. Review the Release PR — it previews the version bump and changelog
+       ↓
+5. Merge the Release PR when ready → triggers:
+   • NuGet stable package publish
+   • npm stable package publish (@latest tag)
+   • GitHub Release creation
+```
+
+## Preview Packages
+
+Every push to main automatically publishes preview packages, separate from Release Please:
+
+- **NuGet**: `pks-cli` version `X.Y.Z-preview.{build_number}`
+- Install with: `dotnet tool install -g pks-cli --prerelease`
+
+These allow testing the latest code without waiting for a stable release.
+
+## Testing
+
+```bash
+# Full test suite
+dotnet test
+
+# Core tests only (matches CI)
+dotnet test --filter "Category=Core&Reliability!=Unstable"
+
+# Format check
+dotnet format --verify-no-changes PKS.CLI.sln
+```
+
+### Before Submitting a PR
+
+1. Run `dotnet format PKS.CLI.sln` to fix formatting
+2. Run `dotnet build --warnaserror` to check for warnings
+3. Run `dotnet test` to ensure all tests pass
+4. Verify commit messages follow conventional commit format
+
+## Utility Scripts
+
+| Script | Usage | Purpose |
+|--------|-------|---------|
+| `scripts/get-package-version.sh` | `./scripts/get-package-version.sh [scope]` | Read current version |
+| `scripts/update-version.sh` | `./scripts/update-version.sh <version> [scope]` | Update version in csproj/version.txt |
+| `scripts/sync-npm-versions.sh` | `./scripts/sync-npm-versions.sh` | Sync npm package versions |
+
+Scopes: `cli`, `devcontainer`, `claude-dotnet-9`, `claude-dotnet-10-full`, `pks-fullstack`, `all`
 
 ## Questions?
 
-Feel free to open an issue if you have questions about contributing!
+Open an issue at [pksorensen/pks-cli](https://github.com/pksorensen/pks-cli/issues)!

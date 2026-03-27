@@ -21,7 +21,7 @@ declare -A VERSION_FILES=(
 )
 
 if [ -z "$SCOPE" ]; then
-    VERSION_FILE="${REPO_ROOT}/version.txt"
+    VERSION_FILE="${REPO_ROOT}/src/version.txt"
 elif [ -n "${VERSION_FILES[$SCOPE]+x}" ]; then
     VERSION_FILE="${REPO_ROOT}/${VERSION_FILES[$SCOPE]}"
 else

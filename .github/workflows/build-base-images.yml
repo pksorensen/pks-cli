@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - vnext
     paths:
       - 'templates/base-images/**'
       - 'src/**'
