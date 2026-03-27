@@ -100,10 +100,10 @@ public class JiraServiceTests
         decoded.Should().Be("user@example.com:token");
     }
 
-        [Fact]
-        public async Task SearchIssuesAsync_ForCloud_ShouldUseSearchJqlEndpoint()
-        {
-                var responseBody = """
+    [Fact]
+    public async Task SearchIssuesAsync_ForCloud_ShouldUseSearchJqlEndpoint()
+    {
+        var responseBody = """
                 {
                     "total": 1,
                     "issues": [
@@ -123,39 +123,39 @@ public class JiraServiceTests
                 }
                 """;
 
-                var handler = new CountingHttpMessageHandler(HttpStatusCode.OK, responseBody);
-                var httpClient = new HttpClient(handler);
+        var handler = new CountingHttpMessageHandler(HttpStatusCode.OK, responseBody);
+        var httpClient = new HttpClient(handler);
 
-                var configValues = new Dictionary<string, string>
-                {
-                        ["jira:base_url"] = "https://example.atlassian.net",
-                        ["jira:auth_method"] = JiraAuthMethod.ApiToken.ToString(),
-                        ["jira:deployment_type"] = JiraDeploymentType.Cloud.ToString(),
-                        ["jira:email"] = "user@example.com",
-                        ["jira:api_token"] = "token",
-                        ["jira:cloud_id"] = "cloud-123"
-                };
-
-                var config = new Mock<IConfigurationService>();
-                config.Setup(x => x.GetAsync(It.IsAny<string>()))
-                        .ReturnsAsync((string key) => configValues.TryGetValue(key, out var value) ? value : null);
-
-                var logger = new Mock<ILogger<JiraService>>();
-                var service = new JiraService(httpClient, config.Object, logger.Object);
-
-                var result = await service.SearchIssuesAsync("project = UDV ORDER BY created ASC", maxResults: 100);
-
-                handler.SendCount.Should().Be(2); // 1 for /field discovery + 1 for search
-                handler.LastRequestUri.Should().Be("https://api.atlassian.com/ex/jira/cloud-123/rest/api/3/search/jql");
-                handler.LastRequestBody.Should().NotContain("\"startAt\"");
-                result.Total.Should().Be(1);
-                result.Issues.Should().ContainSingle(i => i.Key == "UDV-1");
-        }
-
-        [Fact]
-        public async Task SearchIssuesAsync_WhenTotalMissing_ShouldFallbackToIssueCount()
+        var configValues = new Dictionary<string, string>
         {
-                var responseBody = """
+            ["jira:base_url"] = "https://example.atlassian.net",
+            ["jira:auth_method"] = JiraAuthMethod.ApiToken.ToString(),
+            ["jira:deployment_type"] = JiraDeploymentType.Cloud.ToString(),
+            ["jira:email"] = "user@example.com",
+            ["jira:api_token"] = "token",
+            ["jira:cloud_id"] = "cloud-123"
+        };
+
+        var config = new Mock<IConfigurationService>();
+        config.Setup(x => x.GetAsync(It.IsAny<string>()))
+                .ReturnsAsync((string key) => configValues.TryGetValue(key, out var value) ? value : null);
+
+        var logger = new Mock<ILogger<JiraService>>();
+        var service = new JiraService(httpClient, config.Object, logger.Object);
+
+        var result = await service.SearchIssuesAsync("project = UDV ORDER BY created ASC", maxResults: 100);
+
+        handler.SendCount.Should().Be(2); // 1 for /field discovery + 1 for search
+        handler.LastRequestUri.Should().Be("https://api.atlassian.com/ex/jira/cloud-123/rest/api/3/search/jql");
+        handler.LastRequestBody.Should().NotContain("\"startAt\"");
+        result.Total.Should().Be(1);
+        result.Issues.Should().ContainSingle(i => i.Key == "UDV-1");
+    }
+
+    [Fact]
+    public async Task SearchIssuesAsync_WhenTotalMissing_ShouldFallbackToIssueCount()
+    {
+        var responseBody = """
                 {
                     "issues": [
                         {
@@ -174,31 +174,31 @@ public class JiraServiceTests
                 }
                 """;
 
-                var handler = new CountingHttpMessageHandler(HttpStatusCode.OK, responseBody);
-                var httpClient = new HttpClient(handler);
+        var handler = new CountingHttpMessageHandler(HttpStatusCode.OK, responseBody);
+        var httpClient = new HttpClient(handler);
 
-                var configValues = new Dictionary<string, string>
-                {
-                        ["jira:base_url"] = "https://example.atlassian.net",
-                        ["jira:auth_method"] = JiraAuthMethod.ApiToken.ToString(),
-                        ["jira:deployment_type"] = JiraDeploymentType.Cloud.ToString(),
-                        ["jira:email"] = "user@example.com",
-                        ["jira:api_token"] = "token",
-                        ["jira:cloud_id"] = "cloud-123"
-                };
+        var configValues = new Dictionary<string, string>
+        {
+            ["jira:base_url"] = "https://example.atlassian.net",
+            ["jira:auth_method"] = JiraAuthMethod.ApiToken.ToString(),
+            ["jira:deployment_type"] = JiraDeploymentType.Cloud.ToString(),
+            ["jira:email"] = "user@example.com",
+            ["jira:api_token"] = "token",
+            ["jira:cloud_id"] = "cloud-123"
+        };
 
-                var config = new Mock<IConfigurationService>();
-                config.Setup(x => x.GetAsync(It.IsAny<string>()))
-                        .ReturnsAsync((string key) => configValues.TryGetValue(key, out var value) ? value : null);
+        var config = new Mock<IConfigurationService>();
+        config.Setup(x => x.GetAsync(It.IsAny<string>()))
+                .ReturnsAsync((string key) => configValues.TryGetValue(key, out var value) ? value : null);
 
-                var logger = new Mock<ILogger<JiraService>>();
-                var service = new JiraService(httpClient, config.Object, logger.Object);
+        var logger = new Mock<ILogger<JiraService>>();
+        var service = new JiraService(httpClient, config.Object, logger.Object);
 
-                var result = await service.SearchIssuesAsync("project = UDV ORDER BY created ASC", maxResults: 100);
+        var result = await service.SearchIssuesAsync("project = UDV ORDER BY created ASC", maxResults: 100);
 
-                result.Total.Should().Be(1);
-                result.Issues.Should().HaveCount(1);
-        }
+        result.Total.Should().Be(1);
+        result.Issues.Should().HaveCount(1);
+    }
 
     private sealed class CountingHttpMessageHandler : HttpMessageHandler
     {

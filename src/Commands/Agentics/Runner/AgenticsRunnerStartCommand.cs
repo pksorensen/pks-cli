@@ -139,95 +139,95 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             try
             {
 
-            // Set up cancellation (handle both SIGINT via Ctrl+C and SIGTERM via Aspire/process exit)
-            using var cts = new CancellationTokenSource();
-            System.Console.CancelKeyPress += (_, e) =>
-            {
-                e.Cancel = true;
-                DisplayInfo("Shutdown requested (SIGINT)...");
-                cts.Cancel();
-            };
-            AppDomain.CurrentDomain.ProcessExit += (_, _) =>
-            {
-                if (!cts.IsCancellationRequested)
+                // Set up cancellation (handle both SIGINT via Ctrl+C and SIGTERM via Aspire/process exit)
+                using var cts = new CancellationTokenSource();
+                System.Console.CancelKeyPress += (_, e) =>
                 {
-                    DisplayInfo("Process exit signal received (SIGTERM)...");
+                    e.Cancel = true;
+                    DisplayInfo("Shutdown requested (SIGINT)...");
                     cts.Cancel();
-                    // Block briefly to allow cleanup to run
-                    CleanupAllActiveJobsAsync().GetAwaiter().GetResult();
-                }
-            };
-
-            // Polling loop
-            var jobsProcessed = 0;
-            while (!cts.Token.IsCancellationRequested)
-            {
-                try
+                };
+                AppDomain.CurrentDomain.ProcessExit += (_, _) =>
                 {
-                    var job = await PollForJobAsync(registration, cts.Token);
-                    if (job != null)
+                    if (!cts.IsCancellationRequested)
                     {
-                        _console.MarkupLine($"[green]Job received:[/] {job.Id}");
+                        DisplayInfo("Process exit signal received (SIGTERM)...");
+                        cts.Cancel();
+                        // Block briefly to allow cleanup to run
+                        CleanupAllActiveJobsAsync().GetAwaiter().GetResult();
+                    }
+                };
 
-                        if (settings.InProcess)
+                // Polling loop
+                var jobsProcessed = 0;
+                while (!cts.Token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        var job = await PollForJobAsync(registration, cts.Token);
+                        if (job != null)
                         {
-                            await ExecuteInProcessAsync(registration, job, settings, cts.Token);
-                            jobsProcessed++;
-                            _console.MarkupLine($"[green]InProcess job completed.[/]");
-                        }
-                        else
-                        {
-                            var spawnOptions = BuildSpawnOptions(job, credentialServer!.SocketPath, registration);
-                            var spawnResult = await _spawnerService.SpawnLocalAsync(spawnOptions, msg =>
-                            {
-                                if (settings.Verbose)
-                                    _console.MarkupLine($"[dim]{msg.EscapeMarkup()}[/]");
-                            });
+                            _console.MarkupLine($"[green]Job received:[/] {job.Id}");
 
-                            if (spawnResult.Success)
+                            if (settings.InProcess)
                             {
+                                await ExecuteInProcessAsync(registration, job, settings, cts.Token);
                                 jobsProcessed++;
-                                _console.MarkupLine($"[green]Job completed successfully.[/] Container: {spawnResult.ContainerId}");
+                                _console.MarkupLine($"[green]InProcess job completed.[/]");
                             }
                             else
                             {
-                                _console.MarkupLine($"[red]Job failed:[/] {spawnResult.Message.EscapeMarkup()}");
-                                foreach (var err in spawnResult.Errors)
-                                    _console.MarkupLine($"  [red]- {err.EscapeMarkup()}[/]");
+                                var spawnOptions = BuildSpawnOptions(job, credentialServer!.SocketPath, registration);
+                                var spawnResult = await _spawnerService.SpawnLocalAsync(spawnOptions, msg =>
+                                {
+                                    if (settings.Verbose)
+                                        _console.MarkupLine($"[dim]{msg.EscapeMarkup()}[/]");
+                                });
+
+                                if (spawnResult.Success)
+                                {
+                                    jobsProcessed++;
+                                    _console.MarkupLine($"[green]Job completed successfully.[/] Container: {spawnResult.ContainerId}");
+                                }
+                                else
+                                {
+                                    _console.MarkupLine($"[red]Job failed:[/] {spawnResult.Message.EscapeMarkup()}");
+                                    foreach (var err in spawnResult.Errors)
+                                        _console.MarkupLine($"  [red]- {err.EscapeMarkup()}[/]");
+                                }
                             }
                         }
+                        else
+                        {
+                            if (settings.Verbose)
+                                _console.MarkupLine($"[dim]{DateTime.UtcNow:HH:mm:ss} No jobs available, waiting {settings.PollingInterval}s...[/]");
+                        }
                     }
-                    else
+                    catch (OperationCanceledException)
                     {
-                        if (settings.Verbose)
-                            _console.MarkupLine($"[dim]{DateTime.UtcNow:HH:mm:ss} No jobs available, waiting {settings.PollingInterval}s...[/]");
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        _console.MarkupLine($"[red]Polling error:[/] {ex.Message.EscapeMarkup()}");
+                    }
+
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(settings.PollingInterval), cts.Token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
                     }
                 }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    _console.MarkupLine($"[red]Polling error:[/] {ex.Message.EscapeMarkup()}");
-                }
 
-                try
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(settings.PollingInterval), cts.Token);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-            }
+                _console.WriteLine();
 
-            _console.WriteLine();
+                // Clean up all active jobs on shutdown
+                await CleanupAllActiveJobsAsync();
 
-            // Clean up all active jobs on shutdown
-            await CleanupAllActiveJobsAsync();
-
-            DisplaySuccess($"Runner daemon stopped. Jobs processed: {jobsProcessed}");
+                DisplaySuccess($"Runner daemon stopped. Jobs processed: {jobsProcessed}");
 
             }
             finally
