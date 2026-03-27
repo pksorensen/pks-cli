@@ -18,6 +18,7 @@ public class GitCredentialServer : IAsyncDisposable
     private readonly Action<string>? _onLog;
     private readonly IJobTokenService? _tokenService;
     private readonly ICoolifyTokenStore? _tokenStore;
+    private readonly IRegistryConfigurationService? _registryConfig;
     private WebApplication? _app;
 
     public GitCredentialServer(
@@ -25,7 +26,8 @@ public class GitCredentialServer : IAsyncDisposable
         string socketId,
         Action<string>? onLog = null,
         IJobTokenService? tokenService = null,
-        ICoolifyTokenStore? tokenStore = null)
+        ICoolifyTokenStore? tokenStore = null,
+        IRegistryConfigurationService? registryConfig = null)
     {
         // Use a stable directory so we can bind-mount the directory (not the file).
         // Directory mounts survive socket file recreation across runner restarts.
@@ -35,6 +37,7 @@ public class GitCredentialServer : IAsyncDisposable
         _onLog = onLog;
         _tokenService = tokenService;
         _tokenStore = tokenStore;
+        _registryConfig = registryConfig;
     }
 
     /// <summary>
@@ -216,6 +219,27 @@ public class GitCredentialServer : IAsyncDisposable
                 _onLog?.Invoke($"Application status proxy error: {ex.Message}");
                 return Results.Json(new { error = $"proxy error: {ex.Message}" }, statusCode: 502);
             }
+        });
+
+        _app.MapGet("/registry/credential", async (HttpRequest request) =>
+        {
+            var claims = ValidateRequest(request);
+            if (claims == null)
+                return Results.Json(new { error = "unauthorized" }, statusCode: 401);
+
+            var hostname = request.Query["hostname"].FirstOrDefault();
+            if (string.IsNullOrEmpty(hostname))
+                return Results.Json(new { error = "hostname required" }, statusCode: 400);
+
+            if (_registryConfig == null)
+                return Results.Json(new { error = "registry service unavailable" }, statusCode: 503);
+
+            var entry = await _registryConfig.GetByHostnameAsync(hostname);
+            if (entry == null)
+                return Results.Json(new { error = $"No registry registered for {hostname}" }, statusCode: 404);
+
+            _onLog?.Invoke($"Registry credential served for: {hostname}");
+            return Results.Json(new { username = entry.Username, password = entry.Password });
         });
 
         await _app.StartAsync(ct);

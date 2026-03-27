@@ -424,4 +424,4 @@ hive-mind-prompt-*.txt
 /.devcontainer/.env
 
 pks-cli
-data
+data.agentics/

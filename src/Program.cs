@@ -19,6 +19,7 @@ using PKS.Commands.Agentics.Runner;
 using PKS.Commands.Ado;
 using PKS.Commands.Foundry;
 using PKS.Commands.Jira;
+using PKS.Commands.Registry;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.Text;
@@ -161,6 +162,7 @@ services.AddTransient<PrdBranchCommand>();
 services.AddSingleton(serviceProvider => new PKS.Infrastructure.Services.Models.GitHubAuthConfig
 {
     ClientId = "Iv23liFv43zosMUb8t9y", // Agentics Live GitHub App (si14agents org)
+    AppSlug = "agentics-live",
     DefaultScopes = new[] { "repo", "user:email", "write:packages" },
     DeviceCodeUrl = "https://github.com/login/device/code",
     TokenUrl = "https://github.com/login/oauth/access_token",
@@ -208,6 +210,7 @@ services.AddSingleton<IGitHubIssuesService, GitHubIssuesService>();
 services.AddSingleton<EnhancedGitHubService>();
 
 // Register GitHub Runner services
+services.AddSingleton<IRegistryConfigurationService, RegistryConfigurationService>();
 services.AddSingleton<ICoolifyConfigurationService, CoolifyConfigurationService>();
 services.AddSingleton<ICoolifyLookupService, CoolifyLookupService>();
 services.AddSingleton<ICoolifyApiService, CoolifyApiService>();
@@ -461,6 +464,22 @@ app.Configure(config =>
         coolify.AddCommand<PKS.Commands.Coolify.CoolifyStatusCommand>("status")
             .WithDescription("Test connectivity and show projects with resource health status")
             .WithExample(new[] { "coolify", "status" });
+    });
+
+    // Add registry branch command
+    config.AddBranch<RegistrySettings>("registry", registry =>
+    {
+        registry.SetDescription("Manage container registry credentials on this runner");
+
+        registry.AddCommand<RegistryInitCommand>("init")
+            .WithDescription("Register a container registry (persists credentials for CI)")
+            .WithExample(new[] { "registry", "init", "registry.kjeldager.io" });
+
+        registry.AddCommand<RegistryStatusCommand>("status")
+            .WithDescription("List registered registries and check connections");
+
+        registry.AddCommand<RegistryRemoveCommand>("remove")
+            .WithDescription("Remove a registered registry");
     });
 
     // Add Azure DevOps branch command

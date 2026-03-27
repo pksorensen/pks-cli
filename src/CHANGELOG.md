@@ -49,6 +49,21 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.2.0](https://github.com/pksorensen/pks-cli/compare/v6.1.0...v6.2.0) (2026-03-27)
+
+
+### Features
+
+* add project and server options for auto-registration in Agentics runner ([f6eb40d](https://github.com/pksorensen/pks-cli/commit/f6eb40dcf3e9ee6c567f714bd09f607d30c051cd))
+* enhance Agentics runner commands with GitHub integration and project info fetching ([3b94299](https://github.com/pksorensen/pks-cli/commit/3b942997f81b4685bc5cbe4e27fc46a72f0874b1))
+* enhance job execution by introducing initial prompt file and staging git credentials ([4276694](https://github.com/pksorensen/pks-cli/commit/4276694378ef6dbbab35062e890acebc4db48d62))
+* implement registry management commands and services ([756ce50](https://github.com/pksorensen/pks-cli/commit/756ce506b856e8fc40adaadc4f7b4ae84cb3f231))
+
+
+### Bug Fixes
+
+* update RegistryRemoveCommand to use RegistrySettings for command execution ([db52fbf](https://github.com/pksorensen/pks-cli/commit/db52fbf04a964c69080dc4f7c94e33bb4ade3efc))
+
 ## [6.1.0](https://github.com/pksorensen/pks-cli/compare/v6.0.0...v6.1.0) (2026-03-17)
 
 
