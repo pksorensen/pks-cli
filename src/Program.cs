@@ -17,6 +17,9 @@ using PKS.Commands.GitHub.Runner;
 using PKS.Commands.Agentics;
 using PKS.Commands.Agentics.Runner;
 using PKS.Commands.Ado;
+using PKS.Commands.Foundry;
+using PKS.Commands.Jira;
+using PKS.Commands.Registry;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.Text;
@@ -159,6 +162,7 @@ services.AddTransient<PrdBranchCommand>();
 services.AddSingleton(serviceProvider => new PKS.Infrastructure.Services.Models.GitHubAuthConfig
 {
     ClientId = "Iv23liFv43zosMUb8t9y", // Agentics Live GitHub App (si14agents org)
+    AppSlug = "agentics-live",
     DefaultScopes = new[] { "repo", "user:email", "write:packages" },
     DeviceCodeUrl = "https://github.com/login/device/code",
     TokenUrl = "https://github.com/login/oauth/access_token",
@@ -181,6 +185,14 @@ services.AddSingleton(serviceProvider => new PKS.Infrastructure.Services.Models.
 services.AddSingleton<PKS.Infrastructure.Services.Models.AzureDevOpsAuthConfig>();
 services.AddHttpClient<IAzureDevOpsAuthService, AzureDevOpsAuthService>();
 
+// Configure Azure AI Foundry authentication
+services.AddSingleton<PKS.Infrastructure.Services.Models.AzureFoundryAuthConfig>();
+services.AddHttpClient<IAzureFoundryAuthService, AzureFoundryAuthService>();
+
+// Configure Jira integration
+services.AddSingleton<PKS.Infrastructure.Services.Models.JiraAuthConfig>();
+services.AddHttpClient<IJiraService, JiraService>();
+
 // Register GitHub and Project Identity services
 services.AddHttpClient<IGitHubService, GitHubService>();
 services.AddSingleton<IProjectIdentityService, ProjectIdentityService>();
@@ -198,6 +210,10 @@ services.AddSingleton<IGitHubIssuesService, GitHubIssuesService>();
 services.AddSingleton<EnhancedGitHubService>();
 
 // Register GitHub Runner services
+services.AddSingleton<IRegistryConfigurationService, RegistryConfigurationService>();
+services.AddSingleton<ICoolifyConfigurationService, CoolifyConfigurationService>();
+services.AddSingleton<ICoolifyLookupService, CoolifyLookupService>();
+services.AddSingleton<ICoolifyApiService, CoolifyApiService>();
 services.AddSingleton<IRunnerConfigurationService, RunnerConfigurationService>();
 services.AddSingleton<IAgenticsRunnerConfigurationService, AgenticsRunnerConfigurationService>();
 services.AddSingleton<IGitHubActionsService, GitHubActionsService>();
@@ -205,6 +221,8 @@ services.AddSingleton<IProcessRunner, ProcessRunner>();
 services.AddSingleton<IRunnerContainerService, RunnerContainerService>();
 services.AddSingleton<INamedContainerPool, NamedContainerPool>();
 services.AddSingleton<IRunnerDaemonService, RunnerDaemonService>();
+services.AddSingleton<IJobTokenService, JobTokenService>();
+services.AddSingleton<ICoolifyTokenStore, CoolifyTokenStore>();
 
 // Register System Information service
 services.AddSingleton<ISystemInformationService, SystemInformationService>();
@@ -400,12 +418,12 @@ app.Configure(config =>
 
             runner.AddCommand<RunnerRegisterCommand>("register")
                 .WithDescription("Register a repository for devcontainer-based runner")
-                .WithExample(new[] { "github", "runner", "register", "--repo", "owner/repo" })
-                .WithExample(new[] { "github", "runner", "register", "--repo", "owner/repo", "--labels", "custom-label" });
+                .WithExample(new[] { "github", "runner", "register", "owner/repo" })
+                .WithExample(new[] { "github", "runner", "register", "owner/repo", "--labels", "custom-label" });
 
             runner.AddCommand<RunnerUnregisterCommand>("unregister")
                 .WithDescription("Unregister a repository from the runner")
-                .WithExample(new[] { "github", "runner", "unregister", "--repo", "owner/repo" });
+                .WithExample(new[] { "github", "runner", "unregister", "owner/repo" });
 
             runner.AddCommand<RunnerListCommand>("list")
                 .WithDescription("List registered repositories")
@@ -414,7 +432,7 @@ app.Configure(config =>
             runner.AddCommand<RunnerStartCommand>("start")
                 .WithDescription("Start the runner daemon to process workflow jobs")
                 .WithExample(new[] { "github", "runner", "start" })
-                .WithExample(new[] { "github", "runner", "start", "--repo", "owner/repo" });
+                .WithExample(new[] { "github", "runner", "start", "owner/repo" });
 
             runner.AddCommand<RunnerStatusCommand>("status")
                 .WithDescription("Show runner daemon status and active jobs")
@@ -423,7 +441,45 @@ app.Configure(config =>
             runner.AddCommand<RunnerStopCommand>("stop")
                 .WithDescription("Gracefully stop the runner daemon")
                 .WithExample(new[] { "github", "runner", "stop" });
+
+            runner.AddCommand<RunnerPruneCommand>("prune")
+                .WithDescription("Remove duplicate registrations, keeping only the most recent per repo")
+                .WithExample(new[] { "github", "runner", "prune" });
         });
+    });
+
+    // Add coolify branch command
+    config.AddBranch<PKS.Commands.Coolify.CoolifySettings>("coolify", coolify =>
+    {
+        coolify.SetDescription("Manage Coolify deployment integration");
+
+        coolify.AddCommand<PKS.Commands.Coolify.CoolifyRegisterCommand>("register")
+            .WithDescription("Register a Coolify instance for auto-deployment")
+            .WithExample(new[] { "coolify", "register", "https://projects.si14agents.com" });
+
+        coolify.AddCommand<PKS.Commands.Coolify.CoolifyListCommand>("list")
+            .WithDescription("List registered Coolify instances")
+            .WithExample(new[] { "coolify", "list" });
+
+        coolify.AddCommand<PKS.Commands.Coolify.CoolifyStatusCommand>("status")
+            .WithDescription("Test connectivity and show projects with resource health status")
+            .WithExample(new[] { "coolify", "status" });
+    });
+
+    // Add registry branch command
+    config.AddBranch<RegistrySettings>("registry", registry =>
+    {
+        registry.SetDescription("Manage container registry credentials on this runner");
+
+        registry.AddCommand<RegistryInitCommand>("init")
+            .WithDescription("Register a container registry (persists credentials for CI)")
+            .WithExample(new[] { "registry", "init", "registry.kjeldager.io" });
+
+        registry.AddCommand<RegistryStatusCommand>("status")
+            .WithDescription("List registered registries and check connections");
+
+        registry.AddCommand<RegistryRemoveCommand>("remove")
+            .WithDescription("Remove a registered registry");
     });
 
     // Add Azure DevOps branch command
@@ -441,6 +497,52 @@ app.Configure(config =>
             .WithExample(new[] { "ado", "status" });
     });
 
+    // Add Jira branch command
+    config.AddBranch("jira", jira =>
+    {
+        jira.SetDescription("Manage Jira integration and browse tickets");
+
+        jira.AddCommand<JiraInitCommand>("init")
+            .WithDescription("Initialize Jira authentication (API token or OAuth)")
+            .WithExample(new[] { "jira", "init" })
+            .WithExample(new[] { "jira", "init", "--force" });
+
+        jira.AddCommand<JiraBrowseCommand>("browse")
+            .WithDescription("Browse Jira tickets in an interactive tree view")
+            .WithExample(new[] { "jira", "browse" })
+            .WithExample(new[] { "jira", "browse", "--project", "PROJ" });
+
+        jira.AddCommand<JiraConfigCommand>("config")
+            .WithDescription("View or set Jira field mappings")
+            .WithExample(new[] { "jira", "config" })
+            .WithExample(new[] { "jira", "config", "--ac-field", "customfield_10064" });
+    });
+
+    // Add Azure AI Foundry branch command
+    config.AddBranch<FoundrySettings>("foundry", foundry =>
+    {
+        foundry.SetDescription("Manage Azure AI Foundry authentication and model selection");
+
+        foundry.AddCommand<FoundryInitCommand>("init")
+            .WithDescription("Sign in to Azure AI Foundry and select default resource/model")
+            .WithExample(new[] { "foundry", "init" })
+            .WithExample(new[] { "foundry", "init", "--force" })
+            .WithExample(new[] { "foundry", "init", "--tenant", "my-tenant-id" });
+
+        foundry.AddCommand<FoundrySelectCommand>("select")
+            .WithDescription("Switch Foundry resource or model without re-authenticating")
+            .WithExample(new[] { "foundry", "select" });
+
+        foundry.AddCommand<FoundryTokenCommand>("token")
+            .WithDescription("Print access token for the configured Foundry resource")
+            .WithExample(new[] { "foundry", "token" })
+            .WithExample(new[] { "foundry", "token", "--scope", "https://management.azure.com/.default" });
+
+        foundry.AddCommand<FoundryStatusCommand>("status")
+            .WithDescription("Show current Foundry authentication status")
+            .WithExample(new[] { "foundry", "status" });
+    });
+
     // Add git branch command (credential helpers)
     config.AddBranch("git", git =>
     {
@@ -448,6 +550,7 @@ app.Configure(config =>
 
         git.AddCommand<GitAskPassCommand>("askpass")
             .WithDescription("Git credential helper for Azure DevOps (GIT_ASKPASS)")
+            .WithExample(new[] { "git", "askpass", "--install" })
             .WithExample(new[] { "git", "askpass", "Password for 'https://dev.azure.com':" });
     });
 

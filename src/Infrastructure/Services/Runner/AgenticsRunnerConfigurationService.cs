@@ -100,12 +100,26 @@ public class AgenticsRunnerConfigurationService : IAgenticsRunnerConfigurationSe
     public async Task<AgenticsRunnerRegistration> AddRegistrationAsync(AgenticsRunnerRegistration registration)
     {
         var config = await LoadAsync();
-        config.Registrations.Add(registration);
+
+        // Upsert by owner+project so repeated 'start --project' calls don't accumulate duplicates
+        var idx = config.Registrations.FindIndex(r =>
+            string.Equals(r.Owner, registration.Owner, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(r.Project, registration.Project, StringComparison.OrdinalIgnoreCase));
+
+        if (idx >= 0)
+        {
+            config.Registrations[idx] = registration;
+            _logger.LogInformation("Updated agentics runner registration {Id} for {Owner}/{Project}",
+                registration.Id, registration.Owner, registration.Project);
+        }
+        else
+        {
+            config.Registrations.Add(registration);
+            _logger.LogInformation("Added agentics runner registration {Id} for {Owner}/{Project}",
+                registration.Id, registration.Owner, registration.Project);
+        }
+
         await SaveAsync(config);
-
-        _logger.LogInformation("Added agentics runner registration {Id} for {Owner}/{Project}",
-            registration.Id, registration.Owner, registration.Project);
-
         return registration;
     }
 

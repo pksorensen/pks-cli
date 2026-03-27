@@ -11,6 +11,7 @@ public class RunnerDaemonService : IRunnerDaemonService
     private readonly IGitHubAuthenticationService _authService;
     private readonly IGitHubApiClient _apiClient;
     private readonly INamedContainerPool _containerPool;
+    private readonly ICoolifyTokenStore _coolifyTokenStore;
     private readonly ILogger<RunnerDaemonService> _logger;
 
     private static readonly HashSet<string> ReservedLabels = new(StringComparer.OrdinalIgnoreCase)
@@ -42,6 +43,7 @@ public class RunnerDaemonService : IRunnerDaemonService
         IGitHubAuthenticationService authService,
         IGitHubApiClient apiClient,
         INamedContainerPool containerPool,
+        ICoolifyTokenStore coolifyTokenStore,
         ILogger<RunnerDaemonService> logger)
     {
         _configService = configService;
@@ -50,6 +52,7 @@ public class RunnerDaemonService : IRunnerDaemonService
         _authService = authService;
         _apiClient = apiClient;
         _containerPool = containerPool;
+        _coolifyTokenStore = coolifyTokenStore;
         _logger = logger;
     }
 
@@ -325,6 +328,8 @@ public class RunnerDaemonService : IRunnerDaemonService
                 if (_shutdownRequested)
                     break;
 
+                OnStatusChanged($"Job {job.Id} for run {run.Id}: name={job.Name}, environment={job.Environment ?? "(none)"}, labels=[{string.Join(",", job.Labels)}]");
+
                 // Skip if already dispatched
                 lock (_lock)
                 {
@@ -507,7 +512,8 @@ public class RunnerDaemonService : IRunnerDaemonService
                     accessToken, encodedJitConfig,
                     progress => OnStatusChanged($"Run {run.Id}: {progress}"),
                     cancellationToken,
-                    credentialSocketPath: _credentialSocketPath);
+                    credentialSocketPath: _credentialSocketPath,
+                    environment: job.Environment);
             }
 
             jobState.Status = result.Status;
@@ -527,6 +533,9 @@ public class RunnerDaemonService : IRunnerDaemonService
             JobCompleted?.Invoke(this, jobState);
             OnStatusChanged($"Job completed for run {run.Id}: {result.Status}");
 
+            // Clean up token store entries for completed job
+            _coolifyTokenStore?.Remove(job.Id.ToString());
+
             return jobState;
         }
         catch (Exception ex)
@@ -543,6 +552,9 @@ public class RunnerDaemonService : IRunnerDaemonService
 
             JobCompleted?.Invoke(this, jobState);
             OnStatusChanged($"Job failed for run {run.Id}: {ex.Message}");
+
+            // Clean up token store entries for failed job
+            _coolifyTokenStore?.Remove(job.Id.ToString());
 
             return jobState;
         }
@@ -600,7 +612,8 @@ public class RunnerDaemonService : IRunnerDaemonService
             progress => OnStatusChanged($"Run {run.Id}: {progress}"),
             cancellationToken,
             containerName: containerName,
-            credentialSocketPath: _credentialSocketPath);
+            credentialSocketPath: _credentialSocketPath,
+            environment: job.Environment);
 
         // Register in pool (labels were already set via --id-label during devcontainer up)
         if (!string.IsNullOrEmpty(result.ContainerId))

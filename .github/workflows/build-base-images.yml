@@ -101,7 +101,10 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: ${{ join(matrix.image.platforms, ',') }}
-          build-args: ${{ steps.build-args.outputs.args }}
+          build-args: |
+            ${{ steps.build-args.outputs.args }}
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

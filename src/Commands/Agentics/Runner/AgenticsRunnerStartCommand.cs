@@ -54,6 +54,14 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         [CommandOption("--vibecast-binary <PATH>")]
         [Description("Path to vibecast binary (default: uses VIBECAST_BINARY env or 'npx vibecast')")]
         public string? VibecastBinary { get; set; }
+
+        [CommandOption("--project <OWNER/PROJECT>")]
+        [Description("Project to run for in owner/project format. Auto-registers if not already registered. Without this, uses first saved registration.")]
+        public string? Project { get; set; }
+
+        [CommandOption("--server <SERVER>")]
+        [Description("Agentics server URL (falls back to AGENTIC_SERVER env, then agentics.dk). Used when auto-registering with --project.")]
+        public string? Server { get; set; }
     }
 
     public AgenticsRunnerStartCommand(
@@ -81,15 +89,22 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         {
             DisplayBanner();
 
-            // Load first/default registration
-            var registrations = await _configService.ListRegistrationsAsync();
-            if (registrations.Count == 0)
+            // Resolve registration: --project auto-registers if needed, otherwise use first saved
+            AgenticsRunnerRegistration registration;
+            if (!string.IsNullOrEmpty(settings.Project))
             {
-                DisplayError("No runner registrations found. Run 'pks agentics runner register <owner/project>' first.");
-                return 1;
+                registration = await ResolveOrRegisterAsync(settings.Project, settings.Server, settings.Verbose);
             }
-
-            var registration = registrations[0];
+            else
+            {
+                var registrations = await _configService.ListRegistrationsAsync();
+                if (registrations.Count == 0)
+                {
+                    DisplayError("No runner registrations found. Use --project owner/project to auto-register, or run 'pks agentics runner register <owner/project>' first.");
+                    return 1;
+                }
+                registration = registrations[0];
+            }
 
             if (settings.Verbose)
             {
@@ -231,6 +246,89 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         }
     }
 
+    /// <summary>
+    /// Finds an existing local registration for the given owner/project, or auto-registers
+    /// against the server and saves it. This lets 'start --project owner/proj' be self-contained.
+    /// </summary>
+    private async Task<AgenticsRunnerRegistration> ResolveOrRegisterAsync(
+        string ownerProject, string? serverOverride, bool verbose)
+    {
+        var parts = ownerProject.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2)
+            throw new InvalidOperationException($"--project must be in owner/project format, got: '{ownerProject}'");
+
+        var owner = parts[0];
+        var project = parts[1];
+
+        // Check if we already have a saved registration for this project
+        var registrations = await _configService.ListRegistrationsAsync();
+        var existing = registrations.FirstOrDefault(r =>
+            string.Equals(r.Owner, owner, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(r.Project, project, StringComparison.OrdinalIgnoreCase));
+
+        if (existing != null)
+        {
+            if (verbose)
+                DisplayInfo($"Found existing registration for {owner}/{project} (id: {existing.Id})");
+            return existing;
+        }
+
+        // No saved registration — auto-register
+        DisplayInfo($"No saved registration for [cyan]{owner}/{project}[/], registering now...");
+
+        var serverHost = serverOverride
+            ?? Environment.GetEnvironmentVariable("AGENTIC_SERVER")
+            ?? "agentics.dk";
+
+        string serverUrl;
+        if (serverHost.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            serverHost.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            serverUrl = serverHost.TrimEnd('/');
+        }
+        else
+        {
+            var scheme = serverHost.StartsWith("localhost", StringComparison.OrdinalIgnoreCase) ||
+                         serverHost.StartsWith("127.0.0.1")
+                ? "http"
+                : "https";
+            serverUrl = $"{scheme}://{serverHost}";
+        }
+
+        var runnerName = System.Net.Dns.GetHostName();
+
+        using var httpClient = new HttpClient();
+        var requestBody = new { name = runnerName, labels = Array.Empty<string>() };
+        var httpResponse = await httpClient.PostAsJsonAsync(
+            $"{serverUrl}/api/owners/{owner}/projects/{project}/runners",
+            requestBody);
+
+        if (!httpResponse.IsSuccessStatusCode)
+        {
+            var errorBody = await httpResponse.Content.ReadAsStringAsync();
+            throw new InvalidOperationException($"Auto-registration failed ({(int)httpResponse.StatusCode}): {errorBody}");
+        }
+
+        var json = await httpResponse.Content.ReadAsStringAsync();
+        var resp = System.Text.Json.JsonSerializer.Deserialize<RegisterRunnerResponse>(json, JsonOptions)
+            ?? throw new InvalidOperationException("Failed to parse registration response");
+
+        var registration = new AgenticsRunnerRegistration
+        {
+            Id = resp.Id ?? Guid.NewGuid().ToString(),
+            Name = resp.Name ?? runnerName,
+            Token = resp.Token ?? "",
+            Owner = owner,
+            Project = project,
+            Server = serverUrl,
+            RegisteredAt = DateTime.UtcNow
+        };
+
+        await _configService.AddRegistrationAsync(registration);
+        DisplayInfo($"[green]Registered runner '{registration.Name}' for {owner}/{project}[/]");
+        return registration;
+    }
+
     private async Task<RunnerJob?> PollForJobAsync(AgenticsRunnerRegistration registration, CancellationToken ct)
     {
         using var client = _httpClientFactory.CreateClient();
@@ -287,12 +385,13 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
         // 2. Set up work directory
         var workDir = await ResolveWorkDirAsync(settings.WorkDir, ct);
+        var gitEnv = await PrepareGitCredentialsAsync(ct);
         string? jobWorkTree = null;
 
         try
         {
             jobWorkTree = await SetupJobWorkTreeAsync(
-                workDir, registration, job, settings.Verbose, ct);
+                workDir, registration, job, settings.Verbose, ct, gitEnv);
 
             // 3. PATCH to in_progress
             _console.MarkupLine($"[cyan]InProcess: executing job {job.Id} in {jobWorkTree}...[/]");
@@ -345,7 +444,24 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             // Inherit VIBECAST_KEYBOARD_PIN from environment if set
             var keyboardPin = Environment.GetEnvironmentVariable("VIBECAST_KEYBOARD_PIN");
             var keyboardPinEnv = !string.IsNullOrEmpty(keyboardPin) ? $" VIBECAST_KEYBOARD_PIN={keyboardPin}" : "";
-            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id}{keyboardPinEnv} VIBECAST_APPEND_SYSTEM_PROMPT='{appendPrompt}' {vibecastBin}");
+
+            // Write the job prompt to a file so vibecast can pass it to Claude as a positional arg.
+            // This avoids tmux send-keys timing issues (prompt sent before Claude is ready)
+            // and multi-line escaping issues.
+            var promptFile = Path.Combine(vibecastHome, "initial-prompt.txt");
+            var jobPrompt = job.AgentDef?.Prompt ?? "";
+            await File.WriteAllTextAsync(promptFile, jobPrompt, ct);
+            var initialPromptEnv = !string.IsNullOrEmpty(jobPrompt) ? $" VIBECAST_INITIAL_PROMPT_FILE={promptFile}" : "";
+
+            // Stage git credentials and isolated stage dir (inside vibecastHome so it's job-scoped)
+            var stageGitUrl = job.AgentDef?.StageGitUrl ?? "";
+            var stageGitToken = job.AgentDef?.StageGitToken ?? "";
+            var stageDir = Path.Combine(vibecastHome, "stage");
+            var stageGitEnv = !string.IsNullOrEmpty(stageGitUrl)
+                ? $" STAGE_GIT_URL={stageGitUrl} STAGE_GIT_TOKEN={stageGitToken} STAGE_DIR={stageDir}"
+                : "";
+
+            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id}{keyboardPinEnv}{initialPromptEnv}{stageGitEnv} VIBECAST_APPEND_SYSTEM_PROMPT='{appendPrompt}' {vibecastBin}");
 
             var startProc = Process.Start(startPsi);
             if (startProc != null)
@@ -464,20 +580,11 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 await RunProcessAsync("tmux", $"select-window -t {streamingSession}:main", null, ct);
             }
 
-            // 13. Wait for Claude to be ready in the main pane
-            await Task.Delay(3000, ct);
+            // Note: the job prompt is injected via VIBECAST_INITIAL_PROMPT_FILE which vibecast
+            // passes directly to Claude as a positional argument at startup. No send-keys needed.
+            _console.MarkupLine($"[green]Prompt will be delivered via VIBECAST_INITIAL_PROMPT_FILE ({promptFile})[/]");
 
-            // 14. Paste the prompt into Claude Code via tmux send-keys
-            var prompt = job.AgentDef?.Prompt ?? "No prompt provided";
-            _console.MarkupLine($"[cyan]Sending prompt to Claude: {prompt.EscapeMarkup()[..Math.Min(prompt.Length, 80)]}...[/]");
-
-            if (streamingSession != null)
-            {
-                // Send to the streaming session's main pane (top pane = .0)
-                await TmuxSendKeysAsync($"{streamingSession}:main.0", prompt, ct);
-            }
-
-            // 14. Wait for job to complete with activity-based timeout
+            // 13. Wait for job to complete with activity-based timeout
             var idleTimeoutMs = (job.AgentDef?.IdleTimeoutMinutes ?? 2) * 60 * 1000;
             var maxTimeout = TimeSpan.FromMinutes(job.AgentDef?.MaxTimeoutMinutes ?? 60);
             _console.MarkupLine($"[cyan]Waiting up to {maxTimeout.TotalMinutes} minutes (idle threshold: {idleTimeoutMs / 60000} min)...[/]");
@@ -692,7 +799,8 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
     private async Task<string> SetupJobWorkTreeAsync(
         string workDir, AgenticsRunnerRegistration registration,
-        RunnerJob job, bool verbose, CancellationToken ct)
+        RunnerJob job, bool verbose, CancellationToken ct,
+        Dictionary<string, string>? gitEnv = null)
     {
         var owner = registration.Owner;
         var project = registration.Project;
@@ -720,7 +828,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 Directory.CreateDirectory(Path.GetDirectoryName(cloneDir)!);
                 var cloneResult = await RunGitAsync(
                     $"clone --branch {branch} {repository} {cloneDir}",
-                    null, verbose, ct);
+                    null, verbose, ct, gitEnv);
                 if (cloneResult != 0)
                     throw new InvalidOperationException($"git clone failed (exit {cloneResult})");
             }
@@ -728,7 +836,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             {
                 // Pull latest
                 if (verbose) _console.MarkupLine($"[dim]Pulling latest in {cloneDir}...[/]");
-                await RunGitAsync("pull --ff-only", cloneDir, verbose, ct);
+                await RunGitAsync("pull --ff-only", cloneDir, verbose, ct, gitEnv);
             }
             sourceDir = cloneDir;
         }
@@ -992,7 +1100,80 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         return url.ToLowerInvariant();
     }
 
-    private async Task<int> RunGitAsync(string args, string? workingDir, bool verbose, CancellationToken ct)
+    private async Task<Dictionary<string, string>> PrepareGitCredentialsAsync(CancellationToken ct)
+    {
+        // If the environment already has a working GIT_ASKPASS (e.g. VS Code devcontainer
+        // injects one with a gho_ token), verify it actually works before trusting it.
+        // VS Code's GIT_ASKPASS connects to a Unix socket (/tmp/vscode-git-*.sock) that may
+        // be stale/dead if the VS Code session that created it is gone.
+        var existingAskPass = Environment.GetEnvironmentVariable("GIT_ASKPASS");
+        if (!string.IsNullOrEmpty(existingAskPass) && File.Exists(existingAskPass))
+        {
+            try
+            {
+                var testPsi = new ProcessStartInfo(existingAskPass)
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                };
+                testPsi.ArgumentList.Add("Password:");
+                testPsi.Environment["GIT_TERMINAL_PROMPT"] = "0";
+                using var testCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                testCts.CancelAfter(TimeSpan.FromSeconds(3));
+                var testProc = Process.Start(testPsi);
+                if (testProc != null)
+                {
+                    var output = await testProc.StandardOutput.ReadToEndAsync(testCts.Token);
+                    await testProc.WaitForExitAsync(testCts.Token);
+                    if (testProc.ExitCode == 0 && !string.IsNullOrWhiteSpace(output))
+                    {
+                        if (_console != null)
+                            _console.MarkupLine("[dim]Using existing GIT_ASKPASS from environment.[/]");
+                        return new Dictionary<string, string> { ["GIT_TERMINAL_PROMPT"] = "0" };
+                    }
+                }
+            }
+            catch
+            {
+                // GIT_ASKPASS script failed (e.g. stale VS Code socket) — fall through to stored token
+            }
+
+            if (_console != null)
+                _console.MarkupLine("[yellow]Existing GIT_ASKPASS is not functional (stale socket?), falling back to stored token.[/]");
+        }
+
+        try
+        {
+            var stored = await _githubAuth.GetStoredTokenAsync();
+            if (stored == null || string.IsNullOrEmpty(stored.AccessToken))
+                return new Dictionary<string, string>();
+
+            // Write a GIT_ASKPASS script that provides the token non-interactively
+            var scriptPath = Path.Combine(Path.GetTempPath(), $"git-askpass-{Guid.NewGuid():N}.sh");
+            var token = stored.AccessToken;
+            await File.WriteAllTextAsync(scriptPath,
+                $"#!/bin/sh\ncase \"$1\" in\n  *Username*) echo \"x-access-token\" ;;\n  *Password*) echo \"{token}\" ;;\n  *) echo \"\" ;;\nesac\n", ct);
+
+            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            {
+                File.SetUnixFileMode(scriptPath,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+
+            return new Dictionary<string, string>
+            {
+                ["GIT_ASKPASS"] = scriptPath,
+                ["GIT_TERMINAL_PROMPT"] = "0",
+            };
+        }
+        catch
+        {
+            return new Dictionary<string, string>();
+        }
+    }
+
+    private async Task<int> RunGitAsync(string args, string? workingDir, bool verbose, CancellationToken ct,
+        Dictionary<string, string>? extraEnv = null)
     {
         var psi = new ProcessStartInfo("git")
         {
@@ -1006,6 +1187,12 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
         if (workingDir != null)
             psi.WorkingDirectory = workingDir;
+
+        if (extraEnv != null)
+        {
+            foreach (var (key, value) in extraEnv)
+                psi.Environment[key] = value;
+        }
 
         var proc = Process.Start(psi);
         if (proc == null) return -1;
@@ -1087,5 +1274,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         public string? StageId { get; set; }
         public int? IdleTimeoutMinutes { get; set; }
         public int? MaxTimeoutMinutes { get; set; }
+        public string? StageGitUrl { get; set; }
+        public string? StageGitToken { get; set; }
     }
 }

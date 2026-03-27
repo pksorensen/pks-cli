@@ -83,9 +83,9 @@ public class DevcontainerInitCommandTests : TestBase
             }
 
             // Register mock services
-            services.AddSingleton<IDevcontainerService>(_mockDevcontainerService.Object);
-            services.AddSingleton<IDevcontainerFeatureRegistry>(_mockFeatureRegistry.Object);
-            services.AddSingleton<IDevcontainerTemplateService>(_mockTemplateService.Object);
+            services.AddSingleton<IDevcontainerService>(_mockDevcontainerService!.Object);
+            services.AddSingleton<IDevcontainerFeatureRegistry>(_mockFeatureRegistry!.Object);
+            services.AddSingleton<IDevcontainerTemplateService>(_mockTemplateService!.Object);
 
             // Register the actual command
             services.AddTransient<DevcontainerInitCommand>();

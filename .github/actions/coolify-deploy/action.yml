@@ -1,0 +1,429 @@
+name: 'Coolify Deploy'
+description: 'Trigger a Coolify deployment via webhook, poll build + health status, and optionally comment on a GitHub release.'
+
+inputs:
+  webhook:
+    description: 'Coolify webhook URL. Falls back to COOLIFY_WEBHOOK env var (auto-injected by pks runner).'
+    required: false
+    default: ''
+  token:
+    description: 'Coolify API bearer token. Falls back to COOLIFY_TOKEN env var (auto-injected by pks runner).'
+    required: false
+    default: ''
+  github-token:
+    description: 'GitHub token for commenting on releases (optional)'
+    required: false
+    default: ''
+  version:
+    description: 'Version being deployed (for logging and release comments)'
+    required: false
+    default: ''
+  tag-name:
+    description: 'Git tag name to find the GitHub release for commenting'
+    required: false
+    default: ''
+  app-name:
+    description: 'Application name for display in logs and release comments'
+    required: false
+    default: 'app'
+  production-url:
+    description: 'Production URL. Falls back to COOLIFY_APP_FQDN env var (auto-injected by pks runner).'
+    required: false
+    default: ''
+  build-timeout:
+    description: 'Max seconds to wait for build (default: 600 = 10 min)'
+    required: false
+    default: '600'
+  health-timeout:
+    description: 'Max seconds to wait for health check (default: 180 = 3 min)'
+    required: false
+    default: '180'
+  environment:
+    description: 'Coolify environment name (e.g. staging, production). Falls back to COOLIFY_ENVIRONMENT env var. Used to find the correct app when multiple environments exist.'
+    required: false
+    default: ''
+
+outputs:
+  result:
+    description: 'Deployment result: success, failure, or timeout'
+    value: ${{ steps.poll.outputs.result }}
+  status-message:
+    description: 'Human-readable status message'
+    value: ${{ steps.poll.outputs.status_message }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Resolve Coolify config
+      id: config
+      shell: bash
+      run: |
+        # Detect proxy mode (PKS_TOKEN = scoped JWT from pks runner)
+        if [ -n "$PKS_TOKEN" ]; then
+          echo "mode=proxy" >> "$GITHUB_OUTPUT"
+          SOCKET="${PKS_TOKEN_URL:-/var/run/pks-creds/creds.sock}"
+          echo "Using proxy mode via Unix socket: $SOCKET"
+
+          # Resolve environment: input > GitHub OIDC token > env var > default
+          ENV="${{ inputs.environment }}"
+
+          # Try GitHub OIDC token if no explicit environment given
+          if [ -z "$ENV" ] && [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+            OIDC_TOKEN=$(curl -sf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=pks-cli" 2>/dev/null | jq -r '.value // empty')
+            if [ -n "$OIDC_TOKEN" ]; then
+              # Decode JWT payload (base64url → base64, then decode)
+              PAYLOAD=$(echo "$OIDC_TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null)
+              ENV=$(echo "$PAYLOAD" | jq -r '.environment // empty' 2>/dev/null)
+              if [ -n "$ENV" ]; then
+                echo "Environment from GitHub OIDC token: $ENV"
+              fi
+            fi
+          fi
+
+          [ -z "$ENV" ] && ENV="$COOLIFY_ENVIRONMENT"
+          [ -z "$ENV" ] && ENV="production"
+          echo "environment=$ENV" >> "$GITHUB_OUTPUT"
+
+          # Fetch app info from proxy
+          HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" --unix-socket "$SOCKET" \
+            -H "Authorization: Bearer $PKS_TOKEN" \
+            "http://localhost/coolify/token?environment=${ENV}")
+          HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -1)
+          APP_INFO=$(echo "$HTTP_RESPONSE" | head -n -1)
+
+          if [ "$HTTP_CODE" -ne 200 ]; then
+            echo "::error::Proxy returned HTTP $HTTP_CODE for environment '$ENV'"
+            echo "Response: $APP_INFO"
+            # Show available environments if the proxy returned them
+            echo "$APP_INFO" | jq -r '.available[]? | "  Available: \(.name) (env=\(.environment), uuid=\(.uuid))"' 2>/dev/null
+            exit 1
+          fi
+
+          WEBHOOK=$(echo "$APP_INFO" | jq -r '.webhook_url // empty')
+          FQDN=$(echo "$APP_INFO" | jq -r '.fqdn // empty')
+          RESOLVED_ENV=$(echo "$APP_INFO" | jq -r '.environment // empty')
+          RESOLVED_FROM=$(echo "$APP_INFO" | jq -r '.resolved_from // "unknown"')
+
+          # Show available environments for debugging
+          echo "Available environments:"
+          echo "$APP_INFO" | jq -r '.available_environments[]? | "  - \(.name) (env=\(.environment), uuid=\(.uuid))"'
+          echo "Resolved: env=$RESOLVED_ENV ($RESOLVED_FROM match for requested '$ENV')"
+
+          if [ "$RESOLVED_FROM" = "fallback" ] && [ "$RESOLVED_ENV" != "$ENV" ]; then
+            echo "::warning::Requested environment '$ENV' not found. Fell back to '$RESOLVED_ENV'. Check Coolify environment names."
+          fi
+
+          echo "webhook=$WEBHOOK" >> "$GITHUB_OUTPUT"
+          echo "production_url=$FQDN" >> "$GITHUB_OUTPUT"
+          echo "socket=$SOCKET" >> "$GITHUB_OUTPUT"
+          echo "Proxy mode: webhook=$WEBHOOK, fqdn=$FQDN, environment=$RESOLVED_ENV (requested=$ENV, match=$RESOLVED_FROM)"
+        else
+          echo "mode=direct" >> "$GITHUB_OUTPUT"
+
+          # Resolve token: input > env var
+          TOKEN="${{ inputs.token }}"
+          [ -z "$TOKEN" ] && TOKEN="$COOLIFY_TOKEN"
+          if [ -z "$TOKEN" ]; then
+            echo "::error::No Coolify token. Set the 'token' input or ensure COOLIFY_TOKEN env var is set by the pks runner."
+            exit 1
+          fi
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+          # Resolve environment: input > env var > default to production
+          ENV="${{ inputs.environment }}"
+          [ -z "$ENV" ] && ENV="$COOLIFY_ENVIRONMENT"
+          [ -z "$ENV" ] && ENV="production"
+          echo "environment=$ENV" >> "$GITHUB_OUTPUT"
+          echo "Coolify environment: $ENV"
+
+          # Resolve webhook: input > env var > auto-discover by environment
+          WEBHOOK="${{ inputs.webhook }}"
+          [ -z "$WEBHOOK" ] && WEBHOOK="$COOLIFY_WEBHOOK"
+
+          # If no webhook but we have a token and base URL, try to find the app by environment
+          if [ -z "$WEBHOOK" ] && [ -n "$COOLIFY_TOKEN" ]; then
+            COOLIFY_BASE=""
+            # Derive base URL from any injected env var or try known pattern
+            if [ -n "$COOLIFY_WEBHOOK" ]; then
+              COOLIFY_BASE=$(echo "$COOLIFY_WEBHOOK" | sed 's|/api/v1/.*||')
+            fi
+
+            if [ -n "$COOLIFY_BASE" ]; then
+              echo "Looking up app in environment '$ENV' via Coolify API..."
+              REPO_SLUG="${{ github.repository }}"
+
+              # Fetch all applications and find the one matching our repo + environment
+              APPS_JSON=$(curl -sf \
+                --header "Authorization: Bearer $TOKEN" \
+                "${COOLIFY_BASE}/api/v1/applications" 2>/dev/null || echo "[]")
+
+              APP_UUID=$(echo "$APPS_JSON" | jq -r --arg repo "$REPO_SLUG" --arg env "$ENV" '
+                [ .[] | select(
+                  (.git_repository // "" | test($repo; "i")) and
+                  ((.environment.name // "") == $env)
+                ) ] | .[0].uuid // empty')
+
+              if [ -n "$APP_UUID" ]; then
+                WEBHOOK="${COOLIFY_BASE}/api/v1/deploy?uuid=${APP_UUID}&force=false"
+                FQDN=$(echo "$APPS_JSON" | jq -r --arg uuid "$APP_UUID" '
+                  [ .[] | select(.uuid == $uuid) ] | .[0].fqdn // empty')
+                echo "Found app ${APP_UUID} in environment '$ENV' (fqdn: ${FQDN})"
+                echo "production_url=$FQDN" >> "$GITHUB_OUTPUT"
+              else
+                echo "::warning::Could not find app for ${REPO_SLUG} in environment '$ENV'"
+              fi
+            fi
+          fi
+
+          if [ -z "$WEBHOOK" ]; then
+            echo "::error::No Coolify webhook URL. Set the 'webhook' input, ensure COOLIFY_WEBHOOK env var is set, or specify 'environment' to auto-discover."
+            exit 1
+          fi
+          echo "webhook=$WEBHOOK" >> "$GITHUB_OUTPUT"
+
+          # Resolve production URL: input > env var > auto-discovered
+          PROD_URL="${{ inputs.production-url }}"
+          [ -z "$PROD_URL" ] && PROD_URL="$COOLIFY_APP_FQDN"
+          # If still empty, check if we set it during discovery above
+          if [ -z "$PROD_URL" ]; then
+            PROD_URL=$(grep "^production_url=" "$GITHUB_OUTPUT" 2>/dev/null | tail -1 | cut -d= -f2-)
+          fi
+          echo "production_url=$PROD_URL" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Trigger Coolify deploy
+      id: trigger
+      shell: bash
+      run: |
+        echo "Deploying ${{ inputs.app-name }} v${{ inputs.version }}..."
+
+        if [ "${{ steps.config.outputs.mode }}" = "proxy" ]; then
+          # Proxy mode: deploy through Unix socket
+          SOCKET="${{ steps.config.outputs.socket }}"
+          response=$(curl -s -w "\n%{http_code}" \
+            --unix-socket "$SOCKET" \
+            --request POST \
+            -H "Authorization: Bearer $PKS_TOKEN" \
+            "http://localhost/coolify/deploy?environment=${{ steps.config.outputs.environment }}")
+        else
+          # Direct mode: call Coolify API directly
+          response=$(curl -s -w "\n%{http_code}" \
+            --request GET "${{ steps.config.outputs.webhook }}" \
+            --header "Authorization: Bearer ${{ steps.config.outputs.token }}")
+        fi
+
+        http_code=$(echo "$response" | tail -1)
+        body=$(echo "$response" | head -n -1)
+        echo "Response ($http_code): $body"
+
+        if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+          echo "::error::Coolify deploy trigger failed with status $http_code"
+          exit 1
+        fi
+
+        deployment_uuid=$(echo "$body" | jq -r '.deployments[0].deployment_uuid // .deployment_uuid // empty')
+        resource_uuid=$(echo "$body" | jq -r '.deployments[0].resource_uuid // empty')
+        if [ -z "$deployment_uuid" ]; then
+          echo "::warning::No deployment_uuid in response, skipping status polling"
+          echo "has_uuid=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "Deployment UUID: $deployment_uuid"
+          echo "Resource UUID: $resource_uuid"
+          echo "deployment_uuid=$deployment_uuid" >> "$GITHUB_OUTPUT"
+          echo "resource_uuid=$resource_uuid" >> "$GITHUB_OUTPUT"
+          echo "has_uuid=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Poll deployment and health status
+      id: poll
+      if: steps.trigger.outputs.has_uuid == 'true'
+      shell: bash
+      run: |
+        DEPLOY_UUID="${{ steps.trigger.outputs.deployment_uuid }}"
+        APP_UUID="${{ steps.trigger.outputs.resource_uuid }}"
+        MODE="${{ steps.config.outputs.mode }}"
+        BUILD_TIMEOUT=${{ inputs.build-timeout }}
+        HEALTH_TIMEOUT=${{ inputs.health-timeout }}
+        ENVIRONMENT="${{ steps.config.outputs.environment }}"
+
+        if [ "$MODE" = "proxy" ]; then
+          SOCKET="${{ steps.config.outputs.socket }}"
+          AUTH_HEADER="Authorization: Bearer $PKS_TOKEN"
+        else
+          COOLIFY_BASE=$(echo "${{ steps.config.outputs.webhook }}" | sed 's|/api/v1/.*||')
+          AUTH_HEADER="Authorization: Bearer ${{ steps.config.outputs.token }}"
+        fi
+
+        # Helper function for API calls
+        api_get() {
+          local path="$1"
+          if [ "$MODE" = "proxy" ]; then
+            local sep="?"
+            [[ "$path" == *"?"* ]] && sep="&"
+            curl -s --unix-socket "$SOCKET" -H "$AUTH_HEADER" \
+              "http://localhost${path}${sep}environment=${ENVIRONMENT}"
+          else
+            curl -s -H "$AUTH_HEADER" "${COOLIFY_BASE}${path}"
+          fi
+        }
+
+        # Phase 1: Wait for build to finish
+        echo "=== Phase 1: Waiting for build to complete (timeout: ${BUILD_TIMEOUT}s) ==="
+        MAX_ATTEMPTS=$((BUILD_TIMEOUT / 15))
+        ATTEMPT=0
+        BUILD_RESULT=""
+
+        while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+          ATTEMPT=$((ATTEMPT + 1))
+          echo "Build poll $ATTEMPT/$MAX_ATTEMPTS..."
+
+          status_response=$(api_get "/coolify/deployments/${DEPLOY_UUID}")
+
+          if [ "$MODE" = "direct" ]; then
+            # Direct mode: try list endpoint first, then single deployment
+            status_response=$(api_get "/api/v1/deployments?appId=${APP_UUID}&limit=10")
+            our_deploy=$(echo "$status_response" | jq -r --arg uuid "$DEPLOY_UUID" '
+              if type == "array" then map(select(.deployment_uuid == $uuid)) | .[0] // empty
+              elif .deployment_uuid == $uuid then .
+              else empty end')
+            status=$(echo "$our_deploy" | jq -r '.status // "not_found"')
+
+            if [ "$status" = "not_found" ] || [ -z "$our_deploy" ] || [ "$our_deploy" = "null" ]; then
+              direct_response=$(api_get "/api/v1/deployments/${DEPLOY_UUID}")
+              status=$(echo "$direct_response" | jq -r '.status // "unknown"')
+            fi
+          else
+            # Proxy mode: single deployment endpoint
+            status=$(echo "$status_response" | jq -r '.status // "unknown"')
+          fi
+
+          echo "Build status: $status"
+
+          case "$status" in
+            finished) BUILD_RESULT="finished"; break ;;
+            failed|cancelled|error) BUILD_RESULT="$status"; break ;;
+            unknown)
+              if [ "$MODE" = "direct" ]; then
+                BUILD_RESULT="unknown"; break
+              fi
+              echo "Status: $status, polling..."
+              ;;
+            *) echo "Status: $status, polling..." ;;
+          esac
+
+          sleep 15
+        done
+
+        if [ -z "$BUILD_RESULT" ]; then
+          echo "result=timeout" >> "$GITHUB_OUTPUT"
+          echo "status_message=Build timed out after ${BUILD_TIMEOUT}s" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+
+        if [ "$BUILD_RESULT" != "finished" ]; then
+          echo "::error::Deployment ended with status: $BUILD_RESULT"
+
+          # Fetch deployment logs for debugging
+          echo "=== Deployment Logs ==="
+          DEPLOY_DETAIL=$(api_get "/coolify/deployments/${DEPLOY_UUID}")
+          LOGS=$(echo "$DEPLOY_DETAIL" | jq -r '.logs // empty')
+          if [ -n "$LOGS" ]; then
+            echo "$LOGS" | tail -50
+          else
+            # Try getting logs from the full deployment detail
+            echo "$DEPLOY_DETAIL" | jq -r '
+              if .log then (.log | split("\n") | .[-50:] | join("\n"))
+              elif .logs then (.logs | split("\n") | .[-50:] | join("\n"))
+              else "No logs available in deployment response"
+              end' 2>/dev/null || echo "Could not parse deployment logs"
+          fi
+          echo "=== End Deployment Logs ==="
+
+          echo "result=failure" >> "$GITHUB_OUTPUT"
+          echo "status_message=Build ${BUILD_RESULT}" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+
+        # Phase 2: Wait for health check
+        echo "=== Phase 2: Waiting for health check (timeout: ${HEALTH_TIMEOUT}s) ==="
+        MAX_HEALTH=$((HEALTH_TIMEOUT / 15))
+        ATTEMPT=0
+
+        while [ $ATTEMPT -lt $MAX_HEALTH ]; do
+          ATTEMPT=$((ATTEMPT + 1))
+          echo "Health poll $ATTEMPT/$MAX_HEALTH..."
+
+          if [ "$MODE" = "proxy" ]; then
+            app_response=$(api_get "/coolify/applications/${APP_UUID}")
+          else
+            app_response=$(api_get "/api/v1/applications/${APP_UUID}")
+          fi
+          app_status=$(echo "$app_response" | jq -r '.status // "unknown"')
+          echo "Application status: $app_status"
+
+          case "$app_status" in
+            *healthy*)
+              echo "result=success" >> "$GITHUB_OUTPUT"
+              echo "status_message=Deployed and healthy" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+            *unhealthy*|*error*|*exited*)
+              echo "result=failure" >> "$GITHUB_OUTPUT"
+              echo "status_message=Deployed but ${app_status}" >> "$GITHUB_OUTPUT"
+              exit 1
+              ;;
+          esac
+
+          sleep 15
+        done
+
+        echo "result=success" >> "$GITHUB_OUTPUT"
+        echo "status_message=Build completed (health check inconclusive)" >> "$GITHUB_OUTPUT"
+
+    - name: Comment on GitHub release
+      if: always() && inputs.github-token != '' && inputs.tag-name != ''
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        TAG="${{ inputs.tag-name }}"
+        VERSION="${{ inputs.version }}"
+        APP_NAME="${{ inputs.app-name }}"
+        RESULT="${{ steps.poll.outputs.result }}"
+        STATUS_MSG="${{ steps.poll.outputs.status_message }}"
+        HAS_UUID="${{ steps.trigger.outputs.has_uuid }}"
+        REPO="${{ github.repository }}"
+        PROD_URL="${{ steps.config.outputs.production_url }}"
+
+        if [ "$HAS_UUID" != "true" ]; then
+          BODY="## Coolify Deployment\n\n:rocket: Deploy triggered for ${APP_NAME} v${VERSION}\n\n> Deployment UUID not available — status polling was skipped."
+        elif [ "$RESULT" = "success" ]; then
+          LIVE_MSG=""
+          if [ -n "$PROD_URL" ]; then
+            LIVE_MSG=" at ${PROD_URL}"
+          fi
+          BODY="## Coolify Deployment\n\n:white_check_mark: **${STATUS_MSG}**\n\n${APP_NAME} v${VERSION} is now live${LIVE_MSG}"
+        else
+          BODY="## Coolify Deployment\n\n:x: **${STATUS_MSG}**\n\n${APP_NAME} v${VERSION} deployment failed. Check Coolify dashboard for details."
+        fi
+
+        RELEASE_JSON=$(curl -s \
+          -H "Authorization: token $GITHUB_TOKEN" \
+          "https://api.github.com/repos/$REPO/releases/tags/$TAG")
+
+        RELEASE_ID=$(echo "$RELEASE_JSON" | jq -r '.id // empty')
+
+        if [ -z "$RELEASE_ID" ]; then
+          echo "No GitHub release found for tag $TAG — skipping comment"
+          exit 0
+        fi
+
+        EXISTING_BODY=$(echo "$RELEASE_JSON" | jq -r '.body // ""')
+        NEW_BODY=$(printf "%s\n\n---\n\n%b" "$EXISTING_BODY" "$BODY")
+
+        curl -sf -X PATCH \
+          -H "Authorization: token $GITHUB_TOKEN" \
+          -H "Content-Type: application/json" \
+          "https://api.github.com/repos/$REPO/releases/$RELEASE_ID" \
+          -d "$(jq -n --arg body "$NEW_BODY" '{body: $body}')"

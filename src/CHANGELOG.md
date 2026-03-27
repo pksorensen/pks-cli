@@ -49,12 +49,67 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
-## [6.1.0](https://github.com/pksorensen/pks-cli/compare/v6.0.0...v6.1.0) (2026-03-13)
+## [6.2.0](https://github.com/pksorensen/pks-cli/compare/v6.1.0...v6.2.0) (2026-03-27)
 
 
 ### Features
 
+* add project and server options for auto-registration in Agentics runner ([f6eb40d](https://github.com/pksorensen/pks-cli/commit/f6eb40dcf3e9ee6c567f714bd09f607d30c051cd))
+* enhance Agentics runner commands with GitHub integration and project info fetching ([3b94299](https://github.com/pksorensen/pks-cli/commit/3b942997f81b4685bc5cbe4e27fc46a72f0874b1))
+* enhance job execution by introducing initial prompt file and staging git credentials ([4276694](https://github.com/pksorensen/pks-cli/commit/4276694378ef6dbbab35062e890acebc4db48d62))
+* implement registry management commands and services ([756ce50](https://github.com/pksorensen/pks-cli/commit/756ce506b856e8fc40adaadc4f7b4ae84cb3f231))
+
+
+### Bug Fixes
+
+* update RegistryRemoveCommand to use RegistrySettings for command execution ([db52fbf](https://github.com/pksorensen/pks-cli/commit/db52fbf04a964c69080dc4f7c94e33bb4ade3efc))
+
+## [6.1.0](https://github.com/pksorensen/pks-cli/compare/v6.0.0...v6.1.0) (2026-03-17)
+
+
+### Features
+
+* Add acceptance criteria field to Jira issues and update related parsing logic ([a435450](https://github.com/pksorensen/pks-cli/commit/a43545018852a30abd4ca3bc26df9f66209324b3))
+* Add Azure AI Foundry authentication and related commands ([b217fc5](https://github.com/pksorensen/pks-cli/commit/b217fc5599745a9822bd672fa5067dbcf607f216))
+* Add changelog support to Jira issues with parsing and display functionality ([6970731](https://github.com/pksorensen/pks-cli/commit/69707313ec17f041b35f2f71d1845d0b0ad920af))
+* Add Coolify integration for deployment management and instance registration ([d0e455f](https://github.com/pksorensen/pks-cli/commit/d0e455f05c1002a8d220210669e312e2ff72d04e))
+* Add debug output option for Jira commands to log HTTP request/response details ([d0e9dfd](https://github.com/pksorensen/pks-cli/commit/d0e9dfd235ffc981705489d701e777aa13c9dd0a))
+* add GIT_ASKPASS installation command and update Dockerfiles for tmux support ([be810e4](https://github.com/pksorensen/pks-cli/commit/be810e45370a73c5c199ec48bcfc5aa5595496d1))
+* Add issue links support in Jira issue model and browsing command ([edb1f68](https://github.com/pksorensen/pks-cli/commit/edb1f686c08e8642350e55ef7139f4e297e4423a))
+* Add support for saving and managing JQL filters in Jira commands ([a48f636](https://github.com/pksorensen/pks-cli/commit/a48f636d09381854de738e782eb39fed1856b825))
 * enhance Agentics runner with idle timeout and completion signal checks ([62ccfb0](https://github.com/pksorensen/pks-cli/commit/62ccfb0c850db9a449f32f0c6edf9c19fe098d3d))
+* Enhance Coolify integration with environment support and improved app lookup ([8a479f5](https://github.com/pksorensen/pks-cli/commit/8a479f5d6431c082b7a6ade7d0cf29c5b0afab87))
+* Enhance Coolify integration with environment support in job processing ([4e0b125](https://github.com/pksorensen/pks-cli/commit/4e0b12580eda2981664269c3e743b28c9e73a544))
+* Enhance Coolify integration with environment-aware application lookup ([bf4370c](https://github.com/pksorensen/pks-cli/commit/bf4370cccd2d3641162c607beb3df92df76bb22b))
+* Enhance Coolify integration with improved environment handling and strict matching logic ([2f3ad61](https://github.com/pksorensen/pks-cli/commit/2f3ad6147e9f7cb7eaaa7c263275cad7f0f9eadc))
+* Enhance Jira authentication and validation with credential normalization and troubleshooting tips for Cloud ([e094eb6](https://github.com/pksorensen/pks-cli/commit/e094eb67d261a77ed13f1c5dfade34c06ff0632e))
+* Enhance Jira authentication to support deployment type selection and username/password for Server ([321a7b8](https://github.com/pksorensen/pks-cli/commit/321a7b8363e946db1c5e84297bea737e1d87c8d6))
+* Enhance Jira integration by adding support for comments, worklogs, and attachments in issue model and service ([38018c3](https://github.com/pksorensen/pks-cli/commit/38018c3f8a782b478793b336f49517aaa3b9cb97))
+* Enhance Jira issue model and service to support additional fields and export functionality ([091c8fd](https://github.com/pksorensen/pks-cli/commit/091c8fd87916314573c09b5f179107f1d6718739))
+* Enhance JiraBrowseCommand to load child issues recursively and improve selection interface ([f09d114](https://github.com/pksorensen/pks-cli/commit/f09d114adc232961defc8f83f6a29c3e97424fed))
+* Enhance JiraBrowseCommand to load child issues recursively and improve selection interface ([f82135e](https://github.com/pksorensen/pks-cli/commit/f82135e19b84b24ba7e4a355b80d6a293e47cfaa))
+* Enhance JiraBrowseCommand with async selection and export functionality for child issues ([ae9f5c8](https://github.com/pksorensen/pks-cli/commit/ae9f5c86231fe40bd16eeb651622e6e675efcaf0))
+* Enhance loading indicator in JiraBrowseCommand with improved text formatting ([b86a260](https://github.com/pksorensen/pks-cli/commit/b86a26021bb12231241a01b71d42d3f5a2eb6729))
+* Enhance nullability checks and error handling across various services and commands ([9fa310d](https://github.com/pksorensen/pks-cli/commit/9fa310dd54df82952b2a41f42d7c2151d4b54472))
+* Implement async loading with spinner for Jira issue tree navigation ([473a625](https://github.com/pksorensen/pks-cli/commit/473a625bae3b547f979e248c2c16571188dbe3d2))
+* Implement caching mechanism for stale Jira issues retrieval ([1787d93](https://github.com/pksorensen/pks-cli/commit/1787d93ced9220f6cb390e10c1eb385abdd9945d))
+* Implement duplicate registration pruning for GitHub runner ([ea33d60](https://github.com/pksorensen/pks-cli/commit/ea33d60d1ca99c5524ab1484c42a1b37c3df940b))
+* Implement interactive tree selection for Jira issues with expand/collapse and multi-select functionality ([f4485d6](https://github.com/pksorensen/pks-cli/commit/f4485d68d9ced511be18d0fce9a40283d9cac4f2))
+* Implement Jira authentication command and service ([13b0512](https://github.com/pksorensen/pks-cli/commit/13b0512a7adf913ffe4fd6031971d18df2d0bbb6))
+* Implement Jira issue raw fields retrieval and configuration command ([bb52594](https://github.com/pksorensen/pks-cli/commit/bb525943735065044876ebdf0d440eb7d14512fe))
+* Implement local cache for previously exported Jira issues and enhance lazy loading of child issues ([04c7282](https://github.com/pksorensen/pks-cli/commit/04c7282ca507b024f58891843334ea617478aa18))
+* Implement slugification for issue directory names in JiraBrowseCommand ([b73e857](https://github.com/pksorensen/pks-cli/commit/b73e857f9df1091df129a447fc0ddf0b42cc87dc))
+* Improve rendering performance in JiraBrowseCommand with optimized redraw logic ([8ad6c6e](https://github.com/pksorensen/pks-cli/commit/8ad6c6e3a120ed2798a6503f8336fc42b6aae2e9))
+* Refactor JiraBrowseCommand to support lazy loading of child issues and improve interactive selection ([ee85514](https://github.com/pksorensen/pks-cli/commit/ee855141190e1cb3aeee306850168c94fdfe83ad))
+* Simplify authentication check logic in JiraService by streamlining token and auth method validation ([1f6fcc6](https://github.com/pksorensen/pks-cli/commit/1f6fcc62aa4474b5a5b03c514c7185501e22ffbb))
+* Simplify console output in JiraBrowseCommand by replacing markup with plain text ([e282e1a](https://github.com/pksorensen/pks-cli/commit/e282e1a7b905a2b5d8b5662bae6e16127445b4cc))
+* Update GitHub runner command options to use positional arguments for repository ([e0db545](https://github.com/pksorensen/pks-cli/commit/e0db545e3b838f3c6dff619cbad97c668344e8dd))
+* Update JiraService to persist credentials globally and enhance issue search functionality for Cloud ([1333286](https://github.com/pksorensen/pks-cli/commit/1333286c3c0853622f6cb5be3a6f0a19094fd01d))
+
+
+### Bug Fixes
+
+* Allow nullable environment parameter in CoolifyLookupService method ([81d16e2](https://github.com/pksorensen/pks-cli/commit/81d16e2c0fd2475e81850f1df81a83b179777b5f))
 
 ## [6.0.0](https://github.com/pksorensen/pks-cli/compare/v5.0.0...v6.0.0) (2026-03-04)
 

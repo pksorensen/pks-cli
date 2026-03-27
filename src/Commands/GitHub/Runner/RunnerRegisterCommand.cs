@@ -241,14 +241,70 @@ public class RunnerRegisterCommand : RunnerCommand<RunnerRegisterCommand.Setting
 
             DisplaySuccess("Admin permission verified");
 
-            // 5. Add registration
+            // 5. Check for existing registrations for the same repo
+            var existingRegistrations = await WithSpinnerAsync("Checking existing registrations...", async () =>
+                await _configService.ListRegistrationsAsync());
+
+            var duplicates = existingRegistrations
+                .Where(r =>
+                    string.Equals(r.Owner, owner, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(r.Repository, repo, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (duplicates.Count > 0)
+            {
+                Console.WriteLine();
+                DisplayWarning($"Found {duplicates.Count} existing registration(s) for {owner}/{repo}:");
+                Console.WriteLine();
+
+                var existingTable = new Table()
+                    .Border(TableBorder.Rounded)
+                    .BorderColor(Color.Yellow)
+                    .AddColumn("[yellow]ID[/]")
+                    .AddColumn("[cyan]Labels[/]")
+                    .AddColumn("[grey]Registered[/]")
+                    .AddColumn("[grey]Enabled[/]");
+
+                foreach (var dup in duplicates)
+                {
+                    existingTable.AddRow(
+                        dup.Id,
+                        dup.Labels,
+                        dup.RegisteredAt.ToString("yyyy-MM-dd HH:mm:ss UTC"),
+                        dup.Enabled ? "[green]Yes[/]" : "[red]No[/]");
+                }
+
+                Console.Write(existingTable);
+                Console.WriteLine();
+
+                var replace = Console.Confirm($"A registration already exists for [yellow]{owner}/{repo}[/]. Replace it?", defaultValue: false);
+                if (!replace)
+                {
+                    DisplayWarning("Registration cancelled.");
+                    return 0;
+                }
+
+                // Remove all existing registrations for this repo
+                await WithSpinnerAsync("Removing existing registration(s)...", async () =>
+                {
+                    foreach (var dup in duplicates)
+                    {
+                        await _configService.RemoveRegistrationAsync(dup.Id);
+                    }
+                    return true;
+                });
+
+                DisplaySuccess("Existing registration(s) removed");
+            }
+
+            // 6. Add registration
             var labels = settings.Labels ?? "devcontainer-runner";
             var registration = await WithSpinnerAsync("Adding registration...", async () =>
                 await _configService.AddRegistrationAsync(owner, repo, labels));
 
             Console.WriteLine();
 
-            // 6. Display success
+            // 7. Display success
             var table = new Table()
                 .Border(TableBorder.Rounded)
                 .BorderColor(Color.Green)

@@ -16,12 +16,16 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
     private readonly IRunnerContainerService _containerService;
     private readonly IRunnerConfigurationService _configService;
     private readonly IGitHubAuthenticationService _authService;
+    private readonly IJobTokenService _jobTokenService;
+    private readonly ICoolifyTokenStore _coolifyTokenStore;
 
     public RunnerStartCommand(
         IRunnerDaemonService daemonService,
         IRunnerContainerService containerService,
         IRunnerConfigurationService configService,
         IGitHubAuthenticationService authService,
+        IJobTokenService jobTokenService,
+        ICoolifyTokenStore coolifyTokenStore,
         IAnsiConsole console)
         : base(console)
     {
@@ -29,6 +33,8 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
         _containerService = containerService ?? throw new ArgumentNullException(nameof(containerService));
         _configService = configService ?? throw new ArgumentNullException(nameof(configService));
         _authService = authService ?? throw new ArgumentNullException(nameof(authService));
+        _jobTokenService = jobTokenService ?? throw new ArgumentNullException(nameof(jobTokenService));
+        _coolifyTokenStore = coolifyTokenStore ?? throw new ArgumentNullException(nameof(coolifyTokenStore));
     }
 
     public class Settings : RunnerSettings
@@ -49,7 +55,7 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
         {
             DisplayBanner("Start");
 
-            // 1. Pre-flight: authentication
+            // 1. Pre-flight: authentication (with auto-refresh)
             DisplayInfo("Running pre-flight checks...");
 
             var isAuthenticated = await WithSpinnerAsync("Checking authentication...", async () =>
@@ -57,8 +63,74 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
 
             if (!isAuthenticated)
             {
+                // Try refreshing the token first
+                DisplayWarning("Token expired, attempting refresh...");
+                var refreshed = await WithSpinnerAsync("Refreshing token...", async () =>
+                    await _authService.RefreshTokenAsync());
+
+                if (refreshed != null)
+                {
+                    DisplaySuccess("Token refreshed");
+                    isAuthenticated = true;
+                }
+                else
+                {
+                    // Refresh failed — run device code flow inline
+                    DisplayWarning("Refresh failed. Starting login flow...");
+                    Console.WriteLine();
+
+                    var deviceCode = await _authService.InitiateDeviceCodeFlowAsync();
+                    Console.MarkupLine($"[yellow]Open:[/]  [link]{deviceCode.VerificationUri}[/]");
+                    Console.MarkupLine($"[yellow]Code:[/]  [bold cyan]{deviceCode.UserCode}[/]");
+                    Console.WriteLine();
+                    DisplayInfo("Waiting for authorization...");
+
+                    PKS.Infrastructure.Services.Models.GitHubDeviceAuthStatus? authResult = null;
+                    var expiresAt = DateTime.UtcNow.AddSeconds(deviceCode.ExpiresIn);
+                    var pollInterval = TimeSpan.FromSeconds(Math.Max(deviceCode.Interval, 5));
+
+                    while (DateTime.UtcNow < expiresAt)
+                    {
+                        await Task.Delay(pollInterval);
+                        authResult = await _authService.PollForAuthenticationAsync(deviceCode.DeviceCode);
+
+                        if (authResult.IsAuthenticated)
+                            break;
+
+                        if (authResult.Error == "authorization_pending" || authResult.Error == "slow_down")
+                        {
+                            if (authResult.Error == "slow_down")
+                                pollInterval = pollInterval.Add(TimeSpan.FromSeconds(5));
+                            continue;
+                        }
+                        break;
+                    }
+
+                    if (authResult == null || !authResult.IsAuthenticated)
+                    {
+                        var errorDetail = authResult?.ErrorDescription ?? authResult?.Error ?? "authorization timed out";
+                        DisplayError($"Authentication failed: {errorDetail}");
+                        return 1;
+                    }
+
+                    await _authService.StoreTokenAsync(new PKS.Infrastructure.Services.Models.GitHubStoredToken
+                    {
+                        AccessToken = authResult.AccessToken!,
+                        RefreshToken = authResult.RefreshToken,
+                        Scopes = authResult.Scopes,
+                        CreatedAt = DateTime.UtcNow,
+                        ExpiresAt = authResult.ExpiresAt,
+                        IsValid = true,
+                        LastValidated = DateTime.UtcNow
+                    });
+
+                    isAuthenticated = true;
+                }
+            }
+
+            if (!isAuthenticated)
+            {
                 DisplayError("Not authenticated with GitHub.");
-                DisplayWarning("Run 'pks github runner register --repo owner/repo' to authenticate and register a repository.");
                 return 1;
             }
 
@@ -138,7 +210,9 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
                 msg =>
                 {
                     try { File.AppendAllText(logPath, $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}] [cred-server] {msg}\n"); } catch { }
-                });
+                },
+                _jobTokenService,
+                _coolifyTokenStore);
             await credentialServer.StartAsync();
             DisplaySuccess($"Credential server started: {credentialServer.SocketPath}");
             DisplayInfo($"Detailed logs: {logPath}");

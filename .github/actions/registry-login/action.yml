@@ -1,0 +1,28 @@
+name: 'Registry Login'
+description: 'Log in to a container registry using pks runner credentials (requires pks registry init on the runner).'
+
+inputs:
+  registry:
+    description: 'Registry hostname (e.g. registry.kjeldager.io)'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Login via pks runner credentials
+      shell: bash
+      run: |
+        REGISTRY="${{ inputs.registry }}"
+        SOCKET="${PKS_TOKEN_URL:-/var/run/pks-creds/creds.sock}"
+        RESPONSE=$(curl -sf --unix-socket "$SOCKET" \
+          -H "Authorization: Bearer $PKS_TOKEN" \
+          "http://localhost/registry/credential?hostname=${REGISTRY}")
+        if [ $? -ne 0 ]; then
+          echo "::error::Failed to fetch registry credentials from pks socket. Run 'pks registry init ${REGISTRY}' on this runner."
+          exit 1
+        fi
+        USER=$(echo "$RESPONSE" | jq -r '.username')
+        PASS=$(echo "$RESPONSE" | jq -r '.password')
+        echo "::add-mask::$PASS"
+        echo "$PASS" | docker login "$REGISTRY" --username "$USER" --password-stdin
+        echo "REGISTRY_LOGGED_IN=$REGISTRY" >> "$GITHUB_ENV"

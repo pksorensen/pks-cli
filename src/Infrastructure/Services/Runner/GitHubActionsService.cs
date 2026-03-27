@@ -136,7 +136,22 @@ public class GitHubActionsService : IGitHubActionsService
     {
         await EnsureAuthenticatedAsync();
         var endpoint = $"repos/{owner}/{repo}/actions/runs/{runId}/jobs?filter=latest&per_page=100";
+
         var response = await _apiClient.GetAsync<WorkflowJobsResponse>(endpoint, cancellationToken);
-        return response?.Jobs ?? new List<WorkflowJob>();
+        var jobs = response?.Jobs ?? new List<WorkflowJob>();
+
+        // Debug: dump deserialized jobs to see what fields are populated
+        try
+        {
+            var logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".pks-cli");
+            Directory.CreateDirectory(logDir);
+            var opts = new System.Text.Json.JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.SnakeCaseLower };
+            await File.WriteAllTextAsync(
+                Path.Combine(logDir, $"jobs-debug-{runId}.json"),
+                System.Text.Json.JsonSerializer.Serialize(jobs, opts));
+        }
+        catch { /* debug only */ }
+
+        return jobs;
     }
 }

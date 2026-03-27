@@ -16,16 +16,22 @@ public class RunnerContainerService : IRunnerContainerService
     private const string RunnerInstallPath = "/tmp/actions-runner";
 
     private readonly IProcessRunner _processRunner;
+    private readonly ICoolifyLookupService _coolifyLookup;
+    private readonly IJobTokenService _jobTokenService;
+    private readonly ICoolifyTokenStore _coolifyTokenStore;
     private readonly ILogger<RunnerContainerService> _logger;
 
-    /// <summary>
-    /// Initializes a new instance of the <see cref="RunnerContainerService"/> class
-    /// </summary>
-    /// <param name="processRunner">Abstraction for running external processes</param>
-    /// <param name="logger">Logger for diagnostic output</param>
-    public RunnerContainerService(IProcessRunner processRunner, ILogger<RunnerContainerService> logger)
+    public RunnerContainerService(
+        IProcessRunner processRunner,
+        ICoolifyLookupService coolifyLookup,
+        IJobTokenService jobTokenService,
+        ICoolifyTokenStore coolifyTokenStore,
+        ILogger<RunnerContainerService> logger)
     {
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
+        _coolifyLookup = coolifyLookup ?? throw new ArgumentNullException(nameof(coolifyLookup));
+        _jobTokenService = jobTokenService ?? throw new ArgumentNullException(nameof(jobTokenService));
+        _coolifyTokenStore = coolifyTokenStore ?? throw new ArgumentNullException(nameof(coolifyTokenStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -96,8 +102,9 @@ public class RunnerContainerService : IRunnerContainerService
         string encodedJitConfig,
         Action<string>? onProgress = null,
         CancellationToken cancellationToken = default,
-        string? credentialSocketPath = null)
-        => ExecuteJobAsync(registration, runId, branch, accessToken, encodedJitConfig, onProgress, cancellationToken, containerName: null, credentialSocketPath: credentialSocketPath);
+        string? credentialSocketPath = null,
+        string? environment = null)
+        => ExecuteJobAsync(registration, runId, branch, accessToken, encodedJitConfig, onProgress, cancellationToken, containerName: null, credentialSocketPath: credentialSocketPath, environment: environment);
 
     /// <summary>
     /// Execute a full job lifecycle with optional container name for reuse.
@@ -112,7 +119,8 @@ public class RunnerContainerService : IRunnerContainerService
         Action<string>? onProgress,
         CancellationToken cancellationToken,
         string? containerName,
-        string? credentialSocketPath = null)
+        string? credentialSocketPath = null,
+        string? environment = null)
     {
         var job = new RunnerJobState
         {
@@ -163,6 +171,43 @@ public class RunnerContainerService : IRunnerContainerService
                 baseArgs += $" --mount type=bind,source={credentialSocketPath},target=/var/run/pks-creds";
                 baseArgs += " --remote-env GIT_ASKPASS=/tmp/git-askpass.sh";
                 _logger.LogInformation("Credential socket dir mounted: {SocketDir} -> /var/run/pks-creds, GIT_ASKPASS=/tmp/git-askpass.sh", credentialSocketPath);
+            }
+
+            // Look up Coolify apps and prepare per-job token
+            // Static/non-secret vars go into --remote-env (persist in container);
+            // PKS_TOKEN is injected per-job via docker exec -e (OIDC-like scoping)
+            string? pksToken = null;
+            try
+            {
+                onProgress?.Invoke($"Coolify lookup: {registration.Owner}/{registration.Repository}@{branch} (all environments)");
+                var allApps = await _coolifyLookup.FindAllAppsAsync(registration.Owner, registration.Repository, branch);
+                if (allApps.Count > 0)
+                {
+                    // Static display vars go into --remote-env (persist in container)
+                    var defaultApp = allApps.FirstOrDefault(a =>
+                        string.Equals(a.EnvironmentName, "production", StringComparison.OrdinalIgnoreCase))
+                        ?? allApps[0];
+                    baseArgs += " --remote-env PKS_TOKEN_URL=/var/run/pks-creds/creds.sock";
+                    baseArgs += $" --remote-env COOLIFY_APP_FQDN={defaultApp.Fqdn}";
+                    baseArgs += $" --remote-env COOLIFY_ENVIRONMENT={defaultApp.EnvironmentName}";
+
+                    // Generate per-job JWT (injected via docker exec -e, NOT --remote-env)
+                    var jobId = $"{runId}-{Guid.NewGuid():N}";
+                    _coolifyTokenStore.RegisterAll(jobId, allApps);
+                    pksToken = _jobTokenService.CreateToken(
+                        registration.Owner, registration.Repository, branch,
+                        "", "", jobId);
+
+                    onProgress?.Invoke($"Coolify proxy configured for {allApps.Count} app(s) across environments [scoped JWT]");
+                    _logger.LogInformation("Prepared scoped PKS_TOKEN for {Count} app(s) matching {Owner}/{Repo}@{Branch} (jobId={JobId})",
+                        allApps.Count, registration.Owner, registration.Repository, branch, jobId);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Coolify lookup failed for {Owner}/{Repo}@{Branch} — skipping env injection",
+                    registration.Owner, registration.Repository, branch);
+                onProgress?.Invoke($"Warning: Coolify lookup failed: {ex.Message}");
             }
 
             var devcontainerArgs = containerName != null
@@ -251,8 +296,11 @@ public class RunnerContainerService : IRunnerContainerService
             var writeConfigArgs = $"exec {containerId} bash -c \"echo '{encodedJitConfig}' > {RunnerInstallPath}/.jitconfig\"";
             await _processRunner.RunAsync("docker", writeConfigArgs, null, cancellationToken);
 
-            // Run the runner with RUNNER_ALLOW_RUNASROOT and capture all output
-            var runArgs = $"exec -w {RunnerInstallPath} -e RUNNER_ALLOW_RUNASROOT=1 {containerId} bash -c \"./run.sh --jitconfig $(cat .jitconfig) 2>&1\"";
+            // Run the runner with RUNNER_ALLOW_RUNASROOT and per-job PKS_TOKEN
+            var envFlags = "-e RUNNER_ALLOW_RUNASROOT=1";
+            if (!string.IsNullOrEmpty(pksToken))
+                envFlags += $" -e PKS_TOKEN={pksToken} -e PKS_TOKEN_URL=/var/run/pks-creds/creds.sock";
+            var runArgs = $"exec -w {RunnerInstallPath} {envFlags} {containerId} bash -c \"./run.sh --jitconfig $(cat .jitconfig) 2>&1\"";
             var runResult = await _processRunner.RunAsync("docker", runArgs, null, cancellationToken);
 
             // Always log the runner output for debugging
@@ -379,6 +427,32 @@ public class RunnerContainerService : IRunnerContainerService
                 await WriteAskpassScriptAsync(containerId, onProgress, cancellationToken);
             }
 
+            // Prepare per-job Coolify token (OIDC-like: each job gets its own scoped JWT)
+            string? pksToken = null;
+            try
+            {
+                onProgress?.Invoke($"Coolify lookup: {registration.Owner}/{registration.Repository}@{branch} (all environments)");
+                var allApps = await _coolifyLookup.FindAllAppsAsync(registration.Owner, registration.Repository, branch);
+                if (allApps.Count > 0)
+                {
+                    var coolifyJobId = $"{runId}-{jobId}-{Guid.NewGuid():N}";
+                    _coolifyTokenStore.RegisterAll(coolifyJobId, allApps);
+                    pksToken = _jobTokenService.CreateToken(
+                        registration.Owner, registration.Repository, branch,
+                        "", "", coolifyJobId);
+
+                    onProgress?.Invoke($"Coolify proxy configured for {allApps.Count} app(s) across environments [scoped JWT]");
+                    _logger.LogInformation("Prepared scoped PKS_TOKEN for {Count} app(s) in existing container (jobId={JobId})",
+                        allApps.Count, coolifyJobId);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Coolify lookup failed for {Owner}/{Repo}@{Branch} in existing container",
+                    registration.Owner, registration.Repository, branch);
+                onProgress?.Invoke($"Warning: Coolify lookup failed: {ex.Message}");
+            }
+
             // Step 1: Install the GitHub Actions runner to a unique path
             onProgress?.Invoke($"Installing GitHub Actions runner v{RunnerVersion} in existing container {containerId[..Math.Min(12, containerId.Length)]}...");
             _logger.LogInformation("Installing runner to {RunnerPath} in container {ContainerId} for job {JobId}",
@@ -407,7 +481,10 @@ public class RunnerContainerService : IRunnerContainerService
             var writeConfigArgs = $"exec {containerId} bash -c \"echo '{encodedJitConfig}' > {runnerPath}/.jitconfig\"";
             await _processRunner.RunAsync("docker", writeConfigArgs, null, cancellationToken);
 
-            var runArgs = $"exec -w {runnerPath} -e RUNNER_ALLOW_RUNASROOT=1 {containerId} bash -c \"./run.sh --jitconfig $(cat .jitconfig) 2>&1\"";
+            var envFlags2 = "-e RUNNER_ALLOW_RUNASROOT=1";
+            if (!string.IsNullOrEmpty(pksToken))
+                envFlags2 += $" -e PKS_TOKEN={pksToken} -e PKS_TOKEN_URL=/var/run/pks-creds/creds.sock";
+            var runArgs = $"exec -w {runnerPath} {envFlags2} {containerId} bash -c \"./run.sh --jitconfig $(cat .jitconfig) 2>&1\"";
             var runResult = await _processRunner.RunAsync("docker", runArgs, null, cancellationToken);
 
             var stdout = runResult.StandardOutput?.Trim();

@@ -238,6 +238,163 @@ public class RunnerConfigurationServiceTests : TestBase
 
     #endregion
 
+    #region PruneRegistrationsAsync
+
+    [Fact]
+    public async Task PruneRegistrations_RemovesDuplicatesKeepingNewest()
+    {
+        // Arrange – 3 registrations for the same repo with different dates
+        var config = new RunnerConfiguration
+        {
+            Registrations = new List<RunnerRegistration>
+            {
+                new()
+                {
+                    Id = "oldest",
+                    Owner = "pksorensen",
+                    Repository = "pks-cli",
+                    RegisteredAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                },
+                new()
+                {
+                    Id = "newest",
+                    Owner = "pksorensen",
+                    Repository = "pks-cli",
+                    RegisteredAt = new DateTime(2025, 3, 1, 0, 0, 0, DateTimeKind.Utc)
+                },
+                new()
+                {
+                    Id = "middle",
+                    Owner = "pksorensen",
+                    Repository = "pks-cli",
+                    RegisteredAt = new DateTime(2025, 2, 1, 0, 0, 0, DateTimeKind.Utc)
+                }
+            }
+        };
+        await _service.SaveAsync(config);
+
+        // Act
+        var removed = await _service.PruneRegistrationsAsync();
+
+        // Assert
+        removed.Should().HaveCount(2);
+        removed.Select(r => r.Id).Should().BeEquivalentTo("oldest", "middle");
+
+        var loaded = await _service.LoadAsync();
+        loaded.Registrations.Should().HaveCount(1);
+        loaded.Registrations[0].Id.Should().Be("newest");
+    }
+
+    [Fact]
+    public async Task PruneRegistrations_NoOp_WhenNoDuplicates()
+    {
+        // Arrange – 2 registrations for different repos
+        var config = new RunnerConfiguration
+        {
+            Registrations = new List<RunnerRegistration>
+            {
+                new()
+                {
+                    Id = "reg-1",
+                    Owner = "pksorensen",
+                    Repository = "pks-cli",
+                    RegisteredAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                },
+                new()
+                {
+                    Id = "reg-2",
+                    Owner = "pksorensen",
+                    Repository = "other-repo",
+                    RegisteredAt = new DateTime(2025, 2, 1, 0, 0, 0, DateTimeKind.Utc)
+                }
+            }
+        };
+        await _service.SaveAsync(config);
+
+        // Act
+        var removed = await _service.PruneRegistrationsAsync();
+
+        // Assert
+        removed.Should().BeEmpty();
+
+        var loaded = await _service.LoadAsync();
+        loaded.Registrations.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task PruneRegistrations_HandlesMultipleReposWithDuplicates()
+    {
+        // Arrange – duplicates across 2 different repos
+        var config = new RunnerConfiguration
+        {
+            Registrations = new List<RunnerRegistration>
+            {
+                new()
+                {
+                    Id = "repo1-old",
+                    Owner = "pksorensen",
+                    Repository = "pks-cli",
+                    RegisteredAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                },
+                new()
+                {
+                    Id = "repo1-new",
+                    Owner = "pksorensen",
+                    Repository = "pks-cli",
+                    RegisteredAt = new DateTime(2025, 3, 1, 0, 0, 0, DateTimeKind.Utc)
+                },
+                new()
+                {
+                    Id = "repo2-old",
+                    Owner = "PKSorensen",
+                    Repository = "Other-Repo",
+                    RegisteredAt = new DateTime(2025, 1, 15, 0, 0, 0, DateTimeKind.Utc)
+                },
+                new()
+                {
+                    Id = "repo2-new",
+                    Owner = "pksorensen",
+                    Repository = "other-repo",
+                    RegisteredAt = new DateTime(2025, 2, 15, 0, 0, 0, DateTimeKind.Utc)
+                },
+                new()
+                {
+                    Id = "unique-repo",
+                    Owner = "someowner",
+                    Repository = "unique",
+                    RegisteredAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                }
+            }
+        };
+        await _service.SaveAsync(config);
+
+        // Act
+        var removed = await _service.PruneRegistrationsAsync();
+
+        // Assert – one old entry removed per duplicated repo
+        removed.Should().HaveCount(2);
+        removed.Select(r => r.Id).Should().BeEquivalentTo("repo1-old", "repo2-old");
+
+        var loaded = await _service.LoadAsync();
+        loaded.Registrations.Should().HaveCount(3);
+        loaded.Registrations.Select(r => r.Id).Should()
+            .BeEquivalentTo("repo1-new", "repo2-new", "unique-repo");
+    }
+
+    [Fact]
+    public async Task PruneRegistrations_EmptyRegistrations_ReturnsEmpty()
+    {
+        // Arrange – no registrations at all (fresh default config)
+
+        // Act
+        var removed = await _service.PruneRegistrationsAsync();
+
+        // Assert
+        removed.Should().BeEmpty();
+    }
+
+    #endregion
+
     #region GetRegistrationAsync
 
     [Fact]

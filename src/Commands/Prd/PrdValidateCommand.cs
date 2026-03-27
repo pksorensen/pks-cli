@@ -104,7 +104,7 @@ public class PrdValidateCommand : Command<PrdValidateSettings>
         AnsiConsole.Write(panel);
 
         // Show detailed issues
-        if (validation.Errors.Any())
+        if (validation.Errors?.Any() == true)
         {
             AnsiConsole.WriteLine();
             AnsiConsole.MarkupLine("[red bold]Errors (must fix):[/]");
@@ -114,7 +114,7 @@ public class PrdValidateCommand : Command<PrdValidateSettings>
             }
         }
 
-        if (validation.Warnings.Any())
+        if (validation.Warnings?.Any() == true)
         {
             AnsiConsole.WriteLine();
             AnsiConsole.MarkupLine("[yellow bold]Warnings (should fix):[/]");
@@ -124,7 +124,7 @@ public class PrdValidateCommand : Command<PrdValidateSettings>
             }
         }
 
-        if (validation.Suggestions.Any())
+        if (validation.Suggestions?.Any() == true)
         {
             AnsiConsole.WriteLine();
             AnsiConsole.MarkupLine("[cyan bold]Suggestions (could improve):[/]");
@@ -161,11 +161,11 @@ public class PrdValidateCommand : Command<PrdValidateSettings>
                 Suggestions = validation.Suggestions,
                 Summary = new
                 {
-                    TotalIssues = validation.Errors.Count() + validation.Warnings.Count(),
-                    CriticalIssues = validation.Errors.Count(),
-                    RecommendedActions = validation.Errors.Any() ?
+                    TotalIssues = (validation.Errors?.Count() ?? 0) + (validation.Warnings?.Count() ?? 0),
+                    CriticalIssues = validation.Errors?.Count() ?? 0,
+                    RecommendedActions = validation.Errors?.Any() == true ?
                         "Fix all errors before proceeding" :
-                        validation.Warnings.Any() ?
+                        validation.Warnings?.Any() == true ?
                             "Address warnings for better quality" :
                             "PRD is in good shape"
                 }

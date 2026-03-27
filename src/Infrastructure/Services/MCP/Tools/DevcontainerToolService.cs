@@ -91,7 +91,7 @@ public class DevcontainerToolService
                 BaseImage = baseImage,
                 Extensions = extensions?.ToList() ?? new List<string>(),
                 ForwardPortsList = forwardPorts?.ToList() ?? new List<int>(),
-                PostCreateCommand = postCreateCommand
+                PostCreateCommand = postCreateCommand!
             };
 
             // Set features (convert from string[] to Dictionary for JSON serialization)

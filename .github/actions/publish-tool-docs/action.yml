@@ -1,0 +1,97 @@
+name: 'Publish Tool Docs'
+description: 'Publish tool documentation from .agentics/tool/ to the Agentic Live API'
+
+inputs:
+  component:
+    description: 'Component name (e.g., pks). Defaults to repository name.'
+    required: false
+    default: ''
+  version:
+    description: 'Version being published (e.g., 0.5.0)'
+    required: true
+  docs-dir:
+    description: 'Path to the tool docs directory (default: .agentics/tool)'
+    required: false
+    default: '.agentics/tool'
+  server:
+    description: 'Agentic Live server URL'
+    required: false
+    default: 'https://agentics.dk'
+
+outputs:
+  file-count:
+    description: 'Number of doc files published'
+    value: ${{ steps.publish.outputs.file_count }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Collect and publish docs
+      id: publish
+      shell: bash
+      run: |
+        COMPONENT="${{ inputs.component }}"
+        if [ -z "$COMPONENT" ]; then
+          COMPONENT="${{ github.event.repository.name }}"
+        fi
+        VERSION="${{ inputs.version }}"
+        DOCS_DIR="${{ inputs.docs-dir }}"
+        SERVER="${{ inputs.server }}"
+
+        if [ ! -d "$DOCS_DIR" ]; then
+          echo "::warning::Docs directory '$DOCS_DIR' not found, skipping publish"
+          echo "file_count=0" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # Collect all .md files into a JSON payload
+        FILES_JSON="[]"
+        FILE_COUNT=0
+
+        while IFS= read -r -d '' file; do
+          # Get relative path from docs dir
+          REL_PATH="${file#$DOCS_DIR/}"
+          CONTENT=$(cat "$file")
+
+          # Build JSON file entry using jq
+          FILES_JSON=$(echo "$FILES_JSON" | jq \
+            --arg path "$REL_PATH" \
+            --arg content "$CONTENT" \
+            '. + [{"path": $path, "content": $content}]')
+          FILE_COUNT=$((FILE_COUNT + 1))
+        done < <(find "$DOCS_DIR" -name '*.md' -print0)
+
+        if [ "$FILE_COUNT" -eq 0 ]; then
+          echo "::warning::No .md files found in '$DOCS_DIR'"
+          echo "file_count=0" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        echo "Publishing $FILE_COUNT doc files for $COMPONENT v$VERSION to $SERVER..."
+
+        # Build the full payload
+        PAYLOAD=$(jq -n \
+          --arg component "$COMPONENT" \
+          --arg version "$VERSION" \
+          --argjson files "$FILES_JSON" \
+          '{component: $component, version: $version, files: $files}')
+
+        # POST to the API
+        HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
+          -X POST \
+          -H "Content-Type: application/json" \
+          -d "$PAYLOAD" \
+          "${SERVER}/api/tools/docs")
+
+        HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -1)
+        BODY=$(echo "$HTTP_RESPONSE" | head -n -1)
+
+        echo "Response ($HTTP_CODE): $BODY"
+
+        if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+          echo "::error::Failed to publish tool docs (HTTP $HTTP_CODE): $BODY"
+          exit 1
+        fi
+
+        echo "file_count=$FILE_COUNT" >> "$GITHUB_OUTPUT"
+        echo "Successfully published $FILE_COUNT docs for $COMPONENT v$VERSION"
