@@ -6,7 +6,6 @@ on:
       - main
     paths:
       - 'templates/base-images/**'
-      - 'src/**'
   workflow_dispatch:
     inputs:
       image:
