@@ -53,6 +53,63 @@ jobs:
           target-branch: main
 
   # ============================================================
+  # Preview Packages: publish on every push (when no release)
+  # ============================================================
+  preview-packages:
+    name: Publish Preview Packages
+    needs: release-please
+    if: needs.release-please.outputs.releases_created != 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Read base version
+        id: version
+        run: |
+          BASE_VERSION=$(cat src/version.txt | tr -d '[:space:]')
+          PREVIEW_VERSION="${BASE_VERSION}-preview.${{ github.run_number }}"
+          echo "preview=$PREVIEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Restore and build
+        run: |
+          dotnet restore src/pks-cli.csproj
+          dotnet build src/pks-cli.csproj --configuration Release --no-restore
+
+      - name: Create preview NuGet package
+        run: |
+          mkdir -p packages
+          dotnet pack src/pks-cli.csproj \
+            --configuration Release \
+            --output ./packages \
+            --no-restore \
+            -p:PackageVersion=${{ steps.version.outputs.preview }}
+
+      - name: Publish preview to NuGet.org
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if [ -n "$NUGET_API_KEY" ]; then
+            for package in packages/*.nupkg; do
+              if [ -f "$package" ]; then
+                echo "Publishing preview $(basename $package)..."
+                dotnet nuget push "$package" \
+                  --api-key "$NUGET_API_KEY" \
+                  --source https://api.nuget.org/v3/index.json \
+                  --skip-duplicate
+              fi
+            done
+          else
+            echo "NUGET_API_KEY not set, skipping preview publish"
+          fi
+
+  # ============================================================
   # CLI Release: Build, pack, and publish NuGet package
   # ============================================================
   release-cli:

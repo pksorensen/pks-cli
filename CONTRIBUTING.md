@@ -12,9 +12,9 @@ PKS CLI uses a **single-branch model** with `main` as the only long-lived branch
 - Merging a Release PR publishes **stable releases** to NuGet and npm
 
 ```
-feature branch → PR to main → merge
+feature branch → PR to main (CI validates) → merge
                                  ↓
-              CI publishes preview package (6.3.0-preview.42)
+              Preview package published (6.3.0-preview.42)
               Release Please updates the Release PR
                                  ↓
               When ready: merge the Release PR
@@ -143,7 +143,7 @@ Every PR must pass:
 - `dotnet format --verify-no-changes` — code formatting
 - `dotnet build --warnaserror` — clean build
 - `dotnet test --filter "Category=Core&Reliability!=Unstable"` — core tests
-- Hooks validation (PR only)
+- Hooks validation
 
 ## How Release Please Works
 
@@ -173,7 +173,7 @@ PKS CLI uses Release Please in **manifest mode** with per-package versioning.
 ```
 1. Merge PRs with conventional commits into main
        ↓
-2. CI publishes preview NuGet packages (X.Y.Z-preview.{build})
+2. Preview NuGet packages published automatically (X.Y.Z-preview.{build})
        ↓
 3. Release Please creates/updates a Release PR with changelog
        ↓

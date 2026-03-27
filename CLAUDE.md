@@ -696,8 +696,8 @@ feat: broad change                   # All affected packages
 
 | Workflow | Triggers | Purpose |
 |----------|----------|---------|
-| `ci.yml` | PR + push to main | Format check, build, test, hooks validation, preview packages |
-| `release-please.yml` | Push to main | Release orchestration, NuGet/npm stable publish |
+| `ci.yml` | PRs only | Quality gate: format check, build, test, hooks validation |
+| `release-please.yml` | Push to main | Preview packages, release orchestration, NuGet/npm stable publish |
 | `build-base-images.yml` | Changes to base-images | Container infrastructure |
 
 ### Commit Messages
