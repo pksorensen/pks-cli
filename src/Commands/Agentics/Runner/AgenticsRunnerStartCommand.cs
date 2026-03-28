@@ -617,6 +617,17 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         var keyboardPin = job.Id[..8].ToUpperInvariant();
         scriptLines.AppendLine($"export VIBECAST_KEYBOARD_PIN={keyboardPin}");
         scriptLines.AppendLine("export VIBECAST_DEBUG=1");
+
+        // If a vibecast binary was embedded at build time (local dev only, -p:EmbedVibecast=true),
+        // extract it into the container and point VIBECAST_BIN at it so the hooks also pick it up.
+        // This lets us test local vibecast changes without publishing to npm.
+        var embeddedVibecastPath = await TryInjectEmbeddedVibecastAsync(containerId);
+        if (embeddedVibecastPath != null)
+        {
+            scriptLines.AppendLine($"export VIBECAST_BIN={embeddedVibecastPath}");
+            _console.MarkupLine($"[yellow]Using embedded vibecast binary: {embeddedVibecastPath}[/]");
+        }
+
         // Only pass initial prompt file when prompt is non-empty (matches in-process mode behaviour)
         if (!string.IsNullOrEmpty(jobPrompt))
             scriptLines.AppendLine($"export VIBECAST_INITIAL_PROMPT_FILE={promptFile}");
@@ -628,7 +639,9 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         }
         scriptLines.AppendLine($"export VIBECAST_APPEND_SYSTEM_PROMPT=\"{appendPrompt}\"");
         scriptLines.AppendLine($"cd {workspaceFolder}");
-        scriptLines.AppendLine("exec npx --yes vibecast");
+        // Remove any stale .mcp.json left by an older vibecast session (plugin dir handles MCP now)
+        scriptLines.AppendLine("rm -f .mcp.json");
+        scriptLines.AppendLine("exec ${VIBECAST_BIN:-npx --yes vibecast}");
 
         var scriptB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(scriptLines.ToString().Replace("\r\n", "\n")));
         await _spawnerService.ExecInContainerAsync(containerId,
@@ -657,7 +670,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         _console.MarkupLine($"[cyan]Starting vibecast in container tmux session '{vibecastTmux}'...[/]");
         _console.MarkupLine($"[dim]Keyboard PIN (for web UI input): {keyboardPin}[/]");
         var tmuxStart = await _spawnerService.ExecInContainerAsync(containerId,
-            $"tmux new-session -d -s {vibecastTmux} -x 200 -y 50 " +
+            $"tmux new-session -d -s {vibecastTmux} -x 120 -y 48 " +
             $"bash -c '{launchScript} 2>&1 | tee {vibecastHome}/vibecast.log'",
             timeoutSeconds: 30);
         if (!string.IsNullOrWhiteSpace(tmuxStart.Error))
@@ -1810,6 +1823,133 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
     /// Finds the first running container that has the given Docker label filter (e.g. "pks.agentics.fingerprint=abc123").
     /// Returns the container ID or null if none found.
     /// </summary>
+    /// <summary>
+    /// If a vibecast linux-amd64 binary was embedded at build time (via -p:EmbedVibecast=true),
+    /// extracts it to a temp file, copies it into the container, and returns the in-container path.
+    /// Returns null when no embedded binary is present (normal/release builds).
+    /// </summary>
+    private async Task<string?> TryInjectEmbeddedVibecastAsync(string containerId)
+    {
+        var asm = System.Reflection.Assembly.GetExecutingAssembly();
+        using var stream = asm.GetManifestResourceStream("vibecast-linux-amd64");
+        if (stream == null) return null;
+
+        using var ms = new System.IO.MemoryStream();
+        await stream.CopyToAsync(ms);
+        _console.MarkupLine($"[dim]Injecting vibecast binary ({ms.Length / 1024} KB) into container via stdin pipe...[/]");
+
+        // Pipe the raw binary via `docker exec -i ... cat > dest` — avoids docker cp
+        // Windows path issues and base64 command-length limits.
+        var dest = "/tmp/vibecast-embedded";
+
+        // Remove any previous binary so we always inject the latest local build.
+        await _spawnerService.ExecInContainerAsync(containerId, $"rm -f {dest}", timeoutSeconds: 5);
+
+        var psi  = new ProcessStartInfo("docker")
+        {
+            RedirectStandardInput  = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            UseShellExecute        = false,
+        };
+        psi.ArgumentList.Add("exec");
+        psi.ArgumentList.Add("-i");
+        psi.ArgumentList.Add(containerId);
+        psi.ArgumentList.Add("bash");
+        psi.ArgumentList.Add("-c");
+        psi.ArgumentList.Add($"cat > {dest} && chmod +x {dest}");
+
+        Process? proc;
+        try
+        {
+            proc = Process.Start(psi);
+            if (proc == null) return null;
+
+            ms.Position = 0;
+            await ms.CopyToAsync(proc.StandardInput.BaseStream);
+            await proc.StandardInput.BaseStream.FlushAsync();
+            proc.StandardInput.Close();
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[yellow]vibecast inject pipe error: {ex.Message.EscapeMarkup()} — falling back to npx[/]");
+            return null;
+        }
+
+        var stderr = await proc.StandardError.ReadToEndAsync();
+        await proc.WaitForExitAsync();
+
+        if (proc.ExitCode != 0)
+        {
+            _console.MarkupLine($"[yellow]vibecast inject failed (exit {proc.ExitCode}): {stderr.Trim().EscapeMarkup()} — falling back to npx[/]");
+            return null;
+        }
+
+        _console.MarkupLine("[dim]Vibecast binary injected.[/]");
+
+        // Also extract the claude-plugin directory next to the binary so vibecast's
+        // PluginDir() lookup (filepath.Dir(exe)/claude-plugin) finds it at /tmp/claude-plugin.
+        await InjectEmbeddedPluginDirAsync(containerId);
+
+        return dest;
+    }
+
+    private static readonly string[] PluginResources =
+    [
+        "claude-plugin/.mcp.json",
+        "claude-plugin/.claude-plugin/plugin.json",
+        "claude-plugin/hooks/hooks.json",
+    ];
+
+    private async Task InjectEmbeddedPluginDirAsync(string containerId)
+    {
+        var asm = System.Reflection.Assembly.GetExecutingAssembly();
+        foreach (var resourceName in PluginResources)
+        {
+            using var resStream = asm.GetManifestResourceStream(resourceName);
+            if (resStream == null) continue;
+
+            var destPath = $"/tmp/{resourceName}";
+            var destDir  = System.IO.Path.GetDirectoryName(destPath)!.Replace('\\', '/');
+
+            // Ensure destination directory exists
+            await _spawnerService.ExecInContainerAsync(containerId, $"mkdir -p {destDir}", timeoutSeconds: 5);
+
+            var psi = new ProcessStartInfo("docker")
+            {
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            psi.ArgumentList.Add("exec");
+            psi.ArgumentList.Add("-i");
+            psi.ArgumentList.Add(containerId);
+            psi.ArgumentList.Add("bash");
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add($"cat > {destPath}");
+
+            Process? proc;
+            try
+            {
+                proc = Process.Start(psi);
+                if (proc == null) continue;
+                await resStream.CopyToAsync(proc.StandardInput.BaseStream);
+                await proc.StandardInput.BaseStream.FlushAsync();
+                proc.StandardInput.Close();
+            }
+            catch (Exception ex)
+            {
+                _console.MarkupLine($"[yellow]Plugin inject pipe error ({resourceName}): {ex.Message.EscapeMarkup()}[/]");
+                continue;
+            }
+
+            await proc.StandardError.ReadToEndAsync();
+            await proc.WaitForExitAsync();
+        }
+        _console.MarkupLine("[dim]Claude plugin dir injected at /tmp/claude-plugin.[/]");
+    }
+
     private static async Task<string?> FindContainerByLabelAsync(string labelFilter)
     {
         try
