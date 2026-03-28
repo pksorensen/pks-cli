@@ -558,6 +558,7 @@ app.Configure(config =>
     config.AddBranch<HooksSettings>("hooks", hooks =>
     {
         hooks.SetDescription("Manage Claude Code hooks integration");
+        hooks.SetDefaultCommand<HooksMenuCommand>();
 
         hooks.AddCommand<HooksCommand>("init")
             .WithDescription("Initialize Claude Code hooks configuration");

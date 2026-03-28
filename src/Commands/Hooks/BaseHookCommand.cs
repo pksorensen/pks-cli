@@ -191,4 +191,49 @@ public abstract class BaseHookCommand : AsyncCommand<HooksSettings>
 
         return null;
     }
+
+    /// <summary>
+    /// Run a shell command and return its exit code and combined stdout+stderr output.
+    /// </summary>
+    protected static async Task<(int ExitCode, string Output)> RunProcessAsync(
+        string command, string workingDir, int timeoutSeconds = 60)
+    {
+        // Split "npm run lint" → exe="npm", args="run lint"
+        var parts = command.Trim().Split(' ', 2);
+        var exe = parts[0];
+        var args = parts.Length > 1 ? parts[1] : string.Empty;
+
+        using var process = new System.Diagnostics.Process();
+        process.StartInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = exe,
+            Arguments = args,
+            WorkingDirectory = workingDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        var outputBuilder = new System.Text.StringBuilder();
+        process.OutputDataReceived += (_, e) => { if (e.Data != null) outputBuilder.AppendLine(e.Data); };
+        process.ErrorDataReceived  += (_, e) => { if (e.Data != null) outputBuilder.AppendLine(e.Data); };
+
+        process.Start();
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+
+        var completed = await process.WaitForExitAsync(
+            new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds)).Token
+        ).ContinueWith(t => !t.IsCanceled);
+
+        if (!completed)
+        {
+            try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+
+            return (1, $"Lint command timed out after {timeoutSeconds}s.");
+        }
+
+        return (process.ExitCode, outputBuilder.ToString().Trim());
+    }
 }
