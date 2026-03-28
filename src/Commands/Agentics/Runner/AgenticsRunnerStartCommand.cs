@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
 using System.Text.Json;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
@@ -23,6 +24,9 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
     private readonly IAnsiConsole _console;
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+
+    // Container reuse is tracked via Docker labels (pks.agentics.fingerprint) rather than
+    // in-memory state, so containers survive pks-cli restarts.
 
     // Track active job resources for cleanup on shutdown
     private readonly List<ActiveJobContext> _activeJobs = new();
@@ -119,7 +123,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             // Flow: check stored token → try refresh → device code login.
             if (!settings.InProcess)
             {
-                var isAuthenticated = (await _githubAuth.GetStoredTokenAsync()) is { IsValid: true };
+                var isAuthenticated = await _githubAuth.IsAuthenticatedAsync();
 
                 if (!isAuthenticated)
                 {
@@ -246,28 +250,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                             }
                             else
                             {
-                                var storedToken = await _githubAuth.GetStoredTokenAsync();
-                                var spawnOptions = BuildSpawnOptions(job, credentialServer!.SocketPath, registration, storedToken?.AccessToken);
-                                var spawnResult = await _spawnerService.SpawnLocalAsync(spawnOptions, msg =>
-                                {
-                                    if (settings.Verbose)
-                                        _console.MarkupLine($"[dim]{msg.EscapeMarkup()}[/]");
-                                });
-
-                                if (spawnResult.Success)
-                                {
-                                    jobsProcessed++;
-                                    _console.MarkupLine($"[green]Job completed successfully.[/] Container: {spawnResult.ContainerId}");
-                                    await ReportJobResultAsync(registration, "success", null, cts.Token);
-                                }
-                                else
-                                {
-                                    _console.MarkupLine($"[red]Job failed:[/] {spawnResult.Message.EscapeMarkup()}");
-                                    foreach (var err in spawnResult.Errors)
-                                        _console.MarkupLine($"  [red]- {err.EscapeMarkup()}[/]");
-                                    var errorMsg = string.Join("; ", new[] { spawnResult.Message }.Concat(spawnResult.Errors).Where(s => !string.IsNullOrEmpty(s)));
-                                    await ReportJobResultAsync(registration, "failed", errorMsg, cts.Token);
-                                }
+                                await ExecuteSpawnModeAsync(registration, job, settings, credentialServer!, cts.Token);
                             }
                         }
                         else
@@ -363,6 +346,22 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
         if (existing != null)
         {
+            // If --server was explicitly provided and differs from the stored URL, update it
+            if (!string.IsNullOrEmpty(serverOverride))
+            {
+                var normalizedServer = serverOverride.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                                       serverOverride.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+                    ? serverOverride.TrimEnd('/')
+                    : $"http://{serverOverride}";
+
+                if (!string.Equals(existing.Server, normalizedServer, StringComparison.OrdinalIgnoreCase))
+                {
+                    existing.Server = normalizedServer;
+                    await _configService.AddRegistrationAsync(existing);
+                    DisplayInfo($"Updated server URL for {owner}/{project}: {normalizedServer}");
+                }
+            }
+
             if (verbose)
                 DisplayInfo($"Found existing registration for {owner}/{project} (id: {existing.Id})");
             return existing;
@@ -456,6 +455,444 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             return null;
 
         return pollResponse.Jobs[0];
+    }
+
+    /// <summary>
+    /// Full lifecycle for devcontainer spawn mode:
+    ///   claim → in_progress → spawn container → exec agent → completed
+    /// </summary>
+    private async Task ExecuteSpawnModeAsync(
+        AgenticsRunnerRegistration registration,
+        RunnerJob job,
+        Settings settings,
+        GitCredentialServer credentialServer,
+        CancellationToken ct)
+    {
+        using var client = _httpClientFactory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", registration.Token);
+
+        var baseUrl = $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}";
+
+        // 1. Claim the job so findQueuedJobs stops returning it
+        _console.MarkupLine($"[cyan]Claiming job {job.Id}...[/]");
+        var claimResp = await client.PostAsJsonAsync(
+            $"{baseUrl}/runners/generate-jitconfig",
+            new { jobId = job.Id, name = registration.Name ?? "spawn-runner" },
+            ct);
+
+        if (!claimResp.IsSuccessStatusCode)
+        {
+            _console.MarkupLine($"[yellow]Could not claim job {job.Id} (already claimed?), skipping.[/]");
+            return;
+        }
+
+        var claimJson = await claimResp.Content.ReadAsStringAsync(ct);
+        var claimData = JsonSerializer.Deserialize<JsonElement>(claimJson, JsonOptions);
+        var runId = claimData.GetProperty("runId").GetString()!;
+
+        // 2. Check for a warm container via Docker labels (survives pks-cli restarts)
+        var storedToken = await _githubAuth.GetStoredTokenAsync();
+        var spawnOptions = BuildSpawnOptions(job, credentialServer.SocketPath, registration, storedToken?.AccessToken);
+
+        // Patch claude config volume to a stable name so credentials persist across container respawns
+        spawnOptions.InlineDevcontainerFiles = PatchDevcontainerVolumes(
+            spawnOptions.InlineDevcontainerFiles, registration.Owner, registration.Project);
+
+        // Fingerprint computed AFTER patching so cache key matches what gets deployed
+        var fingerprint = ComputeDevcontainerFingerprint(
+            registration.Owner, registration.Project, spawnOptions.InlineDevcontainerFiles);
+
+        // Stamp the container with labels so we can rediscover it after pks-cli restarts
+        spawnOptions.IdLabels = new Dictionary<string, string>
+        {
+            ["pks.agentics.owner"]       = registration.Owner,
+            ["pks.agentics.project"]     = registration.Project,
+            ["pks.agentics.fingerprint"] = fingerprint,
+        };
+
+        string containerId;
+        var warmId = await FindContainerByLabelAsync($"pks.agentics.fingerprint={fingerprint}");
+        if (warmId != null)
+        {
+            _console.MarkupLine($"[green]Reusing warm container:[/] {warmId[..12]} (devcontainer unchanged)");
+            containerId = warmId;
+        }
+        else
+        {
+            // 3. Spawn the devcontainer (clones repo, runs devcontainer up)
+            var logPath = Path.Combine(Path.GetTempPath(), $"pks-runner-{job.Id}-build.log");
+            _console.MarkupLine($"[dim]Build log (streaming): {logPath}[/]");
+            _console.MarkupLine($"[dim]  Windows: Get-Content -Wait \"{logPath}\"[/]");
+            _console.MarkupLine($"[dim]  Linux:   tail -f \"{logPath}\"[/]");
+            spawnOptions.BuildLogPath = logPath;
+
+            var spawnResult = await _spawnerService.SpawnLocalAsync(spawnOptions, msg =>
+            {
+                _console.MarkupLine($"[dim]{msg.EscapeMarkup()}[/]");
+            });
+
+            if (!spawnResult.Success || spawnResult.ContainerId == null)
+            {
+                var errorMsg = string.Join("; ", new[] { spawnResult.Message }
+                    .Concat(spawnResult.Errors)
+                    .Where(s => !string.IsNullOrEmpty(s)));
+                _console.MarkupLine($"[red]Devcontainer spawn failed:[/] {spawnResult.Message.EscapeMarkup()}");
+                await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "failure", ct);
+                await ReportJobResultAsync(registration, "failed", errorMsg, ct);
+                return;
+            }
+
+            containerId = spawnResult.ContainerId;
+            _console.MarkupLine($"[green]Container ready:[/] {containerId[..12]} (labelled for reuse)");
+        }
+
+        // 4. PATCH to in_progress now that the container is running
+        await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "in_progress", null, ct);
+
+        // 5. Determine workspace folder and AGENTIC_SERVER for inside the container
+        var repoName = spawnOptions.ProjectName;
+        var workspaceFolder = $"/workspaces/{repoName}";
+
+        // localhost on the host is not localhost inside the container — use host.docker.internal
+        var serverUri = new Uri(registration.Server);
+        var hostForContainer = serverUri.Host is "localhost" or "127.0.0.1"
+            ? "host.docker.internal"
+            : serverUri.Host;
+        var agenticServerForContainer = $"{hostForContainer}:{serverUri.Port}";
+
+        // 6. Write prompt file into the container (base64 to avoid quoting issues)
+        var vibecastHome = $"/tmp/vibecast-job-{job.Id}";
+        var promptFile   = $"{vibecastHome}/initial-prompt.txt";
+        var jobPrompt    = job.AgentDef?.Prompt ?? "";
+        await _spawnerService.ExecInContainerAsync(containerId,
+            $"bash -c 'mkdir -p {vibecastHome}'",
+            timeoutSeconds: 30);
+        if (!string.IsNullOrEmpty(jobPrompt))
+        {
+            var promptB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(jobPrompt));
+            _console.MarkupLine($"[cyan]Writing prompt to {promptFile}...[/]");
+            await _spawnerService.ExecInContainerAsync(containerId,
+                $"bash -c 'printf \"%s\" \"{promptB64}\" | base64 -d > {promptFile}'",
+                timeoutSeconds: 30);
+        }
+
+        // 7. Build and write a launch script into the container to avoid shell quoting issues
+        var vibecastTmux = $"vibecast-{job.Id[..8]}";
+        var appendPrompt = "When you have completed the assigned task, use the stop_broadcast MCP tool " +
+            "with a message summarizing what you accomplished and conclusion success. " +
+            "If you encounter an unrecoverable error, call stop_broadcast with conclusion failure and describe the issue.";
+        var stageGitUrl   = job.AgentDef?.StageGitUrl ?? "";
+        var stageGitToken = job.AgentDef?.StageGitToken ?? "";
+        var stageDir      = $"{vibecastHome}/stage";
+
+        // Rebase stage git URL onto the container-accessible server (same host/port as AGENTIC_SERVER).
+        // The stage git server IS the agentic server, so we reuse hostForContainer + serverUri.Port.
+        if (!string.IsNullOrEmpty(stageGitUrl))
+        {
+            var stageUri = new Uri(stageGitUrl);
+            var rebased = new UriBuilder(stageUri)
+            {
+                Host   = hostForContainer,
+                Port   = serverUri.Port,
+                Scheme = serverUri.Scheme,
+            };
+            stageGitUrl = rebased.Uri.ToString();
+        }
+
+        var launchScript = $"{vibecastHome}/start.sh";
+        var scriptLines = new System.Text.StringBuilder();
+        scriptLines.AppendLine("#!/bin/bash");
+        // Unset TMUX so vibecast doesn't inherit the outer container tmux session context.
+        // If TMUX is set, vibecast's ttyd inherits it and "tmux attach" refuses to nest sessions,
+        // causing the broadcast relay to see nothing instead of the Claude Code window.
+        scriptLines.AppendLine("unset TMUX");
+        // Ensure user-local bin is on PATH so claude is found (e.g. /home/node/.local/bin)
+        scriptLines.AppendLine("export PATH=\"$HOME/.local/bin:/home/node/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"");
+        scriptLines.AppendLine($"export VIBECAST_HOME={vibecastHome}");
+        scriptLines.AppendLine($"export AGENTIC_SERVER={agenticServerForContainer}");
+        scriptLines.AppendLine($"export AGENTICS_PROJECT={registration.Owner}/{registration.Project}");
+        scriptLines.AppendLine($"export AGENTICS_JOB_ID={job.Id}");
+        // Enable keyboard input from viewers (PIN = first 8 chars of job ID)
+        var keyboardPin = job.Id[..8].ToUpperInvariant();
+        scriptLines.AppendLine($"export VIBECAST_KEYBOARD_PIN={keyboardPin}");
+        scriptLines.AppendLine("export VIBECAST_DEBUG=1");
+        // Only pass initial prompt file when prompt is non-empty (matches in-process mode behaviour)
+        if (!string.IsNullOrEmpty(jobPrompt))
+            scriptLines.AppendLine($"export VIBECAST_INITIAL_PROMPT_FILE={promptFile}");
+        if (stageGitUrl.Length > 0)
+        {
+            scriptLines.AppendLine($"export STAGE_GIT_URL={stageGitUrl}");
+            scriptLines.AppendLine($"export STAGE_GIT_TOKEN={stageGitToken}");
+            scriptLines.AppendLine($"export STAGE_DIR={stageDir}");
+        }
+        scriptLines.AppendLine($"export VIBECAST_APPEND_SYSTEM_PROMPT=\"{appendPrompt}\"");
+        scriptLines.AppendLine($"cd {workspaceFolder}");
+        scriptLines.AppendLine("exec npx --yes vibecast");
+
+        var scriptB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(scriptLines.ToString().Replace("\r\n", "\n")));
+        await _spawnerService.ExecInContainerAsync(containerId,
+            $"bash -c 'printf \"%s\" \"{scriptB64}\" | base64 -d > {launchScript} && chmod +x {launchScript}'",
+            timeoutSeconds: 30);
+
+        // 7a. Pre-flight: verify tmux, npx, and agentic server reachability
+        var preFlight = await _spawnerService.ExecInContainerAsync(containerId,
+            "bash -c 'which tmux && echo tmux-ok || echo tmux-missing'", timeoutSeconds: 10);
+        var npxCheck = await _spawnerService.ExecInContainerAsync(containerId,
+            "bash -c 'which npx && npx --version && echo npx-ok || echo npx-missing'", timeoutSeconds: 10);
+        var reachCheck = await _spawnerService.ExecInContainerAsync(containerId,
+            $"bash -c 'curl -sf --max-time 5 {serverUri.Scheme}://{agenticServerForContainer}/api/healthz -o /dev/null && echo reachable || echo unreachable'",
+            timeoutSeconds: 15);
+        _console.MarkupLine($"[grey]tmux: {preFlight.Output.Trim()}[/]");
+        _console.MarkupLine($"[grey]npx:  {npxCheck.Output.Trim()}[/]");
+        _console.MarkupLine($"[grey]agentic server ({agenticServerForContainer}): {reachCheck.Output.Trim()}[/]");
+        if (preFlight.Output.Contains("tmux-missing") || npxCheck.Output.Contains("npx-missing"))
+        {
+            _console.MarkupLine("[red]Missing required tool in container (tmux or npx). Cannot start vibecast.[/]");
+            await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "failure", ct);
+            await ReportJobResultAsync(registration, "failed", "missing tmux or npx in container", ct);
+            return;
+        }
+
+        _console.MarkupLine($"[cyan]Starting vibecast in container tmux session '{vibecastTmux}'...[/]");
+        _console.MarkupLine($"[dim]Keyboard PIN (for web UI input): {keyboardPin}[/]");
+        var tmuxStart = await _spawnerService.ExecInContainerAsync(containerId,
+            $"tmux new-session -d -s {vibecastTmux} -x 200 -y 50 " +
+            $"bash -c '{launchScript} 2>&1 | tee {vibecastHome}/vibecast.log'",
+            timeoutSeconds: 30);
+        if (!string.IsNullOrWhiteSpace(tmuxStart.Error))
+            _console.MarkupLine($"[grey]tmux start: {tmuxStart.Error.Trim()}[/]");
+
+        // 8. Wait for vibecast control socket, printing tmux pane output every 5s for visibility
+        var controlSocket = $"{vibecastHome}/.vibecast/control.sock";
+        _console.MarkupLine($"[cyan]Waiting for control socket...[/]");
+        var socketReady = false;
+        for (var i = 0; i < 60; i++)
+        {
+            var check = await _spawnerService.ExecInContainerAsync(containerId,
+                $"test -S {controlSocket} && echo yes || echo no", timeoutSeconds: 5);
+            if (check.Output.Contains("yes")) { socketReady = true; break; }
+
+            // Every 5s print last few lines from vibecast log so we can see what's happening
+            if (i % 5 == 4)
+            {
+                var log = await _spawnerService.ExecInContainerAsync(containerId,
+                    $"tail -5 {vibecastHome}/vibecast.log 2>/dev/null || echo '(no log yet)'", timeoutSeconds: 5);
+                _console.MarkupLine($"[grey]vibecast log (t+{i+1}s):[/] {log.Output.Trim().EscapeMarkup()}");
+
+                // Also check if the tmux session is still alive
+                var alive = await _spawnerService.ExecInContainerAsync(containerId,
+                    $"tmux has-session -t {vibecastTmux} 2>/dev/null && echo alive || echo exited", timeoutSeconds: 5);
+                if (alive.Output.Contains("exited"))
+                {
+                    _console.MarkupLine("[red]vibecast tmux session exited prematurely.[/]");
+                    var fullLog = await _spawnerService.ExecInContainerAsync(containerId,
+                        $"cat {vibecastHome}/vibecast.log 2>/dev/null || echo '(empty)'", timeoutSeconds: 5);
+                    _console.MarkupLine($"[grey]Full vibecast log:[/]\n{fullLog.Output.EscapeMarkup()}");
+                    break;
+                }
+            }
+
+            await Task.Delay(1000, ct);
+        }
+        if (!socketReady)
+        {
+            _console.MarkupLine("[red]Control socket not ready — vibecast failed to start.[/]");
+            var fullLog = await _spawnerService.ExecInContainerAsync(containerId,
+                $"cat {vibecastHome}/vibecast.log 2>/dev/null || echo '(empty)'", timeoutSeconds: 5);
+            _console.MarkupLine($"[grey]vibecast log:[/]\n{fullLog.Output.EscapeMarkup()}");
+            await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "failure", ct);
+            await ReportJobResultAsync(registration, "failed", "vibecast control socket not ready", ct);
+            return;
+        }
+        await Task.Delay(1000, ct); // let control server fully initialise
+
+        // 9. Trigger start-stream via control socket
+        _console.MarkupLine("[cyan]Triggering start-stream...[/]");
+        await _spawnerService.ExecInContainerAsync(containerId,
+            $"curl -sf --unix-socket {controlSocket} " +
+            $"-X POST http://localhost/start-stream " +
+            $"-H 'Content-Type: application/json' " +
+            $"-d '{{\"promptSharing\":true,\"shareProjectInfo\":true}}'",
+            timeoutSeconds: 15);
+
+        // 10. Get streamId and link to task
+        string? streamIdValue = null;
+        for (var i = 0; i < 30; i++)
+        {
+            var status = await _spawnerService.ExecInContainerAsync(containerId,
+                $"curl -sf --unix-socket {controlSocket} http://localhost/status",
+                timeoutSeconds: 5);
+            if (status.Output.Contains("\"phase\":\"live\""))
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(status.Output, "\"streamId\":\"([^\"]+)\"");
+                if (m.Success) { streamIdValue = m.Groups[1].Value; break; }
+            }
+            await Task.Delay(1000, ct);
+        }
+
+        // Print vibecast log so far to help diagnose connection issues
+        var vibecastLogSnapshot = await _spawnerService.ExecInContainerAsync(containerId,
+            $"cat {vibecastHome}/vibecast.log 2>/dev/null || echo '(empty)'", timeoutSeconds: 5);
+        if (!string.IsNullOrWhiteSpace(vibecastLogSnapshot.Output))
+            _console.MarkupLine($"[grey]vibecast log:[/]\n{vibecastLogSnapshot.Output.Trim().EscapeMarkup()}");
+
+        if (streamIdValue != null)
+        {
+            _console.MarkupLine($"[green]Streaming live! streamId: {streamIdValue}[/]");
+            await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "in_progress", null, ct, streamIdValue);
+
+            if (job.AgentDef?.TaskId != null && job.AgentDef?.StageId != null)
+            {
+                try
+                {
+                    var linkReq = new HttpRequestMessage(HttpMethod.Post,
+                        $"{baseUrl}/stages/{job.AgentDef.StageId}/tasks/{job.AgentDef.TaskId}/streams");
+                    linkReq.Content = JsonContent.Create(new { streamId = streamIdValue });
+                    await client.SendAsync(linkReq, ct);
+                    _console.MarkupLine($"[green]Stream linked to task {job.AgentDef.TaskId}[/]");
+                }
+                catch (Exception ex)
+                {
+                    _console.MarkupLine($"[yellow]Failed to link stream to task: {ex.Message.EscapeMarkup()}[/]");
+                }
+            }
+
+            // Seed the activity bar with the initial prompt so viewers see it immediately,
+            // even before Claude Code processes it (hooks only fire once Claude is running).
+            if (!string.IsNullOrEmpty(jobPrompt))
+            {
+                try
+                {
+                    var metaUrl = $"{registration.Server.TrimEnd('/')}api/lives/metadata";
+                    var metaReq = new HttpRequestMessage(HttpMethod.Post, metaUrl);
+                    metaReq.Content = JsonContent.Create(new
+                    {
+                        type = "metadata",
+                        subtype = "prompt",
+                        streamId = streamIdValue,
+                        prompt = jobPrompt,
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    });
+                    await client.SendAsync(metaReq, ct);
+                    _console.MarkupLine("[dim]Initial prompt seeded to activity bar.[/]");
+                }
+                catch (Exception ex)
+                {
+                    _console.MarkupLine($"[yellow]Failed to seed initial prompt: {ex.Message.EscapeMarkup()}[/]");
+                }
+            }
+        }
+        else
+        {
+            _console.MarkupLine("[yellow]Streaming session not detected, continuing anyway...[/]");
+        }
+
+        // 11. Wait for job to complete (tmux session ends, idle timeout, or max timeout)
+        var idleTimeoutMs  = (job.AgentDef?.IdleTimeoutMinutes ?? 5) * 60_000;
+        var maxTimeout     = TimeSpan.FromMinutes(job.AgentDef?.MaxTimeoutMinutes ?? 60);
+        _console.MarkupLine($"[cyan]Waiting up to {maxTimeout.TotalMinutes:0}min (idle: {idleTimeoutMs / 60000}min)...[/]");
+
+        var startTime = DateTime.UtcNow;
+        while (DateTime.UtcNow - startTime < maxTimeout && !ct.IsCancellationRequested)
+        {
+            // Check tmux session
+            var tmuxCheck = await _spawnerService.ExecInContainerAsync(containerId,
+                $"tmux has-session -t {vibecastTmux} 2>/dev/null && echo running || echo done",
+                timeoutSeconds: 5);
+            if (tmuxCheck.Output.Contains("done"))
+            {
+                _console.MarkupLine("[green]Vibecast session ended — job complete.[/]");
+                break;
+            }
+
+            // Check .task-complete signal file
+            var signalCheck = await _spawnerService.ExecInContainerAsync(containerId,
+                $"test -f {workspaceFolder}/.task-complete && echo yes || echo no",
+                timeoutSeconds: 5);
+            if (signalCheck.Output.Contains("yes"))
+            {
+                _console.MarkupLine("[green]Task completion signal detected.[/]");
+                break;
+            }
+
+            // Poll activity API (runner is on host, server is accessible directly)
+            if (streamIdValue != null)
+            {
+                try
+                {
+                    var actUrl = $"{registration.Server.TrimEnd('/')}api/lives/activity?streamId={streamIdValue}&idleThresholdMs={idleTimeoutMs}";
+                    var actResp = await client.GetAsync(actUrl, ct);
+                    if (actResp.IsSuccessStatusCode)
+                    {
+                        var actData = JsonSerializer.Deserialize<JsonElement>(
+                            await actResp.Content.ReadAsStringAsync(ct), JsonOptions);
+                        if (actData.TryGetProperty("isActive", out var isActive) && !isActive.GetBoolean())
+                        {
+                            var idleSec = actData.TryGetProperty("idleSinceMs", out var ms) ? ms.GetInt64() / 1000 : 0;
+                            _console.MarkupLine($"[yellow]Agent idle for {idleSec}s — completing job.[/]");
+                            break;
+                        }
+                    }
+                }
+                catch { /* best-effort */ }
+            }
+
+            var elapsed = DateTime.UtcNow - startTime;
+            if ((int)elapsed.TotalSeconds % 60 < 30)
+                _console.MarkupLine($"[dim]{elapsed.Minutes}m elapsed...[/]");
+
+            await Task.Delay(30_000, ct);
+        }
+
+        // 12. Stop vibecast and clean up
+        _console.MarkupLine("[cyan]Stopping vibecast...[/]");
+        await _spawnerService.ExecInContainerAsync(containerId,
+            $"curl -sf --unix-socket {controlSocket} -X POST http://localhost/stop-broadcast || true",
+            timeoutSeconds: 10);
+        await Task.Delay(2000, ct);
+        await _spawnerService.ExecInContainerAsync(containerId,
+            $"tmux kill-session -t {vibecastTmux} 2>/dev/null || true",
+            timeoutSeconds: 10);
+
+        // 13. PATCH to completed
+        await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "success", ct);
+        await ReportJobResultAsync(registration, "success", null, ct);
+    }
+
+    private async Task PatchJobStatusAsync(
+        HttpClient client,
+        string baseUrl,
+        string runId,
+        string jobId,
+        string status,
+        string? conclusion,
+        CancellationToken ct,
+        string? streamId = null)
+    {
+        try
+        {
+            var msg = new HttpRequestMessage(
+                HttpMethod.Patch,
+                $"{baseUrl}/runs/{runId}/jobs/{jobId}");
+            msg.Content = streamId != null
+                ? JsonContent.Create(new { status, conclusion, streamId })
+                : JsonContent.Create(new { status, conclusion });
+            var resp = await client.SendAsync(msg, ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                var body = await resp.Content.ReadAsStringAsync(ct);
+                _console.MarkupLine($"[yellow]PATCH job status warning: {(int)resp.StatusCode} {body.EscapeMarkup()}[/]");
+            }
+            else
+            {
+                _console.MarkupLine($"[dim]Job {jobId} → {status}{(conclusion != null ? $"/{conclusion}" : "")} (✓)[/]");
+            }
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[yellow]PATCH job status error: {ex.Message.EscapeMarkup()}[/]");
+        }
     }
 
     private async Task ExecuteInProcessAsync(AgenticsRunnerRegistration registration, RunnerJob job, Settings settings, CancellationToken ct)
@@ -1307,6 +1744,94 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         return proc.ExitCode;
     }
 
+    /// <summary>
+    /// Replaces the ephemeral claude-code-config-${devcontainerId} volume with a stable
+    /// named volume so credentials persist across container respawns for the same project.
+    /// </summary>
+    private static Dictionary<string, string>? PatchDevcontainerVolumes(
+        Dictionary<string, string>? files, string owner, string project)
+    {
+        if (files == null) return null;
+        static string Sanitize(string s) =>
+            System.Text.RegularExpressions.Regex.Replace(s.ToLowerInvariant(), @"[^a-z0-9]", "-");
+        var stableVolume = $"pks-claude-{Sanitize(owner)}-{Sanitize(project)}";
+        var patched = new Dictionary<string, string>(files);
+        const string key = ".devcontainer/devcontainer.json";
+        if (patched.TryGetValue(key, out var content))
+            patched[key] = System.Text.RegularExpressions.Regex.Replace(
+                content,
+                @"source=claude-code-config-\$\{devcontainerId\}",
+                $"source={stableVolume}");
+        return patched;
+    }
+
+    /// <summary>
+    /// Computes a short fingerprint for the devcontainer config.
+    /// Same owner/project + same devcontainer files → same fingerprint → container can be reused.
+    /// </summary>
+    private static string ComputeDevcontainerFingerprint(
+        string owner, string project, Dictionary<string, string>? devcontainerFiles)
+    {
+        var content = devcontainerFiles == null ? string.Empty :
+            string.Concat(devcontainerFiles
+                .OrderBy(kv => kv.Key)
+                .Select(kv => $"{kv.Key}:{kv.Value}"));
+        var input = System.Text.Encoding.UTF8.GetBytes($"{owner}/{project}/{content}");
+        var hash = SHA256.HashData(input);
+        return Convert.ToHexString(hash)[..16];
+    }
+
+    /// <summary>
+    /// Returns true if the container with the given ID is currently running.
+    /// </summary>
+    private static async Task<bool> IsContainerRunningAsync(string containerId)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("docker", $"inspect --format={{{{.State.Running}}}} {containerId}")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            var proc = Process.Start(psi);
+            if (proc == null) return false;
+            var output = await proc.StandardOutput.ReadToEndAsync();
+            await proc.WaitForExitAsync();
+            return output.Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Finds the first running container that has the given Docker label filter (e.g. "pks.agentics.fingerprint=abc123").
+    /// Returns the container ID or null if none found.
+    /// </summary>
+    private static async Task<string?> FindContainerByLabelAsync(string labelFilter)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("docker",
+                $"ps --filter label={labelFilter} --filter status=running --format {{{{.ID}}}}")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            var proc = Process.Start(psi);
+            if (proc == null) return null;
+            var output = await proc.StandardOutput.ReadToEndAsync();
+            await proc.WaitForExitAsync();
+            var id = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                          .FirstOrDefault();
+            return string.IsNullOrEmpty(id) ? null : id;
+        }
+        catch { return null; }
+    }
+
     private static DevcontainerSpawnOptions BuildSpawnOptions(RunnerJob job, string credentialSocketPath, AgenticsRunnerRegistration registration, string? gitToken)
     {
         // Determine the git URL and branch from the job's agent definition
@@ -1341,6 +1866,8 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             ?? job.ProjectName
             ?? $"{registration.Owner}-{registration.Project}-{job.Id[..8]}";
 
+        // Fingerprint is computed later (after PatchDevcontainerVolumes), so we set a placeholder
+        // label here; the caller overwrites it via spawnOptions.IdLabels after computing the real value.
         return new DevcontainerSpawnOptions
         {
             ProjectName = repoName,
@@ -1354,7 +1881,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             GitUrl = gitUrl,
             GitBranch = gitBranch,
             RemoveExistingContainer = true,
-            InlineDevcontainerFiles = job.AgentDef?.DevcontainerFiles
+            InlineDevcontainerFiles = job.AgentDef?.DevcontainerFiles,
         };
     }
 

@@ -1599,7 +1599,8 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
         string containerId,
         string command,
         string? workingDir = null,
-        int timeoutSeconds = 120)
+        int timeoutSeconds = 120,
+        Action<string>? onOutput = null)
     {
         var startTime = DateTime.UtcNow;
         _logger.LogDebug("Executing command in bootstrap container {ContainerId}: {Command}", containerId, command);
@@ -1631,7 +1632,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
 
             try
             {
-                await ReadOutputToEndAsync(stream, outputBuilder, errorBuilder, cts.Token);
+                await ReadOutputToEndAsync(stream, outputBuilder, errorBuilder, cts.Token, onOutput);
             }
             catch (OperationCanceledException)
             {
@@ -1685,7 +1686,8 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
         MultiplexedStream stream,
         StringBuilder outputBuilder,
         StringBuilder errorBuilder,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<string>? onChunk = null)
     {
         var buffer = new byte[4096];
 
@@ -1705,10 +1707,12 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                 if (result.Target == MultiplexedStream.TargetStream.StandardOut)
                 {
                     outputBuilder.Append(text);
+                    onChunk?.Invoke(text);
                 }
                 else if (result.Target == MultiplexedStream.TargetStream.StandardError)
                 {
                     errorBuilder.Append(text);
+                    onChunk?.Invoke(text);
                 }
             }
         }
@@ -2391,7 +2395,10 @@ DEVCONTAINER_EOF";
         if (!string.IsNullOrEmpty(credentialSocketPath))
         {
             _logger.LogInformation("Injecting git credential helper (socket: {SocketPath})", credentialSocketPath);
-            credentialMountArg = $" --mount type=bind,source={credentialSocketPath},target=/tmp/pks-creds.sock";
+            // Normalize Windows backslashes to forward slashes so the path survives the Linux shell
+            // inside the bootstrap container (backslashes are treated as escape characters otherwise).
+            var normalizedSocketPath = credentialSocketPath.Replace('\\', '/');
+            credentialMountArg = $" --mount type=bind,source={normalizedSocketPath},target=/tmp/pks-creds.sock";
 
             // Write the askpass script inside the bootstrap container
             const string askpassScript = "#!/bin/sh\ncurl -s --unix-socket /tmp/pks-creds.sock \"http://localhost/git-credential?host=github.com\" | sed -n 's/.*\"password\":\"\\([^\"]*\\)\".*/\\1/p'\n";
@@ -2451,49 +2458,56 @@ DEVCONTAINER_EOF";
         // Execute using ExecuteInBootstrapAsync with 1800 second timeout (30 minutes)
         // Increased timeout to allow for full Dockerfile builds from scratch
         // Set working directory so initializeCommand can access relative paths
-        var result = await ExecuteInBootstrapAsync(
-            bootstrapContainerId,
-            devcontainerCommand,
-            workingDir: workspaceFolder,
-            timeoutSeconds: 1800);
-
-        // Write output to log file if specified
+        //
+        // If buildLogPath is set, stream output to the log file in real-time so the user can
+        // tail it while the build is running (e.g. Get-Content -Wait on Windows).
+        BootstrapExecutionResult result;
         if (!string.IsNullOrEmpty(buildLogPath))
         {
+            StreamWriter? logWriter = null;
             try
             {
                 var absoluteLogPath = Path.GetFullPath(buildLogPath);
-
-                // Create log directory if it doesn't exist
                 var logDir = Path.GetDirectoryName(absoluteLogPath);
-                if (!string.IsNullOrEmpty(logDir) && !Directory.Exists(logDir))
-                {
+                if (!string.IsNullOrEmpty(logDir))
                     Directory.CreateDirectory(logDir);
-                }
 
-                // Write both stdout and stderr to the log file
-                var logContent = new StringBuilder();
-                logContent.AppendLine($"=== Devcontainer Build Log ===");
-                logContent.AppendLine($"Timestamp: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-                logContent.AppendLine($"Workspace: {workspaceFolder}");
-                logContent.AppendLine($"Volume: {volumeName}");
-                logContent.AppendLine();
-                logContent.AppendLine("=== STDOUT ===");
-                logContent.AppendLine(result.Output ?? "(no output)");
-                logContent.AppendLine();
-                logContent.AppendLine("=== STDERR ===");
-                logContent.AppendLine(result.Error ?? "(no errors)");
-                logContent.AppendLine();
-                logContent.AppendLine($"=== Exit Code: {result.ExitCode} ===");
-
-                await File.WriteAllTextAsync(absoluteLogPath, logContent.ToString());
-                _logger.LogInformation("Build log written to: {LogPath}", absoluteLogPath);
-                Console.WriteLine($"✅ Build log saved to: {absoluteLogPath}");
+                logWriter = new StreamWriter(absoluteLogPath, append: false, System.Text.Encoding.UTF8) { AutoFlush = true };
+                logWriter.WriteLine("=== Devcontainer Build Log ===");
+                logWriter.WriteLine($"Timestamp: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                logWriter.WriteLine($"Workspace: {workspaceFolder}");
+                logWriter.WriteLine($"Volume: {volumeName}");
+                logWriter.WriteLine();
+                _logger.LogInformation("Streaming build log to: {LogPath}", absoluteLogPath);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to write build log to: {LogPath}", buildLogPath);
+                _logger.LogWarning(ex, "Failed to open build log for streaming: {LogPath}", buildLogPath);
+                logWriter?.Dispose();
+                logWriter = null;
             }
+
+            result = await ExecuteInBootstrapAsync(
+                bootstrapContainerId,
+                devcontainerCommand,
+                workingDir: workspaceFolder,
+                timeoutSeconds: 1800,
+                onOutput: logWriter != null ? chunk => logWriter.Write(chunk) : null);
+
+            if (logWriter != null)
+            {
+                logWriter.WriteLine();
+                logWriter.WriteLine($"=== Exit Code: {result.ExitCode} ===");
+                logWriter.Dispose();
+            }
+        }
+        else
+        {
+            result = await ExecuteInBootstrapAsync(
+                bootstrapContainerId,
+                devcontainerCommand,
+                workingDir: workspaceFolder,
+                timeoutSeconds: 1800);
         }
 
         if (!result.Success)
@@ -2524,6 +2538,11 @@ DEVCONTAINER_EOF";
         }
 
         _logger.LogDebug("devcontainer up output: {Output}", result.Output);
+
+        // Fix workspace ownership: devcontainer up clones the repo as root (bootstrap container),
+        // but the devcontainer runs as remoteUser (typically node/vscode, uid 1000).
+        // Without this chown the devcontainer user cannot write to /workspaces/{project}.
+        await FixFileOwnershipAsync(bootstrapContainerId, workspaceFolder);
 
         // Parse JSON output from last line that starts with {
         var lines = result.Output!.Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -3046,6 +3065,18 @@ DEVCONTAINER_EOF";
     public async Task<string> ComputeConfigurationHashAsync(string projectPath, string devcontainerPath)
     {
         return await _configHashService.ComputeConfigurationHashAsync(projectPath, devcontainerPath);
+    }
+
+    /// <inheritdoc/>
+    public async Task<(bool Success, string Output, string Error, int ExitCode)> ExecInContainerAsync(
+        string containerId,
+        string command,
+        string? workingDir = null,
+        int timeoutSeconds = 3600,
+        Action<string>? onOutput = null)
+    {
+        var result = await ExecuteInBootstrapAsync(containerId, command, workingDir, timeoutSeconds, onOutput);
+        return (result.Success, result.Output ?? string.Empty, result.Error ?? string.Empty, result.ExitCode);
     }
 
     /// <summary>

@@ -130,4 +130,20 @@ public interface IDevcontainerSpawnerService
     /// <param name="devcontainerPath">Path to .devcontainer directory</param>
     /// <returns>Configuration hash</returns>
     Task<string> ComputeConfigurationHashAsync(string projectPath, string devcontainerPath);
+
+    /// <summary>
+    /// Executes a shell command inside a running container (post-spawn agent execution).
+    /// </summary>
+    /// <param name="containerId">ID of the running container</param>
+    /// <param name="command">Shell command to run (executed via /bin/sh -c)</param>
+    /// <param name="workingDir">Optional working directory inside the container</param>
+    /// <param name="timeoutSeconds">Timeout in seconds (default: 3600 = 1 hour)</param>
+    /// <param name="onOutput">Optional callback called with each chunk of stdout/stderr as it arrives</param>
+    /// <returns>Success flag, combined output, error output, and exit code</returns>
+    Task<(bool Success, string Output, string Error, int ExitCode)> ExecInContainerAsync(
+        string containerId,
+        string command,
+        string? workingDir = null,
+        int timeoutSeconds = 3600,
+        Action<string>? onOutput = null);
 }
