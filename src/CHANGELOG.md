@@ -49,6 +49,17 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.3.0](https://github.com/pksorensen/pks-cli/compare/v6.2.2...v6.3.0) (2026-03-28)
+
+
+### Features
+
+* add HooksMenuCommand for interactive configuration of hook behavior; implement lint command management in StopCommand ([1da11ea](https://github.com/pksorensen/pks-cli/commit/1da11ea600453aa999570903767a27e3c0c3f08e))
+* embed vibecast binary and claude-plugin for local testing; add build-local.sh script ([6a62629](https://github.com/pksorensen/pks-cli/commit/6a62629d13e621e33011e3c05cfad7a659904644))
+* enhance devcontainer spawning with real-time output streaming and new ExecInContainerAsync method ([740267d](https://github.com/pksorensen/pks-cli/commit/740267dbba1faac9bca6c61421cc5ba21cdf1e89))
+* implement GitHub authentication flow and devcontainer spawning via Docker volumes ([4512d17](https://github.com/pksorensen/pks-cli/commit/4512d178f2e4af068e8e8017c2b278d0aee4e899))
+* refactor hook command output handling; update StopCommand to read stdin for stop_hook_active; enhance HookDecision model with Reason property ([6fd4ce2](https://github.com/pksorensen/pks-cli/commit/6fd4ce2ae8901baf090fe3ab1c340aecacd8ddb5))
+
 ## [6.2.2](https://github.com/pksorensen/pks-cli/compare/v6.2.1...v6.2.2) (2026-03-27)
 
 

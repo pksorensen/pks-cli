@@ -14,7 +14,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>pks</ToolCommandName>
     <PackageId>pks-cli</PackageId>
-    <PackageVersion>6.2.2</PackageVersion>
+    <PackageVersion>6.3.0</PackageVersion>
     <Authors>PKS Team</Authors>
     <Description>The next agentic CLI for .NET developers - Poul's Killer Swarms</Description>
     <PackageTags>cli;dotnet;agentic;developer-tools</PackageTags>
@@ -72,14 +72,10 @@
   <!-- Local testing only: embed vibecast linux-amd64 binary and claude-plugin dir so
        spawned containers use the local build instead of npx. Build with -p:EmbedVibecast=true. -->
   <ItemGroup Condition="'$(EmbedVibecast)' == 'true'">
-    <EmbeddedResource Include="Infrastructure\Resources\vibecast-linux-amd64"
-                      LogicalName="vibecast-linux-amd64"/>
-    <EmbeddedResource Include="Infrastructure\Resources\claude-plugin\.mcp.json"
-                      LogicalName="claude-plugin/.mcp.json"/>
-    <EmbeddedResource Include="Infrastructure\Resources\claude-plugin\.claude-plugin\plugin.json"
-                      LogicalName="claude-plugin/.claude-plugin/plugin.json"/>
-    <EmbeddedResource Include="Infrastructure\Resources\claude-plugin\hooks\hooks.json"
-                      LogicalName="claude-plugin/hooks/hooks.json"/>
+    <EmbeddedResource Include="Infrastructure\Resources\vibecast-linux-amd64" LogicalName="vibecast-linux-amd64"/>
+    <EmbeddedResource Include="Infrastructure\Resources\claude-plugin\.mcp.json" LogicalName="claude-plugin/.mcp.json"/>
+    <EmbeddedResource Include="Infrastructure\Resources\claude-plugin\.claude-plugin\plugin.json" LogicalName="claude-plugin/.claude-plugin/plugin.json"/>
+    <EmbeddedResource Include="Infrastructure\Resources\claude-plugin\hooks\hooks.json" LogicalName="claude-plugin/hooks/hooks.json"/>
   </ItemGroup>
 
 </Project>
