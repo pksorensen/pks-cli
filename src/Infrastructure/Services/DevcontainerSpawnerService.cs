@@ -88,11 +88,13 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
 
             _logger.LogInformation("devcontainer CLI is installed");
 
-            // Compute configuration hash for change detection
+            // Compute configuration hash for change detection.
+            // Skip when ProjectPath is empty (e.g. GitUrl flow — devcontainer.json is inside the volume).
+            string? configHash = null;
+            if (!string.IsNullOrEmpty(options.ProjectPath))
+            {
             onProgress?.Invoke("Computing configuration hash...");
             _logger.LogInformation("Computing configuration hash...");
-
-            string? configHash = null;
             try
             {
                 var devcontainerPath = Path.Combine(options.ProjectPath, ".devcontainer");
@@ -115,6 +117,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                 _logger.LogWarning(ex, "Failed to compute configuration hash, continuing without hash");
                 // Continue without hash - not a critical failure
             }
+            } // end if (!string.IsNullOrEmpty(options.ProjectPath))
 
             // Check for existing container if reuse is enabled
             if (options.ReuseExisting)
@@ -284,8 +287,24 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                 bootstrapContainer = await StartBootstrapContainerAsync(bootstrapConfig);
                 _logger.LogInformation("Bootstrap container started: {ContainerId}", bootstrapContainer.ContainerId);
 
-                // Step 6: Copy files to volume via bootstrap container
-                if (options.CopySourceFiles)
+                // Step 6: Populate the volume — either by git-clone or by copying local files
+                if (!string.IsNullOrEmpty(options.GitUrl))
+                {
+                    onProgress?.Invoke($"Cloning {options.GitUrl.Split('@').LastOrDefault() ?? options.GitUrl} into volume...");
+                    _logger.LogInformation("Cloning repository into volume {VolumeName}...", volumeName);
+                    result.CompletedStep = DevcontainerSpawnStep.GitCloneIntoVolume;
+
+                    await CloneIntoVolumeAsync(
+                        volumeName,
+                        options.GitUrl,
+                        options.GitBranch,
+                        options.ProjectName,
+                        onProgress,
+                        options.CredentialSocketPath);
+
+                    _logger.LogInformation("Repository cloned into volume");
+                }
+                else if (options.CopySourceFiles)
                 {
                     onProgress?.Invoke("Copying source files to volume...");
                     _logger.LogInformation("Copying source files to volume via bootstrap container...");
@@ -298,6 +317,15 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
 
                     _logger.LogInformation("Files copied to volume");
                 }
+
+                // Step 6b: Ensure .devcontainer/devcontainer.json exists in the volume.
+                // If InlineDevcontainerFiles is set, write those files (overriding any existing .devcontainer).
+                // Otherwise, fall back to creating a minimal default if no devcontainer config is found.
+                await EnsureDevcontainerConfigAsync(
+                    bootstrapContainer.ContainerId,
+                    $"/workspaces/{options.ProjectName}",
+                    options.InlineDevcontainerFiles,
+                    onProgress);
 
                 // Step 7: Run devcontainer up inside bootstrap container
                 onProgress?.Invoke("Running devcontainer up (this may take several minutes)...");
@@ -313,7 +341,10 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                     options.ForwardDockerConfig,
                     options.DockerConfigPath,
                     configHash,
-                    options.CredentialSocketPath);
+                    options.CredentialSocketPath,
+                    options.RemoteEnv,
+                    options.IdLabels,
+                    options.RemoveExistingContainer);
 
                 if (upResult.Outcome != "success")
                 {
@@ -2309,7 +2340,10 @@ DEVCONTAINER_EOF";
         bool forwardDockerConfig = false,
         string? dockerConfigPath = null,
         string? configHash = null,
-        string? credentialSocketPath = null)
+        string? credentialSocketPath = null,
+        Dictionary<string, string>? remoteEnv = null,
+        Dictionary<string, string>? idLabels = null,
+        bool removeExistingContainer = false)
     {
         _logger.LogDebug("Running devcontainer up in bootstrap container: {WorkspaceFolder}", workspaceFolder);
 
@@ -2401,6 +2435,18 @@ DEVCONTAINER_EOF";
             _logger.LogWarning("Using fallback approach without override config");
             devcontainerCommand = $"devcontainer up --workspace-folder {workspaceFolder} --config {workspaceFolder}/.devcontainer/devcontainer.json --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg} --update-remote-user-uid-default off --mount-workspace-git-root false --include-configuration --include-merged-configuration";
         }
+
+        // Append extra remote-env, id-labels, and ephemeral flag if provided
+        if (remoteEnv != null)
+            foreach (var (k, v) in remoteEnv)
+                devcontainerCommand += $" --remote-env {k}={v}";
+
+        if (idLabels != null)
+            foreach (var (k, v) in idLabels)
+                devcontainerCommand += $" --id-label {k}={v}";
+
+        if (removeExistingContainer)
+            devcontainerCommand += " --remove-existing-container";
 
         // Execute using ExecuteInBootstrapAsync with 1800 second timeout (30 minutes)
         // Increased timeout to allow for full Dockerfile builds from scratch
@@ -2511,6 +2557,264 @@ DEVCONTAINER_EOF";
             _logger.LogError(ex, "Failed to parse devcontainer up JSON output: {JsonLine}", jsonLine);
             throw new InvalidOperationException(
                 $"Failed to parse devcontainer up output: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Ensures <c>.devcontainer</c> files exist inside the project folder in the volume.
+    /// If <paramref name="inlineFiles"/> is provided, those files are written unconditionally (overriding any
+    /// existing .devcontainer from the cloned repo). Otherwise, falls back to a minimal default
+    /// <c>devcontainer.json</c> only when the repo has none.
+    /// </summary>
+    private async Task EnsureDevcontainerConfigAsync(
+        string bootstrapContainerId,
+        string workspaceFolder,
+        Dictionary<string, string>? inlineFiles,
+        Action<string>? onProgress)
+    {
+        if (inlineFiles is { Count: > 0 })
+        {
+            _logger.LogInformation(
+                "Writing {Count} inline devcontainer files to {WorkspaceFolder}", inlineFiles.Count, workspaceFolder);
+            onProgress?.Invoke($"Applying stage devcontainer ({inlineFiles.Count} files)...");
+
+            // Ensure the .devcontainer directory exists
+            var mkdirResult = await ExecuteInBootstrapAsync(
+                bootstrapContainerId,
+                $"mkdir -p {workspaceFolder}/.devcontainer",
+                timeoutSeconds: 10);
+            if (!mkdirResult.Success)
+                _logger.LogWarning("mkdir .devcontainer failed: {Error}", mkdirResult.Error);
+
+            foreach (var (relativePath, content) in inlineFiles)
+            {
+                var fullPath = $"{workspaceFolder}/{relativePath}";
+                // Ensure parent directory exists (handles nested paths)
+                var parentDir = System.IO.Path.GetDirectoryName(fullPath)?.Replace('\\', '/');
+                if (!string.IsNullOrEmpty(parentDir))
+                    await ExecuteInBootstrapAsync(bootstrapContainerId, $"mkdir -p {parentDir}", timeoutSeconds: 10);
+
+                // Write via base64 to avoid shell escaping issues with arbitrary file content
+                var b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(content));
+                var writeCmd = $"echo '{b64}' | base64 -d > {fullPath}";
+                var writeResult = await ExecuteInBootstrapAsync(bootstrapContainerId, writeCmd, timeoutSeconds: 15);
+                if (!writeResult.Success)
+                    _logger.LogWarning("Failed to write {Path}: {Error}", relativePath, writeResult.Error);
+                else
+                    _logger.LogDebug("Wrote {Path}", relativePath);
+
+                // Make shell scripts executable
+                if (relativePath.EndsWith(".sh", StringComparison.OrdinalIgnoreCase))
+                    await ExecuteInBootstrapAsync(bootstrapContainerId, $"chmod +x {fullPath}", timeoutSeconds: 5);
+            }
+
+            onProgress?.Invoke("Stage devcontainer files written.");
+            return;
+        }
+
+        // Fallback: write a minimal default only if the repo has no devcontainer config
+        var checkResult = await ExecuteInBootstrapAsync(
+            bootstrapContainerId,
+            $"test -f {workspaceFolder}/.devcontainer/devcontainer.json && echo exists || echo missing",
+            timeoutSeconds: 10);
+
+        if (checkResult.Output?.Trim() == "exists")
+        {
+            _logger.LogDebug("devcontainer.json found in {WorkspaceFolder}", workspaceFolder);
+            return;
+        }
+
+        _logger.LogInformation(
+            "No .devcontainer/devcontainer.json in {WorkspaceFolder} — generating default config", workspaceFolder);
+        onProgress?.Invoke("No devcontainer.json found — creating default config...");
+
+        const string defaultConfig = """
+            {
+              "name": "Agentics Runner",
+              "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+              "features": {},
+              "remoteEnv": {}
+            }
+            """;
+
+        // Escape for sh -c single-quoted string
+        var escaped = defaultConfig.Replace("'", "'\\''");
+        var createCmd = $"mkdir -p {workspaceFolder}/.devcontainer && printf '%s' '{escaped}' > {workspaceFolder}/.devcontainer/devcontainer.json";
+
+        var writeResult2 = await ExecuteInBootstrapAsync(bootstrapContainerId, createCmd, timeoutSeconds: 15);
+        if (!writeResult2.Success)
+        {
+            _logger.LogWarning("Failed to write default devcontainer.json: {Error}", writeResult2.Error);
+        }
+        else
+        {
+            _logger.LogInformation("Default devcontainer.json written to {WorkspaceFolder}/.devcontainer", workspaceFolder);
+            onProgress?.Invoke("Default devcontainer.json created (javascript-node:20 image)");
+        }
+    }
+
+    /// <summary>
+    /// Clones a Git repository directly into a Docker named volume using a short-lived alpine/git container.
+    /// No host-side git installation required; works cross-platform (Windows/Linux/macOS).
+    /// Credentials must be embedded in <paramref name="gitUrl"/> (e.g. https://x-access-token:{token}@github.com/...).
+    /// </summary>
+    /// <summary>
+    /// Queries the local GitCredentialServer Unix socket to obtain the stored OAuth access token.
+    /// Returns null if the socket is unavailable or the server returns an error.
+    /// </summary>
+    private static async Task<string?> FetchTokenFromCredentialSocketAsync(string socketDir)
+    {
+        try
+        {
+            // Accept either the directory or the socket file path itself
+            var socketPath = Directory.Exists(socketDir)
+                ? Path.Combine(socketDir, "creds.sock")
+                : socketDir;
+            if (!File.Exists(socketPath))
+                return null;
+
+            var handler = new System.Net.Http.SocketsHttpHandler
+            {
+                ConnectCallback = async (_, ct) =>
+                {
+                    var socket = new System.Net.Sockets.Socket(
+                        System.Net.Sockets.AddressFamily.Unix,
+                        System.Net.Sockets.SocketType.Stream,
+                        System.Net.Sockets.ProtocolType.Unspecified);
+                    await socket.ConnectAsync(
+                        new System.Net.Sockets.UnixDomainSocketEndPoint(socketPath), ct);
+                    return new System.Net.Sockets.NetworkStream(socket, ownsSocket: true);
+                }
+            };
+
+            using var http = new HttpClient(handler);
+            var json = await http.GetStringAsync("http://localhost/git-credential?host=github.com");
+            var doc = System.Text.Json.JsonDocument.Parse(json);
+            return doc.RootElement.TryGetProperty("password", out var pw) ? pw.GetString() : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task CloneIntoVolumeAsync(
+        string volumeName,
+        string gitUrl,
+        string branch,
+        string projectName,
+        Action<string>? onProgress,
+        string? credentialSocketDir = null)
+    {
+        // If a credential socket is available, fetch the token and embed it in the URL.
+        // This handles private repos without requiring the caller to supply the token.
+        if (!string.IsNullOrEmpty(credentialSocketDir))
+        {
+            var token = await FetchTokenFromCredentialSocketAsync(credentialSocketDir);
+            if (!string.IsNullOrEmpty(token))
+            {
+                // Insert x-access-token into the URL (only if not already present)
+                if (!gitUrl.Contains('@'))
+                {
+                    gitUrl = System.Text.RegularExpressions.Regex.Replace(
+                        gitUrl, @"^(https?://)", $"$1x-access-token:{token}@");
+                    _logger.LogDebug("Embedded credential token into git clone URL");
+                }
+            }
+            else
+            {
+                _logger.LogWarning("Credential socket available but no token returned — clone may fail for private repos");
+            }
+        }
+
+        // Redact credentials from log/progress messages
+        var safeUrl = System.Text.RegularExpressions.Regex.Replace(gitUrl, @"(https?://)([^@]+)@", "$1***@");
+        _logger.LogInformation("Cloning {GitUrl} branch {Branch} into volume {VolumeName}/{ProjectName}",
+            safeUrl, branch, volumeName, projectName);
+
+        // Pull alpine/git so the clone works on first run
+        try
+        {
+            await _dockerClient.Images.CreateImageAsync(
+                new Docker.DotNet.Models.ImagesCreateParameters { FromImage = "alpine/git", Tag = "latest" },
+                null,
+                new Progress<Docker.DotNet.Models.JSONMessage>());
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to pull alpine/git, attempting to use cached image");
+        }
+
+        var createParams = new CreateContainerParameters
+        {
+            Image = "alpine/git",
+            Entrypoint = new[] { "/bin/sh" },
+            Cmd = new[]
+            {
+                "-c",
+                $"GIT_TERMINAL_PROMPT=0 git clone --depth=1 --branch {branch} {gitUrl} /workspace/{projectName}"
+            },
+            HostConfig = new HostConfig
+            {
+                AutoRemove = false,
+                Binds = new List<string> { $"{volumeName}:/workspace" }
+            }
+        };
+
+        var response = await _dockerClient.Containers.CreateContainerAsync(createParams);
+        var containerId = response.ID;
+
+        try
+        {
+            await _dockerClient.Containers.StartContainerAsync(containerId, new ContainerStartParameters());
+
+            // Wait up to 5 minutes for the clone to finish
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            var waitResponse = await _dockerClient.Containers.WaitContainerAsync(containerId, cts.Token);
+
+            if (waitResponse.StatusCode != 0)
+            {
+                // Capture container logs for a useful error message
+                string logText = string.Empty;
+                try
+                {
+                    var logStream = await _dockerClient.Containers.GetContainerLogsAsync(
+                        containerId,
+                        tty: false,
+                        new Docker.DotNet.Models.ContainerLogsParameters
+                        {
+                            ShowStdout = true,
+                            ShowStderr = true,
+                            Tail = "20"
+                        });
+                    var outputBuilder = new StringBuilder();
+                    var errorBuilder = new StringBuilder();
+                    await ReadOutputToEndAsync(logStream, outputBuilder, errorBuilder, CancellationToken.None);
+                    logText = (outputBuilder + "\n" + errorBuilder).Trim();
+                }
+                catch { /* log capture is best-effort */ }
+
+                throw new InvalidOperationException(
+                    $"git clone failed (exit {waitResponse.StatusCode}) — URL: {safeUrl}, branch: {branch}" +
+                    (string.IsNullOrEmpty(logText) ? string.Empty : $"\n{logText}"));
+            }
+
+            onProgress?.Invoke($"Repository cloned into volume ({projectName})");
+            _logger.LogInformation("git clone into volume complete: {VolumeName}/{ProjectName}", volumeName, projectName);
+        }
+        finally
+        {
+            // Always clean up the ephemeral clone container
+            try
+            {
+                await _dockerClient.Containers.RemoveContainerAsync(
+                    containerId,
+                    new ContainerRemoveParameters { Force = true });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to remove git clone container {ContainerId}", containerId);
+            }
         }
     }
 

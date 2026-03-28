@@ -114,6 +114,75 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 DisplayInfo($"Polling interval: {settings.PollingInterval}s");
             }
 
+            // GitHub authentication pre-flight: ensure a valid token is stored so
+            // the credential server can serve it and git clones succeed.
+            // Flow: check stored token → try refresh → device code login.
+            if (!settings.InProcess)
+            {
+                var isAuthenticated = (await _githubAuth.GetStoredTokenAsync()) is { IsValid: true };
+
+                if (!isAuthenticated)
+                {
+                    _console.MarkupLine("[yellow]No valid GitHub token found. Attempting refresh...[/]");
+                    var refreshed = await _githubAuth.RefreshTokenAsync();
+                    if (refreshed != null)
+                    {
+                        _console.MarkupLine("[green]Token refreshed.[/]");
+                        isAuthenticated = true;
+                    }
+                }
+
+                if (!isAuthenticated)
+                {
+                    _console.MarkupLine("[yellow]Token refresh failed. Starting GitHub device-code login...[/]");
+                    _console.WriteLine();
+
+                    var deviceCode = await _githubAuth.InitiateDeviceCodeFlowAsync();
+                    _console.MarkupLine($"[yellow]Open:[/]  [link]{deviceCode.VerificationUri}[/]");
+                    _console.MarkupLine($"[yellow]Code:[/]  [bold cyan]{deviceCode.UserCode}[/]");
+                    _console.WriteLine();
+                    _console.MarkupLine("[cyan]Waiting for GitHub authorization...[/]");
+
+                    var expiresAt = DateTime.UtcNow.AddSeconds(deviceCode.ExpiresIn);
+                    var pollInterval = TimeSpan.FromSeconds(Math.Max(deviceCode.Interval, 5));
+                    PKS.Infrastructure.Services.Models.GitHubDeviceAuthStatus? authResult = null;
+
+                    while (DateTime.UtcNow < expiresAt)
+                    {
+                        await Task.Delay(pollInterval);
+                        authResult = await _githubAuth.PollForAuthenticationAsync(deviceCode.DeviceCode);
+
+                        if (authResult.IsAuthenticated) break;
+                        if (authResult.Error == "slow_down")
+                            pollInterval = pollInterval.Add(TimeSpan.FromSeconds(5));
+                        else if (authResult.Error != "authorization_pending")
+                            break;
+                    }
+
+                    if (authResult?.IsAuthenticated == true)
+                    {
+                        await _githubAuth.StoreTokenAsync(new PKS.Infrastructure.Services.Models.GitHubStoredToken
+                        {
+                            AccessToken = authResult.AccessToken!,
+                            RefreshToken = authResult.RefreshToken,
+                            Scopes = authResult.Scopes,
+                            CreatedAt = DateTime.UtcNow,
+                            ExpiresAt = authResult.ExpiresAt,
+                            IsValid = true,
+                            LastValidated = DateTime.UtcNow
+                        });
+                        _console.MarkupLine("[green]GitHub login successful.[/]");
+                        isAuthenticated = true;
+                    }
+                    else
+                    {
+                        var detail = authResult?.ErrorDescription ?? authResult?.Error ?? "authorization timed out";
+                        DisplayError($"GitHub authentication failed: {detail}");
+                        return 1;
+                    }
+                }
+            }
+
             _console.WriteLine();
             DisplayInfo($"Starting runner daemon for [cyan]{registration.Owner}/{registration.Project}[/]");
             DisplayInfo("Press Ctrl+C to stop.");
@@ -177,7 +246,8 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                             }
                             else
                             {
-                                var spawnOptions = BuildSpawnOptions(job, credentialServer!.SocketPath, registration);
+                                var storedToken = await _githubAuth.GetStoredTokenAsync();
+                                var spawnOptions = BuildSpawnOptions(job, credentialServer!.SocketPath, registration, storedToken?.AccessToken);
                                 var spawnResult = await _spawnerService.SpawnLocalAsync(spawnOptions, msg =>
                                 {
                                     if (settings.Verbose)
@@ -188,12 +258,15 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                                 {
                                     jobsProcessed++;
                                     _console.MarkupLine($"[green]Job completed successfully.[/] Container: {spawnResult.ContainerId}");
+                                    await ReportJobResultAsync(registration, "success", null, cts.Token);
                                 }
                                 else
                                 {
                                     _console.MarkupLine($"[red]Job failed:[/] {spawnResult.Message.EscapeMarkup()}");
                                     foreach (var err in spawnResult.Errors)
                                         _console.MarkupLine($"  [red]- {err.EscapeMarkup()}[/]");
+                                    var errorMsg = string.Join("; ", new[] { spawnResult.Message }.Concat(spawnResult.Errors).Where(s => !string.IsNullOrEmpty(s)));
+                                    await ReportJobResultAsync(registration, "failed", errorMsg, cts.Token);
                                 }
                             }
                         }
@@ -250,6 +323,28 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
     /// Finds an existing local registration for the given owner/project, or auto-registers
     /// against the server and saves it. This lets 'start --project owner/proj' be self-contained.
     /// </summary>
+    private async Task ReportJobResultAsync(
+        AgenticsRunnerRegistration registration,
+        string result,
+        string? error,
+        CancellationToken ct)
+    {
+        try
+        {
+            using var httpClient = _httpClientFactory.CreateClient();
+            httpClient.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", registration.Token);
+            var body = new { jobResult = result, error };
+            await httpClient.PatchAsJsonAsync(
+                $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}/runners/{registration.Id}",
+                body, ct);
+        }
+        catch
+        {
+            // Best-effort — don't fail the runner loop if reporting fails
+        }
+    }
+
     private async Task<AgenticsRunnerRegistration> ResolveOrRegisterAsync(
         string ownerProject, string? serverOverride, bool verbose)
     {
@@ -1212,17 +1307,54 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         return proc.ExitCode;
     }
 
-    private static DevcontainerSpawnOptions BuildSpawnOptions(RunnerJob job, string credentialSocketPath, AgenticsRunnerRegistration registration)
+    private static DevcontainerSpawnOptions BuildSpawnOptions(RunnerJob job, string credentialSocketPath, AgenticsRunnerRegistration registration, string? gitToken)
     {
+        // Determine the git URL and branch from the job's agent definition
+        string? gitUrl = null;
+        var gitBranch = job.AgentDef?.Branch ?? "main";
+
+        // Always clone from AgentDef.Repository (the GitHub source repo).
+        // StageGitUrl is the commit-back target for the in-process/vibecast path — not for cloning.
+        if (!string.IsNullOrEmpty(job.AgentDef?.Repository))
+        {
+            var repo = job.AgentDef.Repository;
+            if (repo.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                repo.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+            {
+                // Already a full URL — embed token if available
+                if (!string.IsNullOrEmpty(gitToken))
+                    gitUrl = System.Text.RegularExpressions.Regex.Replace(repo, @"^(https?://)", $"$1x-access-token:{gitToken}@");
+                else
+                    gitUrl = repo;
+            }
+            else
+            {
+                // owner/repo shorthand — construct GitHub URL
+                var credPart = !string.IsNullOrEmpty(gitToken) ? $"x-access-token:{gitToken}@" : string.Empty;
+                var suffix = repo.EndsWith(".git", StringComparison.OrdinalIgnoreCase) ? string.Empty : ".git";
+                gitUrl = $"https://{credPart}github.com/{repo}{suffix}";
+            }
+        }
+
+        // Use the repo name as ProjectName so the clone lands at /workspace/{repo}
+        var repoName = job.AgentDef?.Repository?.Split('/').LastOrDefault()
+            ?? job.ProjectName
+            ?? $"{registration.Owner}-{registration.Project}-{job.Id[..8]}";
+
         return new DevcontainerSpawnOptions
         {
-            ProjectName = job.ProjectName ?? $"{registration.Owner}-{registration.Project}-{job.Id[..8]}",
-            ProjectPath = job.ProjectPath ?? "/tmp",
-            DevcontainerPath = job.DevcontainerPath ?? string.Empty,
+            ProjectName = repoName,
+            ProjectPath = string.Empty,
+            DevcontainerPath = string.Empty,
             LaunchVsCode = false,
             ReuseExisting = false,
+            CopySourceFiles = false,
             UseBootstrapContainer = true,
-            CredentialSocketPath = credentialSocketPath
+            CredentialSocketPath = credentialSocketPath,
+            GitUrl = gitUrl,
+            GitBranch = gitBranch,
+            RemoveExistingContainer = true,
+            InlineDevcontainerFiles = job.AgentDef?.DevcontainerFiles
         };
     }
 
@@ -1276,6 +1408,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         public int? MaxTimeoutMinutes { get; set; }
         public string? StageGitUrl { get; set; }
         public string? StageGitToken { get; set; }
+        public Dictionary<string, string>? DevcontainerFiles { get; set; }
     }
 
     private class RegisterRunnerResponse

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 
 namespace PKS.Infrastructure.Services.Runner;
@@ -19,6 +20,7 @@ public class RunnerContainerService : IRunnerContainerService
     private readonly ICoolifyLookupService _coolifyLookup;
     private readonly IJobTokenService _jobTokenService;
     private readonly ICoolifyTokenStore _coolifyTokenStore;
+    private readonly IDevcontainerSpawnerService _spawnerService;
     private readonly ILogger<RunnerContainerService> _logger;
 
     public RunnerContainerService(
@@ -26,12 +28,14 @@ public class RunnerContainerService : IRunnerContainerService
         ICoolifyLookupService coolifyLookup,
         IJobTokenService jobTokenService,
         ICoolifyTokenStore coolifyTokenStore,
+        IDevcontainerSpawnerService spawnerService,
         ILogger<RunnerContainerService> logger)
     {
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
         _coolifyLookup = coolifyLookup ?? throw new ArgumentNullException(nameof(coolifyLookup));
         _jobTokenService = jobTokenService ?? throw new ArgumentNullException(nameof(jobTokenService));
         _coolifyTokenStore = coolifyTokenStore ?? throw new ArgumentNullException(nameof(coolifyTokenStore));
+        _spawnerService = spawnerService ?? throw new ArgumentNullException(nameof(spawnerService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -131,51 +135,23 @@ public class RunnerContainerService : IRunnerContainerService
             Status = RunnerJobStatus.Cloning
         };
 
-        var clonePath = Path.Combine(Path.GetTempPath(), $"pks-runner-{Guid.NewGuid():N}");
-        job.ClonePath = clonePath;
-
         try
         {
-            // Step 1: Clone the repository
-            onProgress?.Invoke($"Cloning {registration.Owner}/{registration.Repository}@{branch} to {clonePath}");
-            _logger.LogInformation("Cloning {Owner}/{Repo}@{Branch} to {Path}",
-                registration.Owner, registration.Repository, branch, clonePath);
-
-            var cloneArgs = $"clone --depth=1 --branch {branch} https://x-access-token:{accessToken}@github.com/{registration.Owner}/{registration.Repository}.git {clonePath}";
-            var cloneResult = await _processRunner.RunAsync("git", cloneArgs, null, cancellationToken);
-
-            if (cloneResult.ExitCode != 0)
-            {
-                var errorMsg = cloneResult.StandardError?.Trim();
-                onProgress?.Invoke($"Clone failed (exit {cloneResult.ExitCode}): {errorMsg}");
-                _logger.LogError("Git clone failed with exit code {ExitCode}: {StdErr}",
-                    cloneResult.ExitCode, cloneResult.StandardError);
-                job.Status = RunnerJobStatus.Failed;
-                return job;
-            }
-
-            onProgress?.Invoke($"Clone complete: {clonePath}");
-
-            // Step 2: Start devcontainer
+            // Step 1+2: Clone into a Docker volume and run devcontainer up via the spawner service.
+            // This replaces the host-side git clone and direct devcontainer up call, fixing Windows
+            // path translation issues (/tmp → C:\tmp) and removing the requirement for host git.
             job.Status = RunnerJobStatus.Building;
-            onProgress?.Invoke($"Running: devcontainer up --workspace-folder {clonePath} (this may take a few minutes on first run)");
-            _logger.LogInformation("Running devcontainer up for {Path}", clonePath);
 
-            var baseArgs = $"up --workspace-folder {clonePath} --remote-env PKS_RUNNER=true";
-
-            // Mount credential socket directory and set GIT_ASKPASS if credential server is available.
-            // We mount the directory (not the file) so the bind mount survives socket recreation
-            // across runner restarts — directory mounts reflect new files, file mounts go stale.
+            // Coolify lookup runs before spawn so the env vars can be passed as RemoteEnv
+            var remoteEnv = new Dictionary<string, string>
+            {
+                ["PKS_RUNNER"] = "true"
+            };
             if (!string.IsNullOrEmpty(credentialSocketPath))
             {
-                baseArgs += $" --mount type=bind,source={credentialSocketPath},target=/var/run/pks-creds";
-                baseArgs += " --remote-env GIT_ASKPASS=/tmp/git-askpass.sh";
-                _logger.LogInformation("Credential socket dir mounted: {SocketDir} -> /var/run/pks-creds, GIT_ASKPASS=/tmp/git-askpass.sh", credentialSocketPath);
+                remoteEnv["GIT_ASKPASS"] = "/tmp/git-askpass.sh";
             }
 
-            // Look up Coolify apps and prepare per-job token
-            // Static/non-secret vars go into --remote-env (persist in container);
-            // PKS_TOKEN is injected per-job via docker exec -e (OIDC-like scoping)
             string? pksToken = null;
             try
             {
@@ -183,15 +159,13 @@ public class RunnerContainerService : IRunnerContainerService
                 var allApps = await _coolifyLookup.FindAllAppsAsync(registration.Owner, registration.Repository, branch);
                 if (allApps.Count > 0)
                 {
-                    // Static display vars go into --remote-env (persist in container)
                     var defaultApp = allApps.FirstOrDefault(a =>
                         string.Equals(a.EnvironmentName, "production", StringComparison.OrdinalIgnoreCase))
                         ?? allApps[0];
-                    baseArgs += " --remote-env PKS_TOKEN_URL=/var/run/pks-creds/creds.sock";
-                    baseArgs += $" --remote-env COOLIFY_APP_FQDN={defaultApp.Fqdn}";
-                    baseArgs += $" --remote-env COOLIFY_ENVIRONMENT={defaultApp.EnvironmentName}";
+                    remoteEnv["PKS_TOKEN_URL"] = "/var/run/pks-creds/creds.sock";
+                    remoteEnv["COOLIFY_APP_FQDN"] = defaultApp.Fqdn;
+                    remoteEnv["COOLIFY_ENVIRONMENT"] = defaultApp.EnvironmentName;
 
-                    // Generate per-job JWT (injected via docker exec -e, NOT --remote-env)
                     var jobId = $"{runId}-{Guid.NewGuid():N}";
                     _coolifyTokenStore.RegisterAll(jobId, allApps);
                     pksToken = _jobTokenService.CreateToken(
@@ -210,54 +184,51 @@ public class RunnerContainerService : IRunnerContainerService
                 onProgress?.Invoke($"Warning: Coolify lookup failed: {ex.Message}");
             }
 
-            var devcontainerArgs = containerName != null
-                ? $"{baseArgs} --id-label pks.runner.name={containerName} --id-label pks.runner.owner={registration.Owner} --id-label pks.runner.repo={registration.Repository}"
-                : $"{baseArgs} --remove-existing-container";
-            var devcontainerResult = await _processRunner.RunAsync("devcontainer", devcontainerArgs, null, cancellationToken);
+            Dictionary<string, string>? idLabels = containerName != null
+                ? new Dictionary<string, string>
+                {
+                    ["pks.runner.name"] = containerName,
+                    ["pks.runner.owner"] = registration.Owner,
+                    ["pks.runner.repo"] = registration.Repository
+                }
+                : null;
 
-            // Persist devcontainer up output to a log file for later debugging
-            var logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".pks-cli", "devcontainer-logs");
-            try
+            var spawnOptions = new DevcontainerSpawnOptions
             {
-                Directory.CreateDirectory(logDir);
-                var logFile = Path.Combine(logDir, $"devcontainer-up-{runId}-{DateTime.UtcNow:yyyyMMdd-HHmmss}.log");
-                var logContent = $"[{DateTime.UtcNow:O}] devcontainer {devcontainerArgs}\n" +
-                    $"Exit code: {devcontainerResult.ExitCode}\n\n" +
-                    $"=== STDOUT ===\n{devcontainerResult.StandardOutput}\n\n" +
-                    $"=== STDERR ===\n{devcontainerResult.StandardError}\n";
-                await File.WriteAllTextAsync(logFile, logContent, cancellationToken);
-                onProgress?.Invoke($"devcontainer up log: {logFile}");
-                _logger.LogInformation("Wrote devcontainer up log to {LogFile}", logFile);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Failed to write devcontainer up log");
-            }
+                ProjectName = registration.Repository,
+                ProjectPath = string.Empty,
+                DevcontainerPath = string.Empty,
+                LaunchVsCode = false,
+                ReuseExisting = false,
+                CopySourceFiles = false,
+                UseBootstrapContainer = true,
+                CredentialSocketPath = credentialSocketPath,
+                GitUrl = $"https://x-access-token:{accessToken}@github.com/{registration.Owner}/{registration.Repository}.git",
+                GitBranch = branch,
+                RemoteEnv = remoteEnv,
+                IdLabels = idLabels,
+                RemoveExistingContainer = containerName == null
+            };
 
-            if (devcontainerResult.ExitCode != 0)
+            onProgress?.Invoke($"Spawning devcontainer for {registration.Owner}/{registration.Repository}@{branch}...");
+            _logger.LogInformation("Spawning devcontainer via SpawnLocalAsync for {Owner}/{Repo}@{Branch}",
+                registration.Owner, registration.Repository, branch);
+
+            var spawnResult = await _spawnerService.SpawnLocalAsync(spawnOptions, onProgress);
+
+            if (!spawnResult.Success)
             {
-                var errorMsg = devcontainerResult.StandardError?.Trim();
-                if (string.IsNullOrEmpty(errorMsg))
-                    errorMsg = devcontainerResult.StandardOutput?.Trim();
-                onProgress?.Invoke($"devcontainer up failed (exit {devcontainerResult.ExitCode}): {errorMsg}");
-                _logger.LogError("devcontainer up failed with exit code {ExitCode}: {StdErr}",
-                    devcontainerResult.ExitCode, devcontainerResult.StandardError);
+                var errorMsg = spawnResult.Errors.Count > 0 ? string.Join("; ", spawnResult.Errors) : spawnResult.Message;
+                onProgress?.Invoke($"Devcontainer spawn failed: {errorMsg}");
+                _logger.LogError("SpawnLocalAsync failed for {Owner}/{Repo}@{Branch}: {Error}",
+                    registration.Owner, registration.Repository, branch, errorMsg);
                 job.Status = RunnerJobStatus.Failed;
                 return job;
             }
 
-            // Parse container ID from devcontainer up JSON output
-            var containerId = ParseContainerId(devcontainerResult.StandardOutput);
-            if (string.IsNullOrEmpty(containerId))
-            {
-                onProgress?.Invoke($"Could not parse container ID from devcontainer output");
-                _logger.LogError("Could not parse container ID from devcontainer up output: {Output}",
-                    devcontainerResult.StandardOutput);
-                job.Status = RunnerJobStatus.Failed;
-                return job;
-            }
-
+            var containerId = spawnResult.ContainerId!;
             job.ContainerId = containerId;
+            job.VolumeName = spawnResult.VolumeName;
             if (containerName != null)
                 job.ContainerName = containerName;
             onProgress?.Invoke($"Devcontainer ready: container {containerId[..Math.Min(12, containerId.Length)]}");
@@ -579,7 +550,7 @@ public class RunnerContainerService : IRunnerContainerService
             }
         }
 
-        // Remove the clone directory
+        // Remove the clone directory (legacy path — new jobs use volumes, not host clone dirs)
         if (!string.IsNullOrEmpty(job.ClonePath) && Directory.Exists(job.ClonePath))
         {
             try
@@ -590,6 +561,28 @@ public class RunnerContainerService : IRunnerContainerService
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to remove clone directory {Path}", job.ClonePath);
+            }
+        }
+
+        // Remove the Docker volume created by SpawnLocalAsync
+        if (!string.IsNullOrEmpty(job.VolumeName))
+        {
+            try
+            {
+                var rmVolumeResult = await _processRunner.RunAsync("docker", $"volume rm {job.VolumeName}", null, cancellationToken);
+                if (rmVolumeResult.ExitCode != 0)
+                {
+                    _logger.LogWarning("docker volume rm failed for {VolumeName}: {StdErr}",
+                        job.VolumeName, rmVolumeResult.StandardError);
+                }
+                else
+                {
+                    _logger.LogInformation("Removed Docker volume {VolumeName}", job.VolumeName);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to remove Docker volume {VolumeName}", job.VolumeName);
             }
         }
     }

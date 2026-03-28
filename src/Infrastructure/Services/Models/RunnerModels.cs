@@ -46,6 +46,7 @@ public class RunnerJobState
     public string? ContainerName { get; set; }
     public string ContainerId { get; set; } = string.Empty;
     public string ClonePath { get; set; } = string.Empty;
+    public string? VolumeName { get; set; }
     public DateTime StartedAt { get; set; }
     public RunnerJobStatus Status { get; set; }
 }

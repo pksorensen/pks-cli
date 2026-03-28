@@ -476,6 +476,40 @@ public class DevcontainerSpawnOptions
     /// When set, the socket is bind-mounted into the devcontainer and GIT_ASKPASS is configured.
     /// </summary>
     public string? CredentialSocketPath { get; set; }
+
+    /// <summary>
+    /// Git URL to clone into the volume instead of copying local source files.
+    /// When set, an alpine/git container clones this URL into the volume before devcontainer up.
+    /// Credentials should be embedded in the URL (e.g. https://x-access-token:{token}@github.com/...).
+    /// </summary>
+    public string? GitUrl { get; set; }
+
+    /// <summary>
+    /// Branch to clone when GitUrl is set (default: "main").
+    /// </summary>
+    public string GitBranch { get; set; } = "main";
+
+    /// <summary>
+    /// Extra environment variables to inject into the devcontainer via --remote-env.
+    /// </summary>
+    public Dictionary<string, string>? RemoteEnv { get; set; }
+
+    /// <summary>
+    /// Additional --id-label key/value pairs to pass to devcontainer up.
+    /// </summary>
+    public Dictionary<string, string>? IdLabels { get; set; }
+
+    /// <summary>
+    /// When true, passes --remove-existing-container to devcontainer up (ephemeral jobs).
+    /// </summary>
+    public bool RemoveExistingContainer { get; set; } = false;
+
+    /// <summary>
+    /// If set, these files are written into the workspace .devcontainer folder before devcontainer up,
+    /// overriding any existing .devcontainer content.
+    /// Key = relative path from workspace root (e.g. ".devcontainer/Dockerfile").
+    /// </summary>
+    public Dictionary<string, string>? InlineDevcontainerFiles { get; set; }
 }
 
 /// <summary>
@@ -591,7 +625,8 @@ public enum DevcontainerSpawnStep
     DevcontainerUp = 7,
     BootstrapCleanup = 8,
     VsCodeLaunch = 9,
-    Completed = 10
+    Completed = 10,
+    GitCloneIntoVolume = 61
 }
 
 /// <summary>
