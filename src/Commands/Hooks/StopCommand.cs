@@ -1,7 +1,7 @@
+using System.Text.Json;
 using PKS.Infrastructure;
 using PKS.Infrastructure.Attributes;
 using PKS.Infrastructure.Services.Models;
-using Spectre.Console;
 using Spectre.Console.Cli;
 
 namespace PKS.Commands.Hooks;
@@ -22,6 +22,21 @@ public class StopCommand : BaseHookCommand
 
     protected override async Task<HookDecision> ProcessHookEventAsync(CommandContext context, HooksSettings settings)
     {
+        // Read stdin to check stop_hook_active (prevents infinite loops)
+        if (Console.IsInputRedirected)
+        {
+            var stdin = await Console.In.ReadToEndAsync();
+            try
+            {
+                var input = JsonSerializer.Deserialize<JsonElement>(stdin);
+                if (input.TryGetProperty("stop_hook_active", out var active) && active.GetBoolean())
+                {
+                    return HookDecision.Proceed();
+                }
+            }
+            catch { /* ignore parse errors */ }
+        }
+
         var lintCmd = await _config.GetAsync("hooks:quality:lint_command");
 
         if (string.IsNullOrWhiteSpace(lintCmd))
@@ -29,10 +44,7 @@ public class StopCommand : BaseHookCommand
             return HookDecision.Proceed();
         }
 
-        if (!settings.Json)
-        {
-            AnsiConsole.MarkupLine($"[cyan]Running lint check:[/] {lintCmd}");
-        }
+        Console.Error.WriteLine($"Running lint check: {lintCmd}");
 
         var result = await RunProcessAsync(lintCmd, Directory.GetCurrentDirectory());
 
@@ -41,8 +53,8 @@ public class StopCommand : BaseHookCommand
             return HookDecision.Proceed();
         }
 
-        var message = $"Lint check failed — fix the errors before stopping:\n\n{result.Output}";
+        var reason = $"Lint check failed — fix the errors before stopping:\n\n{result.Output}";
 
-        return HookDecision.Block(message);
+        return HookDecision.Block(reason);
     }
 }

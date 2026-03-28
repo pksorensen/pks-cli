@@ -174,9 +174,9 @@ public class HookDecision
     public string? Decision { get; set; }
 
     /// <summary>
-    /// Optional message explaining the decision (required for "block")
+    /// Reason explaining the decision (required for "block")
     /// </summary>
-    public string? Message { get; set; }
+    public string? Reason { get; set; }
 
     /// <summary>
     /// Whether Claude should continue processing (default: true)
@@ -196,7 +196,7 @@ public class HookDecision
     /// <summary>
     /// Creates a decision to block with a reason
     /// </summary>
-    public static HookDecision Block(string message) => new() { Decision = "block", Message = message };
+    public static HookDecision Block(string reason) => new() { Decision = "block", Reason = reason };
 
     /// <summary>
     /// Creates a decision to approve/bypass permissions

@@ -270,7 +270,7 @@ public class HooksService : IHooksService
                 foreach (var subHook in hook["hooks"]!.AsArray())
                 {
                     var command = subHook?["command"]?.ToString();
-                    if (command?.StartsWith("pks hooks") == true)
+                    if (command != null && IsPksHooksCommand(command))
                     {
                         return true;
                     }
@@ -279,6 +279,62 @@ public class HooksService : IHooksService
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Returns true if the command string looks like a pks hooks invocation,
+    /// regardless of how pks-cli is being called (global tool, dotnet exec, absolute path, etc.)
+    /// </summary>
+    private static bool IsPksHooksCommand(string command)
+    {
+        // Match with or without --json suffix
+        var knownSubcommands = new[]
+        {
+            "hooks stop", "hooks pre-tool-use", "hooks post-tool-use",
+            "hooks user-prompt-submit", "hooks notification",
+            "hooks subagent-stop", "hooks pre-compact"
+        };
+
+        return knownSubcommands.Any(sub =>
+            command.Contains(sub, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Determines the correct command prefix to use when writing hooks to .claude/settings.json,
+    /// based on how pks-cli is currently being invoked.
+    ///
+    /// Handles three cases:
+    ///   1. Self-contained exe / global .NET tool  → absolute path to the exe
+    ///   2. dotnet run / dotnet exec               → "dotnet exec /abs/path/to/pks-cli.dll"
+    ///   3. Unknown / fallback                     → "pks"
+    /// </summary>
+    internal static string GetPksCommandPrefix()
+    {
+        var processPath = Environment.ProcessPath ?? string.Empty;
+        var processName = Path.GetFileNameWithoutExtension(processPath);
+
+        // Not running via the dotnet host → self-contained exe or global tool
+        if (!processName.Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+        {
+            // Use absolute path so the hook works even if the exe is not on PATH.
+            // Only quote if the path contains spaces.
+            if (string.IsNullOrEmpty(processPath)) return "pks";
+
+            return processPath.Contains(' ') ? $"\"{processPath}\"" : processPath;
+        }
+
+        // Running via dotnet host (dotnet run, dotnet exec, etc.)
+        // GetCommandLineArgs()[0] is the managed entry assembly (the .dll)
+        var dllPath = Environment.GetCommandLineArgs().FirstOrDefault() ?? string.Empty;
+        if (!string.IsNullOrEmpty(dllPath) &&
+            dllPath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+        {
+            return dllPath.Contains(' ')
+                ? $"dotnet exec \"{dllPath}\""
+                : $"dotnet exec {dllPath}";
+        }
+
+        return "pks";
     }
 
     private static void MergeHookType(JsonObject hooksSection, string hookType, object pksHookConfig, bool force)
@@ -339,7 +395,7 @@ public class HooksService : IHooksService
         foreach (var subHook in hook["hooks"]!.AsArray())
         {
             var command = subHook?["command"]?.ToString();
-            if (command?.StartsWith("pks hooks") == true)
+            if (command != null && IsPksHooksCommand(command))
             {
                 return true;
             }
@@ -420,6 +476,8 @@ public class HooksService : IHooksService
 
     private static dynamic CreatePksHooksConfiguration()
     {
+        var pks = GetPksCommandPrefix();
+
         return new
         {
             PreToolUse = new[]
@@ -429,11 +487,7 @@ public class HooksService : IHooksService
                     matcher = "Bash",
                     hooks = new[]
                     {
-                        new
-                        {
-                            type = "command",
-                            command = "pks hooks pre-tool-use"
-                        }
+                        new { type = "command", command = $"{pks} hooks pre-tool-use" }
                     }
                 }
             },
@@ -444,11 +498,7 @@ public class HooksService : IHooksService
                     matcher = "Bash",
                     hooks = new[]
                     {
-                        new
-                        {
-                            type = "command",
-                            command = "pks hooks post-tool-use"
-                        }
+                        new { type = "command", command = $"{pks} hooks post-tool-use" }
                     }
                 }
             },
@@ -458,11 +508,7 @@ public class HooksService : IHooksService
                 {
                     hooks = new[]
                     {
-                        new
-                        {
-                            type = "command",
-                            command = "pks hooks user-prompt-submit"
-                        }
+                        new { type = "command", command = $"{pks} hooks user-prompt-submit" }
                     }
                 }
             },
@@ -472,11 +518,7 @@ public class HooksService : IHooksService
                 {
                     hooks = new[]
                     {
-                        new
-                        {
-                            type = "command",
-                            command = "pks hooks stop"
-                        }
+                        new { type = "command", command = $"{pks} hooks stop" }
                     }
                 }
             },
@@ -486,11 +528,7 @@ public class HooksService : IHooksService
                 {
                     hooks = new[]
                     {
-                        new
-                        {
-                            type = "command",
-                            command = "pks hooks notification"
-                        }
+                        new { type = "command", command = $"{pks} hooks notification" }
                     }
                 }
             },
@@ -500,11 +538,7 @@ public class HooksService : IHooksService
                 {
                     hooks = new[]
                     {
-                        new
-                        {
-                            type = "command",
-                            command = "pks hooks subagent-stop"
-                        }
+                        new { type = "command", command = $"{pks} hooks subagent-stop" }
                     }
                 }
             },
@@ -514,11 +548,7 @@ public class HooksService : IHooksService
                 {
                     hooks = new[]
                     {
-                        new
-                        {
-                            type = "command",
-                            command = "pks hooks pre-compact"
-                        }
+                        new { type = "command", command = $"{pks} hooks pre-compact" }
                     }
                 }
             }

@@ -66,25 +66,19 @@ public abstract class BaseHookCommand : AsyncCommand<HooksSettings>
     protected abstract Task<HookDecision> ProcessHookEventAsync(CommandContext context, HooksSettings settings);
 
     /// <summary>
-    /// Output the hook result in appropriate format
+    /// Output the hook result. Hook commands are always called by Claude Code, so they
+    /// always produce JSON when there is a decision, and silence when proceeding.
+    /// The --json flag is retained for manual testing but no longer changes this behaviour.
     /// </summary>
-    protected virtual async Task OutputResultAsync(HookDecision decision, HooksSettings settings)
+    protected virtual Task OutputResultAsync(HookDecision decision, HooksSettings settings)
     {
-        if (settings.Json)
+        if (ShouldOutputJson(decision))
         {
-            // JSON output mode - only output JSON if there's a decision
-            if (ShouldOutputJson(decision))
-            {
-                var json = JsonSerializer.Serialize(decision, JsonOptions);
-                Console.WriteLine(json);
-            }
-            // Otherwise output nothing (proceed silently)
+            var json = JsonSerializer.Serialize(decision, JsonOptions);
+            Console.WriteLine(json);
         }
-        else
-        {
-            // Regular UI mode - show user-friendly output
-            await DisplayUserFriendlyOutputAsync(decision);
-        }
+
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -152,9 +146,9 @@ public abstract class BaseHookCommand : AsyncCommand<HooksSettings>
 
             AnsiConsole.MarkupLine($"\n[{color}]Decision: {decision.Decision}[/]");
 
-            if (!string.IsNullOrEmpty(decision.Message))
+            if (!string.IsNullOrEmpty(decision.Reason))
             {
-                AnsiConsole.MarkupLine($"[dim]Message: {decision.Message}[/]");
+                AnsiConsole.MarkupLine($"[dim]Reason: {decision.Reason}[/]");
             }
         }
 
@@ -198,24 +192,21 @@ public abstract class BaseHookCommand : AsyncCommand<HooksSettings>
     protected static async Task<(int ExitCode, string Output)> RunProcessAsync(
         string command, string workingDir, int timeoutSeconds = 60)
     {
-        // Split "npm run lint" → exe="npm", args="run lint"
-        var parts = command.Trim().Split(' ', 2);
-        var exe = parts[0];
-        var args = parts.Length > 1 ? parts[1] : string.Empty;
-
         using var process = new System.Diagnostics.Process();
-        process.StartInfo = new System.Diagnostics.ProcessStartInfo
+        var startInfo = new System.Diagnostics.ProcessStartInfo
         {
-            FileName = exe,
-            Arguments = args,
+            FileName = "bash",
             WorkingDirectory = workingDir,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        startInfo.ArgumentList.Add("-c");
+        startInfo.ArgumentList.Add(command);
 
         var outputBuilder = new System.Text.StringBuilder();
+        process.StartInfo = startInfo;
         process.OutputDataReceived += (_, e) => { if (e.Data != null) outputBuilder.AppendLine(e.Data); };
         process.ErrorDataReceived  += (_, e) => { if (e.Data != null) outputBuilder.AppendLine(e.Data); };
 
