@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.5.0](https://github.com/pksorensen/pks-cli/compare/v6.4.0...v6.5.0) (2026-03-29)
+
+
+### Features
+
+* add git user configuration options for devcontainer ([dc3210f](https://github.com/pksorensen/pks-cli/commit/dc3210f2ecda3838c33d9fb30d8b62238da40656))
+
 ## [6.4.0](https://github.com/pksorensen/pks-cli/compare/v6.3.0...v6.4.0) (2026-03-29)
 
 
