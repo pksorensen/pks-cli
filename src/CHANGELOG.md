@@ -49,6 +49,14 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.5.1](https://github.com/pksorensen/pks-cli/compare/v6.5.0...v6.5.1) (2026-03-29)
+
+
+### Bug Fixes
+
+* add missing slash in activity URL for idle detection ([4652bbd](https://github.com/pksorensen/pks-cli/commit/4652bbdab3c3b64034deda0bb6315e2dd4e54de8))
+* wrap environment variable values in quotes for consistency ([dd20e53](https://github.com/pksorensen/pks-cli/commit/dd20e5355813f9073255cd9e096d2e55eb2b2099))
+
 ## [6.5.0](https://github.com/pksorensen/pks-cli/compare/v6.4.0...v6.5.0) (2026-03-29)
 
 
