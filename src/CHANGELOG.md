@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.4.0](https://github.com/pksorensen/pks-cli/compare/v6.3.0...v6.4.0) (2026-03-29)
+
+
+### Features
+
+* enhance Agentics runner commands with new environment variables for server configuration and backward compatibility ([6a09987](https://github.com/pksorensen/pks-cli/commit/6a0998706e1ecdce64491ed6af762f9781b39e21))
+
 ## [6.3.0](https://github.com/pksorensen/pks-cli/compare/v6.2.2...v6.3.0) (2026-03-28)
 
 
