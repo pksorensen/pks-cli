@@ -66,6 +66,14 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         [CommandOption("--server <SERVER>")]
         [Description("Agentics server URL (falls back to AGENTIC_SERVER env, then agentics.dk). Used when auto-registering with --project.")]
         public string? Server { get; set; }
+
+        [CommandOption("--git-user-name <NAME>")]
+        [Description("Git user.name to configure inside the devcontainer (default: si-14x)")]
+        public string? GitUserName { get; set; }
+
+        [CommandOption("--git-user-email <EMAIL>")]
+        [Description("Git user.email to configure inside the devcontainer (default: si-14x@agentics.dk)")]
+        public string? GitUserEmail { get; set; }
     }
 
     public AgenticsRunnerStartCommand(
@@ -645,6 +653,10 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             scriptLines.AppendLine($"export STAGE_DIR={stageDir}");
         }
         scriptLines.AppendLine($"export VIBECAST_APPEND_SYSTEM_PROMPT=\"{appendPrompt}\"");
+        var gitUserName  = settings.GitUserName  ?? "si-14x";
+        var gitUserEmail = settings.GitUserEmail ?? "si-14x@agentics.dk";
+        scriptLines.AppendLine($"git config --global user.name \"{gitUserName}\"");
+        scriptLines.AppendLine($"git config --global user.email \"{gitUserEmail}\"");
         scriptLines.AppendLine($"cd {workspaceFolder}");
         // Remove any stale .mcp.json left by an older vibecast session (plugin dir handles MCP now)
         scriptLines.AppendLine("rm -f .mcp.json");
