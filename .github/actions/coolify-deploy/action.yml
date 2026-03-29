@@ -165,7 +165,7 @@ runs:
                 ) ] | .[0].uuid // empty')
 
               if [ -n "$APP_UUID" ]; then
-                WEBHOOK="${COOLIFY_BASE}/api/v1/deploy?uuid=${APP_UUID}&force=false"
+                WEBHOOK="${COOLIFY_BASE}/api/v1/deploy?uuid=${APP_UUID}"
                 FQDN=$(echo "$APPS_JSON" | jq -r --arg uuid "$APP_UUID" '
                   [ .[] | select(.uuid == $uuid) ] | .[0].fqdn // empty')
                 echo "Found app ${APP_UUID} in environment '$ENV' (fqdn: ${FQDN})"

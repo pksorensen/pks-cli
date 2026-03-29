@@ -410,7 +410,7 @@ public class CoolifyLookupService : ICoolifyLookupService
             Uuid = uuid,
             Name = name,
             Fqdn = fqdn,
-            WebhookUrl = $"{instance.Url}/api/v1/deploy?uuid={uuid}&force=false",
+            WebhookUrl = $"{instance.Url}/api/v1/deploy?uuid={uuid}",
             InstanceUrl = instance.Url,
             Token = instance.Token
         };
