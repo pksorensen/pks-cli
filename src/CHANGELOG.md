@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.5.3](https://github.com/pksorensen/pks-cli/compare/v6.5.2...v6.5.3) (2026-03-29)
+
+
+### Bug Fixes
+
+* remove 'force' parameter from Coolify deployment webhook URL ([5437292](https://github.com/pksorensen/pks-cli/commit/543729253c8ef70cf04115e62a46e15c9a09c0c6))
+
 ## [6.5.2](https://github.com/pksorensen/pks-cli/compare/v6.5.1...v6.5.2) (2026-03-29)
 
 
