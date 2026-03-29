@@ -853,7 +853,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             {
                 try
                 {
-                    var actUrl = $"{registration.Server.TrimEnd('/')}api/lives/activity?streamId={streamIdValue}&idleThresholdMs={idleTimeoutMs}";
+                    var actUrl = $"{registration.Server.TrimEnd('/')}/api/lives/activity?streamId={streamIdValue}&idleThresholdMs={idleTimeoutMs}";
                     var actResp = await client.GetAsync(actUrl, ct);
                     if (actResp.IsSuccessStatusCode)
                     {
