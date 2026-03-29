@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.5.2](https://github.com/pksorensen/pks-cli/compare/v6.5.1...v6.5.2) (2026-03-29)
+
+
+### Bug Fixes
+
+* add AGENTICS_JOB_MODE environment variable to process start command ([d399e33](https://github.com/pksorensen/pks-cli/commit/d399e337af8e2b9b0fe5cdfe3205068dd4784345))
+
 ## [6.5.1](https://github.com/pksorensen/pks-cli/compare/v6.5.0...v6.5.1) (2026-03-29)
 
 
