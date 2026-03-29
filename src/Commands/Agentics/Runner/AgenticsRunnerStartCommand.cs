@@ -371,6 +371,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         DisplayInfo($"No saved registration for [cyan]{owner}/{project}[/], registering now...");
 
         var serverHost = serverOverride
+            ?? Environment.GetEnvironmentVariable("AGENTICS_SERVER")
             ?? Environment.GetEnvironmentVariable("AGENTIC_SERVER")
             ?? "agentics.dk";
 
@@ -610,9 +611,15 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         // Ensure user-local bin is on PATH so claude is found (e.g. /home/node/.local/bin)
         scriptLines.AppendLine("export PATH=\"$HOME/.local/bin:/home/node/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"");
         scriptLines.AppendLine($"export VIBECAST_HOME={vibecastHome}");
-        scriptLines.AppendLine($"export AGENTIC_SERVER={agenticServerForContainer}");
+        scriptLines.AppendLine($"export AGENTICS_SERVER={agenticServerForContainer}");
+        scriptLines.AppendLine($"export AGENTIC_SERVER={agenticServerForContainer}"); // deprecated, kept for backwards compat
         scriptLines.AppendLine($"export AGENTICS_PROJECT={registration.Owner}/{registration.Project}");
         scriptLines.AppendLine($"export AGENTICS_JOB_ID={job.Id}");
+        scriptLines.AppendLine($"export AGENTICS_TOKEN={registration.Token}");
+        scriptLines.AppendLine($"export AGENTICS_OWNER={registration.Owner}");
+        scriptLines.AppendLine($"export AGENTICS_PROJECT_NAME={registration.Project}");
+        var agenticsBaseUrl = $"{serverUri.Scheme}://{serverUri.Host}{(serverUri.IsDefaultPort ? "" : $":{serverUri.Port}")}";
+        scriptLines.AppendLine($"export AGENTICS_BASE_URL={agenticsBaseUrl}");
         // Enable keyboard input from viewers (PIN = first 8 chars of job ID)
         var keyboardPin = job.Id[..8].ToUpperInvariant();
         scriptLines.AppendLine($"export VIBECAST_KEYBOARD_PIN={keyboardPin}");
@@ -777,7 +784,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             {
                 try
                 {
-                    var metaUrl = $"{registration.Server.TrimEnd('/')}api/lives/metadata";
+                    var metaUrl = $"{registration.Server.TrimEnd('/')}/api/lives/metadata";
                     var metaReq = new HttpRequestMessage(HttpMethod.Post, metaUrl);
                     metaReq.Content = JsonContent.Create(new
                     {
@@ -1006,7 +1013,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 ? $" STAGE_GIT_URL={stageGitUrl} STAGE_GIT_TOKEN={stageGitToken} STAGE_DIR={stageDir}"
                 : "";
 
-            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id}{keyboardPinEnv}{initialPromptEnv}{stageGitEnv} VIBECAST_APPEND_SYSTEM_PROMPT='{appendPrompt}' {vibecastBin}");
+            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id}{keyboardPinEnv}{initialPromptEnv}{stageGitEnv} VIBECAST_APPEND_SYSTEM_PROMPT='{appendPrompt}' {vibecastBin}");
 
             var startProc = Process.Start(startPsi);
             if (startProc != null)

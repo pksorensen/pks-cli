@@ -56,6 +56,7 @@ public class AgenticsRunnerRegisterCommand(
 
             // 2. Resolve server URL
             var serverHost = settings.Server
+                ?? Environment.GetEnvironmentVariable("AGENTICS_SERVER")
                 ?? Environment.GetEnvironmentVariable("AGENTIC_SERVER")
                 ?? "agentics.dk";
 
