@@ -313,6 +313,10 @@ runs:
             fi
 
             status=$(echo "$status_response" | jq -r '.status // "unknown"')
+            if [ "$status" = "unknown" ]; then
+              echo "::warning::Deployment status unknown — raw response:"
+              echo "$status_response" | jq . 2>/dev/null || echo "$status_response"
+            fi
           fi
 
           if [ "$POLL_ERROR" = "true" ]; then
