@@ -256,16 +256,21 @@ runs:
         fi
 
         # Helper function for API calls
+        # Sets API_HTTP_CODE to the HTTP status code after each call.
+        API_HTTP_CODE=""
         api_get() {
           local path="$1"
+          local response
           if [ "$MODE" = "proxy" ]; then
             local sep="?"
             [[ "$path" == *"?"* ]] && sep="&"
-            curl -s --unix-socket "$SOCKET" -H "$AUTH_HEADER" \
-              "http://localhost${path}${sep}environment=${ENVIRONMENT}"
+            response=$(curl -s -w "\n%{http_code}" --unix-socket "$SOCKET" -H "$AUTH_HEADER" \
+              "http://localhost${path}${sep}environment=${ENVIRONMENT}" 2>/dev/null)
           else
-            curl -s -H "$AUTH_HEADER" "${COOLIFY_BASE}${path}"
+            response=$(curl -s -w "\n%{http_code}" -H "$AUTH_HEADER" "${COOLIFY_BASE}${path}" 2>/dev/null)
           fi
+          API_HTTP_CODE=$(echo "$response" | tail -1)
+          echo "$response" | head -n -1
         }
 
         # Phase 1: Wait for build to finish
@@ -273,12 +278,15 @@ runs:
         MAX_ATTEMPTS=$((BUILD_TIMEOUT / 15))
         ATTEMPT=0
         BUILD_RESULT=""
+        CONSECUTIVE_ERRORS=0
+        MAX_CONSECUTIVE_ERRORS=5
 
         while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
           ATTEMPT=$((ATTEMPT + 1))
           echo "Build poll $ATTEMPT/$MAX_ATTEMPTS..."
 
           status_response=$(api_get "/coolify/deployments/${DEPLOY_UUID}")
+          POLL_ERROR=false
 
           if [ "$MODE" = "direct" ]; then
             # Direct mode: try list endpoint first, then single deployment
@@ -294,8 +302,29 @@ runs:
               status=$(echo "$direct_response" | jq -r '.status // "unknown"')
             fi
           else
-            # Proxy mode: single deployment endpoint
+            # Proxy mode: detect errors before extracting status
+            if [ -z "$status_response" ]; then
+              echo "::warning::Empty response from proxy (socket unreachable?)"
+              POLL_ERROR=true
+            elif [ -n "$API_HTTP_CODE" ] && [ "$API_HTTP_CODE" -ge 400 ] 2>/dev/null; then
+              error_msg=$(echo "$status_response" | jq -r '.error // empty' 2>/dev/null)
+              echo "::warning::Proxy error HTTP $API_HTTP_CODE${error_msg:+: $error_msg}"
+              POLL_ERROR=true
+            fi
+
             status=$(echo "$status_response" | jq -r '.status // "unknown"')
+          fi
+
+          if [ "$POLL_ERROR" = "true" ]; then
+            CONSECUTIVE_ERRORS=$((CONSECUTIVE_ERRORS + 1))
+            if [ $CONSECUTIVE_ERRORS -ge $MAX_CONSECUTIVE_ERRORS ]; then
+              echo "::error::$MAX_CONSECUTIVE_ERRORS consecutive proxy errors — cannot reach Coolify API. Check runner credentials and Coolify token configuration."
+              BUILD_RESULT="error"
+              break
+            fi
+            echo "Consecutive proxy errors: $CONSECUTIVE_ERRORS/$MAX_CONSECUTIVE_ERRORS"
+          else
+            CONSECUTIVE_ERRORS=0
           fi
 
           echo "Build status: $status"
