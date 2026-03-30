@@ -2398,10 +2398,17 @@ DEVCONTAINER_EOF";
             // Normalize Windows backslashes to forward slashes so the path survives the Linux shell
             // inside the bootstrap container (backslashes are treated as escape characters otherwise).
             var normalizedSocketPath = credentialSocketPath.Replace('\\', '/');
-            credentialMountArg = $" --mount type=bind,source={normalizedSocketPath},target=/tmp/pks-creds.sock";
+            // Mount the socket's directory (not the file) so the bind mount survives
+            // socket recreation across runner restarts. The target path must match what
+            // RunnerContainerService.WriteAskpassScriptAsync and PKS_TOKEN_URL expect.
+            // credentialSocketPath may be either the directory or the socket file itself.
+            var socketDir = Directory.Exists(normalizedSocketPath)
+                ? normalizedSocketPath
+                : Path.GetDirectoryName(normalizedSocketPath) ?? normalizedSocketPath;
+            credentialMountArg = $" --mount type=bind,source={socketDir},target=/var/run/pks-creds";
 
             // Write the askpass script inside the bootstrap container
-            const string askpassScript = "#!/bin/sh\ncurl -s --unix-socket /tmp/pks-creds.sock \"http://localhost/git-credential?host=github.com\" | sed -n 's/.*\"password\":\"\\([^\"]*\\)\".*/\\1/p'\n";
+            const string askpassScript = "#!/bin/sh\ncurl -s --unix-socket /var/run/pks-creds/creds.sock \"http://localhost/git-credential?host=github.com\" | sed -n 's/.*\"password\":\"\\([^\"]*\\)\".*/\\1/p'\n";
             var writeAskpassCmd = $"printf '%s' '{askpassScript.Replace("'", "'\\''")}' > /tmp/git-askpass.sh && chmod +x /tmp/git-askpass.sh";
             var askpassResult = await ExecuteInBootstrapAsync(bootstrapContainerId, writeAskpassCmd, workingDir: null, timeoutSeconds: 10);
             if (!askpassResult.Success)

@@ -254,6 +254,7 @@ public class GitCredentialServer : IAsyncDisposable
                     UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
                     UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
             }
+
         }
     }
 
