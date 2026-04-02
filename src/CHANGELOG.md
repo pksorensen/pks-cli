@@ -49,6 +49,19 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.6.0](https://github.com/pksorensen/pks-cli/compare/v6.5.2...v6.6.0) (2026-04-02)
+
+
+### Features
+
+* Add SSH target management commands and services ([1ef4f4c](https://github.com/pksorensen/pks-cli/commit/1ef4f4c40a48e718746bbada0120dd05f7f83d11))
+
+
+### Bug Fixes
+
+* remove 'force' parameter from Coolify deployment webhook URL ([5437292](https://github.com/pksorensen/pks-cli/commit/543729253c8ef70cf04115e62a46e15c9a09c0c6))
+* **runner:** mount credential socket directory correctly in devcontainers ([46028c6](https://github.com/pksorensen/pks-cli/commit/46028c614f9a6daec831331d274b63bc8161d0bf))
+
 ## [6.5.2](https://github.com/pksorensen/pks-cli/compare/v6.5.1...v6.5.2) (2026-03-29)
 
 
