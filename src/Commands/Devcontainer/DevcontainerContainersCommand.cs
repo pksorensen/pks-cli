@@ -9,44 +9,28 @@ using System.Text.Json.Serialization;
 namespace PKS.Commands.Devcontainer;
 
 /// <summary>
-/// Command to list all managed devcontainers with their status and details
+/// Command to list all managed devcontainers with their status and details.
+/// Supports both local and remote (SSH) targets.
 /// </summary>
-/// <remarks>
-/// Displays information about devcontainers managed by PKS CLI including:
-/// - Project name associated with the container
-/// - Container ID (shortened for readability)
-/// - Current status (running/stopped) with color coding
-/// - Volume name used by the container
-/// - Creation timestamp
-///
-/// Supports multiple output formats:
-/// - Table format (default): Rich formatted table with colors
-/// - JSON format: Machine-readable JSON output for scripting
-///
-/// Usage examples:
-/// <code>
-/// pks devcontainer containers                    # Show running containers in table format
-/// pks devcontainer containers --all              # Show all containers (including stopped)
-/// pks devcontainer containers --format json      # Output in JSON format
-/// pks devcontainer containers --all --format json # All containers in JSON format
-/// </code>
-/// </remarks>
 public class DevcontainerContainersCommand : DevcontainerCommand<DevcontainerContainersCommand.Settings>
 {
     private readonly IDevcontainerSpawnerService _spawnerService;
+    private readonly ISshTargetConfigurationService? _sshConfigService;
+    private readonly ISshCommandRunner? _sshCommandRunner;
 
     /// <summary>
     /// Initializes a new instance of the DevcontainerContainersCommand
     /// </summary>
-    /// <param name="spawnerService">Service for managing devcontainer operations</param>
-    /// <param name="console">Spectre.Console instance for output rendering</param>
-    /// <exception cref="ArgumentNullException">Thrown when spawnerService is null</exception>
     public DevcontainerContainersCommand(
         IDevcontainerSpawnerService spawnerService,
-        IAnsiConsole console)
+        IAnsiConsole console,
+        ISshTargetConfigurationService? sshConfigService = null,
+        ISshCommandRunner? sshCommandRunner = null)
         : base(console)
     {
         _spawnerService = spawnerService ?? throw new ArgumentNullException(nameof(spawnerService));
+        _sshConfigService = sshConfigService;
+        _sshCommandRunner = sshCommandRunner;
     }
 
     /// <summary>
@@ -70,12 +54,7 @@ public class DevcontainerContainersCommand : DevcontainerCommand<DevcontainerCon
         public string Format { get; set; } = "table";
     }
 
-    /// <summary>
-    /// Executes the containers command synchronously (delegates to async implementation)
-    /// </summary>
-    /// <param name="context">Command execution context</param>
-    /// <param name="settings">Command settings</param>
-    /// <returns>Exit code: 0 for success, 1 for failure</returns>
+    /// <inheritdoc/>
     public override int Execute(CommandContext context, Settings settings)
     {
         if (settings == null) throw new ArgumentNullException(nameof(settings));
@@ -85,22 +64,10 @@ public class DevcontainerContainersCommand : DevcontainerCommand<DevcontainerCon
     /// <summary>
     /// Executes the containers command asynchronously
     /// </summary>
-    /// <param name="context">Command execution context</param>
-    /// <param name="settings">Command settings</param>
-    /// <returns>Exit code: 0 for success, 1 for failure</returns>
-    /// <remarks>
-    /// Operation flow:
-    /// 1. Display command banner
-    /// 2. Retrieve list of managed containers from service
-    /// 3. Filter containers based on --all flag (running vs all)
-    /// 4. Render output in requested format (table or JSON)
-    /// 5. Display helpful message if no containers found
-    /// </remarks>
     public async Task<int> ExecuteAsync(CommandContext context, Settings settings)
     {
         try
         {
-            // Display banner
             DisplayBanner("Containers");
 
             // Validate format option
@@ -111,43 +78,99 @@ public class DevcontainerContainersCommand : DevcontainerCommand<DevcontainerCon
                 return 1;
             }
 
-            // Retrieve containers with spinner
-            List<ContainerInfo>? containers = null;
-            await WithSpinnerAsync("Retrieving managed containers...", async () =>
-            {
-                // Get volume information
-                var volumes = await _spawnerService.ListManagedVolumesAsync();
+            // Check for registered SSH targets and prompt
+            SshTarget? selectedSshTarget = null;
+            RemoteHostConfig? remoteHost = null;
 
-                // Convert volumes to container info
-                // Note: This is a simplified version. The actual implementation would need
-                // to query Docker to get container status for each volume
-                containers = await GetContainerInfoFromVolumesAsync(volumes);
-            });
-
-            if (containers == null)
+            if (_sshConfigService != null)
             {
-                DisplayError("Failed to retrieve container list");
-                return 1;
+                var sshTargets = await _sshConfigService.ListTargetsAsync();
+                if (sshTargets.Count > 0)
+                {
+                    var choices = new List<string> { "Local (this machine)" };
+                    choices.AddRange(sshTargets.Select(t =>
+                        $"{t.Username}@{t.Host}" + (string.IsNullOrEmpty(t.Label) ? "" : $" ({t.Label})")));
+
+                    var selected = Console.Prompt(
+                        new SelectionPrompt<string>()
+                            .Title("[cyan]Which host?[/]")
+                            .AddChoices(choices));
+
+                    var selectedIndex = choices.IndexOf(selected) - 1;
+                    if (selectedIndex >= 0)
+                    {
+                        selectedSshTarget = sshTargets[selectedIndex];
+                        remoteHost = new RemoteHostConfig
+                        {
+                            Host = selectedSshTarget.Host,
+                            Username = selectedSshTarget.Username,
+                            Port = selectedSshTarget.Port,
+                            KeyPath = selectedSshTarget.KeyPath
+                        };
+                    }
+                }
+            }
+
+            List<ContainerDisplayInfo> containers;
+
+            if (remoteHost != null)
+            {
+                containers = await GetRemoteContainersAsync(remoteHost);
+                // Fetch volumes for each container
+                if (containers.Count > 0)
+                {
+                    await WithSpinnerAsync("Fetching volume info...", async () =>
+                    {
+                        foreach (var container in containers)
+                        {
+                            var inspectResult = await _sshCommandRunner!.RunAsync(remoteHost,
+                                $"docker inspect {container.ContainerId} --format json");
+                            if (inspectResult.Success)
+                            {
+                                try
+                                {
+                                    var inspectJson = System.Text.Json.JsonDocument.Parse(inspectResult.StdOut.Trim().TrimStart('[').TrimEnd(']'));
+                                    if (inspectJson.RootElement.TryGetProperty("Mounts", out var mounts))
+                                    {
+                                        foreach (var mount in mounts.EnumerateArray())
+                                        {
+                                            if (mount.TryGetProperty("Type", out var typeEl) && typeEl.GetString() == "volume"
+                                                && mount.TryGetProperty("Name", out var nameEl))
+                                            {
+                                                container.Volumes.Add(nameEl.GetString() ?? "");
+                                            }
+                                        }
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
+                    });
+                }
+            }
+            else
+            {
+                containers = await GetLocalContainersAsync();
             }
 
             // Filter containers based on --all flag
             var filteredContainers = settings.ShowAll
                 ? containers
-                : containers.Where(c => c.IsRunning).ToList();
+                : containers.Where(c => c.Status.Contains("Up", StringComparison.OrdinalIgnoreCase)
+                    || c.Status.Equals("running", StringComparison.OrdinalIgnoreCase)).ToList();
 
             // Handle empty results
             if (!filteredContainers.Any())
             {
                 if (format == "json")
                 {
-                    // Output empty JSON array
                     System.Console.WriteLine("[]");
                 }
                 else
                 {
-                    System.Console.WriteLine();
+                    Console.WriteLine();
                     DisplayInfo("No managed devcontainers found");
-                    System.Console.WriteLine();
+                    Console.WriteLine();
 
                     var helpPanel = new Panel(
                         settings.ShowAll
@@ -169,7 +192,7 @@ public class DevcontainerContainersCommand : DevcontainerCommand<DevcontainerCon
             }
             else
             {
-                DisplayTableOutput(filteredContainers, settings.ShowAll);
+                DisplayTableOutput(filteredContainers, settings.ShowAll, remoteHost);
             }
 
             return 0;
@@ -182,63 +205,131 @@ public class DevcontainerContainersCommand : DevcontainerCommand<DevcontainerCon
         }
     }
 
-    /// <summary>
-    /// Converts volume information to container information by querying Docker
-    /// </summary>
-    /// <param name="volumes">List of managed volumes</param>
-    /// <returns>List of container information</returns>
-    /// <remarks>
-    /// This method queries Docker to get container details for each volume.
-    /// For Phase 1, this is a simplified implementation that maps volumes to containers.
-    /// </remarks>
-    private async Task<List<ContainerInfo>> GetContainerInfoFromVolumesAsync(List<DevcontainerVolumeInfo> volumes)
+    private async Task<List<ContainerDisplayInfo>> GetLocalContainersAsync()
     {
-        var containers = new List<ContainerInfo>();
+        var containers = new List<ContainerDisplayInfo>();
 
-        foreach (var volume in volumes)
+        List<DevcontainerContainerInfo>? managed = null;
+        await WithSpinnerAsync("Retrieving managed containers...", async () =>
         {
-            // For each volume, try to find the associated container
-            // This would require Docker CLI calls or Docker API integration
-            // For now, we create a placeholder based on volume info
+            managed = await _spawnerService.ListManagedContainersAsync();
+        });
 
-            var container = new ContainerInfo
+        if (managed == null)
+            return containers;
+
+        foreach (var c in managed)
+        {
+            containers.Add(new ContainerDisplayInfo
             {
-                ProjectName = volume.ProjectName,
-                ContainerId = volume.Name, // Volume name as placeholder
-                IsRunning = false, // Would need to query Docker
-                VolumeName = volume.Name,
-                Created = volume.Created
-            };
-
-            containers.Add(container);
+                ProjectName = c.ProjectName,
+                ContainerId = c.ContainerId,
+                Status = c.Status,
+                Created = c.CreatedDate.ToString("yyyy-MM-dd HH:mm:ss"),
+                Image = c.Labels.TryGetValue("devcontainer.metadata", out var _) ? "(devcontainer)" : ""
+            });
         }
 
         return containers;
     }
 
-    /// <summary>
-    /// Displays container information in a formatted table
-    /// </summary>
-    /// <param name="containers">List of containers to display</param>
-    /// <param name="showAll">Whether showing all containers or just running ones</param>
-    private void DisplayTableOutput(List<ContainerInfo> containers, bool showAll)
+    private async Task<List<ContainerDisplayInfo>> GetRemoteContainersAsync(RemoteHostConfig remoteHost)
     {
-        System.Console.WriteLine();
+        var containers = new List<ContainerDisplayInfo>();
+
+        if (_sshCommandRunner == null)
+        {
+            DisplayError("SSH command runner not available");
+            return containers;
+        }
+
+        SshCommandResult? result = null;
+        await WithSpinnerAsync($"Retrieving containers from {remoteHost.Username}@{remoteHost.Host}...", async () =>
+        {
+            // Use JSON format to avoid shell escaping issues with Go template labels
+            result = await _sshCommandRunner.RunAsync(remoteHost,
+                "docker ps -a --filter label=devcontainer.local_folder --format json");
+        });
+
+        if (result == null || !result.Success)
+        {
+            DisplayError($"Failed to list remote containers: {result?.StdErr ?? "unknown error"}");
+            return containers;
+        }
+
+        var lines = result.StdOut.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var line in lines)
+        {
+            try
+            {
+                var json = System.Text.Json.JsonDocument.Parse(line);
+                var root = json.RootElement;
+
+                var id = root.TryGetProperty("ID", out var idEl) ? idEl.GetString() ?? "" : "";
+                var name = root.TryGetProperty("Names", out var nameEl) ? nameEl.GetString() ?? "" : "";
+                var status = root.TryGetProperty("Status", out var statusEl) ? statusEl.GetString() ?? "" : "";
+                var image = root.TryGetProperty("Image", out var imageEl) ? imageEl.GetString() ?? "" : "";
+                var createdAt = root.TryGetProperty("CreatedAt", out var createdEl) ? createdEl.GetString() ?? "" : "";
+
+                // Get labels for project name
+                var labels = root.TryGetProperty("Labels", out var labelsEl) ? labelsEl.GetString() ?? "" : "";
+                var pksProject = "";
+                var localFolder = "";
+                foreach (var label in labels.Split(','))
+                {
+                    var kv = label.Split('=', 2);
+                    if (kv.Length == 2)
+                    {
+                        if (kv[0].Trim() == "pks.project") pksProject = kv[1].Trim();
+                        if (kv[0].Trim() == "devcontainer.local_folder") localFolder = kv[1].Trim();
+                    }
+                }
+
+                var projectName = !string.IsNullOrEmpty(pksProject)
+                    ? pksProject
+                    : !string.IsNullOrEmpty(localFolder)
+                        ? Path.GetFileName(localFolder.TrimEnd('/'))
+                        : name;
+
+                containers.Add(new ContainerDisplayInfo
+                {
+                    ProjectName = projectName,
+                    ContainerId = id,
+                    Status = status,
+                    Created = createdAt,
+                    Image = image
+                });
+            }
+            catch
+            {
+                // Skip unparseable lines
+            }
+        }
+
+        return containers;
+    }
+
+    private void DisplayTableOutput(List<ContainerDisplayInfo> containers, bool showAll, RemoteHostConfig? remoteHost)
+    {
+        Console.WriteLine();
+
+        var hostLabel = remoteHost != null
+            ? $" on {remoteHost.Username}@{remoteHost.Host}"
+            : "";
 
         var table = new Table()
-            .Title($"[cyan]Managed Devcontainers[/] [dim]({containers.Count} {(showAll ? "total" : "running")})[/]")
+            .Title($"[cyan]Managed Devcontainers{hostLabel}[/] [dim]({containers.Count} {(showAll ? "total" : "running")})[/]")
             .Border(TableBorder.Rounded)
             .BorderColor(Color.Cyan1);
 
-        // Add columns
         table.AddColumn(new TableColumn("[yellow]Project[/]").LeftAligned());
         table.AddColumn(new TableColumn("[yellow]Container ID[/]").LeftAligned());
         table.AddColumn(new TableColumn("[yellow]Status[/]").Centered());
-        table.AddColumn(new TableColumn("[yellow]Volume[/]").LeftAligned());
+        table.AddColumn(new TableColumn("[yellow]Volumes[/]").Centered());
         table.AddColumn(new TableColumn("[yellow]Created[/]").RightAligned());
+        table.AddColumn(new TableColumn("[yellow]Image[/]").LeftAligned());
 
-        // Add rows
-        foreach (var container in containers.OrderByDescending(c => c.Created))
+        foreach (var container in containers)
         {
             var projectName = string.IsNullOrEmpty(container.ProjectName)
                 ? "[dim]<unknown>[/]"
@@ -248,45 +339,36 @@ public class DevcontainerContainersCommand : DevcontainerCommand<DevcontainerCon
                 ? container.ContainerId[..12]
                 : container.ContainerId;
 
-            var status = container.IsRunning
-                ? "[green]Running[/]"
-                : "[yellow]Stopped[/]";
+            var isRunning = container.Status.Contains("Up", StringComparison.OrdinalIgnoreCase)
+                || container.Status.Equals("running", StringComparison.OrdinalIgnoreCase);
 
-            var volumeName = string.IsNullOrEmpty(container.VolumeName)
-                ? "[dim]<none>[/]"
-                : $"[dim]{container.VolumeName}[/]";
+            var status = isRunning
+                ? $"[green]{container.Status.EscapeMarkup()}[/]"
+                : $"[yellow]{container.Status.EscapeMarkup()}[/]";
 
-            var created = FormatDateTime(container.Created);
+            var image = string.IsNullOrEmpty(container.Image)
+                ? "[dim]<unknown>[/]"
+                : $"[dim]{container.Image.EscapeMarkup()}[/]";
+
+            var volumeDisplay = container.Volumes.Count > 0
+                ? $"[dim]{container.Volumes.Count}[/]"
+                : "[dim]-[/]";
 
             table.AddRow(
                 projectName,
                 $"[cyan]{containerId}[/]",
                 status,
-                volumeName,
-                $"[dim]{created}[/]"
+                volumeDisplay,
+                $"[dim]{container.Created.EscapeMarkup()}[/]",
+                image
             );
         }
 
         Console.Write(table);
-        System.Console.WriteLine();
-
-        // Display summary statistics
-        if (showAll)
-        {
-            var running = containers.Count(c => c.IsRunning);
-            var stopped = containers.Count - running;
-
-            Console.MarkupLine($"[dim]Summary: {running} running, {stopped} stopped[/]");
-        }
-
-        System.Console.WriteLine();
+        Console.WriteLine();
     }
 
-    /// <summary>
-    /// Displays container information in JSON format
-    /// </summary>
-    /// <param name="containers">List of containers to display</param>
-    private void DisplayJsonOutput(List<ContainerInfo> containers)
+    private void DisplayJsonOutput(List<ContainerDisplayInfo> containers)
     {
         var options = new JsonSerializerOptions
         {
@@ -300,93 +382,26 @@ public class DevcontainerContainersCommand : DevcontainerCommand<DevcontainerCon
     }
 
     /// <summary>
-    /// Formats a DateTime as a relative time string (e.g., "2 hours ago")
-    /// </summary>
-    /// <param name="dateTime">DateTime to format</param>
-    /// <returns>Human-readable relative time string</returns>
-    private string FormatDateTime(DateTime dateTime)
-    {
-        var timeSpan = DateTime.UtcNow - dateTime.ToUniversalTime();
-
-        if (timeSpan.TotalSeconds < 60)
-            return "just now";
-
-        if (timeSpan.TotalMinutes < 60)
-            return $"{(int)timeSpan.TotalMinutes}m ago";
-
-        if (timeSpan.TotalHours < 24)
-            return $"{(int)timeSpan.TotalHours}h ago";
-
-        if (timeSpan.TotalDays < 7)
-            return $"{(int)timeSpan.TotalDays}d ago";
-
-        if (timeSpan.TotalDays < 30)
-            return $"{(int)(timeSpan.TotalDays / 7)}w ago";
-
-        if (timeSpan.TotalDays < 365)
-            return $"{(int)(timeSpan.TotalDays / 30)}mo ago";
-
-        return dateTime.ToLocalTime().ToString("yyyy-MM-dd");
-    }
-
-    /// <summary>
     /// Container information for display purposes
     /// </summary>
-    /// <remarks>
-    /// This class is used as a DTO for serialization to JSON and table display.
-    /// It represents the essential information about a managed devcontainer.
-    /// </remarks>
-    private class ContainerInfo
+    private class ContainerDisplayInfo
     {
-        /// <summary>
-        /// Name of the project associated with this container
-        /// </summary>
         [JsonPropertyName("projectName")]
         public string ProjectName { get; set; } = string.Empty;
 
-        /// <summary>
-        /// Docker container ID (full ID)
-        /// </summary>
         [JsonPropertyName("containerId")]
         public string ContainerId { get; set; } = string.Empty;
 
-        /// <summary>
-        /// Current status of the container
-        /// </summary>
-        [JsonPropertyName("isRunning")]
-        public bool IsRunning { get; set; }
-
-        /// <summary>
-        /// Status text for JSON output
-        /// </summary>
         [JsonPropertyName("status")]
-        public string Status => IsRunning ? "running" : "stopped";
+        public string Status { get; set; } = string.Empty;
 
-        /// <summary>
-        /// Name of the Docker volume used by this container
-        /// </summary>
-        [JsonPropertyName("volumeName")]
-        public string VolumeName { get; set; } = string.Empty;
-
-        /// <summary>
-        /// When the container was created (ISO 8601 format)
-        /// </summary>
         [JsonPropertyName("created")]
-        public DateTime Created { get; set; }
+        public string Created { get; set; } = string.Empty;
 
-        /// <summary>
-        /// Human-readable creation time
-        /// </summary>
-        [JsonPropertyName("createdRelative")]
-        public string CreatedRelative
-        {
-            get
-            {
-                var timeSpan = DateTime.UtcNow - Created.ToUniversalTime();
-                if (timeSpan.TotalDays < 1) return $"{(int)timeSpan.TotalHours}h ago";
-                if (timeSpan.TotalDays < 7) return $"{(int)timeSpan.TotalDays}d ago";
-                return Created.ToString("yyyy-MM-dd");
-            }
-        }
+        [JsonPropertyName("image")]
+        public string Image { get; set; } = string.Empty;
+
+        [JsonPropertyName("volumes")]
+        public List<string> Volumes { get; set; } = new();
     }
 }

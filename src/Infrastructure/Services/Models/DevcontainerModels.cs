@@ -600,6 +600,11 @@ public class DevcontainerSpawnResult
     public string? BootstrapLogs { get; set; }
 
     /// <summary>
+    /// Path to build log file (local)
+    /// </summary>
+    public string? BuildLogPath { get; set; }
+
+    /// <summary>
     /// Full stdout output from devcontainer CLI (for detailed error diagnostics)
     /// </summary>
     public string? DevcontainerCliOutput { get; set; }

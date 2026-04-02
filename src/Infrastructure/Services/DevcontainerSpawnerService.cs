@@ -19,6 +19,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
     private readonly IDockerClient _dockerClient;
     private readonly IAnsiConsole? _console;
     private readonly IConfigurationHashService _configHashService;
+    private readonly ISshCommandRunner? _sshCommandRunner;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DevcontainerSpawnerService"/> class
@@ -27,16 +28,19 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
     /// <param name="dockerClient">Docker client for container operations</param>
     /// <param name="configHashService">Service for computing configuration hashes</param>
     /// <param name="console">Optional console for progress indicators</param>
+    /// <param name="sshCommandRunner">Optional SSH command runner for remote spawning</param>
     public DevcontainerSpawnerService(
         ILogger<DevcontainerSpawnerService> logger,
         IDockerClient dockerClient,
         IConfigurationHashService configHashService,
-        IAnsiConsole? console = null)
+        IAnsiConsole? console = null,
+        ISshCommandRunner? sshCommandRunner = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _dockerClient = dockerClient ?? throw new ArgumentNullException(nameof(dockerClient));
         _configHashService = configHashService ?? throw new ArgumentNullException(nameof(configHashService));
         _console = console;
+        _sshCommandRunner = sshCommandRunner;
     }
 
     /// <inheritdoc/>
@@ -1145,11 +1149,397 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
     }
 
     /// <inheritdoc/>
-    public Task<DevcontainerSpawnResult> SpawnRemoteAsync(
+    public async Task<DevcontainerSpawnResult> SpawnRemoteAsync(
         DevcontainerSpawnOptions options,
         RemoteHostConfig remoteHost)
     {
-        throw new NotImplementedException("Remote spawning will be implemented in Phase 2");
+        var result = new DevcontainerSpawnResult();
+        var startTime = DateTime.UtcNow;
+        string? bootstrapContainerId = null;
+        var volumeName = options.VolumeName ?? GenerateVolumeName(options.ProjectName);
+        var remoteUploadPath = $"/tmp/pks-devcontainer-upload/{options.ProjectName}";
+        // Build log lives in the volume (accessible from both bootstrap container and host via docker cp)
+        var remoteLogFile = $"/workspaces/{options.ProjectName}/.devcontainer/build.log";
+
+        if (_sshCommandRunner == null)
+        {
+            result.Errors.Add("SSH command runner not available. Remote spawning requires SSH support.");
+            return result;
+        }
+
+        // Set up local log file for streaming
+        var logFile = options.BuildLogPath
+            ?? Path.Combine(Path.GetTempPath(), "pks-cli", "logs", $"spawn-{options.ProjectName}-{DateTime.UtcNow:yyyyMMdd-HHmmss}.log");
+        result.BuildLogPath = logFile;
+
+        try
+        {
+            // ── Step 1: Pre-flight checks ──
+            _logger.LogInformation("Testing SSH connectivity to {User}@{Host}:{Port}",
+                remoteHost.Username, remoteHost.Host, remoteHost.Port);
+            result.CompletedStep = DevcontainerSpawnStep.DockerCheck;
+
+            var connected = await _sshCommandRunner.TestConnectivityAsync(remoteHost);
+            if (!connected)
+            {
+                result.Errors.Add($"Cannot connect to {remoteHost.Username}@{remoteHost.Host}:{remoteHost.Port}");
+                return result;
+            }
+
+            var dockerCheck = await _sshCommandRunner.RunAsync(remoteHost, "docker info --format '{{.ServerVersion}}'");
+            if (!dockerCheck.Success)
+            {
+                result.Errors.Add($"Docker not available on remote host: {dockerCheck.StdErr}");
+                return result;
+            }
+            _logger.LogInformation("Remote Docker version: {Version}", dockerCheck.StdOut.Trim());
+
+            result.CompletedStep = DevcontainerSpawnStep.DevcontainerCliCheck;
+            var cliCheck = await _sshCommandRunner.RunAsync(remoteHost, "devcontainer --version");
+            if (!cliCheck.Success)
+            {
+                result.Errors.Add("devcontainer CLI not installed on remote host. Install with: npm install -g @devcontainers/cli");
+                return result;
+            }
+            _logger.LogInformation("Remote devcontainer CLI: {Version}", cliCheck.StdOut.Trim());
+
+            // ── Step 2: Create Docker volume on remote (matches local pattern) ──
+            _logger.LogInformation("Creating Docker volume on remote: {Volume}", volumeName);
+            result.CompletedStep = DevcontainerSpawnStep.VolumeCreation;
+            result.VolumeName = volumeName;
+
+            var createVolumeCmd = $"docker volume create " +
+                $"--label devcontainer.project={options.ProjectName} " +
+                $"--label pks.managed=true " +
+                $"--label devcontainer.created={DateTime.UtcNow:o} " +
+                $"--label vsch.local.repository.volume={volumeName} " +
+                volumeName;
+            var volResult = await _sshCommandRunner.RunAsync(remoteHost, createVolumeCmd);
+            if (!volResult.Success)
+            {
+                result.Errors.Add($"Failed to create Docker volume: {volResult.StdErr}");
+                return result;
+            }
+
+            // ── Step 3: Ensure bootstrap image exists on remote, then start bootstrap container ──
+            _logger.LogInformation("Ensuring bootstrap image on remote...");
+            result.CompletedStep = DevcontainerSpawnStep.BootstrapImageCheck;
+
+            var bootstrapImageName = "pks-devcontainer-bootstrap:latest";
+            var imageCheck = await _sshCommandRunner.RunAsync(remoteHost,
+                $"docker image inspect {bootstrapImageName} --format ok 2>/dev/null || echo missing");
+            if (imageCheck.StdOut.Trim() != "ok")
+            {
+                _logger.LogInformation("Building bootstrap image on remote...");
+
+                // Read the embedded Dockerfile and SCP it to remote
+                var assembly = typeof(DevcontainerSpawnerService).Assembly;
+                var resourceName = "PKS.Infrastructure.Resources.bootstrap.Dockerfile";
+                string dockerfileContent;
+                using (var stream = assembly.GetManifestResourceStream(resourceName))
+                {
+                    if (stream == null)
+                    {
+                        result.Errors.Add("Embedded bootstrap Dockerfile not found");
+                        return result;
+                    }
+                    using var reader = new StreamReader(stream);
+                    dockerfileContent = await reader.ReadToEndAsync();
+                }
+
+                var remoteBuildDir = "/tmp/pks-bootstrap-build";
+                await _sshCommandRunner.RunAsync(remoteHost, $"mkdir -p {remoteBuildDir}");
+
+                // Write Dockerfile via base64 to avoid escaping issues
+                var base64Dockerfile = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(dockerfileContent));
+                await _sshCommandRunner.RunAsync(remoteHost,
+                    $"echo {base64Dockerfile} | base64 -d > {remoteBuildDir}/Dockerfile");
+
+                var buildResult = await _sshCommandRunner.RunAsync(remoteHost,
+                    $"docker build -t {bootstrapImageName} {remoteBuildDir}");
+                if (!buildResult.Success)
+                {
+                    result.Errors.Add($"Failed to build bootstrap image on remote: {buildResult.StdErr}");
+                    return result;
+                }
+                await _sshCommandRunner.RunAsync(remoteHost, $"rm -rf {remoteBuildDir}");
+                _logger.LogInformation("Bootstrap image built on remote");
+            }
+
+            _logger.LogInformation("Starting bootstrap container on remote...");
+            result.CompletedStep = DevcontainerSpawnStep.BootstrapContainerStart;
+
+            var bootstrapName = $"pks-bootstrap-{options.ProjectName}-{Guid.NewGuid().ToString("N")[..8]}";
+            var runBootstrapCmd = $"docker run -d " +
+                $"--name {bootstrapName} " +
+                $"--label pks.managed=true " +
+                $"--label pks.bootstrap=true " +
+                $"--label devcontainer.project={options.ProjectName} " +
+                $"--label devcontainer.volume={volumeName} " +
+                $"-v {volumeName}:/workspaces " +
+                $"-v /var/run/docker.sock:/var/run/docker.sock " +
+                $"-w /workspaces " +
+                $"{bootstrapImageName} sleep infinity";
+
+            var bootstrapResult = await _sshCommandRunner.RunAsync(remoteHost, runBootstrapCmd);
+            if (!bootstrapResult.Success)
+            {
+                result.Errors.Add($"Failed to start bootstrap container: {bootstrapResult.StdErr}");
+                return result;
+            }
+            bootstrapContainerId = bootstrapResult.StdOut.Trim();
+            _logger.LogInformation("Bootstrap container started: {Id}", bootstrapContainerId[..12]);
+
+            // ── Step 4: Copy .devcontainer into volume via bootstrap ──
+            _logger.LogInformation("Copying .devcontainer into volume...");
+            result.CompletedStep = DevcontainerSpawnStep.FileCopyToBootstrap;
+
+            // Create project dir inside volume via bootstrap
+            await _sshCommandRunner.RunAsync(remoteHost,
+                $"docker exec {bootstrapContainerId} mkdir -p /workspaces/{options.ProjectName}");
+
+            // SCP .devcontainer to a temp upload dir on remote host
+            await _sshCommandRunner.RunAsync(remoteHost, $"mkdir -p {remoteUploadPath}");
+            var scpResult = await _sshCommandRunner.ScpAsync(
+                remoteHost,
+                Path.Combine(options.ProjectPath, ".devcontainer"),
+                $"{remoteUploadPath}/",
+                recursive: true);
+            if (!scpResult.Success)
+            {
+                result.Errors.Add($"Failed to SCP .devcontainer to remote: {scpResult.StdErr}");
+                return result;
+            }
+
+            // docker cp from host temp dir into bootstrap container (which writes to volume)
+            var cpResult = await _sshCommandRunner.RunAsync(remoteHost,
+                $"docker cp {remoteUploadPath}/.devcontainer/. {bootstrapContainerId}:/workspaces/{options.ProjectName}/.devcontainer/");
+            if (!cpResult.Success)
+            {
+                result.Errors.Add($"Failed to docker cp into volume: {cpResult.StdErr}");
+                return result;
+            }
+
+            // Fix file ownership (matches local pattern — default to 1000:1000 for node/vscode users)
+            var remoteUser = "node"; // default
+            var catResult = await _sshCommandRunner.RunAsync(remoteHost,
+                $"docker exec {bootstrapContainerId} cat /workspaces/{options.ProjectName}/.devcontainer/devcontainer.json");
+            if (catResult.Success)
+            {
+                try
+                {
+                    using var jsonDoc = JsonDocument.Parse(catResult.StdOut);
+                    if (jsonDoc.RootElement.TryGetProperty("remoteUser", out var ruProp))
+                        remoteUser = ruProp.GetString() ?? "node";
+                }
+                catch { }
+            }
+
+            var uidGid = remoteUser.ToLower() switch
+            {
+                "root" => "0:0",
+                _ => "1000:1000"
+            };
+            _logger.LogInformation("Fixing ownership to {User} ({UidGid})", remoteUser, uidGid);
+            await _sshCommandRunner.RunAsync(remoteHost,
+                $"docker exec {bootstrapContainerId} chown -R {uidGid} /workspaces/{options.ProjectName}");
+
+            // Verify
+            var lsResult = await _sshCommandRunner.RunAsync(remoteHost,
+                $"docker exec {bootstrapContainerId} ls -la /workspaces/{options.ProjectName}/.devcontainer/");
+            _logger.LogInformation("Volume contents: {Output}", lsResult.StdOut.Trim());
+
+            // ── Step 5: Create override config inside bootstrap using jq (matches local pattern) ──
+            // Override config: remove workspaceMount (we use --mount), set workspaceFolder to resolved path
+            _logger.LogInformation("Creating override config inside bootstrap...");
+            var workspaceFolder = $"/workspaces/{options.ProjectName}";
+            var overrideConfigPath = $"{workspaceFolder}/.devcontainer/override-config-{volumeName}.json";
+
+            // Ensure jq is available in bootstrap for reliable JSON manipulation
+            await _sshCommandRunner.RunAsync(remoteHost,
+                $"docker exec {bootstrapContainerId} apk add --no-cache jq 2>/dev/null || true");
+
+            // Write a script into bootstrap to avoid nested shell escaping issues
+            var scriptContent = $"#!/bin/sh\ncat {workspaceFolder}/.devcontainer/devcontainer.json | jq 'del(.workspaceMount) | .workspaceFolder = \"{workspaceFolder}\"' > {overrideConfigPath}\n";
+            var scriptBase64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(scriptContent));
+            await _sshCommandRunner.RunAsync(remoteHost,
+                $"echo {scriptBase64} | docker exec -i {bootstrapContainerId} sh -c 'base64 -d > /tmp/create-override.sh && chmod +x /tmp/create-override.sh'");
+
+            var overrideResult = await _sshCommandRunner.RunAsync(remoteHost,
+                $"docker exec {bootstrapContainerId} /tmp/create-override.sh");
+            if (!overrideResult.Success)
+            {
+                result.Errors.Add($"Failed to create override config: {overrideResult.StdErr}");
+                return result;
+            }
+            _logger.LogInformation("Override config created at {Path}", overrideConfigPath);
+
+            // ── Step 6: Run devcontainer up INSIDE bootstrap container (matches local flow exactly) ──
+            _logger.LogInformation("Running devcontainer up inside bootstrap container...");
+            result.CompletedStep = DevcontainerSpawnStep.DevcontainerUp;
+
+            var buildArgStr = "";
+            if (options.BuildArgs != null)
+            {
+                foreach (var kvp in options.BuildArgs)
+                    buildArgStr += $" --build-arg {kvp.Key}={kvp.Value}";
+            }
+
+            // Command matches local RunDevcontainerUpInBootstrapAsync exactly:
+            // --config + --override-config (NO --workspace-folder)
+            // --mount volume at /workspaces
+            // --id-labels for container identification
+            var devcontainerUpCmd = $"devcontainer up" +
+                $" --config {workspaceFolder}/.devcontainer/devcontainer.json" +
+                $" --override-config {overrideConfigPath}" +
+                $" --id-label devcontainer.local.folder={options.ProjectName}" +
+                $" --id-label devcontainer.local.volume={volumeName}" +
+                $" --id-label pks.managed=true" +
+                $" --id-label pks.project={options.ProjectName}" +
+                $" --mount type=volume,source={volumeName},target=/workspaces,external=true" +
+                $" --update-remote-user-uid-default off" +
+                $" --remove-existing-container" +
+                $" --include-configuration" +
+                $" --include-merged-configuration" +
+                buildArgStr;
+
+            // Execute inside bootstrap via docker exec (matching local ExecuteInBootstrapAsync)
+            // Working dir = workspace folder so initializeCommand relative paths work
+            // Do NOT redirect stderr to file — let RunWithOutputAsync capture both streams to local log
+            var upCommand = $"docker exec -w {workspaceFolder} {bootstrapContainerId} {devcontainerUpCmd}";
+
+            // Use RunWithOutputAsync which streams output to local log file and handles process lifecycle
+            var upResult = await _sshCommandRunner.RunWithOutputAsync(
+                remoteHost,
+                upCommand,
+                logFile,
+                statusLine => _logger.LogInformation("Remote: {Status}", statusLine));
+
+            result.DevcontainerCliOutput = upResult.StdOut;
+            result.DevcontainerCliStderr = upResult.StdErr;
+
+            if (!upResult.Success)
+            {
+                // Error details are in stderr (captured by RunWithOutputAsync and written to local log)
+                var errorDetail = upResult.StdErr;
+                var errorLines = errorDetail?.Split('\n', StringSplitOptions.RemoveEmptyEntries) ?? [];
+                var errorSummary = errorLines.LastOrDefault(l =>
+                    l.Contains("Error", StringComparison.OrdinalIgnoreCase) ||
+                    l.Contains("failed", StringComparison.OrdinalIgnoreCase))
+                    ?? errorLines.LastOrDefault()
+                    ?? "Unknown error (check build log)";
+
+                result.Errors.Add($"devcontainer up failed: {errorSummary.Trim()}");
+                return result;
+            }
+
+            // ── Step 7: Parse container ID from devcontainer up output ──
+            try
+            {
+                var stdout = upResult.StdOut.Trim();
+                var lastBrace = stdout.LastIndexOf('{');
+                if (lastBrace >= 0)
+                {
+                    var jsonStr = stdout[lastBrace..];
+                    var upOutput = JsonSerializer.Deserialize<JsonElement>(jsonStr);
+                    if (upOutput.TryGetProperty("containerId", out var cid))
+                    {
+                        result.ContainerId = cid.GetString();
+                        _logger.LogInformation("Remote container ID: {ContainerId}", result.ContainerId);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Could not parse devcontainer up JSON output");
+            }
+
+            // Fallback: docker ps
+            if (string.IsNullOrEmpty(result.ContainerId))
+            {
+                var psResult = await _sshCommandRunner.RunAsync(remoteHost,
+                    $"docker ps -q --filter label=devcontainer.local.folder={options.ProjectName} --latest");
+                if (psResult.Success && !string.IsNullOrWhiteSpace(psResult.StdOut))
+                {
+                    result.ContainerId = psResult.StdOut.Trim().Split('\n').First();
+                    _logger.LogInformation("Got container ID from docker ps: {ContainerId}", result.ContainerId);
+                }
+            }
+
+            // ── Step 8: Launch VS Code ──
+            if (options.LaunchVsCode && !string.IsNullOrEmpty(result.ContainerId))
+            {
+                _logger.LogInformation("Launching VS Code attached to remote devcontainer...");
+                result.CompletedStep = DevcontainerSpawnStep.VsCodeLaunch;
+
+                var containerConfig = JsonSerializer.Serialize(new
+                {
+                    containerName = $"/{result.ContainerId[..12]}",
+                    settings = new
+                    {
+                        host = $"ssh://{remoteHost.Username}@{remoteHost.Host}:{remoteHost.Port}"
+                    }
+                });
+                var hexConfig = Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(containerConfig)).ToLowerInvariant();
+                var vsCodeUri = $"vscode-remote://attached-container+{hexConfig}/workspaces/{options.ProjectName}";
+                result.VsCodeUri = vsCodeUri;
+
+                var vsCodeInfo = await CheckVsCodeInstallationAsync();
+                if (vsCodeInfo.IsInstalled && vsCodeInfo.ExecutablePath != null)
+                {
+                    await LaunchVsCodeAsync(vsCodeUri, vsCodeInfo.ExecutablePath);
+                    _logger.LogInformation("VS Code launched with attached container URI");
+                }
+                else
+                {
+                    result.Warnings.Add("VS Code not found locally");
+                }
+            }
+            else if (options.LaunchVsCode)
+            {
+                result.CompletedStep = DevcontainerSpawnStep.VsCodeLaunch;
+                var vsCodeUri = $"vscode-remote://ssh-remote+{remoteHost.Username}@{remoteHost.Host}/workspaces/{options.ProjectName}";
+                result.VsCodeUri = vsCodeUri;
+                result.Warnings.Add("Could not get container ID. VS Code opened via SSH — attach to container manually.");
+
+                var vsCodeInfo = await CheckVsCodeInstallationAsync();
+                if (vsCodeInfo.IsInstalled && vsCodeInfo.ExecutablePath != null)
+                    await LaunchVsCodeAsync(vsCodeUri, vsCodeInfo.ExecutablePath);
+            }
+
+            result.Success = true;
+            result.CompletedStep = DevcontainerSpawnStep.Completed;
+            result.Duration = DateTime.UtcNow - startTime;
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Remote spawn failed");
+            result.Errors.Add($"Remote spawn error: {ex.Message}");
+            return result;
+        }
+        finally
+        {
+            // ── Step 9: Cleanup bootstrap container + temp upload dir ──
+            if (bootstrapContainerId != null)
+            {
+                _logger.LogInformation("Cleaning up bootstrap container...");
+                try
+                {
+                    await _sshCommandRunner!.RunAsync(remoteHost, $"docker rm -f {bootstrapContainerId}");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to remove bootstrap container");
+                }
+            }
+            try
+            {
+                await _sshCommandRunner!.RunAsync(remoteHost, $"rm -rf {remoteUploadPath}");
+            }
+            catch { }
+        }
     }
 
     #region Private Helper Methods

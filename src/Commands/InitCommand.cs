@@ -99,6 +99,10 @@ public class InitCommand : Command<InitCommand.Settings>
         [CommandOption("--build-log <PATH>")]
         [Description("Write devcontainer build output to a log file instead of console")]
         public string? BuildLogPath { get; set; }
+
+        [CommandOption("--ssh-target <TARGET>")]
+        [Description("SSH target for remote spawn (user@host or host from registered targets)")]
+        public string? SshTarget { get; set; }
     }
 
     public override int Execute(CommandContext context, Settings? settings)
@@ -331,10 +335,58 @@ public class InitCommand : Command<InitCommand.Settings>
 
                 if (shouldSpawn)
                 {
+                    // Check for registered SSH targets
+                    SshTarget? selectedSshTarget = null;
+                    try
+                    {
+                        var sshConfigService = _serviceProvider.GetService<ISshTargetConfigurationService>();
+                        if (sshConfigService != null)
+                        {
+                            if (!string.IsNullOrEmpty(settings.SshTarget))
+                            {
+                                // --ssh-target provided, find matching registered target
+                                var target = await sshConfigService.FindTargetAsync(settings.SshTarget);
+                                if (target == null)
+                                {
+                                    _console.MarkupLine($"[red]SSH target '{settings.SshTarget}' not found in registered targets.[/]");
+                                    _console.MarkupLine("[dim]Register with: pks ssh register user@host[/]");
+                                    return 1;
+                                }
+                                selectedSshTarget = target;
+                            }
+                            else
+                            {
+                                var sshTargets = await sshConfigService.ListTargetsAsync();
+                                if (sshTargets.Count > 0)
+                                {
+                                    var choices = new List<string> { "Local (this machine)" };
+                                    choices.AddRange(sshTargets.Select(t =>
+                                        $"{t.Username}@{t.Host}" + (string.IsNullOrEmpty(t.Label) ? "" : $" ({t.Label})")));
+
+                                    var selected = _console.Prompt(
+                                        new SelectionPrompt<string>()
+                                            .Title("[cyan]Where would you like to spawn the devcontainer?[/]")
+                                            .AddChoices(choices));
+
+                                    var selectedIndex = choices.IndexOf(selected) - 1; // -1 because first is "Local"
+                                    if (selectedIndex >= 0)
+                                    {
+                                        selectedSshTarget = sshTargets[selectedIndex];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // SSH service not available, continue with local spawn
+                    }
+
                     await SpawnDevcontainerWorkflowAsync(
                         spawnerService,
                         settings,
-                        targetDirectory);
+                        targetDirectory,
+                        selectedSshTarget);
                 }
             }
 
@@ -386,44 +438,53 @@ public class InitCommand : Command<InitCommand.Settings>
     private async Task SpawnDevcontainerWorkflowAsync(
         IDevcontainerSpawnerService spawnerService,
         Settings settings,
-        string projectPath)
+        string projectPath,
+        SshTarget? remoteSshTarget = null)
     {
         try
         {
             _console.WriteLine();
             _console.MarkupLine("[cyan]Preparing to spawn devcontainer...[/]");
 
-            // 1. Pre-flight checks
-            DockerAvailabilityResult? dockerCheck = null;
-            bool? cliInstalled = null;
+            // 1. Pre-flight checks (skip local Docker/CLI checks when spawning remotely)
+            if (remoteSshTarget == null)
+            {
+                DockerAvailabilityResult? dockerCheck = null;
+                bool? cliInstalled = null;
 
-            await _console.Status()
-                .Spinner(Spinner.Known.Dots)
-                .StartAsync("[cyan]Checking Docker and devcontainer CLI...[/]", async ctx =>
-                {
-                    dockerCheck = await spawnerService.CheckDockerAvailabilityAsync();
-                    if (!dockerCheck.IsAvailable)
+                await _console.Status()
+                    .Spinner(Spinner.Known.Dots)
+                    .StartAsync("[cyan]Checking Docker and devcontainer CLI...[/]", async ctx =>
                     {
-                        return;
-                    }
+                        dockerCheck = await spawnerService.CheckDockerAvailabilityAsync();
+                        if (!dockerCheck.IsAvailable)
+                        {
+                            return;
+                        }
 
-                    cliInstalled = await spawnerService.IsDevcontainerCliInstalledAsync();
-                });
+                        cliInstalled = await spawnerService.IsDevcontainerCliInstalledAsync();
+                    });
 
-            if (dockerCheck != null && !dockerCheck.IsAvailable)
-            {
-                _console.MarkupLine($"[red]❌ Docker Not Available[/]");
-                _console.MarkupLine($"[yellow]{dockerCheck.Message}[/]");
-                _console.MarkupLine("[dim]To spawn devcontainer later, run: pks devcontainer spawn[/]");
-                return;
+                if (dockerCheck != null && !dockerCheck.IsAvailable)
+                {
+                    _console.MarkupLine($"[red]❌ Docker Not Available[/]");
+                    _console.MarkupLine($"[yellow]{dockerCheck.Message}[/]");
+                    _console.MarkupLine("[dim]To spawn devcontainer later, run: pks devcontainer spawn[/]");
+                    return;
+                }
+
+                if (cliInstalled == false)
+                {
+                    _console.MarkupLine("[red]❌ devcontainer CLI Not Found[/]");
+                    _console.MarkupLine("[yellow]Install: npm install -g @devcontainers/cli[/]");
+                    _console.MarkupLine("[dim]To spawn devcontainer later, run: pks devcontainer spawn[/]");
+                    return;
+                }
             }
-
-            if (cliInstalled == false)
+            else
             {
-                _console.MarkupLine("[red]❌ devcontainer CLI Not Found[/]");
-                _console.MarkupLine("[yellow]Install: npm install -g @devcontainers/cli[/]");
-                _console.MarkupLine("[dim]To spawn devcontainer later, run: pks devcontainer spawn[/]");
-                return;
+                _console.MarkupLine($"[cyan]Remote target:[/] {remoteSshTarget.Username}@{remoteSshTarget.Host}");
+                _console.MarkupLine("[dim]Docker and devcontainer CLI will be checked on the remote host[/]");
             }
 
             // 2. Generate and confirm volume name (USER PREFERENCE: Always show, allow edit)
@@ -487,25 +548,113 @@ public class InitCommand : Command<InitCommand.Settings>
 
             // 4. Spawn devcontainer with progress tracking
             DevcontainerSpawnResult? result = null;
-            await _console.Status()
-                .Spinner(Spinner.Known.Dots)
-                .StartAsync("[cyan]Spawning devcontainer...[/]", async ctx =>
-                {
-                    var options = new DevcontainerSpawnOptions
-                    {
-                        ProjectName = settings.ProjectName!,
-                        ProjectPath = projectPath,
-                        DevcontainerPath = Path.Combine(projectPath, ".devcontainer"),
-                        VolumeName = confirmedVolumeName,
-                        CopySourceFiles = true, // USER PREFERENCE: Copy full project
-                        LaunchVsCode = !settings.NoLaunchVsCode,
-                        ReuseExisting = true,
-                        BuildArgs = buildArgs,
-                        BuildLogPath = settings.BuildLogPath
-                    };
 
-                    result = await spawnerService.SpawnLocalAsync(options);
+            var options = new DevcontainerSpawnOptions
+            {
+                ProjectName = settings.ProjectName!,
+                ProjectPath = projectPath,
+                DevcontainerPath = Path.Combine(projectPath, ".devcontainer"),
+                VolumeName = confirmedVolumeName,
+                CopySourceFiles = true, // USER PREFERENCE: Copy full project
+                LaunchVsCode = !settings.NoLaunchVsCode,
+                ReuseExisting = true,
+                BuildArgs = buildArgs,
+                BuildLogPath = settings.BuildLogPath,
+                Mode = remoteSshTarget != null ? SpawnMode.Remote : SpawnMode.Local
+            };
+
+            if (remoteSshTarget != null)
+            {
+                // Remote spawn — show log path and stream build progress
+                var logDir = Path.Combine(Path.GetTempPath(), "pks-cli", "logs");
+                Directory.CreateDirectory(logDir);
+                var logFile = Path.Combine(logDir, $"spawn-{settings.ProjectName}-{DateTime.UtcNow:yyyyMMdd-HHmmss}.log");
+                options.BuildLogPath = logFile;
+
+                _console.MarkupLine($"[cyan]Spawning devcontainer on {remoteSshTarget.Username}@{remoteSshTarget.Host}...[/]");
+                _console.WriteLine();
+                _console.MarkupLine($"[dim]Build log:[/] [link]{logFile.EscapeMarkup()}[/]");
+                _console.WriteLine();
+
+                var remoteHost = new RemoteHostConfig
+                {
+                    Host = remoteSshTarget.Host,
+                    Username = remoteSshTarget.Username,
+                    Port = remoteSshTarget.Port,
+                    KeyPath = remoteSshTarget.KeyPath
+                };
+
+                // Stream build output with live display
+                var recentLines = new Queue<string>(5);
+                var spawnTask = spawnerService.SpawnRemoteAsync(options, remoteHost);
+
+                // Poll the log file for new lines while spawn is running
+                _ = Task.Run(async () =>
+                {
+                    // Wait for log file to be created
+                    while (!File.Exists(logFile) && !spawnTask.IsCompleted)
+                        await Task.Delay(200);
+
+                    if (!File.Exists(logFile)) return;
+
+                    using var reader = new StreamReader(new FileStream(logFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite));
+                    while (!spawnTask.IsCompleted)
+                    {
+                        var line = await reader.ReadLineAsync();
+                        if (line != null)
+                        {
+                            // Filter to meaningful lines
+                            var trimmed = line.Trim();
+                            if (!string.IsNullOrEmpty(trimmed)
+                                && !trimmed.Contains(".......... ..........")  // wget progress
+                                && trimmed.Length > 5)
+                            {
+                                lock (recentLines)
+                                {
+                                    if (recentLines.Count >= 5) recentLines.Dequeue();
+                                    // Truncate long lines
+                                    recentLines.Enqueue(trimmed.Length > 100 ? trimmed[..100] + "..." : trimmed);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            await Task.Delay(300);
+                        }
+                    }
                 });
+
+                // Show live progress
+                await _console.Status()
+                    .Spinner(Spinner.Known.Dots)
+                    .StartAsync("[cyan]Building...[/]", async ctx =>
+                    {
+                        while (!spawnTask.IsCompleted)
+                        {
+                            string statusText;
+                            lock (recentLines)
+                            {
+                                statusText = recentLines.Count > 0
+                                    ? $"[dim]{recentLines.Last().EscapeMarkup()}[/]"
+                                    : "[cyan]Building...[/]";
+                            }
+                            ctx.Status(statusText);
+                            await Task.Delay(500);
+                        }
+                    });
+
+                result = await spawnTask;
+            }
+            else
+            {
+                // Local spawn — use spinner
+                await _console.Status()
+                    .Spinner(Spinner.Known.Dots)
+                    .StartAsync("[cyan]Spawning devcontainer...[/]", async ctx =>
+                    {
+                        result = await spawnerService.SpawnLocalAsync(options);
+                    });
+            }
 
             // 5. Display result
             _console.WriteLine();
@@ -530,20 +679,52 @@ public class InitCommand : Command<InitCommand.Settings>
             }
             else if (result != null)
             {
-                _console.MarkupLine($"[red]❌ Failed to spawn devcontainer[/]");
-                _console.MarkupLine($"[yellow]{result.Message.EscapeMarkup()}[/]");
-
-                if (result.Errors.Any())
+                // Write full log to local temp directory (not in the project/repo)
+                string? logFilePath = null;
+                try
                 {
-                    _console.MarkupLine("[dim]Errors:[/]");
-                    foreach (var error in result.Errors)
-                        _console.MarkupLine($"  [red]• {error.EscapeMarkup()}[/]");
+                    var logDir = Path.Combine(Path.GetTempPath(), "pks-cli", "logs");
+                    Directory.CreateDirectory(logDir);
+                    logFilePath = Path.Combine(logDir, $"spawn-{settings.ProjectName}-{DateTime.UtcNow:yyyyMMdd-HHmmss}.log");
+                    var logContent = $"=== Devcontainer Spawn Log ({DateTime.UtcNow:yyyy-MM-dd HH:mm:ss UTC}) ===\n\n";
+                    logContent += $"Step reached: {result.CompletedStep}\n\n";
+                    if (!string.IsNullOrEmpty(result.DevcontainerCliOutput))
+                        logContent += $"--- stdout ---\n{result.DevcontainerCliOutput}\n\n";
+                    if (!string.IsNullOrEmpty(result.DevcontainerCliStderr))
+                        logContent += $"--- stderr ---\n{result.DevcontainerCliStderr}\n\n";
+                    if (result.Errors.Any())
+                        logContent += $"--- errors ---\n{string.Join("\n", result.Errors)}\n";
+                    await File.WriteAllTextAsync(logFilePath, logContent);
+                }
+                catch
+                {
+                    // Ignore log write failures
                 }
 
-                _console.WriteLine();
-                _console.MarkupLine("[dim]To retry, run: pks devcontainer spawn[/]");
+                // Show short summary
+                _console.MarkupLine($"[red]❌ Failed to spawn devcontainer[/]");
 
-                // Note: Cleanup already handled by service (USER PREFERENCE: Auto-cleanup)
+                // Extract short error message (first line of first error, or the message)
+                var shortError = result.Errors.FirstOrDefault() ?? result.Message ?? "Unknown error";
+                // Truncate to first meaningful line
+                var errorLines = shortError.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                var summaryLine = errorLines.FirstOrDefault(l =>
+                    l.Contains("Error", StringComparison.OrdinalIgnoreCase) ||
+                    l.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+                    l.Contains("not found", StringComparison.OrdinalIgnoreCase))
+                    ?? errorLines.FirstOrDefault()
+                    ?? shortError;
+                // Cap length
+                if (summaryLine.Length > 120)
+                    summaryLine = summaryLine[..120] + "...";
+                _console.MarkupLine($"[yellow]{summaryLine.EscapeMarkup()}[/]");
+
+                if (logFilePath != null)
+                {
+                    _console.WriteLine();
+                    _console.MarkupLine($"[dim]Full log: {logFilePath.EscapeMarkup()}[/]");
+                }
+                _console.MarkupLine("[dim]To retry, run: pks devcontainer spawn[/]");
             }
         }
         catch (Exception ex)

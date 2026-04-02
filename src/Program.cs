@@ -93,6 +93,8 @@ services.AddSingleton<IConfigurationService, ConfigurationService>();
 services.AddSingleton<IDeploymentService, DeploymentService>();
 services.AddSingleton<IHooksService, HooksService>();
 services.AddSingleton<IFirstTimeWarningService, FirstTimeWarningService>();
+services.AddSingleton<PKS.Infrastructure.Services.ISshTargetConfigurationService, PKS.Infrastructure.Services.SshTargetConfigurationService>();
+services.AddSingleton<PKS.Infrastructure.Services.ISshCommandRunner, PKS.Infrastructure.Services.SshCommandRunner>();
 // Legacy MCP services removed in Phase 3 - now using SDK-based services only
 
 // New SDK-based MCP hosting services
@@ -344,46 +346,22 @@ app.Configure(config =>
             .WithExample(new[] { "devcontainer", "spawn", "--no-launch-vscode" })
             .WithExample(new[] { "devcontainer", "spawn", "--force" });
 
-        devcontainer.AddCommand<PKS.Commands.Devcontainer.DevcontainerContainersCommand>("containers")
-            .WithDescription("List managed devcontainer containers")
-            .WithExample(new[] { "devcontainer", "containers" })
-            .WithExample(new[] { "devcontainer", "containers", "--all" })
-            .WithExample(new[] { "devcontainer", "containers", "--format", "json" })
-            .WithExample(new[] { "devcontainer", "containers", "-a", "--format", "json" });
+        devcontainer.AddCommand<PKS.Commands.Devcontainer.DevcontainerContainersCommand>("list")
+            .WithDescription("List running devcontainers (local or remote)")
+            .WithExample(new[] { "devcontainer", "list" })
+            .WithExample(new[] { "devcontainer", "list", "--all" });
 
         devcontainer.AddCommand<PKS.Commands.Devcontainer.DevcontainerConnectCommand>("connect")
             .WithDescription("Connect to an existing devcontainer via VS Code")
             .WithExample(new[] { "devcontainer", "connect" })
             .WithExample(new[] { "devcontainer", "connect", "<container-id>" })
-            .WithExample(new[] { "devcontainer", "connect", "--no-launch-vscode" })
-            .WithExample(new[] { "devcontainer", "connect", "<container-id>", "--no-launch-vscode" });
+            .WithExample(new[] { "devcontainer", "connect", "--no-launch-vscode" });
 
-        devcontainer.AddBranch<PKS.Commands.Devcontainer.DevcontainerListSettings>("list", list =>
-        {
-            list.SetDescription("List available devcontainer resources");
-
-            list.AddCommand<PKS.Commands.Devcontainer.DevcontainerListCommand>("features")
-                .WithDescription("List available devcontainer features")
-                .WithExample(new[] { "devcontainer", "list", "features" })
-                .WithExample(new[] { "devcontainer", "list", "features", "--category", "language" })
-                .WithExample(new[] { "devcontainer", "list", "features", "--search", "dotnet", "--show-details" });
-
-            list.AddCommand<PKS.Commands.Devcontainer.DevcontainerListCommand>("templates")
-                .WithDescription("List available devcontainer templates")
-                .WithExample(new[] { "devcontainer", "list", "templates" })
-                .WithExample(new[] { "devcontainer", "list", "templates", "--category", "web" })
-                .WithExample(new[] { "devcontainer", "list", "templates", "--show-details" });
-
-            list.AddCommand<PKS.Commands.Devcontainer.DevcontainerListCommand>("extensions")
-                .WithDescription("List recommended VS Code extensions")
-                .WithExample(new[] { "devcontainer", "list", "extensions" })
-                .WithExample(new[] { "devcontainer", "list", "extensions", "--category", "language" })
-                .WithExample(new[] { "devcontainer", "list", "extensions", "--search", "dotnet" });
-
-            list.AddCommand<PKS.Commands.Devcontainer.DevcontainerListCommand>("")
-                .WithDescription("List all available devcontainer resources")
-                .WithExample(new[] { "devcontainer", "list" });
-        });
+        devcontainer.AddCommand<PKS.Commands.Devcontainer.DevcontainerDestroyCommand>("destroy")
+            .WithDescription("Destroy a devcontainer and its associated volumes")
+            .WithExample(new[] { "devcontainer", "destroy" })
+            .WithExample(new[] { "devcontainer", "destroy", "<container-id>" })
+            .WithExample(new[] { "devcontainer", "destroy", "--force" });
     });
 
     // Add agentics branch command with runner subcommands
@@ -464,6 +442,24 @@ app.Configure(config =>
         coolify.AddCommand<PKS.Commands.Coolify.CoolifyStatusCommand>("status")
             .WithDescription("Test connectivity and show projects with resource health status")
             .WithExample(new[] { "coolify", "status" });
+    });
+
+    // Add SSH remote target management
+    config.AddBranch<PKS.Commands.Ssh.SshSettings>("ssh", ssh =>
+    {
+        ssh.SetDescription("Manage SSH remote targets for devcontainer deployment");
+
+        ssh.AddCommand<PKS.Commands.Ssh.SshRegisterCommand>("register")
+            .WithDescription("Register an SSH target for remote devcontainer deployment")
+            .WithExample(new[] { "ssh", "register", "root@projects.si14agents.com", "-i", "./id_rsa" });
+
+        ssh.AddCommand<PKS.Commands.Ssh.SshListCommand>("list")
+            .WithDescription("List registered SSH targets")
+            .WithExample(new[] { "ssh", "list" });
+
+        ssh.AddCommand<PKS.Commands.Ssh.SshRemoveCommand>("remove")
+            .WithDescription("Remove a registered SSH target")
+            .WithExample(new[] { "ssh", "remove", "projects.si14agents.com" });
     });
 
     // Add registry branch command
