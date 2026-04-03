@@ -49,6 +49,15 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.7.0](https://github.com/pksorensen/pks-cli/compare/v6.6.0...v6.7.0) (2026-04-03)
+
+
+### Features
+
+* **agentics:** add command to submit tasks to Assembly Lines from CI/CD pipelines ([94d43e8](https://github.com/pksorensen/pks-cli/commit/94d43e8c5aeb1e8a50b0f339b5142d60fdc7ab92))
+* **auth:** enhance token refresh logic for GitHub authentication ([f4f22b8](https://github.com/pksorensen/pks-cli/commit/f4f22b893e145c0fcde67cf4292966ff9ac5cfbf))
+* **google:** add Google AI service and commands for API key management and image generation ([b116b07](https://github.com/pksorensen/pks-cli/commit/b116b07ab07cae0f6cfe6b0939f758635d88de7a))
+
 ## [6.6.0](https://github.com/pksorensen/pks-cli/compare/v6.5.2...v6.6.0) (2026-04-02)
 
 
