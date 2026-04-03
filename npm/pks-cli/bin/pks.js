@@ -10,12 +10,12 @@ const { platform, arch } = process;
  */
 function getPlatformPackage() {
   const platformMap = {
-    'linux-x64': '@pks-cli/pks-linux-x64',
-    'linux-arm64': '@pks-cli/pks-linux-arm64',
-    'darwin-x64': '@pks-cli/pks-osx-x64',
-    'darwin-arm64': '@pks-cli/pks-osx-arm64',
-    'win32-x64': '@pks-cli/pks-win-x64',
-    'win32-arm64': '@pks-cli/pks-win-arm64'
+    'linux-x64': '@pks-cli/cli-linux-x64',
+    'linux-arm64': '@pks-cli/cli-linux-arm64',
+    'darwin-x64': '@pks-cli/cli-osx-x64',
+    'darwin-arm64': '@pks-cli/cli-osx-arm64',
+    'win32-x64': '@pks-cli/cli-win-x64',
+    'win32-arm64': '@pks-cli/cli-win-arm64'
   };
 
   const key = `${platform}-${arch}`;
@@ -34,14 +34,26 @@ function getBinaryPath() {
     process.exit(1);
   }
 
+  // Package name without scope, e.g. 'cli-linux-x64'
+  const packageDir = packageName.replace('@pks-cli/', '');
+
   // Try to find the platform package in node_modules
+  // __dirname is node_modules/@pks-cli/cli/bin/
+  // Binary may be at package root or in bin/ subdirectory
+  const scopeDir = join(__dirname, '..', '..');           // node_modules/@pks-cli/
+  const parentScopeDir = join(__dirname, '..', '..', '..', '@pks-cli'); // ../node_modules/@pks-cli/
+
   const paths = [
-    // Installed as dependency
-    join(__dirname, '..', '..', packageName.replace('@pks-cli/', 'pks-cli-'), 'pks'),
-    join(__dirname, '..', '..', packageName.replace('@pks-cli/', 'pks-cli-'), 'pks.exe'),
-    // Installed in parent node_modules
-    join(__dirname, '..', '..', '..', packageName.replace('@pks-cli/', 'pks-cli-'), 'pks'),
-    join(__dirname, '..', '..', '..', packageName.replace('@pks-cli/', 'pks-cli-'), 'pks.exe'),
+    // Scoped: node_modules/@pks-cli/cli-linux-x64/bin/pks
+    join(scopeDir, packageDir, 'bin', 'pks'),
+    join(scopeDir, packageDir, 'bin', 'pks.exe'),
+    join(scopeDir, packageDir, 'pks'),
+    join(scopeDir, packageDir, 'pks.exe'),
+    // Parent node_modules (hoisted)
+    join(parentScopeDir, packageDir, 'bin', 'pks'),
+    join(parentScopeDir, packageDir, 'bin', 'pks.exe'),
+    join(parentScopeDir, packageDir, 'pks'),
+    join(parentScopeDir, packageDir, 'pks.exe'),
   ];
 
   for (const path of paths) {

@@ -32,7 +32,7 @@ public class NpmInstallTests : IntegrationTestBase
         await CleanupGlobalInstall();
 
         // Act
-        var (installExitCode, installOutput) = await RunNpmCommand("install -g @pks-cli/pks");
+        var (installExitCode, installOutput) = await RunNpmCommand("install -g @pks-cli/cli");
 
         // Assert
         installExitCode.Should().Be(0, $"npm install should succeed. Output: {installOutput}");
@@ -49,7 +49,7 @@ public class NpmInstallTests : IntegrationTestBase
         // This test validates that npx execution works without prior installation
 
         // Act
-        var (exitCode, output) = await RunNpmCommand("npx @pks-cli/pks --version");
+        var (exitCode, output) = await RunNpmCommand("npx @pks-cli/cli --version");
 
         // Assert
         exitCode.Should().Be(0, $"npx execution should succeed. Output: {output}");
@@ -65,7 +65,7 @@ public class NpmInstallTests : IntegrationTestBase
         await InitializeNpmProject();
 
         // Act
-        var (installExitCode, installOutput) = await RunNpmCommand("install @pks-cli/pks --save-dev", _testProjectRoot);
+        var (installExitCode, installOutput) = await RunNpmCommand("install @pks-cli/cli --save-dev", _testProjectRoot);
 
         // Assert
         installExitCode.Should().Be(0, $"npm install should succeed. Output: {installOutput}");
@@ -73,7 +73,7 @@ public class NpmInstallTests : IntegrationTestBase
         // Verify package.json updated
         var packageJsonPath = Path.Combine(_testProjectRoot, "package.json");
         var packageJson = File.ReadAllText(packageJsonPath);
-        packageJson.Should().Contain("@pks-cli/pks", "package.json should list pks-cli in devDependencies");
+        packageJson.Should().Contain("@pks-cli/cli", "package.json should list pks-cli in devDependencies");
 
         // Verify binary is accessible via npx
         var (runExitCode, runOutput) = await RunNpmCommand("npx pks --version", _testProjectRoot);
@@ -149,11 +149,11 @@ public class NpmInstallTests : IntegrationTestBase
         // This test validates the installation experience
 
         // Act
-        var (exitCode, output) = await RunNpmCommand("install @pks-cli/pks --verbose");
+        var (exitCode, output) = await RunNpmCommand("install @pks-cli/cli --verbose");
 
         // Assert
         exitCode.Should().Be(0);
-        output.Should().Contain("@pks-cli/pks", "Output should show package name");
+        output.Should().Contain("@pks-cli/cli", "Output should show package name");
 
         // Verify no errors in output
         output.Should().NotContain("ERR!", "Installation should not have errors");
@@ -166,10 +166,10 @@ public class NpmInstallTests : IntegrationTestBase
         // This test validates that uninstallation works correctly
 
         // Arrange
-        await RunNpmCommand("install -g @pks-cli/pks");
+        await RunNpmCommand("install -g @pks-cli/cli");
 
         // Act
-        var (exitCode, output) = await RunNpmCommand("uninstall -g @pks-cli/pks");
+        var (exitCode, output) = await RunNpmCommand("uninstall -g @pks-cli/cli");
 
         // Assert
         exitCode.Should().Be(0, "npm uninstall should succeed");
@@ -250,7 +250,7 @@ public class NpmInstallTests : IntegrationTestBase
     private async Task CleanupGlobalInstall()
     {
         // Try to uninstall if already installed
-        await RunNpmCommand("uninstall -g @pks-cli/pks");
+        await RunNpmCommand("uninstall -g @pks-cli/cli");
     }
 
     private string GetCurrentPlatformPackageName()
@@ -273,7 +273,7 @@ public class NpmInstallTests : IntegrationTestBase
             _ => $"{platform}-{arch}"
         };
 
-        return $"@pks-cli/pks-{packageSuffix}";
+        return $"@pks-cli/cli-{packageSuffix}";
     }
 
     private string CreateTempDirectory()

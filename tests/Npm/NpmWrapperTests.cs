@@ -12,12 +12,12 @@ namespace PKS.CLI.Tests.Npm;
 public class NpmWrapperTests : TestBase
 {
     [Theory]
-    [InlineData("linux", "x64", "@pks-cli/pks-linux-x64")]
-    [InlineData("linux", "arm64", "@pks-cli/pks-linux-arm64")]
-    [InlineData("darwin", "x64", "@pks-cli/pks-osx-x64")]
-    [InlineData("darwin", "arm64", "@pks-cli/pks-osx-arm64")]
-    [InlineData("win32", "x64", "@pks-cli/pks-win-x64")]
-    [InlineData("win32", "arm64", "@pks-cli/pks-win-arm64")]
+    [InlineData("linux", "x64", "@pks-cli/cli-linux-x64")]
+    [InlineData("linux", "arm64", "@pks-cli/cli-linux-arm64")]
+    [InlineData("darwin", "x64", "@pks-cli/cli-osx-x64")]
+    [InlineData("darwin", "arm64", "@pks-cli/cli-osx-arm64")]
+    [InlineData("win32", "x64", "@pks-cli/cli-win-x64")]
+    [InlineData("win32", "arm64", "@pks-cli/cli-win-arm64")]
     public void Wrapper_ShouldDetectPlatform_AndSelectCorrectBinary(
         string platform, string arch, string expectedPackage)
     {
@@ -27,12 +27,12 @@ public class NpmWrapperTests : TestBase
         // Arrange
         var platformMap = new Dictionary<string, string>
         {
-            ["linux-x64"] = "@pks-cli/pks-linux-x64",
-            ["linux-arm64"] = "@pks-cli/pks-linux-arm64",
-            ["darwin-x64"] = "@pks-cli/pks-osx-x64",
-            ["darwin-arm64"] = "@pks-cli/pks-osx-arm64",
-            ["win32-x64"] = "@pks-cli/pks-win-x64",
-            ["win32-arm64"] = "@pks-cli/pks-win-arm64"
+            ["linux-x64"] = "@pks-cli/cli-linux-x64",
+            ["linux-arm64"] = "@pks-cli/cli-linux-arm64",
+            ["darwin-x64"] = "@pks-cli/cli-osx-x64",
+            ["darwin-arm64"] = "@pks-cli/cli-osx-arm64",
+            ["win32-x64"] = "@pks-cli/cli-win-x64",
+            ["win32-arm64"] = "@pks-cli/cli-win-arm64"
         };
 
         var key = $"{platform}-{arch}";
@@ -56,12 +56,12 @@ public class NpmWrapperTests : TestBase
         // Arrange
         var platformMap = new Dictionary<string, string>
         {
-            ["linux-x64"] = "@pks-cli/pks-linux-x64",
-            ["linux-arm64"] = "@pks-cli/pks-linux-arm64",
-            ["darwin-x64"] = "@pks-cli/pks-osx-x64",
-            ["darwin-arm64"] = "@pks-cli/pks-osx-arm64",
-            ["win32-x64"] = "@pks-cli/pks-win-x64",
-            ["win32-arm64"] = "@pks-cli/pks-win-arm64"
+            ["linux-x64"] = "@pks-cli/cli-linux-x64",
+            ["linux-arm64"] = "@pks-cli/cli-linux-arm64",
+            ["darwin-x64"] = "@pks-cli/cli-osx-x64",
+            ["darwin-arm64"] = "@pks-cli/cli-osx-arm64",
+            ["win32-x64"] = "@pks-cli/cli-win-x64",
+            ["win32-arm64"] = "@pks-cli/cli-win-arm64"
         };
 
         var key = $"{platform}-{arch}";
@@ -115,13 +115,13 @@ public class NpmWrapperTests : TestBase
     {
         // The wrapper should check multiple locations for the binary:
         // 1. Relative to wrapper script: ../../pks-cli-{platform}/bin/pks
-        // 2. In node_modules: ../../../@pks-cli/pks-{platform}/bin/pks
+        // 2. In node_modules: ../../../@pks-cli/cli-{platform}/bin/pks
 
         // Arrange
         var possiblePaths = new List<string>
         {
             "../../pks-cli-linux-x64/bin/pks",
-            "../../../@pks-cli/pks-linux-x64/bin/pks"
+            "../../../@pks-cli/cli-linux-x64/bin/pks"
         };
 
         // Assert
@@ -140,7 +140,7 @@ public class NpmWrapperTests : TestBase
             "Could not find PKS CLI binary",
             "Expected at:",
             "Please try reinstalling:",
-            "npm install -g @pks-cli/pks"
+            "npm install -g @pks-cli/cli"
         };
 
         // Assert - verify that error messages contain helpful information

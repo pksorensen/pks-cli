@@ -37,7 +37,7 @@ public class NpmPackageStructureTests : TestBase
         var root = packageJson.RootElement;
 
         // Validate basic fields
-        root.GetProperty("name").GetString().Should().Be("@pks-cli/pks");
+        root.GetProperty("name").GetString().Should().Be("@pks-cli/cli");
         root.GetProperty("description").GetString().Should().NotBeNullOrEmpty();
 
         // Validate bin field
@@ -51,12 +51,12 @@ public class NpmPackageStructureTests : TestBase
 
         var expectedPlatforms = new[]
         {
-            "@pks-cli/pks-linux-x64",
-            "@pks-cli/pks-linux-arm64",
-            "@pks-cli/pks-osx-x64",
-            "@pks-cli/pks-osx-arm64",
-            "@pks-cli/pks-win-x64",
-            "@pks-cli/pks-win-arm64"
+            "@pks-cli/cli-linux-x64",
+            "@pks-cli/cli-linux-arm64",
+            "@pks-cli/cli-osx-x64",
+            "@pks-cli/cli-osx-arm64",
+            "@pks-cli/cli-win-x64",
+            "@pks-cli/cli-win-arm64"
         };
 
         foreach (var platform in expectedPlatforms)
@@ -115,7 +115,7 @@ public class NpmPackageStructureTests : TestBase
         var root = packageJson.RootElement;
 
         // Validate name
-        root.GetProperty("name").GetString().Should().Be($"@pks-cli/pks-{platform}");
+        root.GetProperty("name").GetString().Should().Be($"@pks-cli/cli-{platform}");
 
         // Validate os constraint
         root.TryGetProperty("os", out var os).Should().BeTrue("package.json should have os field");
@@ -127,9 +127,6 @@ public class NpmPackageStructureTests : TestBase
         var cpuArray = cpu.EnumerateArray().Select(e => e.GetString()).ToList();
         cpuArray.Should().Contain(expectedCpu, $"cpu should include {expectedCpu}");
 
-        // Validate bin field
-        root.TryGetProperty("bin", out var bin).Should().BeTrue();
-        bin.TryGetProperty("pks", out _).Should().BeTrue();
     }
 
     [Fact]

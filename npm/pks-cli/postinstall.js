@@ -9,12 +9,12 @@ const { join } = require('path');
  */
 function getPlatformPackage() {
   const platformMap = {
-    'linux-x64': '@pks-cli/pks-linux-x64',
-    'linux-arm64': '@pks-cli/pks-linux-arm64',
-    'darwin-x64': '@pks-cli/pks-osx-x64',
-    'darwin-arm64': '@pks-cli/pks-osx-arm64',
-    'win32-x64': '@pks-cli/pks-win-x64',
-    'win32-arm64': '@pks-cli/pks-win-arm64'
+    'linux-x64': '@pks-cli/cli-linux-x64',
+    'linux-arm64': '@pks-cli/cli-linux-arm64',
+    'darwin-x64': '@pks-cli/cli-osx-x64',
+    'darwin-arm64': '@pks-cli/cli-osx-arm64',
+    'win32-x64': '@pks-cli/cli-win-x64',
+    'win32-arm64': '@pks-cli/cli-win-arm64'
   };
 
   const key = `${platform}-${arch}`;
@@ -33,10 +33,12 @@ function checkPlatformPackage() {
     return false;
   }
 
-  const packageDirName = packageName.replace('@pks-cli/', 'pks-cli-');
+  const packageDir = packageName.replace('@pks-cli/', '');
   const paths = [
-    join(__dirname, '..', packageDirName),
-    join(__dirname, '..', '..', packageDirName),
+    // Scoped: node_modules/@pks-cli/cli-linux-x64/
+    join(__dirname, '..', packageDir),
+    // Parent node_modules (hoisted)
+    join(__dirname, '..', '..', '@pks-cli', packageDir),
   ];
 
   for (const path of paths) {
@@ -68,7 +70,7 @@ function showInstallationHelp() {
   console.warn('');
   console.warn('Or reinstall with:');
   console.warn('');
-  console.warn('  npm install @pks-cli/pks --force');
+  console.warn('  npm install @pks-cli/cli --force');
   console.warn('');
 
   // Non-zero exit in CI environments only

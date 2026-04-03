@@ -89,7 +89,7 @@ jobs:
             sed -i "s/\"version\": \".*\"/\"version\": \"${{ inputs.version }}\"/" "npm/pks-cli-$platform/package.json"
 
             # Update optionalDependencies in main package
-            package_name="@pks-cli/pks-$platform"
+            package_name="@pks-cli/cli-$platform"
             sed -i "s|\"$package_name\": \".*\"|\"$package_name\": \"${{ inputs.version }}\"|" npm/pks-cli/package.json
           done
 

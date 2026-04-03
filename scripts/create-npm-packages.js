@@ -11,42 +11,42 @@ const PLATFORMS = [
   {
     name: 'linux-x64',
     rid: 'linux-x64',
-    packageName: '@pks-cli/pks-linux-x64',
+    packageName: '@pks-cli/cli-linux-x64',
     binaryName: 'pks',
     dir: 'pks-cli-linux-x64'
   },
   {
     name: 'linux-arm64',
     rid: 'linux-arm64',
-    packageName: '@pks-cli/pks-linux-arm64',
+    packageName: '@pks-cli/cli-linux-arm64',
     binaryName: 'pks',
     dir: 'pks-cli-linux-arm64'
   },
   {
     name: 'osx-x64',
     rid: 'osx-x64',
-    packageName: '@pks-cli/pks-osx-x64',
+    packageName: '@pks-cli/cli-osx-x64',
     binaryName: 'pks',
     dir: 'pks-cli-osx-x64'
   },
   {
     name: 'osx-arm64',
     rid: 'osx-arm64',
-    packageName: '@pks-cli/pks-osx-arm64',
+    packageName: '@pks-cli/cli-osx-arm64',
     binaryName: 'pks',
     dir: 'pks-cli-osx-arm64'
   },
   {
     name: 'win-x64',
     rid: 'win-x64',
-    packageName: '@pks-cli/pks-win-x64',
+    packageName: '@pks-cli/cli-win-x64',
     binaryName: 'pks.exe',
     dir: 'pks-cli-win-x64'
   },
   {
     name: 'win-arm64',
     rid: 'win-arm64',
-    packageName: '@pks-cli/pks-win-arm64',
+    packageName: '@pks-cli/cli-win-arm64',
     binaryName: 'pks.exe',
     dir: 'pks-cli-win-arm64'
   }
