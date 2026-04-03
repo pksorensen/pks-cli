@@ -358,20 +358,54 @@ runs:
           echo "::error::Deployment ended with status: $BUILD_RESULT"
 
           # Fetch deployment logs for debugging
-          echo "=== Deployment Logs ==="
           DEPLOY_DETAIL=$(api_get "/coolify/deployments/${DEPLOY_UUID}")
           LOGS=$(echo "$DEPLOY_DETAIL" | jq -r '.logs // empty')
-          if [ -n "$LOGS" ]; then
-            echo "$LOGS" | tail -50
+
+          # Pretty-print logs if it's a JSON array, else fall back to raw
+          if echo "$LOGS" | jq -e 'if type == "array" then true else false end' > /dev/null 2>&1; then
+            VISIBLE_COUNT=$(echo "$LOGS" | jq '[.[] | select(.hidden == false)] | length')
+            HIDDEN_COUNT=$(echo "$LOGS" | jq '[.[] | select(.hidden == true)] | length')
+            echo ""
+            echo "=== Deployment Logs ($VISIBLE_COUNT visible, $HIDDEN_COUNT debug) ==="
+
+            # Print visible entries
+            echo "$LOGS" | jq -r '
+              .[] | select(.hidden == false) |
+              "[" + (.timestamp | split(".")[0] | sub("T";" ")) + "]"
+              + (if .type == "stderr" then " !! " else "    " end)
+              + .output' 2>/dev/null
+
+            # Show hidden (debug) entries in a collapsible group
+            if [ "$HIDDEN_COUNT" -gt 0 ]; then
+              echo ""
+              echo "::group::Debug logs ($HIDDEN_COUNT entries)"
+              echo "$LOGS" | jq -r '
+                .[] | select(.hidden == true) |
+                "[" + (.timestamp | split(".")[0] | sub("T";" ")) + "]"
+                + (if .type == "stderr" then " !! " else "    " end)
+                + (if .command then "$ " + .command + "\n       " else "" end)
+                + .output' 2>/dev/null
+              echo "::endgroup::"
+            fi
+
+            # Highlight the key error line for GitHub annotation
+            FIRST_ERROR=$(echo "$LOGS" | jq -r '
+              [.[] | select(.type == "stderr" and (.output | test("error|Error|ERROR|failed|FAILED"; "i")) and .hidden == false)]
+              | .[0].output // empty' 2>/dev/null)
+            if [ -n "$FIRST_ERROR" ]; then
+              echo "::error::$FIRST_ERROR"
+            fi
+            echo "==================================="
           else
-            # Try getting logs from the full deployment detail
+            # Fallback: plain string or unexpected format
+            echo "=== Deployment Logs ==="
             echo "$DEPLOY_DETAIL" | jq -r '
               if .log then (.log | split("\n") | .[-50:] | join("\n"))
               elif .logs then (.logs | split("\n") | .[-50:] | join("\n"))
               else "No logs available in deployment response"
               end' 2>/dev/null || echo "Could not parse deployment logs"
+            echo "=== End Deployment Logs ==="
           fi
-          echo "=== End Deployment Logs ==="
 
           echo "result=failure" >> "$GITHUB_OUTPUT"
           echo "status_message=Build ${BUILD_RESULT}" >> "$GITHUB_OUTPUT"
