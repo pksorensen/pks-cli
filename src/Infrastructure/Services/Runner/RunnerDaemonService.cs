@@ -172,12 +172,23 @@ public class RunnerDaemonService : IRunnerDaemonService
                 // Collect completed tasks
                 CollectCompletedJobs();
 
-                // Proactive token refresh: refresh if within 5 minutes of expiry
+                // Proactive token refresh: refresh if within 5 minutes of expiry,
+                // if ExpiresAt is unknown (null), or if the token is older than 4 hours.
                 var storedToken = await _authService.GetStoredTokenAsync();
-                if (storedToken?.ExpiresAt != null && storedToken.ExpiresAt.Value <= DateTime.UtcNow.AddMinutes(5))
+                var needsRefresh = storedToken != null && (
+                    storedToken.ExpiresAt == null
+                    || storedToken.ExpiresAt.Value <= DateTime.UtcNow.AddMinutes(5)
+                    || storedToken.CreatedAt <= DateTime.UtcNow.AddHours(-4));
+
+                if (needsRefresh)
                 {
-                    _logger.LogInformation("Token expires at {ExpiresAt}, proactively refreshing...", storedToken.ExpiresAt);
-                    OnStatusChanged("Proactively refreshing token before expiry...");
+                    var reason = storedToken!.ExpiresAt == null
+                        ? "unknown expiry"
+                        : storedToken.ExpiresAt.Value <= DateTime.UtcNow.AddMinutes(5)
+                            ? $"expires at {storedToken.ExpiresAt}"
+                            : $"token age > 4h (created {storedToken.CreatedAt:HH:mm:ss})";
+                    _logger.LogInformation("Proactively refreshing token ({Reason})...", reason);
+                    OnStatusChanged($"Proactively refreshing token ({reason})...");
                     var newToken = await _authService.RefreshTokenAsync();
                     if (newToken != null)
                     {

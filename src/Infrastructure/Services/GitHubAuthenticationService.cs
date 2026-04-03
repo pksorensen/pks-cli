@@ -555,15 +555,18 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
             _logger.LogInformation("Refresh response: expires_in={ExpiresIn}, has_refresh_token={HasRefresh}, scopes={Scopes}",
                 tokenResponse.ExpiresIn, tokenResponse.RefreshToken != null, string.Join(",", tokenResponse.Scopes));
 
+            // Default to 8 hours when GitHub omits expires_in, so proactive
+            // refresh in the daemon poll loop is never accidentally disabled.
+            const int defaultExpiresInSeconds = 8 * 60 * 60;
+
             var newToken = new GitHubStoredToken
             {
                 AccessToken = tokenResponse.AccessToken,
                 RefreshToken = tokenResponse.RefreshToken ?? storedToken.RefreshToken,
                 Scopes = tokenResponse.Scopes.Length > 0 ? tokenResponse.Scopes : storedToken.Scopes,
                 CreatedAt = DateTime.UtcNow,
-                ExpiresAt = tokenResponse.ExpiresIn.HasValue
-                    ? DateTime.UtcNow.AddSeconds(tokenResponse.ExpiresIn.Value)
-                    : null,
+                ExpiresAt = DateTime.UtcNow.AddSeconds(
+                    tokenResponse.ExpiresIn ?? defaultExpiresInSeconds),
                 IsValid = true,
                 LastValidated = DateTime.UtcNow
             };

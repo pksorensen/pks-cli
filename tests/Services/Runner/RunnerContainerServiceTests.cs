@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Moq;
+using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using PKS.Infrastructure.Services.Runner;
 using Xunit;
@@ -24,7 +25,7 @@ public class RunnerContainerServiceTests : IDisposable
         _mockJobTokenService = new Mock<IJobTokenService>();
         _mockCoolifyTokenStore = new Mock<ICoolifyTokenStore>();
         _mockLogger = new Mock<ILogger<RunnerContainerService>>();
-        _service = new RunnerContainerService(_mockProcessRunner.Object, _mockCoolifyLookup.Object, _mockJobTokenService.Object, _mockCoolifyTokenStore.Object, _mockLogger.Object);
+        _service = new RunnerContainerService(_mockProcessRunner.Object, _mockCoolifyLookup.Object, _mockJobTokenService.Object, _mockCoolifyTokenStore.Object, Mock.Of<IDevcontainerSpawnerService>(), _mockLogger.Object);
         _testRegistration = new RunnerRegistration
         {
             Owner = "testowner",

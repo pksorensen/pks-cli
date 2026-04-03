@@ -7,6 +7,7 @@ using Spectre.Console.Testing;
 using System.Text;
 using Xunit;
 using Moq;
+using PKS.Infrastructure;
 
 namespace PKS.CLI.Tests.Commands.Hooks;
 
@@ -140,7 +141,7 @@ public class HookEventCommandsTests : TestBase
     public async Task StopCommand_ShouldExecuteSuccessfully()
     {
         // Arrange
-        var command = new StopCommand();
+        var command = new StopCommand(Mock.Of<IConfigurationService>());
         var settings = new HooksSettings();
         var context = CreateMockCommandContext("stop");
 

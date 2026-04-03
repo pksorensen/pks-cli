@@ -566,17 +566,107 @@ public class RunnerDaemonServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_WhenTokenExpiresAtIsNull_ProactivelyRefreshes()
+    {
+        var cts = new CancellationTokenSource();
+
+        // Token has null ExpiresAt (GitHub omitted expires_in)
+        var nullExpiryToken = new GitHubStoredToken
+        {
+            AccessToken = "ghp_null_expiry",
+            RefreshToken = "ghr_refresh",
+            IsValid = true,
+            Scopes = new[] { "repo" },
+            CreatedAt = DateTime.UtcNow,
+            ExpiresAt = null
+        };
+
+        var refreshedToken = new GitHubStoredToken
+        {
+            AccessToken = "ghp_refreshed_from_null",
+            RefreshToken = "ghr_new_refresh",
+            IsValid = true,
+            Scopes = new[] { "repo" },
+            ExpiresAt = DateTime.UtcNow.AddHours(8)
+        };
+
+        _mockAuthService
+            .Setup(a => a.GetStoredTokenAsync(null))
+            .ReturnsAsync(nullExpiryToken);
+
+        _mockAuthService
+            .Setup(a => a.RefreshTokenAsync(null))
+            .ReturnsAsync(refreshedToken);
+
+        _mockActionsService
+            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<QueuedWorkflowRun>())
+            .Callback(() => cts.Cancel());
+
+        await _service.RunAsync(cts.Token);
+
+        _mockAuthService.Verify(a => a.RefreshTokenAsync(null), Times.AtLeastOnce);
+        _mockApiClient.Verify(a => a.SetAuthenticationToken("ghp_refreshed_from_null"), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenTokenOlderThan4Hours_ProactivelyRefreshes()
+    {
+        var cts = new CancellationTokenSource();
+
+        // Token was created 5 hours ago but claims to expire in 8 hours
+        var oldToken = new GitHubStoredToken
+        {
+            AccessToken = "ghp_old_token",
+            RefreshToken = "ghr_refresh",
+            IsValid = true,
+            Scopes = new[] { "repo" },
+            CreatedAt = DateTime.UtcNow.AddHours(-5),
+            ExpiresAt = DateTime.UtcNow.AddHours(3)
+        };
+
+        var refreshedToken = new GitHubStoredToken
+        {
+            AccessToken = "ghp_refreshed_old",
+            RefreshToken = "ghr_new_refresh",
+            IsValid = true,
+            Scopes = new[] { "repo" },
+            ExpiresAt = DateTime.UtcNow.AddHours(8)
+        };
+
+        _mockAuthService
+            .Setup(a => a.GetStoredTokenAsync(null))
+            .ReturnsAsync(oldToken);
+
+        _mockAuthService
+            .Setup(a => a.RefreshTokenAsync(null))
+            .ReturnsAsync(refreshedToken);
+
+        _mockActionsService
+            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<QueuedWorkflowRun>())
+            .Callback(() => cts.Cancel());
+
+        await _service.RunAsync(cts.Token);
+
+        _mockAuthService.Verify(a => a.RefreshTokenAsync(null), Times.AtLeastOnce);
+        _mockApiClient.Verify(a => a.SetAuthenticationToken("ghp_refreshed_old"), Times.AtLeastOnce);
+    }
+
+    [Fact]
     public async Task RunAsync_WhenTokenNotNearExpiry_DoesNotProactivelyRefresh()
     {
         var cts = new CancellationTokenSource();
 
         // Token expires in 30 minutes (well outside the 5-minute threshold)
+        // CreatedAt is recent so the max-age safety net doesn't trigger
         var validToken = new GitHubStoredToken
         {
             AccessToken = "ghp_valid_token",
             RefreshToken = "ghr_refresh",
             IsValid = true,
             Scopes = new[] { "repo" },
+            CreatedAt = DateTime.UtcNow,
             ExpiresAt = DateTime.UtcNow.AddMinutes(30)
         };
 

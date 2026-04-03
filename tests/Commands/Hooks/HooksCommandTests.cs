@@ -97,7 +97,7 @@ public class HooksCommandTests : TestBase
     public async Task StopCommand_WithJsonFlag_OutputsNoJson_WhenProceeding()
     {
         // Arrange
-        var command = new StopCommand();
+        var command = new StopCommand(Mock.Of<PKS.Infrastructure.IConfigurationService>());
         var context = CreateCommandContext("stop");
         var settings = new HooksSettings { Json = true };
 
@@ -120,7 +120,7 @@ public class HooksCommandTests : TestBase
 
         // Assert
         decision.Decision.Should().Be("block");
-        decision.Message.Should().Be("Test reason");
+        decision.Reason.Should().Be("Test reason");
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public class HooksCommandTests : TestBase
 
         // Assert
         decision.Decision.Should().Be("approve");
-        decision.Message.Should().BeNull();
+        decision.Reason.Should().BeNull();
     }
 
     [Fact]
@@ -142,7 +142,7 @@ public class HooksCommandTests : TestBase
 
         // Assert
         decision.Decision.Should().BeNull();
-        decision.Message.Should().BeNull();
+        decision.Reason.Should().BeNull();
         decision.Continue.Should().BeNull();
     }
 

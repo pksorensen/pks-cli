@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Moq;
 using PKS.CLI.Tests.Infrastructure;
 using PKS.Commands.Hooks;
+using PKS.Infrastructure;
 using PKS.Infrastructure.Services;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -147,7 +148,7 @@ public class HooksErrorHandlingTests : TestBase
             ("pre-tool-use", new PreToolUseCommand()),
             ("post-tool-use", new PostToolUseCommand()),
             ("user-prompt-submit", new UserPromptSubmitCommand()),
-            ("stop", new StopCommand())
+            ("stop", new StopCommand(Mock.Of<IConfigurationService>()))
         };
 
         var originalDirectory = Directory.GetCurrentDirectory();
