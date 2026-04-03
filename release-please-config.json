@@ -13,7 +13,8 @@
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
         { "type": "xml", "path": "pks-cli.csproj", "xpath": "//Project/PropertyGroup/PackageVersion" }
-      ]
+      ],
+      "include-paths": ["src", "npm", "scripts", ".github/workflows/create-npm-packages.yml"]
     },
     "templates/devcontainer": {
       "release-type": "simple",
