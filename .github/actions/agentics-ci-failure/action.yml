@@ -1,0 +1,53 @@
+name: 'Agentics CI Failure'
+description: >
+  Submit a CI/CD failure as a task to an Agentics Assembly Line.
+  Requires pks-cli to be installed and a runner registered for the target project
+  (pks agentics runner register owner/project). When running on the pks self-hosted
+  runner the stored runner token and GitHub credentials are used automatically.
+
+inputs:
+  assembly-line-url:
+    description: >
+      Full URL to the target assembly line.
+      Example: https://agentics.dk/p/pksorensen/agentic-live-www/assembly-lines/mnjcmdw9-v9igma
+    required: true
+  title:
+    description: >
+      Task title. Defaults to "CI Failure: {workflow} / {job}" when not provided.
+    required: false
+    default: ''
+  error:
+    description: >
+      Raw error output or additional context to include in the task description.
+      When omitted, pks-cli fetches the failing job logs from the GitHub API automatically.
+    required: false
+    default: ''
+  priority:
+    description: 'Task priority: low, medium, or high'
+    required: false
+    default: 'high'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Submit failure task to Assembly Line
+      shell: bash
+      run: |
+        TITLE="${{ inputs.title }}"
+        if [ -z "$TITLE" ]; then
+          TITLE="CI Failure: ${GITHUB_WORKFLOW} / ${GITHUB_JOB}"
+        fi
+
+        ARGS=(
+          --assembly-line-url "${{ inputs.assembly-line-url }}"
+          --title "$TITLE"
+          --priority "${{ inputs.priority }}"
+        )
+
+        if [ -n "$INPUT_ERROR" ]; then
+          ARGS+=(--description "$INPUT_ERROR")
+        fi
+
+        pks agentics task submit "${ARGS[@]}"
+      env:
+        INPUT_ERROR: ${{ inputs.error }}

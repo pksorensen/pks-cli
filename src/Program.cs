@@ -16,6 +16,7 @@ using PKS.Infrastructure.Services.Runner;
 using PKS.Commands.GitHub.Runner;
 using PKS.Commands.Agentics;
 using PKS.Commands.Agentics.Runner;
+using PKS.Commands.Agentics.Tasks;
 using PKS.Commands.Ado;
 using PKS.Commands.Foundry;
 using PKS.Commands.Jira;
@@ -387,6 +388,16 @@ app.Configure(config =>
             runner.AddCommand<AgenticsRunnerStartCommand>("start")
                 .WithDescription("Start the runner daemon to poll for and execute jobs")
                 .WithExample(new[] { "agentics", "runner", "start" });
+        });
+
+        agentics.AddBranch<AgenticsSettings>("task", task =>
+        {
+            task.SetDescription("Submit tasks to Assembly Lines");
+
+            task.AddCommand<AgenticsTaskSubmitCommand>("submit")
+                .WithDescription("Submit a task to an assembly line (for use in CI/CD pipelines)")
+                .WithExample(new[] { "agentics", "task", "submit", "--assembly-line-url", "https://agentics.dk/p/owner/project/assembly-lines/stage-id", "--title", "Fix failing tests" })
+                .WithExample(new[] { "agentics", "task", "submit", "--assembly-line-url", "https://agentics.dk/p/owner/project/assembly-lines/stage-id", "--title", "CI Failure", "--description", "Build step failed" });
         });
     });
 
