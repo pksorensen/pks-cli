@@ -20,6 +20,8 @@ using PKS.Commands.Ado;
 using PKS.Commands.Foundry;
 using PKS.Commands.Jira;
 using PKS.Commands.Registry;
+using PKS.Commands.Google;
+using PKS.Commands.Image;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.Text;
@@ -231,6 +233,9 @@ services.AddSingleton<ISystemInformationService, SystemInformationService>();
 
 // Register Template Packaging service
 services.AddSingleton<ITemplatePackagingService, TemplatePackagingService>();
+
+// Register Google AI service
+services.AddHttpClient<IGoogleAiService, GoogleAiService>();
 
 // Register Report services
 services.AddSingleton<IReportService, ReportService>();
@@ -538,6 +543,29 @@ app.Configure(config =>
             .WithDescription("Show current Foundry authentication status")
             .WithExample(new[] { "foundry", "status" });
     });
+
+    // Add Google AI branch command
+    config.AddBranch("google", google =>
+    {
+        google.SetDescription("Manage Google AI credentials");
+
+        google.AddCommand<GoogleInitCommand>("init")
+            .WithDescription("Register a Google AI Studio API key")
+            .WithExample(new[] { "google", "init" })
+            .WithExample(new[] { "google", "init", "--force" });
+
+        google.AddCommand<GoogleStatusCommand>("status")
+            .WithDescription("Show registered Google AI credentials")
+            .WithExample(new[] { "google", "status" });
+    });
+
+    // Add image generation command
+    config.AddCommand<ImageCommand>("image")
+        .WithDescription("Generate or augment an image using Google AI")
+        .WithExample(new[] { "image", "--list-models" })
+        .WithExample(new[] { "image", "\"a dark editorial photograph of a match burning\"" })
+        .WithExample(new[] { "image", "--prompt-file", "prompt.txt", "--output", "cover.jpg" })
+        .WithExample(new[] { "image", "--input", "bg.jpg", "\"Add title 'My Book' in white serif at the top\"", "--output", "cover-final.jpg" });
 
     // Add git branch command (credential helpers)
     config.AddBranch("git", git =>
