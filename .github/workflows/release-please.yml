@@ -74,7 +74,14 @@ jobs:
         id: version
         run: |
           BASE_VERSION=$(cat src/version.txt | tr -d '[:space:]')
-          PREVIEW_VERSION="${BASE_VERSION}-preview.${{ github.run_number }}"
+          # Count commits since last release tag to get a preview counter that resets after each release
+          LAST_TAG=$(git describe --tags --abbrev=0 --match "v*" 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            COMMIT_COUNT=$(git rev-list --count "${LAST_TAG}..HEAD")
+          else
+            COMMIT_COUNT=${{ github.run_number }}
+          fi
+          PREVIEW_VERSION="${BASE_VERSION}-preview.${COMMIT_COUNT}"
           echo "preview=$PREVIEW_VERSION" >> $GITHUB_OUTPUT
 
       - name: Restore and build
