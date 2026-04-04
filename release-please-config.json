@@ -5,16 +5,21 @@
   "bump-patch-for-minor-pre-major": true,
   "include-v-in-tag": true,
   "packages": {
-    "src": {
+    ".": {
       "release-type": "simple",
       "component": "pks-cli",
       "package-name": "pks-cli",
       "include-component-in-tag": false,
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
-        { "type": "xml", "path": "pks-cli.csproj", "xpath": "//Project/PropertyGroup/PackageVersion" }
+        { "type": "xml", "path": "src/pks-cli.csproj", "xpath": "//Project/PropertyGroup/PackageVersion" }
       ],
-      "include-paths": ["src", "npm", "scripts", ".github/workflows/create-npm-packages.yml"]
+      "exclude-paths": [
+        "templates/devcontainer",
+        "templates/claude-dotnet-9",
+        "templates/claude-dotnet-10-full",
+        "templates/pks-fullstack"
+      ]
     },
     "templates/devcontainer": {
       "release-type": "simple",

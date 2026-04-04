@@ -13,7 +13,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SCOPE=${1:-}
 
 declare -A VERSION_FILES=(
-    ["cli"]="src/version.txt"
+    ["cli"]="version.txt"
     ["devcontainer"]="templates/devcontainer/version.txt"
     ["claude-dotnet-9"]="templates/claude-dotnet-9/version.txt"
     ["claude-dotnet-10-full"]="templates/claude-dotnet-10-full/version.txt"
@@ -21,7 +21,7 @@ declare -A VERSION_FILES=(
 )
 
 if [ -z "$SCOPE" ]; then
-    VERSION_FILE="${REPO_ROOT}/src/version.txt"
+    VERSION_FILE="${REPO_ROOT}/version.txt"
 elif [ -n "${VERSION_FILES[$SCOPE]+x}" ]; then
     VERSION_FILE="${REPO_ROOT}/${VERSION_FILES[$SCOPE]}"
 else

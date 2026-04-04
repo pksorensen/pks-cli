@@ -25,7 +25,7 @@ declare -A PACKAGE_FILES=(
 
 # Package to version.txt mappings
 declare -A VERSION_FILES=(
-    ["cli"]="src/version.txt"
+    ["cli"]="version.txt"
     ["devcontainer"]="templates/devcontainer/version.txt"
     ["claude-dotnet-9"]="templates/claude-dotnet-9/version.txt"
     ["claude-dotnet-10-full"]="templates/claude-dotnet-10-full/version.txt"
