@@ -25,6 +25,13 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
+    /// <summary>ActivitySource name used by the runner. Referenced by Program.cs when building the TracerProvider.</summary>
+    public const string ActivitySourceName = "pks-cli.agentics.runner";
+    private static readonly System.Diagnostics.ActivitySource _activitySource = new(ActivitySourceName, "1.0.0");
+
+    /// <summary>Global monotonic counter so debug captures sort correctly across concurrent jobs.</summary>
+    private static int _captureSeq = 0;
+
     // Container reuse is tracked via Docker labels (pks.agentics.fingerprint) rather than
     // in-memory state, so containers survive pks-cli restarts.
 
@@ -50,6 +57,10 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         [CommandOption("--inprocess")]
         [Description("Execute jobs in-process instead of spawning devcontainers (for testing)")]
         public bool InProcess { get; set; }
+
+        [CommandOption("--worktree")]
+        [Description("(--inprocess only) Use a git worktree of the current repo as the job workspace. Without this flag, a fresh git clone (or empty dir) is used instead.")]
+        public bool Worktree { get; set; }
 
         [CommandOption("--work-dir <PATH>")]
         [Description("Base work directory (default: .agentics/_work)")]
@@ -249,6 +260,20 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                         if (job != null)
                         {
                             _console.MarkupLine($"[green]Job received:[/] {job.Id}");
+                            if (!string.IsNullOrEmpty(job.AgentDef?.Traceparent))
+                                _console.MarkupLine($"[dim]trace: {job.AgentDef.Traceparent}[/]");
+
+                            // Restore parent trace context so this runner span is a child of the
+                            // server-side span that dispatched the job (visible in Aspire dashboard).
+                            System.Diagnostics.ActivityContext parentCtx = default;
+                            if (!string.IsNullOrEmpty(job.AgentDef?.Traceparent))
+                                System.Diagnostics.ActivityContext.TryParse(job.AgentDef.Traceparent, null, isRemote: true, out parentCtx);
+                            using var jobActivity = _activitySource.StartActivity(
+                                "runner.execute_job", System.Diagnostics.ActivityKind.Consumer, parentCtx);
+                            jobActivity?.SetTag("agentics.job_id", job.Id);
+                            jobActivity?.SetTag("agentics.task_id", job.AgentDef?.TaskId);
+                            jobActivity?.SetTag("agentics.stage_id", job.AgentDef?.StageId);
+                            jobActivity?.SetTag("agentics.mode", settings.InProcess ? "inprocess" : "spawn");
 
                             if (settings.InProcess)
                             {
@@ -520,6 +545,46 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             ["pks.agentics.fingerprint"] = fingerprint,
         };
 
+        // Acquire plugins and agent plugin dirs on the Runner side, populating a Docker volume
+        // mounted at /run/alp/plugins inside the devcontainer.
+        var hasPlugins = job.AgentDef?.Plugins?.Count > 0;
+        var hasAgents  = job.AgentDef?.Agents?.Count  > 0;
+        string? pluginVolumeName = null;
+        var pluginContainerPaths = new List<string>();
+
+        if (hasPlugins || hasAgents)
+        {
+            var volumeName = $"alp-plugins-{job.Id}";
+            var createResult = await RunCaptureAsync("docker", new[] { "volume", "create", volumeName }, ct);
+            if (createResult.ExitCode == 0)
+            {
+                pluginVolumeName = volumeName;
+                _console.MarkupLine($"[cyan]Created ALP plugin volume: {volumeName}[/]");
+
+                if (hasPlugins)
+                {
+                    var clonedPaths = await ClonePluginsIntoVolumeAsync(
+                        job.AgentDef!.Plugins!, volumeName, ct);
+                    pluginContainerPaths.AddRange(clonedPaths);
+                }
+
+                if (hasAgents)
+                {
+                    var agentPluginPath = await WriteAgentPluginDirInVolumeAsync(
+                        job.AgentDef!.Agents!, volumeName, job.Id, ct);
+                    if (agentPluginPath != null)
+                        pluginContainerPaths.Add(agentPluginPath);
+                }
+            }
+            else
+            {
+                _console.MarkupLine($"[red]Failed to create plugin volume {volumeName}: {createResult.Stderr.EscapeMarkup()}[/]");
+            }
+        }
+
+        if (pluginVolumeName != null)
+            spawnOptions.PluginVolumeName = pluginVolumeName;
+
         string containerId;
         var warmId = await FindContainerByLabelAsync($"pks.agentics.fingerprint={fingerprint}");
         if (warmId != null)
@@ -588,9 +653,12 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
         // 7. Build and write a launch script into the container to avoid shell quoting issues
         var vibecastTmux = $"vibecast-{job.Id[..8]}";
-        var appendPrompt = "When you have completed the assigned task, use the stop_broadcast MCP tool " +
+        var defaultAppendPrompt = "When you have completed the assigned task, use the stop_broadcast MCP tool " +
             "with a message summarizing what you accomplished and conclusion success. " +
             "If you encounter an unrecoverable error, call stop_broadcast with conclusion failure and describe the issue.";
+        var appendPrompt = !string.IsNullOrWhiteSpace(job.AgentDef?.AppendSystemPrompt)
+            ? job.AgentDef.AppendSystemPrompt + "\n\n" + defaultAppendPrompt
+            : defaultAppendPrompt;
         var stageGitUrl   = job.AgentDef?.StageGitUrl ?? "";
         var stageGitToken = job.AgentDef?.StageGitToken ?? "";
         var stageDir      = $"{vibecastHome}/stage";
@@ -653,11 +721,48 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             scriptLines.AppendLine($"export STAGE_DIR={stageDir}");
         }
         scriptLines.AppendLine($"export VIBECAST_APPEND_SYSTEM_PROMPT=\"{appendPrompt}\"");
+
+        // Expose pre-cloned plugins via VIBECAST_EXTRA_PLUGINS so vibecast passes --plugin-dir
+        // to Claude for each one. Plugins are cloned by the Runner (pks-cli) before container
+        // spawn and mounted at /run/alp/plugins via a dedicated Docker volume — see PreparePluginVolumeAsync.
+        if (pluginContainerPaths.Count > 0)
+        {
+            scriptLines.AppendLine($"export VIBECAST_EXTRA_PLUGINS=\"{string.Join(":", pluginContainerPaths)}\"");
+        }
+
+        // Propagate W3C trace context for log correlation with the server-side trace.
+        if (!string.IsNullOrEmpty(job.AgentDef?.Traceparent))
+        {
+            scriptLines.AppendLine($"export TRACEPARENT={job.AgentDef.Traceparent}");
+            var traceId = job.AgentDef.Traceparent.Split('-').ElementAtOrDefault(1) ?? "";
+            scriptLines.AppendLine($"export AGENTICS_TRACE_ID={traceId}");
+        }
+
+        // Auto-git: tell vibecast to block Claude from stopping with uncommitted changes
+        if (job.AgentDef?.AutoGit == true)
+        {
+            scriptLines.AppendLine("export AGENTICS_AUTO_GIT=1");
+            if (!string.IsNullOrWhiteSpace(job.AgentDef.CommitMessageTemplate))
+            {
+                // Escape single quotes in the template before embedding in the shell export
+                var escapedHint = job.AgentDef.CommitMessageTemplate.Replace("'", "'\\''");
+                scriptLines.AppendLine($"export AGENTICS_COMMIT_MESSAGE_HINT='{escapedHint}'");
+            }
+        }
+
         var gitUserName  = settings.GitUserName  ?? "si-14x";
         var gitUserEmail = settings.GitUserEmail ?? "si-14x@agentics.dk";
         scriptLines.AppendLine($"git config --global user.name \"{gitUserName}\"");
         scriptLines.AppendLine($"git config --global user.email \"{gitUserEmail}\"");
         scriptLines.AppendLine($"cd {workspaceFolder}");
+
+        // initBranch: create a task-scoped branch before Claude starts so work is isolated
+        if (job.AgentDef?.InitBranch == true && !string.IsNullOrEmpty(job.AgentDef.TaskId))
+        {
+            var branchName = $"task/{job.AgentDef.TaskId}";
+            scriptLines.AppendLine($"git checkout -b {branchName} 2>/dev/null || git checkout {branchName}");
+        }
+
         // Remove any stale .mcp.json left by an older vibecast session (plugin dir handles MCP now)
         scriptLines.AppendLine("rm -f .mcp.json");
         scriptLines.AppendLine("exec ${VIBECAST_BIN:-npx --yes vibecast}");
@@ -666,6 +771,8 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         await _spawnerService.ExecInContainerAsync(containerId,
             $"bash -c 'printf \"%s\" \"{scriptB64}\" | base64 -d > {launchScript} && chmod +x {launchScript}'",
             timeoutSeconds: 30);
+
+        // Agents are delivered via --plugin-dir (VIBECAST_EXTRA_PLUGINS) — see WriteAgentPluginDirInVolumeAsync above.
 
         // 7a. Pre-flight: verify tmux, npx, and agentic server reachability
         var preFlight = await _spawnerService.ExecInContainerAsync(containerId,
@@ -890,6 +997,204 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         // 13. PATCH to completed
         await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "success", ct);
         await ReportJobResultAsync(registration, "success", null, ct);
+
+        // 14. Remove plugin volume now that the job is done
+        if (pluginVolumeName != null)
+            await RemovePluginVolumeAsync(pluginVolumeName);
+    }
+
+    /// <summary>
+    /// Creates a Docker volume named <c>alp-plugins-{jobId}</c>, clones each declared plugin
+    /// into it via a short-lived alpine/git container, and returns the container-side paths
+    /// (<c>/run/alp/plugins/{pluginId}</c>) to expose via <c>VIBECAST_EXTRA_PLUGINS</c>.
+    ///
+    /// Cloning happens here (Runner process) so marketplace URLs such as <c>localhost:40145</c>
+    /// are reachable — the Runner has access to the host network, the devcontainer does not.
+    /// The volume must already exist.
+    /// </summary>
+    private async Task<List<string>> ClonePluginsIntoVolumeAsync(
+        IEnumerable<PluginRef> plugins, string volumeName, CancellationToken ct)
+    {
+        var containerPaths = new List<string>();
+        foreach (var plugin in plugins)
+        {
+            var destInVolume = $"/plugins/{plugin.Id}";
+            _console.MarkupLine($"[dim]Cloning plugin {plugin.Id} from {plugin.SourceUrl.EscapeMarkup()}[/]");
+            var cloneResult = await RunCaptureAsync("docker", new[]
+            {
+                "run", "--rm",
+                "--mount", $"type=volume,source={volumeName},target=/plugins",
+                "alpine/git", "clone", "--depth=1", plugin.SourceUrl, destInVolume
+            }, ct);
+
+            if (cloneResult.ExitCode == 0)
+            {
+                containerPaths.Add($"/run/alp/plugins/{plugin.Id}");
+                _console.MarkupLine($"[green]  ✓ {plugin.Id}[/]");
+            }
+            else
+            {
+                _console.MarkupLine($"[yellow]Could not clone plugin {plugin.Id}: {cloneResult.Stderr.Trim().EscapeMarkup()}[/]");
+            }
+        }
+
+        return containerPaths;
+    }
+
+    /// <summary>
+    /// Writes a dynamic agent plugin directory into an existing Docker volume so vibecast can
+    /// pass it as <c>--plugin-dir</c> to Claude. Agents are delivered as a plugin dir rather than
+    /// being written to the workspace <c>.claude/agents/</c> folder, keeping agent installation
+    /// consistent with the regular plugin mechanism.
+    ///
+    /// Plugin dir structure inside the volume:
+    /// <code>
+    ///   agents-{jobId}/
+    ///   ├── .claude-plugin/plugin.json
+    ///   └── agents/
+    ///       ├── {agentId}.md
+    ///       └── ...
+    /// </code>
+    /// </summary>
+    private async Task<string?> WriteAgentPluginDirInVolumeAsync(
+        IList<AgentRef> agents, string volumeName, string jobId, CancellationToken ct)
+    {
+        var dirName = $"agents-{jobId}";
+        var pluginJson = $$"""{"name":"task-agents","version":"1.0.0","description":"Agents for job {{jobId}}"}""";
+        var pluginJsonB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(pluginJson));
+
+        // Build a shell script that creates the dir structure and writes all agent files
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"mkdir -p /plugins/{dirName}/.claude-plugin /plugins/{dirName}/agents");
+        sb.AppendLine($"printf '%s' '{pluginJsonB64}' | base64 -d > /plugins/{dirName}/.claude-plugin/plugin.json");
+        foreach (var agent in agents)
+        {
+            var b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(agent.Content));
+            sb.AppendLine($"printf '%s' '{b64}' | base64 -d > /plugins/{dirName}/agents/{agent.Id}.md");
+        }
+
+        var scriptB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(sb.ToString().Replace("\r\n", "\n")));
+        var result = await RunCaptureAsync("docker", new[]
+        {
+            "run", "--rm",
+            "--mount", $"type=volume,source={volumeName},target=/plugins",
+            "alpine", "sh", "-c", $"printf '%s' '{scriptB64}' | base64 -d | sh"
+        }, ct);
+
+        if (result.ExitCode != 0)
+        {
+            _console.MarkupLine($"[yellow]Could not write agent plugin dir into volume: {result.Stderr.Trim().EscapeMarkup()}[/]");
+            return null;
+        }
+
+        _console.MarkupLine($"[cyan]Written {agents.Count} agent(s) as plugin dir {dirName} in volume {volumeName}[/]");
+
+        return $"/run/alp/plugins/{dirName}";
+    }
+
+    /// <summary>
+    /// In in-process mode, writes agent files to a local plugin directory that pks-cli and
+    /// vibecast share via the filesystem. Returns the local path to add to VIBECAST_EXTRA_PLUGINS.
+    ///
+    /// Plugin dir structure:
+    /// <code>
+    ///   {workDir}/plugins/{jobId}-agents/
+    ///   ├── .claude-plugin/plugin.json
+    ///   └── agents/
+    ///       └── {agentId}.md
+    /// </code>
+    /// </summary>
+    private string? CreateAgentPluginDirLocally(
+        IList<AgentRef> agents, string jobId, string workDir)
+    {
+        try
+        {
+            var pluginDir = Path.Combine(workDir, "plugins", $"{jobId}-agents");
+            var claudePluginDir = Path.Combine(pluginDir, ".claude-plugin");
+            var agentsDir = Path.Combine(pluginDir, "agents");
+            Directory.CreateDirectory(claudePluginDir);
+            Directory.CreateDirectory(agentsDir);
+
+            var pluginJson = $$"""{"name":"task-agents","version":"1.0.0","description":"Agents for job {{jobId}}"}""";
+            File.WriteAllText(Path.Combine(claudePluginDir, "plugin.json"), pluginJson);
+
+            foreach (var agent in agents)
+                File.WriteAllText(Path.Combine(agentsDir, $"{agent.Id}.md"), agent.Content);
+
+            _console.MarkupLine($"[cyan]Written {agents.Count} agent(s) as plugin dir (in-process): {pluginDir.EscapeMarkup()}[/]");
+
+            return pluginDir;
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[yellow]Could not create local agent plugin dir: {ex.Message.EscapeMarkup()}[/]");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Removes the ALP plugin volume after the job completes.
+    /// </summary>
+    private async Task RemovePluginVolumeAsync(string volumeName)
+    {
+        var result = await RunCaptureAsync("docker", new[] { "volume", "rm", volumeName }, CancellationToken.None);
+        if (result.ExitCode == 0)
+            _console.MarkupLine($"[dim]Removed ALP plugin volume: {volumeName}[/]");
+        else
+            _console.MarkupLine($"[yellow]Could not remove plugin volume {volumeName}: {result.Stderr.Trim().EscapeMarkup()}[/]");
+    }
+
+    /// <summary>
+    /// In in-process mode, clones plugins directly to the local filesystem under
+    /// <c>.agentics/_work/plugins/{jobId}/</c> where both pks-cli and vibecast share the same FS.
+    /// </summary>
+    private async Task<List<string>> ClonePluginsLocallyAsync(
+        IEnumerable<PluginRef> plugins, string jobId, string workDir, CancellationToken ct)
+    {
+        var pluginsDir = Path.Combine(workDir, "plugins", jobId);
+        Directory.CreateDirectory(pluginsDir);
+        var paths = new List<string>();
+        foreach (var plugin in plugins)
+        {
+            var dest = Path.Combine(pluginsDir, plugin.Id);
+            _console.MarkupLine($"[dim]Cloning plugin {plugin.Id} (in-process) from {plugin.SourceUrl.EscapeMarkup()}[/]");
+            var result = await RunCaptureAsync("git",
+                new[] { "clone", "--depth=1", plugin.SourceUrl, dest }, ct);
+            if (result.ExitCode == 0)
+            {
+                paths.Add(dest);
+                _console.MarkupLine($"[green]  cloned {plugin.Id} to {dest.EscapeMarkup()}[/]");
+            }
+            else
+            {
+                _console.MarkupLine($"[yellow]Could not clone plugin {plugin.Id}: {result.Stderr.Trim().EscapeMarkup()}[/]");
+            }
+        }
+        return paths;
+    }
+
+    /// <summary>
+    /// Runs an external command and captures stdout, stderr, and exit code.
+    /// </summary>
+    private static async Task<(string Stdout, string Stderr, int ExitCode)> RunCaptureAsync(
+        string executable, IEnumerable<string> args, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo(executable)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        using var proc = Process.Start(psi);
+        if (proc == null)
+            return (string.Empty, "Failed to start process", 1);
+
+        var stdout = await proc.StandardOutput.ReadToEndAsync(ct);
+        var stderr = await proc.StandardError.ReadToEndAsync(ct);
+        await proc.WaitForExitAsync(ct);
+        return (stdout.Trim(), stderr.Trim(), proc.ExitCode);
     }
 
     private async Task PatchJobStatusAsync(
@@ -929,6 +1234,9 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
     private async Task ExecuteInProcessAsync(AgenticsRunnerRegistration registration, RunnerJob job, Settings settings, CancellationToken ct)
     {
+        // Capture the parent span (runner.execute_job) so we can enrich it at the end
+        var jobSpan = System.Diagnostics.Activity.Current;
+
         using var client = _httpClientFactory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", registration.Token);
@@ -936,26 +1244,41 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         var baseUrl = $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}";
 
         // 1. Claim via generate-jitconfig
-        _console.MarkupLine($"[cyan]InProcess: claiming job {job.Id}...[/]");
-        var claimResponse = await client.PostAsJsonAsync(
-            $"{baseUrl}/runners/generate-jitconfig",
-            new { jobId = job.Id, name = "inprocess-runner" },
-            ct);
-        claimResponse.EnsureSuccessStatusCode();
-
-        var claimJson = await claimResponse.Content.ReadAsStringAsync(ct);
-        var claimData = JsonSerializer.Deserialize<JsonElement>(claimJson, JsonOptions);
-        var runId = claimData.GetProperty("runId").GetString()!;
+        string runId;
+        using (var claimSpan = _activitySource.StartActivity("runner.job.claim"))
+        {
+            _console.MarkupLine($"[cyan]InProcess: claiming job {job.Id}...[/]");
+            var claimResponse = await client.PostAsJsonAsync(
+                $"{baseUrl}/runners/generate-jitconfig",
+                new { jobId = job.Id, name = "inprocess-runner" },
+                ct);
+            claimResponse.EnsureSuccessStatusCode();
+            var claimJson = await claimResponse.Content.ReadAsStringAsync(ct);
+            var claimData = JsonSerializer.Deserialize<JsonElement>(claimJson, JsonOptions);
+            runId = claimData.GetProperty("runId").GetString()!;
+            claimSpan?.SetTag("run_id", runId);
+            claimSpan?.SetTag("job_id", job.Id);
+        }
 
         // 2. Set up work directory
         var workDir = await ResolveWorkDirAsync(settings.WorkDir, ct);
         var gitEnv = await PrepareGitCredentialsAsync(ct);
         string? jobWorkTree = null;
+        var answerLoopCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        Task? answerLoopTask = null;
 
         try
         {
-            jobWorkTree = await SetupJobWorkTreeAsync(
-                workDir, registration, job, settings.Verbose, ct, gitEnv);
+            using (var wsSpan = _activitySource.StartActivity("runner.job.setup_workspace"))
+            {
+                var useWorktree = settings.Worktree;
+                wsSpan?.SetTag("worktree_mode", useWorktree);
+                wsSpan?.SetTag("repository", job.AgentDef?.Repository ?? "");
+                wsSpan?.SetTag("branch", job.AgentDef?.Branch ?? "main");
+                jobWorkTree = await SetupJobWorkTreeAsync(
+                    workDir, registration, job, settings.Verbose, useWorktree, ct, gitEnv);
+                wsSpan?.SetTag("workspace_path", jobWorkTree);
+            }
 
             // 3. PATCH to in_progress
             _console.MarkupLine($"[cyan]InProcess: executing job {job.Id} in {jobWorkTree}...[/]");
@@ -980,6 +1303,9 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             Directory.CreateDirectory(vibecastHome);
 
             // 7. Start vibecast as a background process in the worktree directory
+            var agentSpan = _activitySource.StartActivity("runner.job.start_agent");
+            agentSpan?.SetTag("vibecast.binary", vibecastBin);
+            agentSpan?.SetTag("job.id", job.Id);
             var vibecastTmux = $"vibecast-job-{job.Id[..8]}";
             _console.MarkupLine($"[cyan]Starting vibecast in tmux session '{vibecastTmux}'...[/]");
 
@@ -997,15 +1323,18 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             startPsi.ArgumentList.Add("-s");
             startPsi.ArgumentList.Add(vibecastTmux);
             startPsi.ArgumentList.Add("-x");
-            startPsi.ArgumentList.Add("200");
+            startPsi.ArgumentList.Add("120");
             startPsi.ArgumentList.Add("-y");
-            startPsi.ArgumentList.Add("50");
+            startPsi.ArgumentList.Add("48");
             startPsi.ArgumentList.Add("bash");
             startPsi.ArgumentList.Add("-c");
             // Reset HOME to the real user home (runner overrides HOME for its own config isolation)
             // so that Claude Code finds its settings in ~/.claude/
             var realHome = await GetRealHomeDirectoryAsync(ct);
-            var appendPrompt = "When you have completed the assigned task, use the stop_broadcast MCP tool with a message summarizing what you accomplished and conclusion 'success'. If you encounter an unrecoverable error, call stop_broadcast with conclusion 'failure' and describe the issue.";
+            var defaultAppendPrompt = "When you have completed the assigned task, use the stop_broadcast MCP tool with a message summarizing what you accomplished and conclusion 'success'. If you encounter an unrecoverable error, call stop_broadcast with conclusion 'failure' and describe the issue.";
+            var appendPrompt = !string.IsNullOrWhiteSpace(job.AgentDef?.AppendSystemPrompt)
+                ? job.AgentDef.AppendSystemPrompt + "\n\n" + defaultAppendPrompt
+                : defaultAppendPrompt;
             // Inherit VIBECAST_KEYBOARD_PIN from environment if set
             var keyboardPin = Environment.GetEnvironmentVariable("VIBECAST_KEYBOARD_PIN");
             var keyboardPinEnv = !string.IsNullOrEmpty(keyboardPin) ? $" VIBECAST_KEYBOARD_PIN={keyboardPin}" : "";
@@ -1018,6 +1347,11 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             await File.WriteAllTextAsync(promptFile, jobPrompt, ct);
             var initialPromptEnv = !string.IsNullOrEmpty(jobPrompt) ? $" VIBECAST_INITIAL_PROMPT_FILE={promptFile}" : "";
 
+            // Write appendSystemPrompt to a file to avoid shell quoting issues with special chars/JSON
+            var appendPromptFile = Path.Combine(vibecastHome, "append-system-prompt.txt");
+            await File.WriteAllTextAsync(appendPromptFile, appendPrompt, ct);
+            var appendPromptEnv = $" VIBECAST_APPEND_SYSTEM_PROMPT_FILE={appendPromptFile}";
+
             // Stage git credentials and isolated stage dir (inside vibecastHome so it's job-scoped)
             var stageGitUrl = job.AgentDef?.StageGitUrl ?? "";
             var stageGitToken = job.AgentDef?.StageGitToken ?? "";
@@ -1026,7 +1360,97 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 ? $" STAGE_GIT_URL={stageGitUrl} STAGE_GIT_TOKEN={stageGitToken} STAGE_DIR={stageDir}"
                 : "";
 
-            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{stageGitEnv} VIBECAST_APPEND_SYSTEM_PROMPT='{appendPrompt}' {vibecastBin}");
+            // Write settings.local.json to pre-approve writes to .claude/ in the job work tree.
+            // Claude Code (newer versions) prompts for permission when agents write to .claude/
+            // even with dangerouslyAllowAllTools set — this silences that prompt.
+            // Also write a .claude/.gitignore so git never tracks any job-scoped .claude/ files.
+            {
+                var claudeSettingsDir = Path.Combine(jobWorkTree, ".claude");
+                Directory.CreateDirectory(claudeSettingsDir);
+                var claudeSettingsFile = Path.Combine(claudeSettingsDir, "settings.local.json");
+                await File.WriteAllTextAsync(claudeSettingsFile, """
+{
+  "permissions": {
+    "allow": [
+      "Write(.claude/**)",
+      "Edit(.claude/**)",
+      "Bash(mkdir**)"
+    ]
+  }
+}
+""", ct);
+                // Prevent any .claude/ contents from being committed by Claude during auto-git.
+                var claudeGitignoreFile = Path.Combine(claudeSettingsDir, ".gitignore");
+                if (!File.Exists(claudeGitignoreFile))
+                    await File.WriteAllTextAsync(claudeGitignoreFile, "*\n", ct);
+                _console.MarkupLine($"[cyan]Pre-wrote .claude/settings.local.json and .claude/.gitignore in {jobWorkTree}[/]");
+            }
+
+            // Propagate W3C trace context so logs/vibecast output can be correlated
+            var traceparentEnv = !string.IsNullOrEmpty(job.AgentDef?.Traceparent)
+                ? $" TRACEPARENT={job.AgentDef.Traceparent} AGENTICS_TRACE_ID={job.AgentDef.Traceparent.Split('-').ElementAtOrDefault(1) ?? ""}"
+                : "";
+
+            // If this is a retry of a timed-out session, pass the prior claudeSessionId so vibecast
+            // can forward --resume to Claude Code and pick up the conversation thread
+            var resumeEnv = !string.IsNullOrEmpty(job.AgentDef?.ResumeSessionId)
+                ? $" VIBECAST_RESUME_SESSION_ID={job.AgentDef.ResumeSessionId}"
+                : "";
+
+            // Auto-git: tell vibecast's stop hook to block Claude from stopping with uncommitted changes
+            var autoGitEnv = "";
+            if (job.AgentDef?.AutoGit == true)
+            {
+                autoGitEnv = " AGENTICS_AUTO_GIT=1";
+                if (!string.IsNullOrWhiteSpace(job.AgentDef.CommitMessageTemplate))
+                {
+                    var escapedHint = job.AgentDef.CommitMessageTemplate.Replace("'", "'\\''");
+                    autoGitEnv += $" AGENTICS_COMMIT_MESSAGE_HINT='{escapedHint}'";
+                }
+            }
+
+            // initBranch: create a task-scoped branch in the worktree before launching Claude
+            if (job.AgentDef?.InitBranch == true && !string.IsNullOrEmpty(job.AgentDef.TaskId))
+            {
+                var branchName = $"task/{job.AgentDef.TaskId}";
+                try
+                {
+                    await RunProcessAsync("git", $"-C {jobWorkTree} checkout -b {branchName}", null, ct);
+                }
+                catch
+                {
+                    // Branch may already exist — try checking it out instead
+                    await RunProcessAsync("git", $"-C {jobWorkTree} checkout {branchName}", null, ct);
+                }
+            }
+
+            // Clone plugins and write agent plugin dirs locally — pks-cli and vibecast share the same FS
+            var allLocalPluginPaths = new List<string>();
+
+            if (job.AgentDef?.Plugins?.Count > 0)
+            {
+                using var pluginSpan = _activitySource.StartActivity("runner.job.clone_plugins");
+                pluginSpan?.SetTag("plugin.count", job.AgentDef.Plugins.Count);
+                pluginSpan?.SetTag("plugin.ids", string.Join(",", job.AgentDef.Plugins.Select(p => p.Id)));
+                var localPluginPaths = await ClonePluginsLocallyAsync(
+                    job.AgentDef.Plugins, job.Id, workDir, ct);
+                allLocalPluginPaths.AddRange(localPluginPaths);
+                pluginSpan?.SetTag("plugin.paths", string.Join(",", localPluginPaths));
+            }
+
+            if (job.AgentDef?.Agents?.Count > 0)
+            {
+                var agentPluginPath = CreateAgentPluginDirLocally(
+                    job.AgentDef.Agents, job.Id, workDir);
+                if (agentPluginPath != null)
+                    allLocalPluginPaths.Add(agentPluginPath);
+            }
+
+            var extraPluginsEnv = allLocalPluginPaths.Count > 0
+                ? $" VIBECAST_EXTRA_PLUGINS=\"{string.Join(":", allLocalPluginPaths)}\""
+                : "";
+
+            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv} {vibecastBin}");
 
             var startProc = Process.Start(startPsi);
             if (startProc != null)
@@ -1109,6 +1533,8 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             {
                 _console.MarkupLine("[yellow]Streaming session not detected, will try to paste prompt anyway...[/]");
             }
+            agentSpan?.SetTag("stream.id", streamIdValue ?? "");
+            agentSpan?.Dispose();
 
             // 11. Update job with streamId and link stream to project
             if (streamIdValue != null)
@@ -1149,12 +1575,312 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             // passes directly to Claude as a positional argument at startup. No send-keys needed.
             _console.MarkupLine($"[green]Prompt will be delivered via VIBECAST_INITIAL_PROMPT_FILE ({promptFile})[/]");
 
+            // 12b. Start background answer-injection loop if this job is linked to a task.
+            // Polls the server for pending questions and injects answers via tmux send-keys.
+            if (job.AgentDef?.TaskId != null && job.AgentDef?.StageId != null && streamingSession != null)
+            {
+                var vibecastSession = streamingSession; // vibecast names its tmux session after the stream ID
+                answerLoopTask = Task.Run(async () =>
+                {
+                    var lastInjectedToolUseId = "";
+                    var lastSeenToolUseId = ""; // survives pendingQuestion being cleared after user answers
+                    _console.MarkupLine("[cyan]Answer injection loop started.[/]");
+                    while (!answerLoopCts.Token.IsCancellationRequested)
+                    {
+                        try
+                        {
+                            await Task.Delay(3000, answerLoopCts.Token);
+
+                            // Fetch current pending question from the task
+                            var tasksResp = await client.GetAsync(
+                                $"{baseUrl}/stages/{job.AgentDef.StageId}/tasks",
+                                answerLoopCts.Token);
+                            if (!tasksResp.IsSuccessStatusCode) continue;
+
+                            var tasksJson = await tasksResp.Content.ReadAsStringAsync(answerLoopCts.Token);
+                            using var tasksDoc = JsonDocument.Parse(tasksJson);
+                            // Clone the matched element before the doc is disposed
+                            JsonElement? matchedRaw = null;
+                            foreach (var t in tasksDoc.RootElement.EnumerateArray())
+                            {
+                                if (t.TryGetProperty("id", out var idEl) && idEl.GetString() == job.AgentDef.TaskId)
+                                {
+                                    matchedRaw = t.Clone();
+                                    break;
+                                }
+                            }
+                            if (matchedRaw == null) continue;
+                            var matchedTask = matchedRaw.Value;
+
+                            // Track the toolUseId from pendingQuestion while it exists.
+                            // IMPORTANT: when the user submits an answer, clearTaskPendingQuestion removes
+                            // pendingQuestion from the task — so we must remember the last seen toolUseId
+                            // and still poll for its answer, otherwise we miss the window.
+                            if (matchedTask.TryGetProperty("pendingQuestion", out var pq) &&
+                                pq.TryGetProperty("toolUseId", out var tuid) &&
+                                tuid.GetString() is { Length: > 0 } activeTuid)
+                            {
+                                lastSeenToolUseId = activeTuid;
+                            }
+
+                            // ── Permission request branch ──────────────────────────────────────────
+                            // When Claude Code shows a permission dialog in the tmux pane,
+                            // the PermissionRequest hook records a pendingPermission + vote on the task.
+                            // We poll the vote, and when resolved send Down+Enter to pick Allow/Deny.
+                            if (matchedTask.TryGetProperty("pendingPermission", out var pp) &&
+                                pp.TryGetProperty("toolUseId", out var ppTuid) &&
+                                pp.TryGetProperty("streamId", out var ppStream) &&
+                                ppTuid.GetString() is { Length: > 0 } permToolUseId &&
+                                permToolUseId != lastInjectedToolUseId)
+                            {
+                                var permStreamId = ppStream.GetString() ?? "";
+                                var voteResp = await client.GetAsync(
+                                    $"{agenticsBaseUrl}/api/lives/question-vote?streamId={Uri.EscapeDataString(permStreamId)}&toolUseId={Uri.EscapeDataString(permToolUseId)}",
+                                    answerLoopCts.Token);
+                                if (voteResp.IsSuccessStatusCode)
+                                {
+                                    var voteJson = await voteResp.Content.ReadAsStringAsync(answerLoopCts.Token);
+                                    using var voteDoc = JsonDocument.Parse(voteJson);
+                                    var voteRoot = voteDoc.RootElement;
+                                    if (voteRoot.TryGetProperty("resolvedAnswer", out var resolvedEl) &&
+                                        resolvedEl.GetString() is { Length: > 0 } resolvedAnswer)
+                                    {
+                                        // Vote resolved — inject answer via tmux exactly like single-question mode
+                                        _console.MarkupLine($"[green]Permission vote resolved: {resolvedAnswer.EscapeMarkup()} for {permToolUseId}[/]");
+                                        lastInjectedToolUseId = permToolUseId;
+
+                                        var permDebugDir = Path.Combine(vibecastHome, "debug");
+                                        var permPaneTarget = $"{vibecastSession}:main.0";
+                                        var paneContent = await TmuxCaptureAndDebugAsync(permPaneTarget, "permission_before", permDebugDir, answerLoopCts.Token);
+
+                                        // Map vote result to pane option: "Allow" → first Yes option, "Deny" → first No option
+                                        var searchTerm = resolvedAnswer == "Allow" ? "Yes" : "No";
+                                        var optionNumber = MatchOptionNumber(paneContent, searchTerm);
+                                        if (optionNumber == 0) optionNumber = resolvedAnswer == "Allow" ? 1 : 3;
+
+                                        var currentOption = SelectedOptionNumber(paneContent);
+                                        var downs = optionNumber - currentOption;
+                                        _console.MarkupLine($"[dim]  → permission: '{resolvedAnswer.EscapeMarkup()}' → option {optionNumber} ({downs} Down(s))[/]");
+                                        for (var d = 0; d < downs; d++)
+                                        {
+                                            await TmuxSendKeyRawAsync(permPaneTarget, "Down", answerLoopCts.Token);
+                                            await Task.Delay(100, answerLoopCts.Token);
+                                        }
+                                        await TmuxSendKeyRawAsync(permPaneTarget, "Enter", answerLoopCts.Token);
+                                        // Skip the rest of this loop iteration so the wizard injection
+                                        // doesn't run while the permission dialog is still dismissing.
+                                        continue;
+                                    }
+                                }
+                            }
+
+                            // Poll for whichever toolUseId we know about (active or recently cleared)
+                            var toolUseId = lastSeenToolUseId;
+                            if (string.IsNullOrEmpty(toolUseId) || toolUseId == lastInjectedToolUseId) continue;
+
+                            // Check if an answer is available
+                            var ansResp = await client.GetAsync(
+                                $"{baseUrl}/stages/{job.AgentDef.StageId}/tasks/{job.AgentDef.TaskId}/answer-question?toolUseId={Uri.EscapeDataString(toolUseId)}",
+                                answerLoopCts.Token);
+                            if (!ansResp.IsSuccessStatusCode) continue;
+
+                            var ansJson = await ansResp.Content.ReadAsStringAsync(answerLoopCts.Token);
+                            var ansData = JsonSerializer.Deserialize<JsonElement>(ansJson, JsonOptions);
+                            if (!ansData.TryGetProperty("answer", out var ansEl) || ansEl.ValueKind == JsonValueKind.Null) continue;
+                            var answer = ansEl.GetString() ?? "";
+                            if (string.IsNullOrEmpty(answer)) continue;
+
+                            // Inject answer into the vibecast tmux session.
+                            // Target pane 0 of the "main" window explicitly — pane 1 is the fkeybar
+                            // and may be active, so omitting the pane index drops keys into fkeybar.
+                            //
+                            // Claude Code's ask_followup_question renders two distinct UIs:
+                            //   A) Simple text prompt — user types freely, sends with Enter
+                            //   B) Multi-step selection wizard — each question has option 1 pre-selected,
+                            //      navigate with Enter (select), Tab (next field / Submit), then Enter
+                            //
+                            // The server stores answers as a Q&A block (blank-line-separated pairs) when
+                            // the web UI fills in the wizard. For wizard answers we must NOT type the raw
+                            // text — instead we send Enter for each Q&A pair (accepting the pre-selected
+                            // recommended option) then Tab + Enter to confirm the Submit button.
+                            //
+                            // A "wizard answer" is detected by the presence of blank-line-separated
+                            // Q&A blocks (question line + answer line + blank line).
+                            // A "plain answer" is a single non-empty block without that structure.
+                            _console.MarkupLine($"[green]Injecting answer for toolUseId {toolUseId}: {answer.EscapeMarkup()}[/]");
+                            // NOTE: lastInjectedToolUseId is set only after the first successful step so that
+                            // a bail-out (wizard not visible yet) causes a retry on the next poll cycle.
+
+                            var debugDir = Path.Combine(vibecastHome, "debug");
+                            var paneTarget = $"{vibecastSession}:main.0";
+                            var paragraphs = answer.Split(new[] { "\n\n" }, StringSplitOptions.RemoveEmptyEntries);
+                            var isWizardAnswer = paragraphs.Length > 1;
+
+                            if (isWizardAnswer)
+                            {
+                                // Wizard mode: for each Q&A block, capture the pane to read the visible
+                                // options, match the answer text to an option number, and send that digit.
+                                // Claude auto-advances to the next question when a valid option number
+                                // is pressed. After all questions, Tab moves to Submit and Enter confirms.
+                                _console.MarkupLine($"[dim]Wizard answer detected ({paragraphs.Length} steps)[/]");
+                                var stepIdx = 0;
+                                var wizardAborted = false;
+                                string? prevStepContent = null;
+                                foreach (var para in paragraphs)
+                                {
+                                    var lines = para.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                                    if (lines.Length < 2) continue;
+                                    var answerText = lines[1].Trim(); // second line is the answer
+
+                                    // Capture pane, retrying until numbered options are visible.
+                                    // Pass prevStepContent so we wait for the wizard to visually
+                                    // advance (content change) before reading the next question's options.
+                                    // After Enter advances the wizard the next question may take
+                                    // up to ~1.5s to render — retry avoids a spurious free-text fallback.
+                                    var paneContent = await WaitForOptionsAsync(paneTarget, $"wizard_step{stepIdx}_before", debugDir, answerLoopCts.Token, previousContent: prevStepContent);
+                                    var hasAnyOptions = System.Text.RegularExpressions.Regex.IsMatch(
+                                        paneContent, @"^\s*\d+\.\s+\S",
+                                        System.Text.RegularExpressions.RegexOptions.Multiline);
+
+                                    if (!hasAnyOptions)
+                                    {
+                                        // The wizard UI isn't visible at all — we might be between dialogs or
+                                        // the dialog was dismissed already. Bail out without marking as injected
+                                        // so the next poll cycle retries when the wizard actually appears.
+                                        _console.MarkupLine($"[yellow]Wizard not visible at step {stepIdx} (no numbered options), deferring injection[/]");
+                                        wizardAborted = true;
+                                        break;
+                                    }
+
+                                    var optionNumber = MatchOptionNumber(paneContent, answerText);
+
+                                    if (optionNumber > 0)
+                                    {
+                                        // Mark as injected only once we've confirmed the wizard is on screen.
+                                        if (stepIdx == 0) lastInjectedToolUseId = toolUseId;
+
+                                        // The wizard cursor starts at option 1 (❯). Navigate down to the target
+                                        // option with arrow keys, then press Enter to select and advance.
+                                        // The wizard responds to Enter, not digit shortcuts.
+                                        var currentOption = SelectedOptionNumber(paneContent);
+                                        var downs = optionNumber - currentOption;
+                                        _console.MarkupLine($"[dim]  → matched '{answerText.EscapeMarkup()}' to option {optionNumber} (cursor at {currentOption}, {downs} Down(s))[/]");
+                                        for (var d = 0; d < downs; d++)
+                                        {
+                                            await TmuxSendKeyRawAsync(paneTarget, "Down", answerLoopCts.Token);
+                                            await Task.Delay(100, answerLoopCts.Token);
+                                        }
+                                        // Enter selects the highlighted option and advances to the next question
+                                        await TmuxSendKeyRawAsync(paneTarget, "Enter", answerLoopCts.Token);
+                                        prevStepContent = paneContent; // remember so next step waits for change
+                                    }
+                                    else
+                                    {
+                                        // No matching numbered option — navigate to "Type something" if available.
+                                        // Only type free text if "Type something" is visible in the wizard.
+                                        // If it's not present the wizard isn't in the right state; bail out.
+                                        var typeSomethingNum = TypeSomethingOptionNumber(paneContent);
+                                        if (typeSomethingNum > 0)
+                                        {
+                                            if (stepIdx == 0) lastInjectedToolUseId = toolUseId;
+                                            _console.MarkupLine($"[dim]  → no option match for '{answerText.EscapeMarkup()}', typing as free text[/]");
+                                            var currentOption = SelectedOptionNumber(paneContent);
+                                            var downs = typeSomethingNum - currentOption;
+                                            for (var d = 0; d < downs; d++)
+                                            {
+                                                await TmuxSendKeyRawAsync(paneTarget, "Down", answerLoopCts.Token);
+                                                await Task.Delay(100, answerLoopCts.Token);
+                                            }
+                                            await TmuxSendKeyRawAsync(paneTarget, "Enter", answerLoopCts.Token);
+                                            await Task.Delay(300, answerLoopCts.Token);
+                                            await TmuxSendKeysAsync(paneTarget, answerText, answerLoopCts.Token);
+                                            prevStepContent = paneContent; // remember so next step waits for change
+                                        }
+                                        else
+                                        {
+                                            // Numbered options exist but none match and there's no free-text slot.
+                                            // This likely means we're in a different dialog (e.g., permission).
+                                            // Bail out without marking as injected — retry next cycle.
+                                            _console.MarkupLine($"[yellow]No option match for '{answerText.EscapeMarkup()}' and no 'Type something' slot — deferring injection[/]");
+                                            wizardAborted = true;
+                                            break;
+                                        }
+                                    }
+                                    stepIdx++;
+                                }
+
+                                if (wizardAborted) continue;
+                                // Capture before final Tab+Enter
+                                await TmuxCaptureAndDebugAsync(paneTarget, "wizard_submit_before", debugDir, answerLoopCts.Token);
+                                await TmuxSendKeysToTabAsync(paneTarget, answerLoopCts.Token);
+                                await Task.Delay(300, answerLoopCts.Token);
+                                await TmuxSendKeysAsync(paneTarget, "", answerLoopCts.Token);
+                            }
+                            else
+                            {
+                                // Single-answer mode: capture pane and check if it shows a numbered option list.
+                                // AskUserQuestion with questions.length===1 sends just the label text as the answer
+                                // (no \n\n), but the UI is the same arrow-key selection as the multi-step wizard —
+                                // NOT free-text typing. Try option matching first; fall back to typing only if no match.
+                                var plainPane = await WaitForOptionsAsync(paneTarget, "plain_before", debugDir, answerLoopCts.Token);
+                                var plainHasOptions = System.Text.RegularExpressions.Regex.IsMatch(
+                                    plainPane, @"^\s*\d+\.\s+\S",
+                                    System.Text.RegularExpressions.RegexOptions.Multiline);
+
+                                if (!plainHasOptions)
+                                {
+                                    // No question UI visible — not the right moment to inject.
+                                    // Don't mark as injected so the next poll cycle retries.
+                                    _console.MarkupLine($"[yellow]Single-question: no question UI visible, deferring injection[/]");
+                                    continue;
+                                }
+
+                                lastInjectedToolUseId = toolUseId;
+                                var plainOptionNumber = MatchOptionNumber(plainPane, answer);
+                                if (plainOptionNumber > 0)
+                                {
+                                    var currentOption = SelectedOptionNumber(plainPane);
+                                    var downs = plainOptionNumber - currentOption;
+                                    _console.MarkupLine($"[dim]  → single-question: matched '{answer.EscapeMarkup()}' to option {plainOptionNumber} ({downs} Down(s))[/]");
+                                    for (var d = 0; d < downs; d++)
+                                    {
+                                        await TmuxSendKeyRawAsync(paneTarget, "Down", answerLoopCts.Token);
+                                        await Task.Delay(100, answerLoopCts.Token);
+                                    }
+                                    // Enter selects and auto-submits (no Tab needed for single-question)
+                                    await TmuxSendKeyRawAsync(paneTarget, "Enter", answerLoopCts.Token);
+                                }
+                                else
+                                {
+                                    // Truly free-text: question UI is showing but has no numbered options.
+                                    _console.MarkupLine($"[dim]  → single-question: no option match, typing as free text[/]");
+                                    await TmuxSendKeysAsync(paneTarget, answer, answerLoopCts.Token);
+                                }
+                            }
+                        }
+                        catch (OperationCanceledException) { break; }
+                        catch (Exception ex)
+                        {
+                            _console.MarkupLine($"[yellow]Answer loop error: {ex.Message.EscapeMarkup()}[/]");
+                        }
+                    }
+                    _console.MarkupLine("[cyan]Answer injection loop stopped.[/]");
+                }, answerLoopCts.Token);
+            }
+
             // 13. Wait for job to complete with activity-based timeout
             var idleTimeoutMs = (job.AgentDef?.IdleTimeoutMinutes ?? 2) * 60 * 1000;
             var maxTimeout = TimeSpan.FromMinutes(job.AgentDef?.MaxTimeoutMinutes ?? 60);
             _console.MarkupLine($"[cyan]Waiting up to {maxTimeout.TotalMinutes} minutes (idle threshold: {idleTimeoutMs / 60000} min)...[/]");
 
+            using var waitSpan = _activitySource.StartActivity("runner.job.wait_completion");
+            waitSpan?.SetTag("idle_timeout_minutes", job.AgentDef?.IdleTimeoutMinutes ?? 2);
+            waitSpan?.SetTag("max_timeout_minutes", job.AgentDef?.MaxTimeoutMinutes ?? 60);
+            waitSpan?.SetTag("stream.id", streamIdValue ?? "");
+
             var startTime = DateTime.UtcNow;
+            // Track why the loop exited so we report the right conclusion
+            var completionReason = "timeout"; // default: loop ran to max timeout
             while (DateTime.UtcNow - startTime < maxTimeout)
             {
                 // Check for task completion signal file
@@ -1162,6 +1888,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 if (File.Exists(completionSignal))
                 {
                     _console.MarkupLine("[green]Task completion signal detected![/]");
+                    completionReason = "success";
                     break;
                 }
 
@@ -1179,7 +1906,11 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                         await checkProc.WaitForExitAsync(ct);
                         if (checkProc.ExitCode != 0)
                         {
+                            // Vibecast called stop_broadcast itself — honour whatever conclusion
+                            // was already sent via session-event; use "success" as default here
+                            // because the actual conclusion comes from the broadcast end event.
                             _console.MarkupLine("[yellow]Streaming session ended, completing job.[/]");
+                            completionReason = "success";
                             break;
                         }
                     }
@@ -1201,6 +1932,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                             {
                                 var idleSince = actData.TryGetProperty("idleSinceMs", out var idleMs) ? idleMs.GetInt64() / 1000 : 0;
                                 _console.MarkupLine($"[yellow]Agent idle for {idleSince}s, completing job.[/]");
+                                completionReason = "idle_timeout";
                                 break;
                             }
                         }
@@ -1219,33 +1951,63 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                     _console.MarkupLine($"[dim]{elapsed.Minutes}m elapsed...[/]");
             }
 
-            // 15. Stop vibecast streaming
+            // Record completion reason on wait span and parent job span
+            var elapsedMinutes = (DateTime.UtcNow - startTime).TotalMinutes;
+            waitSpan?.SetTag("completion.reason", completionReason);
+            waitSpan?.SetTag("elapsed.minutes", Math.Round(elapsedMinutes, 2));
+
+            // 15. Stop vibecast streaming — vibecast sends session-event/end which stores
+            // completionMessage + claudeSessionId on the session. The PATCH below reads that
+            // session data to create the task comment and stamp the task fields. The Runner
+            // does NOT call session-event/end directly; the streaming layer owns that.
+            var jobConclusion = completionReason == "success" ? "success" : "failure";
+            var stopPath = completionReason == "success"
+                ? "/stop-broadcast"
+                : $"/stop-broadcast?conclusion={Uri.EscapeDataString(completionReason)}";
             _console.MarkupLine("[cyan]Stopping vibecast session...[/]");
-            await SendControlSocketRequestAsync(controlSocket, "POST", "/stop-broadcast", null, ct);
+            await SendControlSocketRequestAsync(controlSocket, "POST", stopPath, null, ct);
             await Task.Delay(2000, ct);
 
             // Kill the vibecast tmux session
             await RunProcessAsync("tmux", $"kill-session -t {vibecastTmux}", null, ct);
-
-            // 16. PATCH job to completed
-            _console.MarkupLine("[cyan]Marking job as completed...[/]");
+            _console.MarkupLine($"[cyan]Marking job as completed (conclusion: {jobConclusion}, reason: {completionReason})...[/]");
             var patchCompleted = new HttpRequestMessage(HttpMethod.Patch, $"{baseUrl}/runs/{runId}/jobs/{job.Id}");
             patchCompleted.Content = JsonContent.Create(new
             {
                 status = "completed",
-                conclusion = "success",
-                logs = $"Job completed after {(DateTime.UtcNow - startTime).TotalMinutes:F1} minutes in {jobWorkTree}"
+                conclusion = jobConclusion,
+                // completionReason carries the detailed reason (idle_timeout, timeout, success, etc.)
+                // so the server can apply the correct task lifecycle logic without parsing conclusion.
+                completionReason,
+                streamId = streamIdValue,
+                logs = $"Job completed after {(DateTime.UtcNow - startTime).TotalMinutes:F1} minutes in {jobWorkTree} (reason: {completionReason})"
             });
             patchCompleted.Headers.Authorization = new AuthenticationHeaderValue("Bearer", registration.Token);
             await client.SendAsync(patchCompleted, ct);
 
             _console.MarkupLine($"[green]Job {job.Id} completed.[/]");
 
+            // Enrich parent job span with final outcome
+            jobSpan?.SetTag("agentics.conclusion", jobConclusion);
+            jobSpan?.SetTag("agentics.completion_reason", completionReason);
+            jobSpan?.SetTag("agentics.stream_id", streamIdValue ?? "");
+            jobSpan?.SetTag("agentics.elapsed_minutes", Math.Round(elapsedMinutes, 2));
+            if (jobConclusion != "success")
+                jobSpan?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, completionReason);
+
             // Remove from active tracking (normal completion)
             lock (_activeJobsLock) { _activeJobs.RemoveAll(j => j.JobId == job.Id); }
         }
         finally
         {
+            // Stop the answer injection loop
+            await answerLoopCts.CancelAsync();
+            if (answerLoopTask != null)
+            {
+                try { await answerLoopTask.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
+            }
+            answerLoopCts.Dispose();
+
             if (jobWorkTree != null)
             {
                 await CleanupWorkTreeAsync(jobWorkTree, settings.Verbose, ct);
@@ -1331,6 +2093,198 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             await proc.WaitForExitAsync(ct);
     }
 
+    /// <summary>Sends a Tab key to the target tmux pane (no text, no Enter).</summary>
+    private static async Task TmuxSendKeysToTabAsync(string target, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo("tmux")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        psi.ArgumentList.Add("send-keys");
+        psi.ArgumentList.Add("-t");
+        psi.ArgumentList.Add(target);
+        psi.ArgumentList.Add("Tab");
+
+        var proc = Process.Start(psi);
+        if (proc != null)
+            await proc.WaitForExitAsync(ct);
+    }
+
+    /// <summary>Captures the visible text content of a tmux pane (no ANSI codes).</summary>
+    private static async Task<string> TmuxCapturePaneAsync(string target, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo("tmux")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        psi.ArgumentList.Add("capture-pane");
+        psi.ArgumentList.Add("-t");
+        psi.ArgumentList.Add(target);
+        psi.ArgumentList.Add("-p");
+
+        var proc = Process.Start(psi);
+        if (proc == null) return string.Empty;
+        var output = await proc.StandardOutput.ReadToEndAsync(ct);
+        await proc.WaitForExitAsync(ct);
+        return output;
+    }
+
+    /// <summary>
+    /// Captures the pane, writes a debug snapshot file to <paramref name="debugDir"/>,
+    /// and emits an OTEL event on the current Activity. Returns the captured content.
+    ///
+    /// Files are named: <c>NNN_label.txt</c> (NNN = zero-padded global sequence) so they
+    /// sort chronologically in a file browser.  The debug dir is created on first use.
+    /// </summary>
+    private static async Task<string> TmuxCaptureAndDebugAsync(
+        string target, string label, string debugDir, CancellationToken ct)
+    {
+        var content = await TmuxCapturePaneAsync(target, ct);
+
+        try
+        {
+            Directory.CreateDirectory(debugDir);
+            var seq = Interlocked.Increment(ref _captureSeq);
+            var safeLabel = string.Concat(label.Select(c => char.IsLetterOrDigit(c) || c == '_' ? c : '_'));
+            var filename = Path.Combine(debugDir, $"{seq:D4}_{safeLabel}.txt");
+            await File.WriteAllTextAsync(filename, content, ct);
+        }
+        catch { /* debug writes are best-effort */ }
+
+        // Emit OTEL event — truncate content to avoid oversized spans
+        var truncated = content.Length > 2000 ? content[..2000] + "…" : content;
+        System.Diagnostics.Activity.Current?.AddEvent(new System.Diagnostics.ActivityEvent(
+            "tmux.capture",
+            tags: new System.Diagnostics.ActivityTagsCollection
+            {
+                ["tmux.target"] = target,
+                ["tmux.label"] = label,
+                ["tmux.content"] = truncated,
+            }));
+
+        return content;
+    }
+
+    /// <summary>
+    /// Captures the tmux pane, retrying until at least one numbered option (e.g. "1. Foo")
+    /// is visible or the timeout elapses. This handles the delay between the wizard advancing
+    /// to the next question and Claude Code actually rendering the new options on screen.
+    /// When <paramref name="previousContent"/> is provided the function first waits for the
+    /// pane to show DIFFERENT content (wizard has advanced) before checking for options.
+    /// This prevents reading stale content from the previous step immediately after Enter.
+    /// </summary>
+    private static async Task<string> WaitForOptionsAsync(
+        string target, string label, string debugDir, CancellationToken ct,
+        int maxWaitMs = 3000, int intervalMs = 300, string? previousContent = null)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(maxWaitMs);
+        var content = "";
+        while (DateTime.UtcNow < deadline)
+        {
+            content = await TmuxCaptureAndDebugAsync(target, label, debugDir, ct);
+
+            // If we have previous content, skip until the wizard has visually advanced
+            // (content changed) to avoid matching the just-answered question's options.
+            if (previousContent != null && content.Trim() == previousContent.Trim())
+            {
+                await Task.Delay(intervalMs, ct);
+                continue;
+            }
+
+            // Consider the pane "ready" when at least one line looks like "N. Option text"
+            if (System.Text.RegularExpressions.Regex.IsMatch(
+                    content, @"^\s*\d+\.\s+\S",
+                    System.Text.RegularExpressions.RegexOptions.Multiline))
+                return content;
+            await Task.Delay(intervalMs, ct);
+        }
+        // Return whatever we have after timeout (fall back to free-text if still no options)
+        return content;
+    }
+
+    /// <summary>
+    /// Parses the visible pane content for numbered option lines like "  1. SaaS (Recommended)"
+    /// or "❯ 1. SaaS (Recommended)" and returns the number whose text matches answerText.
+    /// Strips common annotation suffixes like "(Recommended)" from both sides before comparing.
+    /// Returns 0 if no match is found.
+    /// </summary>
+    private static int MatchOptionNumber(string paneContent, string answerText)
+    {
+        static string Normalize(string s) =>
+            System.Text.RegularExpressions.Regex.Replace(s, @"\s*\(.*?\)\s*$", "").Trim();
+
+        var normalizedAnswer = Normalize(answerText);
+
+        foreach (var line in paneContent.Split('\n'))
+        {
+            // Strip leading selection cursor and whitespace
+            var trimmed = line.TrimStart('❯', ' ', '\t');
+            var match = System.Text.RegularExpressions.Regex.Match(trimmed, @"^(\d+)\.\s+(.+)");
+            if (!match.Success) continue;
+
+            var num = int.Parse(match.Groups[1].Value);
+            var optText = Normalize(match.Groups[2].Value);
+
+            if (optText.Equals(normalizedAnswer, StringComparison.OrdinalIgnoreCase) ||
+                normalizedAnswer.StartsWith(optText, StringComparison.OrdinalIgnoreCase) ||
+                optText.StartsWith(normalizedAnswer, StringComparison.OrdinalIgnoreCase))
+            {
+                return num;
+            }
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// Returns the option number currently highlighted by the ❯ cursor in the pane content.
+    /// Returns 1 if no cursor is found (safe default — the wizard always starts at option 1).
+    /// </summary>
+    private static int SelectedOptionNumber(string paneContent)
+    {
+        foreach (var line in paneContent.Split('\n'))
+        {
+            if (!line.TrimStart().StartsWith("❯")) continue;
+            var trimmed = line.TrimStart('❯', ' ', '\t');
+            var match = System.Text.RegularExpressions.Regex.Match(trimmed, @"^(\d+)\.");
+            if (match.Success) return int.Parse(match.Groups[1].Value);
+        }
+        return 1;
+    }
+
+    /// <summary>
+    /// Returns the option number for "Type something." in the pane, or 0 if not found.
+    /// </summary>
+    private static int TypeSomethingOptionNumber(string paneContent)
+    {
+        foreach (var line in paneContent.Split('\n'))
+        {
+            var trimmed = line.TrimStart('❯', ' ', '\t');
+            var match = System.Text.RegularExpressions.Regex.Match(trimmed, @"^(\d+)\.\s+Type something");
+            if (match.Success) return int.Parse(match.Groups[1].Value);
+        }
+        return 0;
+    }
+
+    /// <summary>Sends a single named key (e.g. "Down", "Enter", "Tab") without appending Enter.</summary>
+    private static async Task TmuxSendKeyRawAsync(string target, string key, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo("tmux")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        psi.ArgumentList.Add("send-keys");
+        psi.ArgumentList.Add("-t");
+        psi.ArgumentList.Add(target);
+        psi.ArgumentList.Add(key);
+
+        var proc = Process.Start(psi);
+        if (proc != null)
+            await proc.WaitForExitAsync(ct);
+    }
+
     private static async Task RunProcessAsync(string cmd, string args, string? workDir, CancellationToken ct)
     {
         try
@@ -1364,13 +2318,36 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
     private async Task<string> SetupJobWorkTreeAsync(
         string workDir, AgenticsRunnerRegistration registration,
-        RunnerJob job, bool verbose, CancellationToken ct,
+        RunnerJob job, bool verbose, bool useWorktree, CancellationToken ct,
         Dictionary<string, string>? gitEnv = null)
     {
         var owner = registration.Owner;
         var project = registration.Project;
         var repository = job.AgentDef?.Repository;
         var branch = job.AgentDef?.Branch ?? "main";
+
+        // Clean-clone mode: no worktree. Fresh git clone (or empty dir) per job.
+        if (!useWorktree)
+        {
+            var jobDir = Path.Combine(workDir, "jobs", job.Id);
+            Directory.CreateDirectory(jobDir);
+
+            if (!string.IsNullOrEmpty(repository))
+            {
+                _console.MarkupLine($"[cyan]Cloning {repository} → {jobDir}...[/]");
+                var cloneResult = await RunGitAsync(
+                    $"clone --depth=1 --branch {branch} {repository} {jobDir}",
+                    null, verbose, ct, gitEnv);
+                if (cloneResult != 0)
+                    _console.MarkupLine($"[yellow]git clone failed (exit {cloneResult}) — using empty job directory[/]");
+            }
+            else
+            {
+                _console.MarkupLine($"[cyan]No repository URL — using empty job directory {jobDir}[/]");
+            }
+
+            return jobDir;
+        }
 
         // Find git repo root and its remote URL for same-repo detection
         var repoRoot = await GetGitToplevelAsync(ct);
@@ -1467,18 +2444,26 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
         try
         {
-            // Find the parent repo to run worktree remove from
-            var gitDir = await GetGitDirForWorktreeAsync(worktreePath, ct);
-            if (gitDir != null)
+            // A linked git worktree has a .git FILE (not directory) at its root.
+            // A plain directory that happens to sit inside a git repo does NOT.
+            // We must check for this before calling `git worktree remove` to avoid
+            // the "is not a working tree" fatal from git.
+            var gitFilePath = Path.Combine(worktreePath, ".git");
+            var isLinkedWorktree = File.Exists(gitFilePath) && !Directory.Exists(gitFilePath);
+
+            if (isLinkedWorktree)
             {
-                if (verbose) _console.MarkupLine($"[dim]Removing worktree {worktreePath}...[/]");
-                await RunGitAsync($"worktree remove --force {worktreePath}", gitDir, verbose, ct);
+                var gitDir = await GetGitDirForWorktreeAsync(worktreePath, ct);
+                if (gitDir != null)
+                {
+                    if (verbose) _console.MarkupLine($"[dim]Removing worktree {worktreePath}...[/]");
+                    await RunGitAsync($"worktree remove --force {worktreePath}", gitDir, verbose, ct);
+                    return;
+                }
             }
-            else
-            {
-                // Fallback: just delete the directory
-                Directory.Delete(worktreePath, true);
-            }
+
+            // Fallback: just delete the directory
+            Directory.Delete(worktreePath, true);
         }
         catch (Exception ex)
         {
@@ -2088,6 +3073,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         public string? Repository { get; set; }
         public string? Branch { get; set; }
         public string? Prompt { get; set; }
+        public string? AppendSystemPrompt { get; set; }
         public List<string> Labels { get; set; } = new();
         public string? TaskId { get; set; }
         public string? StageId { get; set; }
@@ -2096,6 +3082,32 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         public string? StageGitUrl { get; set; }
         public string? StageGitToken { get; set; }
         public Dictionary<string, string>? DevcontainerFiles { get; set; }
+        public List<PluginRef>? Plugins { get; set; }
+        public List<AgentRef>? Agents { get; set; }
+        /// <summary>W3C traceparent header from the server-side span that dispatched this job.</summary>
+        public string? Traceparent { get; set; }
+        /// <summary>claudeSessionId from a prior timed-out run — when set, runner injects VIBECAST_RESUME_SESSION_ID so vibecast can pass --resume to Claude.</summary>
+        public string? ResumeSessionId { get; set; }
+        /// <summary>When true, vibecast blocks Claude from stopping until the working tree is clean (no uncommitted changes).</summary>
+        public bool AutoGit { get; set; }
+        /// <summary>When true, runner creates a task-scoped branch (task-{taskId}) before launching Claude.</summary>
+        public bool InitBranch { get; set; }
+        /// <summary>Commit message hint shown to Claude when AutoGit blocks session end due to uncommitted changes.</summary>
+        public string? CommitMessageTemplate { get; set; }
+    }
+
+    private class PluginRef
+    {
+        public string Id { get; set; } = "";
+        public string Name { get; set; } = "";
+        public string SourceUrl { get; set; } = "";
+    }
+
+    private class AgentRef
+    {
+        public string Id { get; set; } = "";
+        public string Name { get; set; } = "";
+        public string Content { get; set; } = "";
     }
 
     private class RegisterRunnerResponse

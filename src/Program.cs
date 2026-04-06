@@ -1,4 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
+using OpenTelemetry;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure;
 using PKS.Infrastructure.Initializers.Registry;
@@ -654,7 +657,25 @@ app.Configure(config =>
     });
 });
 
+// Set up OpenTelemetry tracing if an OTLP endpoint is configured (e.g. injected by Aspire).
+// This makes runner spans visible in the Aspire dashboard alongside Next.js server traces.
+using var tracerProvider = SetupTracing();
+
 return await app.RunAsync(args);
+
+static TracerProvider? SetupTracing()
+{
+    // Only activate when an OTLP endpoint is available (Aspire injects OTEL_EXPORTER_OTLP_ENDPOINT).
+    var otlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
+    if (string.IsNullOrEmpty(otlpEndpoint)) return null;
+
+    return Sdk.CreateTracerProviderBuilder()
+        .SetResourceBuilder(ResourceBuilder.CreateDefault()
+            .AddService("pks-cli", serviceVersion: GetVersion()))
+        .AddSource(PKS.Commands.Agentics.Runner.AgenticsRunnerStartCommand.ActivitySourceName)
+        .AddOtlpExporter()
+        .Build();
+}
 
 static string GetVersion()
 {

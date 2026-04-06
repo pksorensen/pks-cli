@@ -47,6 +47,10 @@
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="0.3.0-preview.3"/>
     <!-- Docker integration -->
     <PackageReference Include="Docker.DotNet" Version="3.125.15"/>
+    <!-- OpenTelemetry: ActivitySource + OTLP export to Aspire -->
+    <PackageReference Include="OpenTelemetry" Version="1.11.2"/>
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.11.2"/>
+    <PackageReference Include="System.Diagnostics.DiagnosticSource" Version="9.0.4"/>
   </ItemGroup>
 
   <!-- Template inclusion for normal builds (NuGet global tool) -->
