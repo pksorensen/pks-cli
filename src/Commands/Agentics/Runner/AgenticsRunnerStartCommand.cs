@@ -29,6 +29,13 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
     public const string ActivitySourceName = "pks-cli.agentics.runner";
     private static readonly System.Diagnostics.ActivitySource _activitySource = new(ActivitySourceName, "1.0.0");
 
+    /// <summary>Meter name used by the runner. Referenced by Program.cs when building the MeterProvider.</summary>
+    public const string MeterName = "pks-cli.agentics.runner";
+    private static readonly System.Diagnostics.Metrics.Meter _meter = new(MeterName, "1.0.0");
+    private static readonly System.Diagnostics.Metrics.Counter<long> _pollCounter =
+        _meter.CreateCounter<long>("runner.polls", unit: "{polls}",
+            description: "Number of job poll attempts. Use this to verify the runner is alive.");
+
     /// <summary>Global monotonic counter so debug captures sort correctly across concurrent jobs.</summary>
     private static int _captureSeq = 0;
 
@@ -111,6 +118,35 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         try
         {
             DisplayBanner();
+
+            // ── OTEL startup diagnostics ──────────────────────────────────────────────
+            {
+                var otlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
+                var serviceName  = Environment.GetEnvironmentVariable("OTEL_SERVICE_NAME");
+                var resourceAttrs = Environment.GetEnvironmentVariable("OTEL_RESOURCE_ATTRIBUTES");
+                if (!string.IsNullOrEmpty(otlpEndpoint))
+                {
+                    _console.MarkupLine($"[dim]OTEL exporter: [cyan]{otlpEndpoint.EscapeMarkup()}[/][/]");
+                    if (!string.IsNullOrEmpty(serviceName))
+                        _console.MarkupLine($"[dim]OTEL service:  [cyan]{serviceName.EscapeMarkup()}[/][/]");
+                    if (!string.IsNullOrEmpty(resourceAttrs))
+                        _console.MarkupLine($"[dim]OTEL resource: [cyan]{resourceAttrs.EscapeMarkup()}[/][/]");
+
+                    // Emit a startup span — visible immediately in the Aspire dashboard and confirms OTEL is working.
+                    using var startSpan = _activitySource.StartActivity("runner.start");
+                    startSpan?.SetTag("runner.version",
+                        System.Reflection.Assembly.GetExecutingAssembly()
+                            .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+                            is System.Reflection.AssemblyInformationalVersionAttribute[] { Length: > 0 } attrs
+                            ? attrs[0].InformationalVersion : "unknown");
+                    startSpan?.SetTag("otel.endpoint", otlpEndpoint);
+                }
+                else
+                {
+                    _console.MarkupLine("[dim]OTEL: no OTEL_EXPORTER_OTLP_ENDPOINT — tracing disabled[/]");
+                }
+            }
+            // ─────────────────────────────────────────────────────────────────────────
 
             // Resolve registration: --project auto-registers if needed, otherwise use first saved
             AgenticsRunnerRegistration registration;
@@ -257,6 +293,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                     try
                     {
                         var job = await PollForJobAsync(registration, cts.Token);
+
                         if (job != null)
                         {
                             _console.MarkupLine($"[green]Job received:[/] {job.Id}");
@@ -291,6 +328,11 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                             if (settings.Verbose)
                                 _console.MarkupLine($"[dim]{DateTime.UtcNow:HH:mm:ss} No jobs available, waiting {settings.PollingInterval}s...[/]");
                         }
+
+                        _pollCounter.Add(1,
+                            new KeyValuePair<string, object?>("owner", registration.Owner),
+                            new KeyValuePair<string, object?>("project", registration.Project),
+                            new KeyValuePair<string, object?>("result", job != null ? "job_found" : "empty"));
                     }
                     catch (OperationCanceledException)
                     {
@@ -299,6 +341,10 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                     catch (Exception ex)
                     {
                         _console.MarkupLine($"[red]Polling error:[/] {ex.Message.EscapeMarkup()}");
+                        _pollCounter.Add(1,
+                            new KeyValuePair<string, object?>("owner", registration.Owner),
+                            new KeyValuePair<string, object?>("project", registration.Project),
+                            new KeyValuePair<string, object?>("result", "error"));
                     }
 
                     try
@@ -659,6 +705,11 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         var appendPrompt = !string.IsNullOrWhiteSpace(job.AgentDef?.AppendSystemPrompt)
             ? job.AgentDef.AppendSystemPrompt + "\n\n" + defaultAppendPrompt
             : defaultAppendPrompt;
+        if (job.AgentDef?.GitignoreLines?.Count > 0)
+        {
+            var lines = string.Join("\n", job.AgentDef.GitignoreLines.Select(l => $"  {l}"));
+            appendPrompt = $"Ensure the project's .gitignore file contains the following lines (add them if missing):\n{lines}\n\n" + appendPrompt;
+        }
         var stageGitUrl   = job.AgentDef?.StageGitUrl ?? "";
         var stageGitToken = job.AgentDef?.StageGitToken ?? "";
         var stageDir      = $"{vibecastHome}/stage";
@@ -750,6 +801,12 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             }
         }
 
+        // Operator: auto-approve image uploads so headless stations don't require TUI interaction
+        if (job.AgentDef?.OperatorConfig?.AutoApproveImageUploads == true)
+        {
+            scriptLines.AppendLine("export VIBECAST_AUTO_APPROVE_IMAGES=1");
+        }
+
         var gitUserName  = settings.GitUserName  ?? "si-14x";
         var gitUserEmail = settings.GitUserEmail ?? "si-14x@agentics.dk";
         scriptLines.AppendLine($"git config --global user.name \"{gitUserName}\"");
@@ -763,8 +820,13 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             scriptLines.AppendLine($"git checkout -b {branchName} 2>/dev/null || git checkout {branchName}");
         }
 
-        // Remove any stale .mcp.json left by an older vibecast session (plugin dir handles MCP now)
+        // Remove any stale .mcp.json left by an older vibecast session (plugin dir handles MCP now).
+        // Tools like `aspire agent init` run during the session and will recreate it correctly.
         scriptLines.AppendLine("rm -f .mcp.json");
+        // Write a targeted .claude/.gitignore so only job/session-scoped files are excluded from git.
+        // A blanket "*" would also suppress MCP configs written by tools like `aspire agent init`.
+        scriptLines.AppendLine("mkdir -p .claude");
+        scriptLines.AppendLine("[ -f .claude/.gitignore ] || printf '%s\\n' '# Runner-injected — never commit' 'settings.local.json' > .claude/.gitignore");
         scriptLines.AppendLine("exec ${VIBECAST_BIN:-npx --yes vibecast}");
 
         var scriptB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(scriptLines.ToString().Replace("\r\n", "\n")));
@@ -1335,6 +1397,11 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             var appendPrompt = !string.IsNullOrWhiteSpace(job.AgentDef?.AppendSystemPrompt)
                 ? job.AgentDef.AppendSystemPrompt + "\n\n" + defaultAppendPrompt
                 : defaultAppendPrompt;
+            if (job.AgentDef?.GitignoreLines?.Count > 0)
+            {
+                var lines = string.Join("\n", job.AgentDef.GitignoreLines.Select(l => $"  {l}"));
+                appendPrompt = $"Ensure the project's .gitignore file contains the following lines (add them if missing):\n{lines}\n\n" + appendPrompt;
+            }
             // Inherit VIBECAST_KEYBOARD_PIN from environment if set
             var keyboardPin = Environment.GetEnvironmentVariable("VIBECAST_KEYBOARD_PIN");
             var keyboardPinEnv = !string.IsNullOrEmpty(keyboardPin) ? $" VIBECAST_KEYBOARD_PIN={keyboardPin}" : "";
@@ -1379,10 +1446,14 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
   }
 }
 """, ct);
-                // Prevent any .claude/ contents from being committed by Claude during auto-git.
+                // Write a targeted .claude/.gitignore that only ignores job/session-scoped files.
+                // Do NOT use a blanket "*" — project-level files like settings.json and MCP
+                // configs written by tools such as `aspire agent init` should be committable.
                 var claudeGitignoreFile = Path.Combine(claudeSettingsDir, ".gitignore");
                 if (!File.Exists(claudeGitignoreFile))
-                    await File.WriteAllTextAsync(claudeGitignoreFile, "*\n", ct);
+                    await File.WriteAllTextAsync(claudeGitignoreFile,
+                        "# Runner-injected — never commit\n" +
+                        "settings.local.json\n", ct);
                 _console.MarkupLine($"[cyan]Pre-wrote .claude/settings.local.json and .claude/.gitignore in {jobWorkTree}[/]");
             }
 
@@ -1396,6 +1467,8 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             var resumeEnv = !string.IsNullOrEmpty(job.AgentDef?.ResumeSessionId)
                 ? $" VIBECAST_RESUME_SESSION_ID={job.AgentDef.ResumeSessionId}"
                 : "";
+            if (!string.IsNullOrEmpty(job.AgentDef?.ResumeStreamId))
+                resumeEnv += $" STREAM_ID={job.AgentDef.ResumeStreamId}";
 
             // Auto-git: tell vibecast's stop hook to block Claude from stopping with uncommitted changes
             var autoGitEnv = "";
@@ -1408,6 +1481,11 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                     autoGitEnv += $" AGENTICS_COMMIT_MESSAGE_HINT='{escapedHint}'";
                 }
             }
+
+            // Operator: auto-approve image uploads so headless stations don't require TUI interaction
+            var autoApproveEnv = job.AgentDef?.OperatorConfig?.AutoApproveImageUploads == true
+                ? " VIBECAST_AUTO_APPROVE_IMAGES=1"
+                : "";
 
             // initBranch: create a task-scoped branch in the worktree before launching Claude
             if (job.AgentDef?.InitBranch == true && !string.IsNullOrEmpty(job.AgentDef.TaskId))
@@ -1450,7 +1528,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 ? $" VIBECAST_EXTRA_PLUGINS=\"{string.Join(":", allLocalPluginPaths)}\""
                 : "";
 
-            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv} {vibecastBin}");
+            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv}{autoApproveEnv} {vibecastBin}");
 
             var startProc = Process.Start(startPsi);
             if (startProc != null)
@@ -3088,12 +3166,22 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         public string? Traceparent { get; set; }
         /// <summary>claudeSessionId from a prior timed-out run — when set, runner injects VIBECAST_RESUME_SESSION_ID so vibecast can pass --resume to Claude.</summary>
         public string? ResumeSessionId { get; set; }
+        /// <summary>streamId from a prior timed-out run — when set, runner injects STREAM_ID so vibecast reuses the same broadcast channel.</summary>
+        public string? ResumeStreamId { get; set; }
         /// <summary>When true, vibecast blocks Claude from stopping until the working tree is clean (no uncommitted changes).</summary>
         public bool AutoGit { get; set; }
         /// <summary>When true, runner creates a task-scoped branch (task-{taskId}) before launching Claude.</summary>
         public bool InitBranch { get; set; }
         /// <summary>Commit message hint shown to Claude when AutoGit blocks session end due to uncommitted changes.</summary>
         public string? CommitMessageTemplate { get; set; }
+        /// <summary>Lines to ensure exist in the project .gitignore — injected into the agent system prompt.</summary>
+        public List<string>? GitignoreLines { get; set; }
+        public RunnerOperatorConfig? OperatorConfig { get; set; }
+    }
+
+    private class RunnerOperatorConfig
+    {
+        public bool AutoApproveImageUploads { get; set; }
     }
 
     private class PluginRef

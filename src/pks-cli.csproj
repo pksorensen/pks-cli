@@ -33,24 +33,25 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Spectre.Console" Version="0.47.0"/>
-    <PackageReference Include="Spectre.Console.Cli" Version="0.47.0"/>
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0"/>
-    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0"/>
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.0"/>
-    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.0"/>
-    <PackageReference Include="NuGet.Protocol" Version="6.12.4"/>
-    <PackageReference Include="NuGet.Configuration" Version="6.12.4"/>
-    <PackageReference Include="NuGet.Common" Version="6.12.4"/>
+    <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.12.0" />
+    <PackageReference Include="Spectre.Console" Version="0.47.0" />
+    <PackageReference Include="Spectre.Console.Cli" Version="0.47.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.0" />
+    <PackageReference Include="NuGet.Protocol" Version="6.12.4" />
+    <PackageReference Include="NuGet.Configuration" Version="6.12.4" />
+    <PackageReference Include="NuGet.Common" Version="6.12.4" />
     <!-- Model Context Protocol SDK -->
-    <PackageReference Include="ModelContextProtocol" Version="0.3.0-preview.3"/>
-    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="0.3.0-preview.3"/>
+    <PackageReference Include="ModelContextProtocol" Version="0.3.0-preview.3" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="0.3.0-preview.3" />
     <!-- Docker integration -->
-    <PackageReference Include="Docker.DotNet" Version="3.125.15"/>
+    <PackageReference Include="Docker.DotNet" Version="3.125.15" />
     <!-- OpenTelemetry: ActivitySource + OTLP export to Aspire -->
-    <PackageReference Include="OpenTelemetry" Version="1.11.2"/>
-    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.11.2"/>
-    <PackageReference Include="System.Diagnostics.DiagnosticSource" Version="9.0.4"/>
+    <PackageReference Include="OpenTelemetry" Version="1.11.2" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.11.2" />
+    <PackageReference Include="System.Diagnostics.DiagnosticSource" Version="9.0.4" />
   </ItemGroup>
 
   <!-- Template inclusion for normal builds (NuGet global tool) -->
@@ -70,16 +71,16 @@
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Infrastructure\Resources\bootstrap.Dockerfile"/>
+    <EmbeddedResource Include="Infrastructure\Resources\bootstrap.Dockerfile" />
   </ItemGroup>
 
   <!-- Local testing only: embed vibecast linux-amd64 binary and claude-plugin dir so
        spawned containers use the local build instead of npx. Build with -p:EmbedVibecast=true. -->
   <ItemGroup Condition="'$(EmbedVibecast)' == 'true'">
-    <EmbeddedResource Include="Infrastructure\Resources\vibecast-linux-amd64" LogicalName="vibecast-linux-amd64"/>
-    <EmbeddedResource Include="Infrastructure\Resources\claude-plugin\.mcp.json" LogicalName="claude-plugin/.mcp.json"/>
-    <EmbeddedResource Include="Infrastructure\Resources\claude-plugin\.claude-plugin\plugin.json" LogicalName="claude-plugin/.claude-plugin/plugin.json"/>
-    <EmbeddedResource Include="Infrastructure\Resources\claude-plugin\hooks\hooks.json" LogicalName="claude-plugin/hooks/hooks.json"/>
+    <EmbeddedResource Include="Infrastructure\Resources\vibecast-linux-amd64" LogicalName="vibecast-linux-amd64" />
+    <EmbeddedResource Include="Infrastructure\Resources\claude-plugin\.mcp.json" LogicalName="claude-plugin/.mcp.json" />
+    <EmbeddedResource Include="Infrastructure\Resources\claude-plugin\.claude-plugin\plugin.json" LogicalName="claude-plugin/.claude-plugin/plugin.json" />
+    <EmbeddedResource Include="Infrastructure\Resources\claude-plugin\hooks\hooks.json" LogicalName="claude-plugin/hooks/hooks.json" />
   </ItemGroup>
 
 </Project>
