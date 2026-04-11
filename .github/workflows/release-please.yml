@@ -22,9 +22,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       releases_created: ${{ steps.release.outputs.releases_created }}
-      cli_release_created: ${{ steps.release.outputs['src--release_created'] }}
-      cli_version: ${{ steps.release.outputs['src--version'] }}
-      cli_tag_name: ${{ steps.release.outputs['src--tag_name'] }}
+      cli_release_created: ${{ steps.release.outputs['.--release_created'] }}
+      cli_version: ${{ steps.release.outputs['.--version'] }}
+      cli_tag_name: ${{ steps.release.outputs['.--tag_name'] }}
       devcontainer_release_created: ${{ steps.release.outputs['templates/devcontainer--release_created'] }}
       devcontainer_version: ${{ steps.release.outputs['templates/devcontainer--version'] }}
       devcontainer_tag_name: ${{ steps.release.outputs['templates/devcontainer--tag_name'] }}
@@ -73,8 +73,15 @@ jobs:
       - name: Read base version
         id: version
         run: |
-          BASE_VERSION=$(cat src/version.txt | tr -d '[:space:]')
-          PREVIEW_VERSION="${BASE_VERSION}-preview.${{ github.run_number }}"
+          BASE_VERSION=$(cat version.txt | tr -d '[:space:]')
+          # Count commits since last release tag to get a preview counter that resets after each release
+          LAST_TAG=$(git describe --tags --abbrev=0 --match "v*" 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            COMMIT_COUNT=$(git rev-list --count "${LAST_TAG}..HEAD")
+          else
+            COMMIT_COUNT=${{ github.run_number }}
+          fi
+          PREVIEW_VERSION="${BASE_VERSION}-preview.${COMMIT_COUNT}"
           echo "preview=$PREVIEW_VERSION" >> $GITHUB_OUTPUT
 
       - name: Restore and build
