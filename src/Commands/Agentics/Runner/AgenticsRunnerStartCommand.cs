@@ -286,13 +286,17 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                     }
                 };
 
+                // Compute runner capabilities once at startup
+                var capabilities = await ComputeCapabilitiesAsync(settings.InProcess, cts.Token);
+                _console.MarkupLine($"[dim]Runner capabilities: {string.Join(", ", capabilities)}[/]");
+
                 // Polling loop
                 var jobsProcessed = 0;
                 while (!cts.Token.IsCancellationRequested)
                 {
                     try
                     {
-                        var job = await PollForJobAsync(registration, cts.Token);
+                        var job = await PollForJobAsync(registration, capabilities, cts.Token);
 
                         if (job != null)
                         {
@@ -309,10 +313,16 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                                 "runner.execute_job", System.Diagnostics.ActivityKind.Consumer, parentCtx);
                             jobActivity?.SetTag("agentics.job_id", job.Id);
                             jobActivity?.SetTag("agentics.task_id", job.AgentDef?.TaskId);
-                            jobActivity?.SetTag("agentics.stage_id", job.AgentDef?.StageId);
+                            jobActivity?.SetTag("agentics.assembly_line_id", job.AgentDef?.AssemblyLineId);
                             jobActivity?.SetTag("agentics.mode", settings.InProcess ? "inprocess" : "spawn");
 
-                            if (settings.InProcess)
+                            if (job.AgentDef?.JobType == "git_push" && job.AgentDef?.GitPushPayload != null)
+                            {
+                                await ExecuteGitPushJobAsync(registration, job, settings, cts.Token);
+                                jobsProcessed++;
+                                _console.MarkupLine($"[green]Git push job completed.[/]");
+                            }
+                            else if (settings.InProcess)
                             {
                                 await ExecuteInProcessAsync(registration, job, settings, cts.Token);
                                 jobsProcessed++;
@@ -503,7 +513,58 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         return registration;
     }
 
-    private async Task<RunnerJob?> PollForJobAsync(AgenticsRunnerRegistration registration, CancellationToken ct)
+    /// <summary>
+    /// Computes the capability strings this runner instance supports.
+    /// "alp_operator" — always present (can run vibecast/claude jobs).
+    /// "git:push"       — present when a GitHub token is stored (so git push won't prompt).
+    /// </summary>
+    private async Task<List<string>> ComputeCapabilitiesAsync(bool inProcess, CancellationToken ct)
+    {
+        var caps = new List<string> { "alp_operator" };
+
+        // In --inprocess mode: check whether the stored GitHub token is valid.
+        // In spawn mode:       the GitCredentialServer is always started with a stored token,
+        //                      so we only get here after authentication succeeded (see startup preflight).
+        var hasGitCredentials = inProcess
+            ? await _githubAuth.IsAuthenticatedAsync()
+            : true; // spawn mode always authenticated (preflight enforced above)
+
+        // Also accept credentials served via a working GIT_ASKPASS in the environment
+        // (e.g. VS Code devcontainer injects a gho_ token via socket).
+        if (!hasGitCredentials)
+        {
+            var askpass = Environment.GetEnvironmentVariable("GIT_ASKPASS");
+            if (!string.IsNullOrEmpty(askpass) && File.Exists(askpass))
+            {
+                try
+                {
+                    using var cts2 = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    cts2.CancelAfter(TimeSpan.FromSeconds(3));
+                    var psi = new ProcessStartInfo(askpass) { RedirectStandardOutput = true, RedirectStandardError = true };
+                    psi.ArgumentList.Add("Password:");
+                    psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
+                    var proc = Process.Start(psi);
+                    if (proc != null)
+                    {
+                        var output = await proc.StandardOutput.ReadToEndAsync(cts2.Token);
+                        await proc.WaitForExitAsync(cts2.Token);
+                        hasGitCredentials = proc.ExitCode == 0 && !string.IsNullOrWhiteSpace(output);
+                    }
+                }
+                catch
+                {
+                    // GIT_ASKPASS not functional — ignore
+                }
+            }
+        }
+
+        if (hasGitCredentials)
+            caps.Add("git:push");
+
+        return caps;
+    }
+
+    private async Task<RunnerJob?> PollForJobAsync(AgenticsRunnerRegistration registration, IReadOnlyList<string> capabilities, CancellationToken ct)
     {
         using var client = _httpClientFactory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
@@ -511,7 +572,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
         var response = await client.PostAsJsonAsync(
             $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}/runners/jobs",
-            new { },
+            new { capabilities },
             ct);
 
         if (response.StatusCode == System.Net.HttpStatusCode.NoContent ||
@@ -943,12 +1004,12 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             _console.MarkupLine($"[green]Streaming live! streamId: {streamIdValue}[/]");
             await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "in_progress", null, ct, streamIdValue);
 
-            if (job.AgentDef?.TaskId != null && job.AgentDef?.StageId != null)
+            if (job.AgentDef?.TaskId != null && job.AgentDef?.AssemblyLineId != null)
             {
                 try
                 {
                     var linkReq = new HttpRequestMessage(HttpMethod.Post,
-                        $"{baseUrl}/stages/{job.AgentDef.StageId}/tasks/{job.AgentDef.TaskId}/streams");
+                        $"{baseUrl}/assembly-lines/{job.AgentDef.AssemblyLineId}/tasks/{job.AgentDef.TaskId}/streams");
                     linkReq.Content = JsonContent.Create(new { streamId = streamIdValue });
                     await client.SendAsync(linkReq, ct);
                     _console.MarkupLine($"[green]Stream linked to task {job.AgentDef.TaskId}[/]");
@@ -1294,6 +1355,204 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         }
     }
 
+    private async Task ExecuteGitPushJobAsync(AgenticsRunnerRegistration registration, RunnerJob job, Settings settings, CancellationToken ct)
+    {
+        using var client = _httpClientFactory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", registration.Token);
+
+        var baseUrl = $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}";
+        var payload = job.AgentDef!.GitPushPayload!;
+        var verbose = settings.Verbose;
+
+        // 1. Claim the job
+        string runId;
+        _console.MarkupLine($"[cyan]GitPush: claiming job {job.Id}...[/]");
+        try
+        {
+            var claimResponse = await client.PostAsJsonAsync(
+                $"{baseUrl}/runners/generate-jitconfig",
+                new { jobId = job.Id, name = "git-push-runner" },
+                ct);
+            claimResponse.EnsureSuccessStatusCode();
+            var claimData = JsonSerializer.Deserialize<JsonElement>(
+                await claimResponse.Content.ReadAsStringAsync(ct), JsonOptions);
+            runId = claimData.GetProperty("runId").GetString()!;
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[red]GitPush: failed to claim job: {ex.Message.EscapeMarkup()}[/]");
+            return;
+        }
+
+        // 2. Mark in_progress
+        await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "in_progress", null, ct);
+
+        // 3. Set up temp work directory
+        var jobDir = Path.Combine(Path.GetTempPath(), $"agentics-git-push-{job.Id}");
+        Directory.CreateDirectory(jobDir);
+
+        try
+        {
+            // 4. Prepare git credentials
+            var gitEnv = await PrepareGitCredentialsAsync(ct);
+
+            // 5. Configure git identity
+            await RunGitArgsAsync(["config", "--global", "user.name", "Agentics Runner"], null, verbose, ct);
+            await RunGitArgsAsync(["config", "--global", "user.email", "runner@agentics.dk"], null, verbose, ct);
+
+            // 6. Clone or initialize the target repo
+            _console.MarkupLine($"[cyan]GitPush: cloning {payload.TargetRepo.EscapeMarkup()}...[/]");
+
+            // Try cloning the repo (might be empty — that's OK)
+            var cloneExit = await RunGitArgsAsync(["clone", payload.TargetRepo, jobDir], null, verbose, ct, gitEnv);
+            if (cloneExit == 0)
+            {
+                // Check out or create the target branch
+                var checkoutExit = await RunGitArgsAsync(["checkout", payload.TargetBranch], jobDir, verbose, ct);
+                if (checkoutExit != 0)
+                {
+                    // Branch doesn't exist — create it
+                    await RunGitArgsAsync(["checkout", "-b", payload.TargetBranch], jobDir, verbose, ct);
+                }
+            }
+            else
+            {
+                // Clone failed (empty repo or network error) — init locally
+                _console.MarkupLine("[yellow]GitPush: clone failed, initialising empty repo...[/]");
+                Directory.CreateDirectory(jobDir);
+                await RunGitArgsAsync(["init"], jobDir, verbose, ct);
+                await RunGitArgsAsync(["remote", "add", "origin", payload.TargetRepo], jobDir, verbose, ct);
+                await RunGitArgsAsync(["checkout", "-b", payload.TargetBranch], jobDir, verbose, ct);
+            }
+
+            // 7. Write all files into the work directory
+            _console.MarkupLine($"[cyan]GitPush: writing {payload.Files.Count} file(s)...[/]");
+            foreach (var (relativePath, content) in payload.Files)
+            {
+                var fullPath = Path.Combine(jobDir, relativePath.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+                await File.WriteAllTextAsync(fullPath, content, ct);
+                if (verbose)
+                    _console.MarkupLine($"[dim]  wrote {relativePath.EscapeMarkup()}[/]");
+            }
+
+            // 8. Stage all changes
+            var addExit = await RunGitArgsAsync(["add", "-A"], jobDir, verbose, ct);
+            if (addExit != 0) throw new Exception("git add -A failed");
+
+            // Check if there's anything to commit
+            var statusResult = await RunGitOutputAsync(["status", "--porcelain"], jobDir, ct);
+            if (string.IsNullOrWhiteSpace(statusResult))
+            {
+                _console.MarkupLine("[yellow]GitPush: nothing to commit — files are already up to date.[/]");
+                await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "success", ct);
+                return;
+            }
+
+            // 9. Commit
+            var commitExit = await RunGitArgsAsync(["commit", "-m", payload.CommitMessage], jobDir, verbose, ct, gitEnv);
+            if (commitExit != 0) throw new Exception("git commit failed");
+
+            // 10. Push (--set-upstream handles both first push and subsequent pushes)
+            _console.MarkupLine($"[cyan]GitPush: pushing to {payload.TargetBranch.EscapeMarkup()}...[/]");
+            var pushExit = await RunGitArgsAsync(
+                ["push", "--set-upstream", "origin", payload.TargetBranch],
+                jobDir, verbose, ct, gitEnv);
+            if (pushExit != 0) throw new Exception($"git push failed (exit {pushExit})");
+
+            // 11. Get commit SHA for logs
+            var commitSha = (await RunGitOutputAsync(["rev-parse", "HEAD"], jobDir, ct)).Trim();
+            _console.MarkupLine($"[green]GitPush: pushed commit {commitSha.EscapeMarkup()}[/]");
+
+            // 12. Report success
+            await PatchJobStatusWithLogsAsync(client, baseUrl, runId, job.Id, "completed", "success", commitSha, ct);
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[red]GitPush: failed: {ex.Message.EscapeMarkup()}[/]");
+            await PatchJobStatusWithLogsAsync(client, baseUrl, runId, job.Id, "completed", "failure", ex.Message, ct);
+        }
+        finally
+        {
+            try { Directory.Delete(jobDir, recursive: true); } catch { /* best-effort cleanup */ }
+        }
+    }
+
+    private async Task PatchJobStatusWithLogsAsync(
+        HttpClient client, string baseUrl, string runId, string jobId,
+        string status, string conclusion, string logs, CancellationToken ct)
+    {
+        try
+        {
+            var msg = new HttpRequestMessage(HttpMethod.Patch, $"{baseUrl}/runs/{runId}/jobs/{jobId}");
+            msg.Content = JsonContent.Create(new { status, conclusion, logs, completionReason = conclusion });
+            var resp = await client.SendAsync(msg, ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                var body = await resp.Content.ReadAsStringAsync(ct);
+                _console.MarkupLine($"[yellow]PATCH job status warning: {(int)resp.StatusCode} {body.EscapeMarkup()}[/]");
+            }
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[yellow]PATCH job status error: {ex.Message.EscapeMarkup()}[/]");
+        }
+    }
+
+    /// <summary>Runs git with an explicit argument array (avoids space-splitting issues with commit messages).</summary>
+    private async Task<int> RunGitArgsAsync(string[] args, string? workingDir, bool verbose, CancellationToken ct,
+        Dictionary<string, string>? extraEnv = null)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+        if (workingDir != null)
+            psi.WorkingDirectory = workingDir;
+        if (extraEnv != null)
+            foreach (var (key, value) in extraEnv)
+                psi.Environment[key] = value;
+
+        var proc = Process.Start(psi);
+        if (proc == null) return -1;
+
+        var stdout = await proc.StandardOutput.ReadToEndAsync(ct);
+        var stderr = await proc.StandardError.ReadToEndAsync(ct);
+        await proc.WaitForExitAsync(ct);
+
+        if (verbose || proc.ExitCode != 0)
+        {
+            if (!string.IsNullOrWhiteSpace(stdout))
+                _console.MarkupLine($"[dim]{stdout.Trim().EscapeMarkup()}[/]");
+            if (!string.IsNullOrWhiteSpace(stderr))
+                _console.MarkupLine($"[dim]{stderr.Trim().EscapeMarkup()}[/]");
+        }
+        return proc.ExitCode;
+    }
+
+    /// <summary>Runs git and returns stdout as a string.</summary>
+    private static async Task<string> RunGitOutputAsync(string[] args, string workingDir, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            WorkingDirectory = workingDir,
+        };
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+
+        var proc = Process.Start(psi);
+        if (proc == null) return "";
+        var output = await proc.StandardOutput.ReadToEndAsync(ct);
+        await proc.WaitForExitAsync(ct);
+        return output;
+    }
+
     private async Task ExecuteInProcessAsync(AgenticsRunnerRegistration registration, RunnerJob job, Settings settings, CancellationToken ct)
     {
         // Capture the parent span (runner.execute_job) so we can enrich it at the end
@@ -1624,12 +1883,12 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 await client.SendAsync(patchStream, ct);
 
                 // Link stream to the task so the task card glows when live
-                if (job.AgentDef?.TaskId != null && job.AgentDef?.StageId != null)
+                if (job.AgentDef?.TaskId != null && job.AgentDef?.AssemblyLineId != null)
                 {
                     try
                     {
                         var linkReq = new HttpRequestMessage(HttpMethod.Post,
-                            $"{baseUrl}/stages/{job.AgentDef.StageId}/tasks/{job.AgentDef.TaskId}/streams");
+                            $"{baseUrl}/assembly-lines/{job.AgentDef.AssemblyLineId}/tasks/{job.AgentDef.TaskId}/streams");
                         linkReq.Content = JsonContent.Create(new { streamId = streamIdValue });
                         linkReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", registration.Token);
                         await client.SendAsync(linkReq, ct);
@@ -1655,14 +1914,22 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
             // 12b. Start background answer-injection loop if this job is linked to a task.
             // Polls the server for pending questions and injects answers via tmux send-keys.
-            if (job.AgentDef?.TaskId != null && job.AgentDef?.StageId != null && streamingSession != null)
+            agentSpan?.SetTag("agentics.answer_loop.task_id", job.AgentDef?.TaskId ?? "null");
+            agentSpan?.SetTag("agentics.answer_loop.assembly_line_id", job.AgentDef?.AssemblyLineId ?? "null");
+            agentSpan?.SetTag("agentics.answer_loop.streaming_session", streamingSession ?? "null");
+            if (job.AgentDef?.TaskId != null && job.AgentDef?.AssemblyLineId != null && streamingSession != null)
             {
                 var vibecastSession = streamingSession; // vibecast names its tmux session after the stream ID
+                agentSpan?.AddEvent(new System.Diagnostics.ActivityEvent("answer_loop.started",
+                    tags: new System.Diagnostics.ActivityTagsCollection {
+                        ["assembly_line_id"] = job.AgentDef.AssemblyLineId,
+                        ["task_id"] = job.AgentDef.TaskId,
+                    }));
+                _console.MarkupLine($"[cyan]Answer injection loop started. assemblyLineId={job.AgentDef.AssemblyLineId} taskId={job.AgentDef.TaskId}[/]");
                 answerLoopTask = Task.Run(async () =>
                 {
                     var lastInjectedToolUseId = "";
                     var lastSeenToolUseId = ""; // survives pendingQuestion being cleared after user answers
-                    _console.MarkupLine("[cyan]Answer injection loop started.[/]");
                     while (!answerLoopCts.Token.IsCancellationRequested)
                     {
                         try
@@ -1671,7 +1938,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
                             // Fetch current pending question from the task
                             var tasksResp = await client.GetAsync(
-                                $"{baseUrl}/stages/{job.AgentDef.StageId}/tasks",
+                                $"{baseUrl}/assembly-lines/{job.AgentDef.AssemblyLineId}/tasks",
                                 answerLoopCts.Token);
                             if (!tasksResp.IsSuccessStatusCode) continue;
 
@@ -1758,7 +2025,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
                             // Check if an answer is available
                             var ansResp = await client.GetAsync(
-                                $"{baseUrl}/stages/{job.AgentDef.StageId}/tasks/{job.AgentDef.TaskId}/answer-question?toolUseId={Uri.EscapeDataString(toolUseId)}",
+                                $"{baseUrl}/assembly-lines/{job.AgentDef.AssemblyLineId}/tasks/{job.AgentDef.TaskId}/answer-question?toolUseId={Uri.EscapeDataString(toolUseId)}",
                                 answerLoopCts.Token);
                             if (!ansResp.IsSuccessStatusCode) continue;
 
@@ -1786,6 +2053,11 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                             // Q&A blocks (question line + answer line + blank line).
                             // A "plain answer" is a single non-empty block without that structure.
                             _console.MarkupLine($"[green]Injecting answer for toolUseId {toolUseId}: {answer.EscapeMarkup()}[/]");
+                            System.Diagnostics.Activity.Current?.AddEvent(new System.Diagnostics.ActivityEvent("answer_loop.injecting",
+                                tags: new System.Diagnostics.ActivityTagsCollection {
+                                    ["tool_use_id"] = toolUseId,
+                                    ["answer_preview"] = answer.Length > 60 ? answer[..60] + "…" : answer,
+                                }));
                             // NOTE: lastInjectedToolUseId is set only after the first successful step so that
                             // a bail-out (wizard not visible yet) causes a retry on the next poll cycle.
 
@@ -2421,7 +2693,23 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             }
             else
             {
-                _console.MarkupLine($"[cyan]No repository URL — using empty job directory {jobDir}[/]");
+                _console.MarkupLine($"[cyan]No repository URL — initializing isolated git repo in {jobDir}[/]");
+                // Init a git repo so Claude's git-root detection stops here instead of
+                // walking up to the runner's parent workspace (e.g. /workspaces/agentic-live-www).
+                // Without this, Claude writes .claude/agents/ and other files into the wrong repo.
+                await RunGitAsync($"init {jobDir}", null, verbose, ct, gitEnv);
+                // .claude/ is written by the runner after this init — gitignore it so Claude
+                // never sees it as untracked and doesn't try to commit runner-injected config.
+                await File.WriteAllTextAsync(Path.Combine(jobDir, ".gitignore"), ".claude/\n", ct);
+                var initGitEnv = new Dictionary<string, string>(gitEnv ?? [])
+                {
+                    ["GIT_AUTHOR_NAME"]     = "pks-runner",
+                    ["GIT_AUTHOR_EMAIL"]    = "runner@agentics.dk",
+                    ["GIT_COMMITTER_NAME"]  = "pks-runner",
+                    ["GIT_COMMITTER_EMAIL"] = "runner@agentics.dk",
+                };
+                await RunGitAsync($"-C {jobDir} add .gitignore", null, verbose, ct, initGitEnv);
+                await RunGitAsync($"-C {jobDir} commit -m \"init job {job.Id}\"", null, verbose, ct, initGitEnv);
             }
 
             return jobDir;
@@ -3154,7 +3442,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         public string? AppendSystemPrompt { get; set; }
         public List<string> Labels { get; set; } = new();
         public string? TaskId { get; set; }
-        public string? StageId { get; set; }
+        public string? AssemblyLineId { get; set; }
         public int? IdleTimeoutMinutes { get; set; }
         public int? MaxTimeoutMinutes { get; set; }
         public string? StageGitUrl { get; set; }
@@ -3177,6 +3465,18 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         /// <summary>Lines to ensure exist in the project .gitignore — injected into the agent system prompt.</summary>
         public List<string>? GitignoreLines { get; set; }
         public RunnerOperatorConfig? OperatorConfig { get; set; }
+        /// <summary>Job type — defaults to alp_operator. Use git_push for runner-proxied git push operations.</summary>
+        public string? JobType { get; set; }
+        /// <summary>Payload for git_push jobs. Runner clones targetRepo, writes files, commits, and pushes.</summary>
+        public GitPushPayloadModel? GitPushPayload { get; set; }
+    }
+
+    private class GitPushPayloadModel
+    {
+        public string TargetRepo { get; set; } = "";
+        public string TargetBranch { get; set; } = "main";
+        public string CommitMessage { get; set; } = "chore: export assembly line";
+        public Dictionary<string, string> Files { get; set; } = new();
     }
 
     private class RunnerOperatorConfig

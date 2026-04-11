@@ -405,10 +405,21 @@ app.Configure(config =>
         });
     });
 
-    // Add github branch command with runner subcommands
+    // Add github branch command with auth + runner subcommands
     config.AddBranch<PKS.Commands.GitHub.GitHubSettings>("github", github =>
     {
-        github.SetDescription("Manage GitHub integration and self-hosted runners");
+        github.SetDescription("Manage GitHub authentication and self-hosted runners");
+
+        github.AddCommand<PKS.Commands.GitHub.GitHubInitCommand>("init")
+            .WithDescription("Authenticate with GitHub and grant runner push access to a repo")
+            .WithExample(new[] { "github", "init" })
+            .WithExample(new[] { "github", "init", "https://github.com/owner/repo" })
+            .WithExample(new[] { "github", "init", "--force" });
+
+        github.AddCommand<PKS.Commands.GitHub.GitHubStatusCommand>("status")
+            .WithDescription("Show GitHub authentication status and git:push capability")
+            .WithExample(new[] { "github", "status" })
+            .WithExample(new[] { "github", "status", "--verbose" });
 
         github.AddBranch<PKS.Commands.GitHub.GitHubSettings>("runner", runner =>
         {
@@ -581,6 +592,18 @@ app.Configure(config =>
         .WithExample(new[] { "image", "\"a dark editorial photograph of a match burning\"" })
         .WithExample(new[] { "image", "--prompt-file", "prompt.txt", "--output", "cover.jpg" })
         .WithExample(new[] { "image", "--input", "bg.jpg", "\"Add title 'My Book' in white serif at the top\"", "--output", "cover-final.jpg" });
+
+    // Add claude analysis commands
+    config.AddBranch<PKS.Commands.Claude.ClaudeSettings>("claude", claude =>
+    {
+        claude.SetDescription("Analyse Claude Code usage for this project");
+
+        claude.AddCommand<PKS.Commands.Claude.ClaudeStatsCommand>("stats")
+            .WithDescription("Show response-time performance stats from local session files")
+            .WithExample(["claude", "stats"])
+            .WithExample(["claude", "stats", "--days", "14"])
+            .WithExample(["claude", "stats", "--all-projects"]);
+    });
 
     // Add git branch command (credential helpers)
     config.AddBranch("git", git =>

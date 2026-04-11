@@ -149,7 +149,7 @@ public class AgenticsTaskSubmitCommand(
                             labels,
                         };
 
-                        var url = $"{serverUrl}/api/owners/{owner}/projects/{project}/stages/{stageId}/tasks";
+                        var url = $"{serverUrl}/api/owners/{owner}/projects/{project}/assembly-lines/{stageId}/tasks";
                         var response = await http.PostAsJsonAsync(url, requestBody, JsonOptions);
 
                         if (!response.IsSuccessStatusCode)
