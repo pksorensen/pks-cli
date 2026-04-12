@@ -1044,6 +1044,24 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                     _console.MarkupLine($"[yellow]Failed to seed initial prompt: {ex.Message.EscapeMarkup()}[/]");
                 }
             }
+
+            // Store task and system prompts on the session so the activity log can display them.
+            try
+            {
+                var sessionPatchUrl = $"{registration.Server.TrimEnd('/')}/api/lives/sessions/{streamIdValue}";
+                var sessionPatchReq = new HttpRequestMessage(HttpMethod.Patch, sessionPatchUrl);
+                sessionPatchReq.Content = JsonContent.Create(new
+                {
+                    taskPrompt = string.IsNullOrEmpty(jobPrompt) ? null : jobPrompt,
+                    systemPrompt = string.IsNullOrEmpty(appendPrompt) ? null : appendPrompt,
+                });
+                await client.SendAsync(sessionPatchReq, ct);
+                _console.MarkupLine("[dim]Prompts stored on session.[/]");
+            }
+            catch (Exception ex)
+            {
+                _console.MarkupLine($"[yellow]Failed to store prompts on session: {ex.Message.EscapeMarkup()}[/]");
+            }
         }
         else
         {
@@ -1479,6 +1497,49 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         }
     }
 
+    /// <summary>Read the vibecast process log file, capped at last 4000 chars for OTEL span limits.</summary>
+    private static async Task<string> CaptureVibecastLogAsync(string logFile, CancellationToken ct)
+    {
+        try
+        {
+            if (!File.Exists(logFile)) return "(no vibecast log)";
+            var content = await File.ReadAllTextAsync(logFile, ct);
+            return content.Length > 4000 ? "...\n" + content[^4000..] : content;
+        }
+        catch (Exception ex)
+        {
+            return $"(log read error: {ex.Message})";
+        }
+    }
+
+    /// <summary>Capture last 100 lines of a tmux pane — useful for seeing Claude's terminal output on failure.</summary>
+    private async Task<string> CaptureTmuxPaneAsync(string session, string window, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("tmux")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            psi.ArgumentList.Add("capture-pane");
+            psi.ArgumentList.Add("-p");
+            psi.ArgumentList.Add("-t");
+            psi.ArgumentList.Add($"{session}:{window}.0");
+            psi.ArgumentList.Add("-S");
+            psi.ArgumentList.Add("-100");
+            var proc = Process.Start(psi);
+            if (proc == null) return "(tmux capture failed)";
+            var output = await proc.StandardOutput.ReadToEndAsync(ct);
+            await proc.WaitForExitAsync(ct);
+            return string.IsNullOrWhiteSpace(output) ? "(empty pane)" : output;
+        }
+        catch (Exception ex)
+        {
+            return $"(tmux capture error: {ex.Message})";
+        }
+    }
+
     private async Task PatchJobStatusWithLogsAsync(
         HttpClient client, string baseUrl, string runId, string jobId,
         string status, string conclusion, string logs, CancellationToken ct)
@@ -1622,6 +1683,38 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             // We use VIBECAST_HOME (not HOME) so Claude Code's settings/hooks still resolve from real HOME
             var vibecastHome = Path.Combine(Path.GetTempPath(), $"vibecast-job-{job.Id}");
             Directory.CreateDirectory(vibecastHome);
+            var vibecastLogFile = Path.Combine(vibecastHome, "vibecast.log");
+
+            // Start OTLP broadcast proxy. Vibecast and Claude send all telemetry here;
+            // the proxy fans out to both Aspire (for real-time dashboard) and Next.js
+            // (for per-project analysis via /api/otel). Resource attrs are injected via
+            // OTEL_RESOURCE_ATTRIBUTES so vibecast spans are correlated to this job.
+            await using var otlpProxy = OtlpProxy.Start(analysisBaseUrl: agenticsBaseUrl);
+            var resourceAttrs = $"job.id={job.Id},run.id={runId}";
+            if (!string.IsNullOrEmpty(job.AgentDef?.TaskId))
+                resourceAttrs += $",task.id={job.AgentDef.TaskId}";
+            if (!string.IsNullOrEmpty(job.AgentDef?.AssemblyLineId))
+                resourceAttrs += $",assembly_line.id={job.AgentDef.AssemblyLineId}";
+            // Signal-specific endpoint vars (full URL including path) are required by Claude Code.
+            // The generic OTEL_EXPORTER_OTLP_ENDPOINT is kept for vibecast itself.
+            var proxyBase = $"http://localhost:{otlpProxy.Port}";
+            var otelEnv = $" OTEL_EXPORTER_OTLP_ENDPOINT=\"{proxyBase}\""
+                        + $" OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=\"{proxyBase}/v1/traces\""
+                        + $" OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=\"{proxyBase}/v1/logs\""
+                        + $" OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=\"{proxyBase}/v1/metrics\""
+                        + $" OTEL_EXPORTER_OTLP_INSECURE=true"
+                        + $" OTEL_EXPORTER_OTLP_PROTOCOL=\"http/json\""
+                        + $" OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=\"http/json\""
+                        + $" OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=\"http/json\""
+                        + $" OTEL_SERVICE_NAME=\"vibecast-job\""
+                        + $" OTEL_RESOURCE_ATTRIBUTES=\"{resourceAttrs}\""
+                        + $" CLAUDE_CODE_ENABLE_TELEMETRY=1"
+                        + $" CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1"
+                        + $" OTEL_TRACES_EXPORTER=otlp"
+                        + $" OTEL_LOGS_EXPORTER=otlp"
+                        + $" OTEL_TRACES_EXPORT_INTERVAL=5000"
+                        + $" OTEL_LOGS_EXPORT_INTERVAL=5000"
+                        + $" VIBECAST_DEBUG=1";
 
             // 7. Start vibecast as a background process in the worktree directory
             var agentSpan = _activitySource.StartActivity("runner.job.start_agent");
@@ -1661,6 +1754,23 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 var lines = string.Join("\n", job.AgentDef.GitignoreLines.Select(l => $"  {l}"));
                 appendPrompt = $"Ensure the project's .gitignore file contains the following lines (add them if missing):\n{lines}\n\n" + appendPrompt;
             }
+            // Prepend workspace path so Claude knows exactly where to write .claude/ files,
+            // agents, and other project-relative paths. This is belt-and-suspenders alongside
+            // the settings.json anchor written to {jobWorkTree}/.claude/ below.
+            appendPrompt = $"Your project workspace root is: {jobWorkTree}\n" +
+                           $"All files (including .claude/agents/, .claude/settings.json, etc.) must be written " +
+                           $"relative to this directory, not to any parent directory.\n\n" +
+                           appendPrompt;
+
+            // In-process mode: the runner runs on the same machine as the developer's host Aspire
+            // session. Warn Claude so it verifies before killing any aspire/system process.
+            appendPrompt = "⚠️  IN-PROCESS ENVIRONMENT: This job runs on the same machine as the developer's " +
+                           "host Aspire session (Next.js, ws-relay, Keycloak, etc. are already running). " +
+                           "Before using pkill, aspire stop, or similar commands: verify the target process " +
+                           "belongs to your job (check PIDs, cwd, or session names). " +
+                           "When starting Aspire in this job, always use `aspire run --isolated` to avoid " +
+                           "port conflicts with the host session.\n\n" +
+                           appendPrompt;
             // Inherit VIBECAST_KEYBOARD_PIN from environment if set
             var keyboardPin = Environment.GetEnvironmentVariable("VIBECAST_KEYBOARD_PIN");
             var keyboardPinEnv = !string.IsNullOrEmpty(keyboardPin) ? $" VIBECAST_KEYBOARD_PIN={keyboardPin}" : "";
@@ -1686,15 +1796,29 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 ? $" STAGE_GIT_URL={stageGitUrl} STAGE_GIT_TOKEN={stageGitToken} STAGE_DIR={stageDir}"
                 : "";
 
-            // Write settings.local.json to pre-approve writes to .claude/ in the job work tree.
-            // Claude Code (newer versions) prompts for permission when agents write to .claude/
-            // even with dangerouslyAllowAllTools set — this silences that prompt.
-            // Also write a .claude/.gitignore so git never tracks any job-scoped .claude/ files.
+            // Write .claude/ config files in the job work tree to anchor Claude Code's project
+            // root detection here. Claude walks up from CWD looking for a .claude/settings.json —
+            // without this file it would walk past the job worktree all the way up to the runner's
+            // workspace (e.g. /workspaces/agentic-live-www) and write agents/sessions there instead.
+            //
+            // settings.json   — anchors project root detection + deny rules that lock Claude to
+            //                   the job work tree (Claude Code is NOT CWD-restricted by default)
+            // settings.local.json — pre-approves writes to .claude/** so no TUI permission prompts
+            // .gitignore      — keeps runner-injected files out of git history
             {
                 var claudeSettingsDir = Path.Combine(jobWorkTree, ".claude");
                 Directory.CreateDirectory(claudeSettingsDir);
-                var claudeSettingsFile = Path.Combine(claudeSettingsDir, "settings.local.json");
-                await File.WriteAllTextAsync(claudeSettingsFile, """
+
+                // Anchor file: Claude Code's project root detection walks up looking for settings.json.
+                // An empty settings.json in the job worktree stops the walk here.
+                // Path isolation is enforced by the vibecast PreToolUse hook (VIBECAST_ALLOWED_DIRECTORIES).
+                var claudeSettingsFile = Path.Combine(claudeSettingsDir, "settings.json");
+                if (!File.Exists(claudeSettingsFile))
+                    await File.WriteAllTextAsync(claudeSettingsFile, "{}\n", ct);
+
+                // Local overrides: pre-approve writes to .claude/** so no TUI permission prompts
+                var claudeLocalFile = Path.Combine(claudeSettingsDir, "settings.local.json");
+                await File.WriteAllTextAsync(claudeLocalFile, """
 {
   "permissions": {
     "allow": [
@@ -1705,6 +1829,31 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
   }
 }
 """, ct);
+                // Write a CLAUDE.md that anchors project root, instructs Claude on isolation rules,
+                // and warns about shared system resources to avoid interfering with the host env.
+                var claudeMdFile = Path.Combine(jobWorkTree, "CLAUDE.md");
+                if (!File.Exists(claudeMdFile))
+                    await File.WriteAllTextAsync(claudeMdFile, $"""
+# Job Environment
+
+This is a runner job directory. Your workspace is `{jobWorkTree}`.
+
+## Aspire
+
+When starting Aspire in this job, use `--isolated` to get randomized ports:
+
+```bash
+aspire run --isolated --non-interactive
+```
+
+Before stopping or killing any Aspire or system process, check it belongs to this job
+(verify PID cwd, session name, or port). Use `aspire ps` to see running instances.
+
+## Working directory
+
+All files must be created under `{jobWorkTree}`. Do not write to parent directories.
+""", ct);
+
                 // Write a targeted .claude/.gitignore that only ignores job/session-scoped files.
                 // Do NOT use a blanket "*" — project-level files like settings.json and MCP
                 // configs written by tools such as `aspire agent init` should be committable.
@@ -1713,7 +1862,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                     await File.WriteAllTextAsync(claudeGitignoreFile,
                         "# Runner-injected — never commit\n" +
                         "settings.local.json\n", ct);
-                _console.MarkupLine($"[cyan]Pre-wrote .claude/settings.local.json and .claude/.gitignore in {jobWorkTree}[/]");
+                _console.MarkupLine($"[cyan]Pre-wrote .claude/settings.json + settings.local.json + .gitignore in {jobWorkTree}[/]");
             }
 
             // Propagate W3C trace context so logs/vibecast output can be correlated
@@ -1726,8 +1875,12 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             var resumeEnv = !string.IsNullOrEmpty(job.AgentDef?.ResumeSessionId)
                 ? $" VIBECAST_RESUME_SESSION_ID={job.AgentDef.ResumeSessionId}"
                 : "";
-            if (!string.IsNullOrEmpty(job.AgentDef?.ResumeStreamId))
-                resumeEnv += $" STREAM_ID={job.AgentDef.ResumeStreamId}";
+            // Do NOT pass STREAM_ID for continue/resume jobs. Reusing an old stream ID causes
+            // ws-relay to silently reject the broadcaster WebSocket reconnect, so the runner's
+            // isActive check never becomes true and the job idle-times out immediately.
+            // Vibecast will generate a fresh stream ID; Claude still resumes via --resume <sessionId>.
+            // if (!string.IsNullOrEmpty(job.AgentDef?.ResumeStreamId))
+            //     resumeEnv += $" STREAM_ID={job.AgentDef.ResumeStreamId}";
 
             // Auto-git: tell vibecast's stop hook to block Claude from stopping with uncommitted changes
             var autoGitEnv = "";
@@ -1787,7 +1940,17 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 ? $" VIBECAST_EXTRA_PLUGINS=\"{string.Join(":", allLocalPluginPaths)}\""
                 : "";
 
-            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv}{autoApproveEnv} {vibecastBin}");
+            // Set VIBECAST_ALLOWED_DIRECTORIES so vibecast uses the job dir as Claude's working
+            // directory (instead of git-root detection which could find the runner's workspace).
+            // Note: Claude Code is NOT CWD-restricted by default — path isolation is enforced via
+            // deny rules in .claude/settings.json written above.
+            var allowedDirsEnv = $" VIBECAST_ALLOWED_DIRECTORIES=\"{jobWorkTree}\"";
+
+            // Redirect vibecast stdout+stderr to a log file so failures are diagnosable.
+            // The log is captured on timeout and included in the job PATCH logs field.
+            var vibecastLogRedirect = $" > \"{vibecastLogFile}\" 2>&1";
+
+            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv}{autoApproveEnv}{allowedDirsEnv}{otelEnv} {vibecastBin}{vibecastLogRedirect}");
 
             var startProc = Process.Start(startPsi);
             if (startProc != null)
@@ -1822,6 +1985,12 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             if (!File.Exists(controlSocket))
             {
                 _console.MarkupLine("[red]Control socket not found after 30s[/]");
+                var startupLog = await CaptureVibecastLogAsync(vibecastLogFile, ct);
+                agentSpan?.AddEvent(new System.Diagnostics.ActivityEvent("vibecast.control_socket_timeout",
+                    tags: new System.Diagnostics.ActivityTagsCollection { ["vibecast.log"] = startupLog }));
+                await PatchJobStatusWithLogsAsync(client, baseUrl, runId, job.Id,
+                    "completed", "failure",
+                    $"Vibecast failed to start (control socket not found after 30s):\n{startupLog}", ct);
                 throw new InvalidOperationException("vibecast control socket not found");
             }
 
@@ -1868,7 +2037,19 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
             if (streamingSession == null)
             {
-                _console.MarkupLine("[yellow]Streaming session not detected, will try to paste prompt anyway...[/]");
+                _console.MarkupLine("[yellow]Streaming session not detected — capturing logs for diagnostics...[/]");
+                var vibecastLog = await CaptureVibecastLogAsync(vibecastLogFile, ct);
+                var tmuxLog = await CaptureTmuxPaneAsync(vibecastTmux, "main", ct);
+                var combinedLog = $"--- vibecast ---\n{vibecastLog}\n--- claude pane ---\n{tmuxLog}";
+                agentSpan?.AddEvent(new System.Diagnostics.ActivityEvent("vibecast.stream_timeout",
+                    tags: new System.Diagnostics.ActivityTagsCollection {
+                        ["vibecast.log"] = vibecastLog,
+                        ["tmux.pane"] = tmuxLog
+                    }));
+                await PatchJobStatusWithLogsAsync(client, baseUrl, runId, job.Id,
+                    "completed", "failure",
+                    $"Streaming session never started (timeout):\n{combinedLog}", ct);
+                throw new InvalidOperationException("vibecast streaming session not found after 30s");
             }
             agentSpan?.SetTag("stream.id", streamIdValue ?? "");
             agentSpan?.Dispose();
@@ -1910,6 +2091,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
             // Note: the job prompt is injected via VIBECAST_INITIAL_PROMPT_FILE which vibecast
             // passes directly to Claude as a positional argument at startup. No send-keys needed.
+            // A positional arg to claude stays interactive (NOT the same as -p which exits after response).
             _console.MarkupLine($"[green]Prompt will be delivered via VIBECAST_INITIAL_PROMPT_FILE ({promptFile})[/]");
 
             // 12b. Start background answer-injection loop if this job is linked to a task.
@@ -1930,6 +2112,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 {
                     var lastInjectedToolUseId = "";
                     var lastSeenToolUseId = ""; // survives pendingQuestion being cleared after user answers
+                    var stalePermSkipCount = 0; // suppress repeated stale-permission log spam
                     while (!answerLoopCts.Token.IsCancellationRequested)
                     {
                         try
@@ -1979,6 +2162,17 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                                 permToolUseId != lastInjectedToolUseId)
                             {
                                 var permStreamId = ppStream.GetString() ?? "";
+                                // Skip permissions from other streams — they're stale from previous jobs.
+                                if (!string.IsNullOrEmpty(streamIdValue) && permStreamId != streamIdValue)
+                                {
+                                    stalePermSkipCount++;
+                                    if (stalePermSkipCount == 1)
+                                        _console.MarkupLine($"[dim]Stale permission from stream {permStreamId.EscapeMarkup()} (current: {streamIdValue.EscapeMarkup()}) — will suppress further repeats[/]");
+                                    else if (stalePermSkipCount % 20 == 0)
+                                        _console.MarkupLine($"[dim]Still seeing stale permission from {permStreamId.EscapeMarkup()} ({stalePermSkipCount}x skipped)[/]");
+                                    goto skipPermission;
+                                }
+                                stalePermSkipCount = 0; // reset when we see a fresh permission
                                 var voteResp = await client.GetAsync(
                                     $"{agenticsBaseUrl}/api/lives/question-vote?streamId={Uri.EscapeDataString(permStreamId)}&toolUseId={Uri.EscapeDataString(permToolUseId)}",
                                     answerLoopCts.Token);
@@ -2019,6 +2213,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                                 }
                             }
 
+                            skipPermission:;
                             // Poll for whichever toolUseId we know about (active or recently cleared)
                             var toolUseId = lastSeenToolUseId;
                             if (string.IsNullOrEmpty(toolUseId) || toolUseId == lastInjectedToolUseId) continue;
@@ -2148,12 +2343,50 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                                         }
                                         else
                                         {
-                                            // Numbered options exist but none match and there's no free-text slot.
-                                            // This likely means we're in a different dialog (e.g., permission).
-                                            // Bail out without marking as injected — retry next cycle.
-                                            _console.MarkupLine($"[yellow]No option match for '{answerText.EscapeMarkup()}' and no 'Type something' slot — deferring injection[/]");
-                                            wizardAborted = true;
-                                            break;
+                                            // Check if this is a multi-select answer (comma-separated values).
+                                            // ask_followup_question with allowMultipleSelections renders checkboxes:
+                                            // navigate to each item with arrow keys, Space to toggle, Enter to submit.
+                                            var multiItems = answerText.Split(',')
+                                                .Select(s => s.Trim())
+                                                .Where(s => s.Length > 0)
+                                                .ToList();
+                                            if (multiItems.Count > 1)
+                                            {
+                                                if (stepIdx == 0) lastInjectedToolUseId = toolUseId;
+                                                _console.MarkupLine($"[dim]  → multi-select: selecting {multiItems.Count} items: {answerText.EscapeMarkup()}[/]");
+                                                var currentPane = paneContent;
+                                                foreach (var item in multiItems)
+                                                {
+                                                    var itemNum = MatchOptionNumber(currentPane, item);
+                                                    if (itemNum == 0)
+                                                    {
+                                                        _console.MarkupLine($"[yellow]Multi-select: no option for '{item.EscapeMarkup()}', skipping[/]");
+                                                        continue;
+                                                    }
+                                                    var curr = SelectedOptionNumber(currentPane);
+                                                    var downs = itemNum - curr;
+                                                    _console.MarkupLine($"[dim]    → '{item.EscapeMarkup()}' option {itemNum} (cursor {curr}, {downs} Down(s))[/]");
+                                                    for (var d = 0; d < downs; d++)
+                                                    {
+                                                        await TmuxSendKeyRawAsync(paneTarget, "Down", answerLoopCts.Token);
+                                                        await Task.Delay(100, answerLoopCts.Token);
+                                                    }
+                                                    await TmuxSendKeyRawAsync(paneTarget, "Space", answerLoopCts.Token);
+                                                    await Task.Delay(200, answerLoopCts.Token);
+                                                    currentPane = await TmuxCaptureAndDebugAsync(paneTarget, $"multiselect_{stepIdx}_{item}", debugDir, answerLoopCts.Token);
+                                                }
+                                                await TmuxSendKeyRawAsync(paneTarget, "Enter", answerLoopCts.Token);
+                                                prevStepContent = currentPane;
+                                            }
+                                            else
+                                            {
+                                                // Numbered options exist but none match and there's no free-text slot.
+                                                // This likely means we're in a different dialog (e.g., permission).
+                                                // Bail out without marking as injected — retry next cycle.
+                                                _console.MarkupLine($"[yellow]No option match for '{answerText.EscapeMarkup()}' and no 'Type something' slot — deferring injection[/]");
+                                                wizardAborted = true;
+                                                break;
+                                            }
                                         }
                                     }
                                     stepIdx++;
@@ -2266,7 +2499,13 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                     }
                 }
 
-                // Poll activity endpoint to detect idle agent
+                // Poll activity endpoint to detect idle agent.
+                // We treat either recent websocket activity OR recent OTLP telemetry as "active".
+                // Claude emits spans continuously while thinking/using tools, so OTLP traffic is a
+                // reliable proxy for "Claude is still working" even when there's no terminal output.
+                var otlpIdleSecs = (DateTime.UtcNow - otlpProxy.LastActivityAt).TotalSeconds;
+                var otlpActive = otlpIdleSecs < idleTimeoutMs / 1000.0;
+
                 if (streamIdValue != null)
                 {
                     try
@@ -2280,10 +2519,19 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                                 await actResp.Content.ReadAsStringAsync(ct), JsonOptions);
                             if (actData.TryGetProperty("isActive", out var isActive) && !isActive.GetBoolean())
                             {
-                                var idleSince = actData.TryGetProperty("idleSinceMs", out var idleMs) ? idleMs.GetInt64() / 1000 : 0;
-                                _console.MarkupLine($"[yellow]Agent idle for {idleSince}s, completing job.[/]");
-                                completionReason = "idle_timeout";
-                                break;
+                                // Websocket activity says idle — but check OTLP too before timing out.
+                                // Claude may be processing internally without producing terminal output.
+                                if (otlpActive)
+                                {
+                                    _console.MarkupLine($"[dim]Websocket idle but OTLP active ({otlpIdleSecs:F0}s ago), continuing...[/]");
+                                }
+                                else
+                                {
+                                    var idleSince = actData.TryGetProperty("idleSinceMs", out var idleMs) ? idleMs.GetInt64() / 1000 : 0;
+                                    _console.MarkupLine($"[yellow]Agent idle for {idleSince}s (no websocket or OTLP activity), completing job.[/]");
+                                    completionReason = "idle_timeout";
+                                    break;
+                                }
                             }
                         }
                     }
@@ -2321,6 +2569,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             // Kill the vibecast tmux session
             await RunProcessAsync("tmux", $"kill-session -t {vibecastTmux}", null, ct);
             _console.MarkupLine($"[cyan]Marking job as completed (conclusion: {jobConclusion}, reason: {completionReason})...[/]");
+            var vibecastLogSummary = await CaptureVibecastLogAsync(vibecastLogFile, ct);
             var patchCompleted = new HttpRequestMessage(HttpMethod.Patch, $"{baseUrl}/runs/{runId}/jobs/{job.Id}");
             patchCompleted.Content = JsonContent.Create(new
             {
@@ -2330,7 +2579,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 // so the server can apply the correct task lifecycle logic without parsing conclusion.
                 completionReason,
                 streamId = streamIdValue,
-                logs = $"Job completed after {(DateTime.UtcNow - startTime).TotalMinutes:F1} minutes in {jobWorkTree} (reason: {completionReason})"
+                logs = $"Job completed after {(DateTime.UtcNow - startTime).TotalMinutes:F1} minutes in {jobWorkTree} (reason: {completionReason})\n{vibecastLogSummary}"
             });
             patchCompleted.Headers.Authorization = new AuthenticationHeaderValue("Bearer", registration.Token);
             await client.SendAsync(patchCompleted, ct);
@@ -2569,8 +2818,8 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
         foreach (var line in paneContent.Split('\n'))
         {
-            // Strip leading selection cursor and whitespace
-            var trimmed = line.TrimStart('❯', ' ', '\t');
+            // Strip leading selection cursor, checkbox markers (◯ ◉ ● ○), and whitespace
+            var trimmed = line.TrimStart('❯', ' ', '\t').TrimStart('◯', '◉', '●', '○', ' ');
             var match = System.Text.RegularExpressions.Regex.Match(trimmed, @"^(\d+)\.\s+(.+)");
             if (!match.Success) continue;
 
@@ -2596,7 +2845,8 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         foreach (var line in paneContent.Split('\n'))
         {
             if (!line.TrimStart().StartsWith("❯")) continue;
-            var trimmed = line.TrimStart('❯', ' ', '\t');
+            // Strip cursor, optional checkbox markers, and whitespace
+            var trimmed = line.TrimStart('❯', ' ', '\t').TrimStart('◯', '◉', '●', '○', ' ');
             var match = System.Text.RegularExpressions.Regex.Match(trimmed, @"^(\d+)\.");
             if (match.Success) return int.Parse(match.Groups[1].Value);
         }
@@ -2677,30 +2927,52 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         var branch = job.AgentDef?.Branch ?? "main";
 
         // Clean-clone mode: no worktree. Fresh git clone (or empty dir) per job.
+        // The actual job directory lives in /tmp outside the project tree so Claude
+        // cannot walk up and find the runner workspace's .claude/ settings, skills,
+        // or CLAUDE.md files. A symlink is placed at .agentics/_work/jobs/{jobId}
+        // for VS Code / file-explorer visibility.
         if (!useWorktree)
         {
-            var jobDir = Path.Combine(workDir, "jobs", job.Id);
-            Directory.CreateDirectory(jobDir);
+            var tmpJobDir = Path.Combine(Path.GetTempPath(), "pks-runner-jobs", job.Id);
+            Directory.CreateDirectory(tmpJobDir);
+
+            var symlinkParent = Path.Combine(workDir, "jobs");
+            Directory.CreateDirectory(symlinkParent);
+            var symlinkPath = Path.Combine(symlinkParent, job.Id);
+            if (!Path.Exists(symlinkPath))
+                Directory.CreateSymbolicLink(symlinkPath, tmpJobDir);
+
+            _console.MarkupLine($"[dim]Job dir: {tmpJobDir} (symlink: {symlinkPath})[/]");
+
+            // Pre-approve the job directory so Claude Code skips the "Do you trust this folder?"
+            // prompt. Claude checks for an existing project entry in ~/.claude/projects/{encoded}/
+            // to decide whether to show the prompt. Creating the directory signals prior approval.
+            try
+            {
+                var realHome = await GetRealHomeDirectoryAsync(ct);
+                var encodedPath = tmpJobDir.TrimStart('/').Replace("/", "-");
+                var claudeProjectDir = Path.Combine(realHome, ".claude", "projects", encodedPath);
+                Directory.CreateDirectory(claudeProjectDir);
+            }
+            catch { /* non-fatal — Claude will show the trust prompt at worst */ }
 
             if (!string.IsNullOrEmpty(repository))
             {
-                _console.MarkupLine($"[cyan]Cloning {repository} → {jobDir}...[/]");
+                _console.MarkupLine($"[cyan]Cloning {repository} → {tmpJobDir}...[/]");
                 var cloneResult = await RunGitAsync(
-                    $"clone --depth=1 --branch {branch} {repository} {jobDir}",
+                    $"clone --depth=1 --branch {branch} {repository} {tmpJobDir}",
                     null, verbose, ct, gitEnv);
                 if (cloneResult != 0)
                     _console.MarkupLine($"[yellow]git clone failed (exit {cloneResult}) — using empty job directory[/]");
             }
             else
             {
-                _console.MarkupLine($"[cyan]No repository URL — initializing isolated git repo in {jobDir}[/]");
-                // Init a git repo so Claude's git-root detection stops here instead of
-                // walking up to the runner's parent workspace (e.g. /workspaces/agentic-live-www).
-                // Without this, Claude writes .claude/agents/ and other files into the wrong repo.
-                await RunGitAsync($"init {jobDir}", null, verbose, ct, gitEnv);
+                _console.MarkupLine($"[cyan]No repository URL — initializing isolated git repo in {tmpJobDir}[/]");
+                // Init a git repo so Claude's git-root detection stops here.
+                await RunGitAsync($"init {tmpJobDir}", null, verbose, ct, gitEnv);
                 // .claude/ is written by the runner after this init — gitignore it so Claude
                 // never sees it as untracked and doesn't try to commit runner-injected config.
-                await File.WriteAllTextAsync(Path.Combine(jobDir, ".gitignore"), ".claude/\n", ct);
+                await File.WriteAllTextAsync(Path.Combine(tmpJobDir, ".gitignore"), ".claude/\n", ct);
                 var initGitEnv = new Dictionary<string, string>(gitEnv ?? [])
                 {
                     ["GIT_AUTHOR_NAME"]     = "pks-runner",
@@ -2708,11 +2980,11 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                     ["GIT_COMMITTER_NAME"]  = "pks-runner",
                     ["GIT_COMMITTER_EMAIL"] = "runner@agentics.dk",
                 };
-                await RunGitAsync($"-C {jobDir} add .gitignore", null, verbose, ct, initGitEnv);
-                await RunGitAsync($"-C {jobDir} commit -m \"init job {job.Id}\"", null, verbose, ct, initGitEnv);
+                await RunGitAsync($"-C {tmpJobDir} add .gitignore", null, verbose, ct, initGitEnv);
+                await RunGitAsync($"-C {tmpJobDir} commit -m \"init job {job.Id}\"", null, verbose, ct, initGitEnv);
             }
 
-            return jobDir;
+            return tmpJobDir;
         }
 
         // Find git repo root and its remote URL for same-repo detection
