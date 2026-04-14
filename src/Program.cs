@@ -205,6 +205,12 @@ services.AddSingleton<IProjectIdentityService, ProjectIdentityService>();
 // Register GitHub Authentication service with HttpClient
 services.AddHttpClient<IGitHubAuthenticationService, GitHubAuthenticationService>();
 
+// Configure Microsoft Graph authentication
+services.AddSingleton<PKS.Infrastructure.Services.Models.MsGraphAuthConfig>();
+services.AddHttpClient<IMsGraphAuthenticationService, MsGraphAuthenticationService>();
+services.AddHttpClient<IMsGraphEmailService, MsGraphEmailService>();
+services.AddSingleton<IMsGraphEmailExportService, MsGraphEmailExportService>();
+
 // Register GitHub API client and related services
 services.AddHttpClient<IGitHubApiClient, GitHubApiClient>();
 services.AddSingleton<IGitHubIssuesService, GitHubIssuesService>();
@@ -568,6 +574,29 @@ app.Configure(config =>
         google.AddCommand<GoogleStatusCommand>("status")
             .WithDescription("Show registered Google AI credentials")
             .WithExample(new[] { "google", "status" });
+    });
+
+    // Add Microsoft Graph branch command
+    config.AddBranch<PKS.Commands.MsGraph.MsGraphSettings>("ms-graph", msgraph =>
+    {
+        msgraph.SetDescription("Manage Microsoft Graph API authentication");
+
+        msgraph.AddCommand<PKS.Commands.MsGraph.MsGraphRegisterCommand>("register")
+            .WithDescription("Authenticate with Microsoft Graph using device code flow")
+            .WithExample(new[] { "ms-graph", "register", "--client-id", "your-client-id", "--tenant-id", "your-tenant-id" })
+            .WithExample(new[] { "ms-graph", "register" });
+    });
+
+    // Add email branch command
+    config.AddBranch<PKS.Commands.Email.EmailSettings>("email", email =>
+    {
+        email.SetDescription("Email management and export");
+
+        email.AddCommand<PKS.Commands.Email.EmailExportCommand>("export")
+            .WithDescription("Export emails from Microsoft Graph to markdown files")
+            .WithExample(new[] { "email", "export" })
+            .WithExample(new[] { "email", "export", "--after", "2026-01-01", "--folder", "inbox" })
+            .WithExample(new[] { "email", "export", "-o", "./my-emails", "--max", "100" });
     });
 
     // Add image generation command
