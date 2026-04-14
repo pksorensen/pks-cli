@@ -478,6 +478,13 @@ public class DevcontainerSpawnOptions
     public string? CredentialSocketPath { get; set; }
 
     /// <summary>
+    /// Name of a Docker volume pre-populated with cloned ALP plugins by the Runner.
+    /// When set, the volume is mounted at /run/alp/plugins inside the devcontainer so
+    /// the Operator (vibecast) can pass each plugin dir to Claude via --plugin-dir.
+    /// </summary>
+    public string? PluginVolumeName { get; set; }
+
+    /// <summary>
     /// Git URL to clone into the volume instead of copying local source files.
     /// When set, an alpine/git container clones this URL into the volume before devcontainer up.
     /// Credentials should be embedded in the URL (e.g. https://x-access-token:{token}@github.com/...).

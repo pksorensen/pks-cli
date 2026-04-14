@@ -1,4 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
+using OpenTelemetry;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure;
 using PKS.Infrastructure.Initializers.Registry;
@@ -407,10 +411,21 @@ app.Configure(config =>
         });
     });
 
-    // Add github branch command with runner subcommands
+    // Add github branch command with auth + runner subcommands
     config.AddBranch<PKS.Commands.GitHub.GitHubSettings>("github", github =>
     {
-        github.SetDescription("Manage GitHub integration and self-hosted runners");
+        github.SetDescription("Manage GitHub authentication and self-hosted runners");
+
+        github.AddCommand<PKS.Commands.GitHub.GitHubInitCommand>("init")
+            .WithDescription("Authenticate with GitHub and grant runner push access to a repo")
+            .WithExample(new[] { "github", "init" })
+            .WithExample(new[] { "github", "init", "https://github.com/owner/repo" })
+            .WithExample(new[] { "github", "init", "--force" });
+
+        github.AddCommand<PKS.Commands.GitHub.GitHubStatusCommand>("status")
+            .WithDescription("Show GitHub authentication status and git:push capability")
+            .WithExample(new[] { "github", "status" })
+            .WithExample(new[] { "github", "status", "--verbose" });
 
         github.AddBranch<PKS.Commands.GitHub.GitHubSettings>("runner", runner =>
         {
@@ -607,6 +622,18 @@ app.Configure(config =>
         .WithExample(new[] { "image", "--prompt-file", "prompt.txt", "--output", "cover.jpg" })
         .WithExample(new[] { "image", "--input", "bg.jpg", "\"Add title 'My Book' in white serif at the top\"", "--output", "cover-final.jpg" });
 
+    // Add claude analysis commands
+    config.AddBranch<PKS.Commands.Claude.ClaudeSettings>("claude", claude =>
+    {
+        claude.SetDescription("Analyse Claude Code usage for this project");
+
+        claude.AddCommand<PKS.Commands.Claude.ClaudeStatsCommand>("stats")
+            .WithDescription("Show response-time performance stats from local session files")
+            .WithExample(["claude", "stats"])
+            .WithExample(["claude", "stats", "--days", "14"])
+            .WithExample(["claude", "stats", "--all-projects"]);
+    });
+
     // Add git branch command (credential helpers)
     config.AddBranch("git", git =>
     {
@@ -683,7 +710,103 @@ app.Configure(config =>
     });
 });
 
+// Set up OpenTelemetry tracing if an OTLP endpoint is configured (e.g. injected by Aspire).
+// This makes runner spans visible in the Aspire dashboard alongside Next.js server traces.
+using var tracerProvider = SetupTracing();
+using var meterProvider = SetupMetrics();
+
 return await app.RunAsync(args);
+
+static TracerProvider? SetupTracing()
+{
+    // Only activate when an OTLP endpoint is available (Aspire injects OTEL_EXPORTER_OTLP_ENDPOINT).
+    var otlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
+    if (string.IsNullOrEmpty(otlpEndpoint)) return null;
+
+    // pks-cli runs via tmux send-keys rather than being directly spawned by Aspire,
+    // so it never receives OTEL_EXPORTER_OTLP_CERTIFICATE. Bypass TLS validation for
+    // localhost endpoints (Aspire devcontainer uses an ephemeral self-signed cert).
+    var isLocalhost = otlpEndpoint.Contains("localhost") || otlpEndpoint.Contains("127.0.0.1");
+
+    return Sdk.CreateTracerProviderBuilder()
+        .SetResourceBuilder(ResourceBuilder.CreateDefault()
+            .AddService("pks-cli", serviceVersion: GetVersion()))
+        .AddSource(PKS.Commands.Agentics.Runner.AgenticsRunnerStartCommand.ActivitySourceName)
+        .AddHttpClientInstrumentation(o =>
+        {
+            // Suppress polling heartbeats — they fire every few seconds, produce no signal,
+            // and flood the trace dashboard. Only trace requests that represent real work.
+            o.FilterHttpRequestMessage = req =>
+                req.RequestUri?.AbsolutePath.EndsWith("/runners/jobs") != true;
+        })
+        .AddOtlpExporter(opts =>
+        {
+            if (isLocalhost)
+            {
+                // HttpClientFactory is used for both gRPC and HTTP/protobuf in OTel .NET SDK 1.6+.
+                // DangerousAcceptAnyServerCertificateValidator is safe here: localhost-only, devcontainer.
+                // Explicitly request HTTP/2 so the underlying client works for both gRPC (requires HTTP/2)
+                // and http/protobuf (compatible with HTTP/2 or HTTP/1.1).
+                opts.HttpClientFactory = () =>
+                {
+                    var handler = new HttpClientHandler
+                    {
+                        ServerCertificateCustomValidationCallback =
+                            HttpClientHandler.DangerousAcceptAnyServerCertificateValidator,
+                    };
+                    var client = new HttpClient(handler)
+                    {
+                        DefaultRequestVersion = System.Net.HttpVersion.Version20,
+                        DefaultVersionPolicy = System.Net.Http.HttpVersionPolicy.RequestVersionOrLower,
+                    };
+                    return client;
+                };
+            }
+        })
+        .Build();
+}
+
+static MeterProvider? SetupMetrics()
+{
+    // Only activate when an OTLP endpoint is available (Aspire injects OTEL_EXPORTER_OTLP_ENDPOINT).
+    var otlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
+    if (string.IsNullOrEmpty(otlpEndpoint)) return null;
+
+    // pks-cli runs via tmux send-keys rather than being directly spawned by Aspire,
+    // so it never receives OTEL_EXPORTER_OTLP_CERTIFICATE. Bypass TLS validation for
+    // localhost endpoints (Aspire devcontainer uses an ephemeral self-signed cert).
+    var isLocalhost = otlpEndpoint.Contains("localhost") || otlpEndpoint.Contains("127.0.0.1");
+
+    return Sdk.CreateMeterProviderBuilder()
+        .SetResourceBuilder(ResourceBuilder.CreateDefault()
+            .AddService("pks-cli", serviceVersion: GetVersion()))
+        .AddMeter(PKS.Commands.Agentics.Runner.AgenticsRunnerStartCommand.MeterName)
+        .AddOtlpExporter(opts =>
+        {
+            if (isLocalhost)
+            {
+                // HttpClientFactory is used for both gRPC and HTTP/protobuf in OTel .NET SDK 1.6+.
+                // DangerousAcceptAnyServerCertificateValidator is safe here: localhost-only, devcontainer.
+                // Explicitly request HTTP/2 so the underlying client works for both gRPC (requires HTTP/2)
+                // and http/protobuf (compatible with HTTP/2 or HTTP/1.1).
+                opts.HttpClientFactory = () =>
+                {
+                    var handler = new HttpClientHandler
+                    {
+                        ServerCertificateCustomValidationCallback =
+                            HttpClientHandler.DangerousAcceptAnyServerCertificateValidator,
+                    };
+                    var client = new HttpClient(handler)
+                    {
+                        DefaultRequestVersion = System.Net.HttpVersion.Version20,
+                        DefaultVersionPolicy = System.Net.Http.HttpVersionPolicy.RequestVersionOrLower,
+                    };
+                    return client;
+                };
+            }
+        })
+        .Build();
+}
 
 static string GetVersion()
 {

@@ -348,7 +348,8 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                     options.CredentialSocketPath,
                     options.RemoteEnv,
                     options.IdLabels,
-                    options.RemoveExistingContainer);
+                    options.RemoveExistingContainer,
+                    options.PluginVolumeName);
 
                 if (upResult.Outcome != "success")
                 {
@@ -2737,7 +2738,8 @@ DEVCONTAINER_EOF";
         string? credentialSocketPath = null,
         Dictionary<string, string>? remoteEnv = null,
         Dictionary<string, string>? idLabels = null,
-        bool removeExistingContainer = false)
+        bool removeExistingContainer = false,
+        string? pluginVolumeName = null)
     {
         _logger.LogDebug("Running devcontainer up in bootstrap container: {WorkspaceFolder}", workspaceFolder);
 
@@ -2781,6 +2783,13 @@ DEVCONTAINER_EOF";
         }
 
         // If credential socket is provided, inject askpass script and add it to override config remoteEnv
+        string? pluginVolumeMountArg = null;
+        if (!string.IsNullOrEmpty(pluginVolumeName))
+        {
+            pluginVolumeMountArg = $" --mount type=volume,source={pluginVolumeName},target=/run/alp/plugins";
+            _logger.LogInformation("Mounting ALP plugin volume '{Volume}' at /run/alp/plugins", pluginVolumeName);
+        }
+
         string? credentialMountArg = null;
         if (!string.IsNullOrEmpty(credentialSocketPath))
         {
@@ -2831,13 +2840,13 @@ DEVCONTAINER_EOF";
             // The override config has workspaceMount/workspaceFolder removed, and we use --mount for the volume
             // This avoids the bind mount issue while preserving feature metadata processing
             _logger.LogInformation("Using override config approach with file: {OverrideConfig}", overrideConfigPath);
-            devcontainerCommand = $"devcontainer up --config {workspaceFolder}/.devcontainer/devcontainer.json --override-config {overrideConfigPath} --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg} --update-remote-user-uid-default off --include-configuration --include-merged-configuration";
+            devcontainerCommand = $"devcontainer up --config {workspaceFolder}/.devcontainer/devcontainer.json --override-config {overrideConfigPath} --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg}{pluginVolumeMountArg} --update-remote-user-uid-default off --include-configuration --include-merged-configuration";
         }
         else
         {
             // Fallback: use workspace-folder without override-config
             _logger.LogWarning("Using fallback approach without override config");
-            devcontainerCommand = $"devcontainer up --workspace-folder {workspaceFolder} --config {workspaceFolder}/.devcontainer/devcontainer.json --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg} --update-remote-user-uid-default off --mount-workspace-git-root false --include-configuration --include-merged-configuration";
+            devcontainerCommand = $"devcontainer up --workspace-folder {workspaceFolder} --config {workspaceFolder}/.devcontainer/devcontainer.json --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg}{pluginVolumeMountArg} --update-remote-user-uid-default off --mount-workspace-git-root false --include-configuration --include-merged-configuration";
         }
 
         // Append extra remote-env, id-labels, and ephemeral flag if provided

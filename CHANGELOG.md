@@ -49,6 +49,15 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.7.1](https://github.com/pksorensen/pks-cli/compare/v6.7.0...v6.7.1) (2026-04-04)
+
+
+### Bug Fixes
+
+* add include-paths to pks-cli configuration in release-please ([5de0584](https://github.com/pksorensen/pks-cli/commit/5de0584585ea2441c3c4ebaa63795ef284b6b4d4))
+* rename package scope from @pks-cli/pks to @pks-cli/cli across the project ([fd3f902](https://github.com/pksorensen/pks-cli/commit/fd3f90251dff676d72a9657eaed7e3961223fc8b))
+* update preview versioning to count commits since last release tag ([ec985f9](https://github.com/pksorensen/pks-cli/commit/ec985f95b68f3ee9e6d8ad008ce193ab4c8ba30d))
+
 ## [6.7.0](https://github.com/pksorensen/pks-cli/compare/v6.6.0...v6.7.0) (2026-04-03)
 
 
