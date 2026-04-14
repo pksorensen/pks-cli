@@ -299,49 +299,58 @@ public class JiraService : IJiraService
         if (acFieldId != null) fieldsList.Add(acFieldId);
         var fields = fieldsList.ToArray();
 
-        var requestBody = credentials.DeploymentType == JiraDeploymentType.Cloud
-            ? JsonSerializer.Serialize(new
-            {
-                jql,
-                maxResults,
-                fields
-            })
-            : JsonSerializer.Serialize(new
-            {
-                jql,
-                startAt,
-                maxResults,
-                fields
-            });
-
         var apiBaseUrl = GetApiBaseUrl(credentials);
         var searchPath = credentials.DeploymentType == JiraDeploymentType.Cloud
             ? "search/jql"
             : "search";
 
-        var request = new HttpRequestMessage(HttpMethod.Post, $"{apiBaseUrl}/{searchPath}")
+        // Cap page size at 100 (Jira Cloud maximum)
+        var pageSize = Math.Min(maxResults, 100);
+
+        var allIssues = new List<JiraIssue>();
+        var currentStartAt = startAt;
+        int total;
+
+        do
         {
-            Content = new StringContent(requestBody, Encoding.UTF8, "application/json")
-        };
-        ApplyAuth(request, credentials);
+            var requestBody = JsonSerializer.Serialize(new
+            {
+                jql,
+                startAt = currentStartAt,
+                maxResults = pageSize,
+                fields
+            });
 
-        var response = await SendWithDebugAsync(request);
-        response.EnsureSuccessStatusCode();
+            var request = new HttpRequestMessage(HttpMethod.Post, $"{apiBaseUrl}/{searchPath}")
+            {
+                Content = new StringContent(requestBody, Encoding.UTF8, "application/json")
+            };
+            ApplyAuth(request, credentials);
 
-        var content = await response.Content.ReadAsStringAsync();
-        var doc = JsonDocument.Parse(content);
-        var issues = ParseIssues(doc.RootElement, acFieldId);
-        var total = doc.RootElement.TryGetProperty("total", out var totalProp) && totalProp.ValueKind == JsonValueKind.Number
-            ? totalProp.GetInt32()
-            : issues.Count;
+            var response = await SendWithDebugAsync(request);
+            response.EnsureSuccessStatusCode();
 
-        var result = new JiraSearchResult
+            var content = await response.Content.ReadAsStringAsync();
+            var doc = JsonDocument.Parse(content);
+            var pageIssues = ParseIssues(doc.RootElement, acFieldId);
+            total = doc.RootElement.TryGetProperty("total", out var totalProp) && totalProp.ValueKind == JsonValueKind.Number
+                ? totalProp.GetInt32()
+                : pageIssues.Count;
+
+            allIssues.AddRange(pageIssues);
+            currentStartAt += pageIssues.Count;
+
+            // Stop if we received fewer issues than requested (last page) or no issues at all
+            if (pageIssues.Count == 0 || pageIssues.Count < pageSize)
+                break;
+
+        } while (currentStartAt < total);
+
+        return new JiraSearchResult
         {
             Total = total,
-            Issues = issues
+            Issues = allIssues
         };
-
-        return result;
     }
 
     public async Task<List<JiraIssue>> GetProjectIssuesAsync(string projectKey, string? epicKey = null)
