@@ -147,7 +147,7 @@ public class JiraServiceTests
 
         handler.SendCount.Should().Be(2); // 1 for /field discovery + 1 for search
         handler.LastRequestUri.Should().Be("https://api.atlassian.com/ex/jira/cloud-123/rest/api/3/search/jql");
-        handler.LastRequestBody.Should().Contain("\"startAt\"");
+        handler.LastRequestBody.Should().NotContain("\"startAt\"");
         result.Total.Should().Be(1);
         result.Issues.Should().ContainSingle(i => i.Key == "UDV-1");
     }
@@ -203,10 +203,9 @@ public class JiraServiceTests
     [Fact]
     public async Task SearchIssuesAsync_SinglePage_ShouldNotMakeExtraRequests()
     {
-        // total=2, issues returned=2, so no further pages needed
+        // No nextPageToken means single page — no further requests needed
         var searchResponse = """
                 {
-                    "total": 2,
                     "issues": [
                         {
                             "id": "10001",
@@ -267,11 +266,11 @@ public class JiraServiceTests
     [Fact]
     public async Task SearchIssuesAsync_MultiplePages_ShouldFetchAllIssues()
     {
-        // Simulate total=3, first page returns 2, second page returns 1
+        // Cloud uses nextPageToken for pagination — page1 returns token, page2 does not
         var fieldDiscoveryResponse = "[]"; // empty field list
         var page1Response = """
                 {
-                    "total": 3,
+                    "nextPageToken": "page2-token",
                     "issues": [
                         {
                             "id": "10001",
@@ -302,7 +301,6 @@ public class JiraServiceTests
                 """;
         var page2Response = """
                 {
-                    "total": 3,
                     "issues": [
                         {
                             "id": "10003",
@@ -350,13 +348,13 @@ public class JiraServiceTests
         // 1 for /field discovery + 2 for search pages
         handler.SendCount.Should().Be(3);
 
-        // Verify the second search request included startAt=2
+        // Verify the second search request included nextPageToken
         var searchRequests = handler.AllRequestBodies
             .Where(b => b != null && b.Contains("\"jql\""))
             .ToList();
         searchRequests.Should().HaveCount(2);
-        searchRequests[0].Should().Contain("\"startAt\":0");
-        searchRequests[1].Should().Contain("\"startAt\":2");
+        searchRequests[0].Should().NotContain("\"nextPageToken\"");
+        searchRequests[1].Should().Contain("\"nextPageToken\":\"page2-token\"");
     }
 
     [Fact]
@@ -457,7 +455,6 @@ public class JiraServiceTests
     {
         var searchResponse = """
                 {
-                    "total": 0,
                     "issues": []
                 }
                 """;
