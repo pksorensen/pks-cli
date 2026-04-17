@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -794,37 +795,54 @@ public class JiraBrowseCommand : Command<JiraBrowseCommand.Settings>
         if (skipped > 0)
             _console.MarkupLine($"[dim]{skipped} issues unchanged, fetching details for {staleIssues.Count} updated issues...[/]");
 
-        // Fetch enriched data ONLY for stale issues
+        // Fetch enriched data ONLY for stale issues (parallel with throttle)
         if (staleIssues.Count > 0)
         {
+            var fetched = 0;
+            var startTime = Stopwatch.GetTimestamp();
             await _console.Status()
                 .Spinner(Spinner.Known.Dots)
                 .StartAsync($"[cyan]Fetching details for {staleIssues.Count} issues...[/]", async ctx =>
                 {
-                    foreach (var issue in staleIssues)
+                    var throttle = new SemaphoreSlim(10);
+                    var tasks = staleIssues.Select(async issue =>
                     {
-                        ctx.Status($"[cyan]Fetching {Markup.Escape(issue.Key)}...[/]");
+                        await throttle.WaitAsync();
                         try
                         {
-                            var fullIssue = await _jiraService.GetIssueWithAllFieldsAsync(issue.Key);
-                            if (fullIssue != null)
+                            try
                             {
-                                issue.RawFields = fullIssue.RawFields;
-                                issue.RawFieldNames = fullIssue.RawFieldNames;
-                                issue.IssueLinks = fullIssue.IssueLinks;
-                                // Prefer the full issue's parsed fields (fetched without field filter)
-                                if (!string.IsNullOrEmpty(fullIssue.Description))
-                                    issue.Description = fullIssue.Description;
-                                if (!string.IsNullOrEmpty(fullIssue.AcceptanceCriteria))
-                                    issue.AcceptanceCriteria = fullIssue.AcceptanceCriteria;
+                                var fullIssue = await _jiraService.GetIssueWithAllFieldsAsync(issue.Key);
+                                if (fullIssue != null)
+                                {
+                                    issue.RawFields = fullIssue.RawFields;
+                                    issue.RawFieldNames = fullIssue.RawFieldNames;
+                                    issue.IssueLinks = fullIssue.IssueLinks;
+                                    if (!string.IsNullOrEmpty(fullIssue.Description))
+                                        issue.Description = fullIssue.Description;
+                                    if (!string.IsNullOrEmpty(fullIssue.AcceptanceCriteria))
+                                        issue.AcceptanceCriteria = fullIssue.AcceptanceCriteria;
+                                }
                             }
+                            catch { /* skip */ }
+                            try { issue.Comments = await _jiraService.GetCommentsAsync(issue.Key); } catch { /* skip */ }
+                            try { issue.Worklogs = await _jiraService.GetWorklogsAsync(issue.Key); } catch { /* skip */ }
+                            try { issue.Attachments = await _jiraService.GetAttachmentsAsync(issue.Key); } catch { /* skip */ }
+                            try { issue.Changelog = await _jiraService.GetChangelogAsync(issue.Key); } catch { /* skip */ }
+
+                            var count = Interlocked.Increment(ref fetched);
+                            var elapsed = Stopwatch.GetElapsedTime(startTime);
+                            var avgPerIssue = elapsed / count;
+                            var remaining = avgPerIssue * (staleIssues.Count - count);
+                            var eta = remaining.TotalSeconds < 1 ? "almost done" : $"~{remaining:mm\\:ss} remaining";
+                            ctx.Status($"[cyan]{count}/{staleIssues.Count} done — {eta}[/]");
                         }
-                        catch { /* skip */ }
-                        try { issue.Comments = await _jiraService.GetCommentsAsync(issue.Key); } catch { /* skip */ }
-                        try { issue.Worklogs = await _jiraService.GetWorklogsAsync(issue.Key); } catch { /* skip */ }
-                        try { issue.Attachments = await _jiraService.GetAttachmentsAsync(issue.Key); } catch { /* skip */ }
-                        try { issue.Changelog = await _jiraService.GetChangelogAsync(issue.Key); } catch { /* skip */ }
-                    }
+                        finally
+                        {
+                            throttle.Release();
+                        }
+                    });
+                    await Task.WhenAll(tasks);
                 });
         }
 

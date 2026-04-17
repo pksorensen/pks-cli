@@ -200,6 +200,293 @@ public class JiraServiceTests
         result.Issues.Should().HaveCount(1);
     }
 
+    [Fact]
+    public async Task SearchIssuesAsync_SinglePage_ShouldNotMakeExtraRequests()
+    {
+        // No nextPageToken means single page — no further requests needed
+        var searchResponse = """
+                {
+                    "issues": [
+                        {
+                            "id": "10001",
+                            "key": "UDV-1",
+                            "fields": {
+                                "summary": "Issue one",
+                                "status": { "name": "To Do" },
+                                "issuetype": { "name": "Task" },
+                                "priority": { "name": "Medium" },
+                                "assignee": null,
+                                "project": { "key": "UDV" }
+                            }
+                        },
+                        {
+                            "id": "10002",
+                            "key": "UDV-2",
+                            "fields": {
+                                "summary": "Issue two",
+                                "status": { "name": "Done" },
+                                "issuetype": { "name": "Bug" },
+                                "priority": { "name": "High" },
+                                "assignee": null,
+                                "project": { "key": "UDV" }
+                            }
+                        }
+                    ]
+                }
+                """;
+
+        var handler = new SequentialHttpMessageHandler(HttpStatusCode.OK, searchResponse);
+        var httpClient = new HttpClient(handler);
+
+        var configValues = new Dictionary<string, string>
+        {
+            ["jira:base_url"] = "https://example.atlassian.net",
+            ["jira:auth_method"] = JiraAuthMethod.ApiToken.ToString(),
+            ["jira:deployment_type"] = JiraDeploymentType.Cloud.ToString(),
+            ["jira:email"] = "user@example.com",
+            ["jira:api_token"] = "token",
+            ["jira:cloud_id"] = "cloud-123"
+        };
+
+        var config = new Mock<IConfigurationService>();
+        config.Setup(x => x.GetAsync(It.IsAny<string>()))
+                .ReturnsAsync((string key) => configValues.TryGetValue(key, out var value) ? value : null);
+
+        var logger = new Mock<ILogger<JiraService>>();
+        var service = new JiraService(httpClient, config.Object, logger.Object);
+
+        var result = await service.SearchIssuesAsync("project = UDV ORDER BY created ASC", maxResults: 100);
+
+        result.Total.Should().Be(2);
+        result.Issues.Should().HaveCount(2);
+        // 1 for /field discovery + 1 for search (no extra pagination calls)
+        handler.SendCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task SearchIssuesAsync_MultiplePages_ShouldFetchAllIssues()
+    {
+        // Cloud uses nextPageToken for pagination — page1 returns token, page2 does not
+        var fieldDiscoveryResponse = "[]"; // empty field list
+        var page1Response = """
+                {
+                    "nextPageToken": "page2-token",
+                    "issues": [
+                        {
+                            "id": "10001",
+                            "key": "UDV-1",
+                            "fields": {
+                                "summary": "Issue one",
+                                "status": { "name": "To Do" },
+                                "issuetype": { "name": "Task" },
+                                "priority": { "name": "Medium" },
+                                "assignee": null,
+                                "project": { "key": "UDV" }
+                            }
+                        },
+                        {
+                            "id": "10002",
+                            "key": "UDV-2",
+                            "fields": {
+                                "summary": "Issue two",
+                                "status": { "name": "Done" },
+                                "issuetype": { "name": "Bug" },
+                                "priority": { "name": "High" },
+                                "assignee": null,
+                                "project": { "key": "UDV" }
+                            }
+                        }
+                    ]
+                }
+                """;
+        var page2Response = """
+                {
+                    "issues": [
+                        {
+                            "id": "10003",
+                            "key": "UDV-3",
+                            "fields": {
+                                "summary": "Issue three",
+                                "status": { "name": "In Progress" },
+                                "issuetype": { "name": "Story" },
+                                "priority": { "name": "Low" },
+                                "assignee": null,
+                                "project": { "key": "UDV" }
+                            }
+                        }
+                    ]
+                }
+                """;
+
+        var handler = new SequentialHttpMessageHandler(
+            HttpStatusCode.OK,
+            fieldDiscoveryResponse, page1Response, page2Response);
+        var httpClient = new HttpClient(handler);
+
+        var configValues = new Dictionary<string, string>
+        {
+            ["jira:base_url"] = "https://example.atlassian.net",
+            ["jira:auth_method"] = JiraAuthMethod.ApiToken.ToString(),
+            ["jira:deployment_type"] = JiraDeploymentType.Cloud.ToString(),
+            ["jira:email"] = "user@example.com",
+            ["jira:api_token"] = "token",
+            ["jira:cloud_id"] = "cloud-123"
+        };
+
+        var config = new Mock<IConfigurationService>();
+        config.Setup(x => x.GetAsync(It.IsAny<string>()))
+                .ReturnsAsync((string key) => configValues.TryGetValue(key, out var value) ? value : null);
+
+        var logger = new Mock<ILogger<JiraService>>();
+        var service = new JiraService(httpClient, config.Object, logger.Object);
+
+        var result = await service.SearchIssuesAsync("project = UDV ORDER BY created ASC", maxResults: 2);
+
+        result.Total.Should().Be(3);
+        result.Issues.Should().HaveCount(3);
+        result.Issues.Select(i => i.Key).Should().BeEquivalentTo(new[] { "UDV-1", "UDV-2", "UDV-3" });
+        // 1 for /field discovery + 2 for search pages
+        handler.SendCount.Should().Be(3);
+
+        // Verify the second search request included nextPageToken
+        var searchRequests = handler.AllRequestBodies
+            .Where(b => b != null && b.Contains("\"jql\""))
+            .ToList();
+        searchRequests.Should().HaveCount(2);
+        searchRequests[0].Should().NotContain("\"nextPageToken\"");
+        searchRequests[1].Should().Contain("\"nextPageToken\":\"page2-token\"");
+    }
+
+    [Fact]
+    public async Task SearchIssuesAsync_MultiplePages_Server_ShouldFetchAllIssues()
+    {
+        // Simulate Server deployment with total=3, pages of 2
+        var fieldDiscoveryResponse = "[]";
+        var page1Response = """
+                {
+                    "total": 3,
+                    "issues": [
+                        {
+                            "id": "10001",
+                            "key": "SRV-1",
+                            "fields": {
+                                "summary": "Server issue one",
+                                "status": { "name": "Open" },
+                                "issuetype": { "name": "Task" },
+                                "priority": { "name": "Medium" },
+                                "assignee": null,
+                                "project": { "key": "SRV" }
+                            }
+                        },
+                        {
+                            "id": "10002",
+                            "key": "SRV-2",
+                            "fields": {
+                                "summary": "Server issue two",
+                                "status": { "name": "Closed" },
+                                "issuetype": { "name": "Bug" },
+                                "priority": { "name": "High" },
+                                "assignee": null,
+                                "project": { "key": "SRV" }
+                            }
+                        }
+                    ]
+                }
+                """;
+        var page2Response = """
+                {
+                    "total": 3,
+                    "issues": [
+                        {
+                            "id": "10003",
+                            "key": "SRV-3",
+                            "fields": {
+                                "summary": "Server issue three",
+                                "status": { "name": "In Progress" },
+                                "issuetype": { "name": "Story" },
+                                "priority": { "name": "Low" },
+                                "assignee": null,
+                                "project": { "key": "SRV" }
+                            }
+                        }
+                    ]
+                }
+                """;
+
+        var handler = new SequentialHttpMessageHandler(
+            HttpStatusCode.OK,
+            fieldDiscoveryResponse, page1Response, page2Response);
+        var httpClient = new HttpClient(handler);
+
+        var configValues = new Dictionary<string, string>
+        {
+            ["jira:base_url"] = "https://jira.example.com",
+            ["jira:auth_method"] = JiraAuthMethod.ApiToken.ToString(),
+            ["jira:deployment_type"] = JiraDeploymentType.Server.ToString(),
+            ["jira:email"] = "user@example.com",
+            ["jira:api_token"] = "token"
+        };
+
+        var config = new Mock<IConfigurationService>();
+        config.Setup(x => x.GetAsync(It.IsAny<string>()))
+                .ReturnsAsync((string key) => configValues.TryGetValue(key, out var value) ? value : null);
+
+        var logger = new Mock<ILogger<JiraService>>();
+        var service = new JiraService(httpClient, config.Object, logger.Object);
+
+        var result = await service.SearchIssuesAsync("project = SRV ORDER BY created ASC", maxResults: 2);
+
+        result.Total.Should().Be(3);
+        result.Issues.Should().HaveCount(3);
+        result.Issues.Select(i => i.Key).Should().BeEquivalentTo(new[] { "SRV-1", "SRV-2", "SRV-3" });
+        handler.SendCount.Should().Be(3); // 1 field discovery + 2 search pages
+
+        // Verify startAt was sent in both search requests
+        var searchRequests = handler.AllRequestBodies
+            .Where(b => b != null && b.Contains("\"jql\""))
+            .ToList();
+        searchRequests.Should().HaveCount(2);
+        searchRequests[0].Should().Contain("\"startAt\":0");
+        searchRequests[1].Should().Contain("\"startAt\":2");
+    }
+
+    [Fact]
+    public async Task SearchIssuesAsync_EmptyResult_ShouldReturnEmptyList()
+    {
+        var searchResponse = """
+                {
+                    "issues": []
+                }
+                """;
+
+        var handler = new SequentialHttpMessageHandler(HttpStatusCode.OK, searchResponse);
+        var httpClient = new HttpClient(handler);
+
+        var configValues = new Dictionary<string, string>
+        {
+            ["jira:base_url"] = "https://example.atlassian.net",
+            ["jira:auth_method"] = JiraAuthMethod.ApiToken.ToString(),
+            ["jira:deployment_type"] = JiraDeploymentType.Cloud.ToString(),
+            ["jira:email"] = "user@example.com",
+            ["jira:api_token"] = "token",
+            ["jira:cloud_id"] = "cloud-123"
+        };
+
+        var config = new Mock<IConfigurationService>();
+        config.Setup(x => x.GetAsync(It.IsAny<string>()))
+                .ReturnsAsync((string key) => configValues.TryGetValue(key, out var value) ? value : null);
+
+        var logger = new Mock<ILogger<JiraService>>();
+        var service = new JiraService(httpClient, config.Object, logger.Object);
+
+        var result = await service.SearchIssuesAsync("project = UDV ORDER BY created ASC", maxResults: 100);
+
+        result.Total.Should().Be(0);
+        result.Issues.Should().BeEmpty();
+        // 1 for /field discovery + 1 for search (no extra pagination)
+        handler.SendCount.Should().Be(2);
+    }
+
     private sealed class CountingHttpMessageHandler : HttpMessageHandler
     {
         private readonly HttpStatusCode _statusCode;
@@ -230,6 +517,50 @@ public class JiraServiceTests
             var response = new HttpResponseMessage(_statusCode)
             {
                 Content = new StringContent(_body)
+            };
+
+            return response;
+        }
+    }
+
+    /// <summary>
+    /// HTTP message handler that returns different responses for sequential requests.
+    /// The first N responses come from the provided list; after that the last response is repeated.
+    /// Also tracks all request bodies for verification.
+    /// </summary>
+    private sealed class SequentialHttpMessageHandler : HttpMessageHandler
+    {
+        private readonly HttpStatusCode _statusCode;
+        private readonly List<string> _responses;
+
+        public int SendCount { get; private set; }
+        public List<string?> AllRequestBodies { get; } = new();
+        public string? LastRequestUri { get; private set; }
+        public string? LastRequestBody { get; private set; }
+
+        public SequentialHttpMessageHandler(HttpStatusCode statusCode, params string[] responses)
+        {
+            _statusCode = statusCode;
+            _responses = responses.ToList();
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var index = SendCount;
+            SendCount++;
+            LastRequestUri = request.RequestUri?.ToString();
+            LastRequestBody = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            AllRequestBodies.Add(LastRequestBody);
+
+            // Use the response at the current index, or the last one if we've exhausted the list
+            var responseIndex = index < _responses.Count ? index : _responses.Count - 1;
+            var body = _responses[responseIndex];
+
+            var response = new HttpResponseMessage(_statusCode)
+            {
+                Content = new StringContent(body)
             };
 
             return response;
