@@ -860,6 +860,8 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 var escapedHint = job.AgentDef.CommitMessageTemplate.Replace("'", "'\\''");
                 scriptLines.AppendLine($"export AGENTICS_COMMIT_MESSAGE_HINT='{escapedHint}'");
             }
+            if (!string.IsNullOrWhiteSpace(job.AgentDef.ProjectRepoToken))
+                scriptLines.AppendLine($"export AGENTICS_REPO_TOKEN='{job.AgentDef.ProjectRepoToken}'");
         }
 
         // Operator: auto-approve image uploads so headless stations don't require TUI interaction
@@ -1646,8 +1648,6 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         var workDir = await ResolveWorkDirAsync(settings.WorkDir, ct);
         var gitEnv = await PrepareGitCredentialsAsync(ct);
         string? jobWorkTree = null;
-        var answerLoopCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        Task? answerLoopTask = null;
 
         try
         {
@@ -1661,6 +1661,11 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                     workDir, registration, job, settings.Verbose, useWorktree, ct, gitEnv);
                 wsSpan?.SetTag("workspace_path", jobWorkTree);
             }
+
+            // 2b. Restore CLAUDE_CONFIG_DIR archive from server (no-op if none stored yet).
+            // This enables cross-machine resume: the previous runner's CLAUDE_CONFIG_DIR
+            // (sessions, memory, settings) is restored here before Claude starts.
+            await RestoreClaudeConfigArchiveAsync(client, baseUrl, registration, ct);
 
             // 3. PATCH to in_progress
             _console.MarkupLine($"[cyan]InProcess: executing job {job.Id} in {jobWorkTree}...[/]");
@@ -1892,6 +1897,10 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
                     var escapedHint = job.AgentDef.CommitMessageTemplate.Replace("'", "'\\''");
                     autoGitEnv += $" AGENTICS_COMMIT_MESSAGE_HINT='{escapedHint}'";
                 }
+                // Pass the project repo token separately — AGENTICS_TOKEN is the runner API token
+                // and is NOT accepted by the git server's repo.git endpoint.
+                if (!string.IsNullOrWhiteSpace(job.AgentDef.ProjectRepoToken))
+                    autoGitEnv += $" AGENTICS_REPO_TOKEN='{job.AgentDef.ProjectRepoToken}'";
             }
 
             // Operator: auto-approve image uploads so headless stations don't require TUI interaction
@@ -1946,11 +1955,16 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             // deny rules in .claude/settings.json written above.
             var allowedDirsEnv = $" VIBECAST_ALLOWED_DIRECTORIES=\"{jobWorkTree}\"";
 
+            // CLAUDE_CONFIG_DIR: project-scoped config dir in /tmp so all jobs for the same
+            // project share one Claude config. Combined with the stable task CWD this means
+            // session transcripts accumulate in one place and --resume always works.
+            var claudeConfigDirEnv = $" CLAUDE_CONFIG_DIR=/tmp/agentic-{registration.Owner}-{registration.Project}";
+
             // Redirect vibecast stdout+stderr to a log file so failures are diagnosable.
             // The log is captured on timeout and included in the job PATCH logs field.
             var vibecastLogRedirect = $" > \"{vibecastLogFile}\" 2>&1";
 
-            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv}{autoApproveEnv}{allowedDirsEnv}{otelEnv} {vibecastBin}{vibecastLogRedirect}");
+            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv}{autoApproveEnv}{allowedDirsEnv}{claudeConfigDirEnv}{otelEnv} {vibecastBin}{vibecastLogRedirect}");
 
             var startProc = Process.Start(startPsi);
             if (startProc != null)
@@ -2094,362 +2108,10 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             // A positional arg to claude stays interactive (NOT the same as -p which exits after response).
             _console.MarkupLine($"[green]Prompt will be delivered via VIBECAST_INITIAL_PROMPT_FILE ({promptFile})[/]");
 
-            // 12b. Start background answer-injection loop if this job is linked to a task.
-            // Polls the server for pending questions and injects answers via tmux send-keys.
-            agentSpan?.SetTag("agentics.answer_loop.task_id", job.AgentDef?.TaskId ?? "null");
-            agentSpan?.SetTag("agentics.answer_loop.assembly_line_id", job.AgentDef?.AssemblyLineId ?? "null");
-            agentSpan?.SetTag("agentics.answer_loop.streaming_session", streamingSession ?? "null");
-            if (job.AgentDef?.TaskId != null && job.AgentDef?.AssemblyLineId != null && streamingSession != null)
-            {
-                var vibecastSession = streamingSession; // vibecast names its tmux session after the stream ID
-                agentSpan?.AddEvent(new System.Diagnostics.ActivityEvent("answer_loop.started",
-                    tags: new System.Diagnostics.ActivityTagsCollection {
-                        ["assembly_line_id"] = job.AgentDef.AssemblyLineId,
-                        ["task_id"] = job.AgentDef.TaskId,
-                    }));
-                _console.MarkupLine($"[cyan]Answer injection loop started. assemblyLineId={job.AgentDef.AssemblyLineId} taskId={job.AgentDef.TaskId}[/]");
-                answerLoopTask = Task.Run(async () =>
-                {
-                    var lastInjectedToolUseId = "";
-                    var lastSeenToolUseId = ""; // survives pendingQuestion being cleared after user answers
-                    var stalePermSkipCount = 0; // suppress repeated stale-permission log spam
-                    while (!answerLoopCts.Token.IsCancellationRequested)
-                    {
-                        try
-                        {
-                            await Task.Delay(3000, answerLoopCts.Token);
-
-                            // Fetch current pending question from the task
-                            var tasksResp = await client.GetAsync(
-                                $"{baseUrl}/assembly-lines/{job.AgentDef.AssemblyLineId}/tasks",
-                                answerLoopCts.Token);
-                            if (!tasksResp.IsSuccessStatusCode) continue;
-
-                            var tasksJson = await tasksResp.Content.ReadAsStringAsync(answerLoopCts.Token);
-                            using var tasksDoc = JsonDocument.Parse(tasksJson);
-                            // Clone the matched element before the doc is disposed
-                            JsonElement? matchedRaw = null;
-                            foreach (var t in tasksDoc.RootElement.EnumerateArray())
-                            {
-                                if (t.TryGetProperty("id", out var idEl) && idEl.GetString() == job.AgentDef.TaskId)
-                                {
-                                    matchedRaw = t.Clone();
-                                    break;
-                                }
-                            }
-                            if (matchedRaw == null) continue;
-                            var matchedTask = matchedRaw.Value;
-
-                            // Track the toolUseId from pendingQuestion while it exists.
-                            // IMPORTANT: when the user submits an answer, clearTaskPendingQuestion removes
-                            // pendingQuestion from the task — so we must remember the last seen toolUseId
-                            // and still poll for its answer, otherwise we miss the window.
-                            if (matchedTask.TryGetProperty("pendingQuestion", out var pq) &&
-                                pq.TryGetProperty("toolUseId", out var tuid) &&
-                                tuid.GetString() is { Length: > 0 } activeTuid)
-                            {
-                                lastSeenToolUseId = activeTuid;
-                            }
-
-                            // ── Permission request branch ──────────────────────────────────────────
-                            // When Claude Code shows a permission dialog in the tmux pane,
-                            // the PermissionRequest hook records a pendingPermission + vote on the task.
-                            // We poll the vote, and when resolved send Down+Enter to pick Allow/Deny.
-                            if (matchedTask.TryGetProperty("pendingPermission", out var pp) &&
-                                pp.TryGetProperty("toolUseId", out var ppTuid) &&
-                                pp.TryGetProperty("streamId", out var ppStream) &&
-                                ppTuid.GetString() is { Length: > 0 } permToolUseId &&
-                                permToolUseId != lastInjectedToolUseId)
-                            {
-                                var permStreamId = ppStream.GetString() ?? "";
-                                // Skip permissions from other streams — they're stale from previous jobs.
-                                if (!string.IsNullOrEmpty(streamIdValue) && permStreamId != streamIdValue)
-                                {
-                                    stalePermSkipCount++;
-                                    if (stalePermSkipCount == 1)
-                                        _console.MarkupLine($"[dim]Stale permission from stream {permStreamId.EscapeMarkup()} (current: {streamIdValue.EscapeMarkup()}) — will suppress further repeats[/]");
-                                    else if (stalePermSkipCount % 20 == 0)
-                                        _console.MarkupLine($"[dim]Still seeing stale permission from {permStreamId.EscapeMarkup()} ({stalePermSkipCount}x skipped)[/]");
-                                    goto skipPermission;
-                                }
-                                stalePermSkipCount = 0; // reset when we see a fresh permission
-                                var voteResp = await client.GetAsync(
-                                    $"{agenticsBaseUrl}/api/lives/question-vote?streamId={Uri.EscapeDataString(permStreamId)}&toolUseId={Uri.EscapeDataString(permToolUseId)}",
-                                    answerLoopCts.Token);
-                                if (voteResp.IsSuccessStatusCode)
-                                {
-                                    var voteJson = await voteResp.Content.ReadAsStringAsync(answerLoopCts.Token);
-                                    using var voteDoc = JsonDocument.Parse(voteJson);
-                                    var voteRoot = voteDoc.RootElement;
-                                    if (voteRoot.TryGetProperty("resolvedAnswer", out var resolvedEl) &&
-                                        resolvedEl.GetString() is { Length: > 0 } resolvedAnswer)
-                                    {
-                                        // Vote resolved — inject answer via tmux exactly like single-question mode
-                                        _console.MarkupLine($"[green]Permission vote resolved: {resolvedAnswer.EscapeMarkup()} for {permToolUseId}[/]");
-                                        lastInjectedToolUseId = permToolUseId;
-
-                                        var permDebugDir = Path.Combine(vibecastHome, "debug");
-                                        var permPaneTarget = $"{vibecastSession}:main.0";
-                                        var paneContent = await TmuxCaptureAndDebugAsync(permPaneTarget, "permission_before", permDebugDir, answerLoopCts.Token);
-
-                                        // Map vote result to pane option: "Allow" → first Yes option, "Deny" → first No option
-                                        var searchTerm = resolvedAnswer == "Allow" ? "Yes" : "No";
-                                        var optionNumber = MatchOptionNumber(paneContent, searchTerm);
-                                        if (optionNumber == 0) optionNumber = resolvedAnswer == "Allow" ? 1 : 3;
-
-                                        var currentOption = SelectedOptionNumber(paneContent);
-                                        var downs = optionNumber - currentOption;
-                                        _console.MarkupLine($"[dim]  → permission: '{resolvedAnswer.EscapeMarkup()}' → option {optionNumber} ({downs} Down(s))[/]");
-                                        for (var d = 0; d < downs; d++)
-                                        {
-                                            await TmuxSendKeyRawAsync(permPaneTarget, "Down", answerLoopCts.Token);
-                                            await Task.Delay(100, answerLoopCts.Token);
-                                        }
-                                        await TmuxSendKeyRawAsync(permPaneTarget, "Enter", answerLoopCts.Token);
-                                        // Skip the rest of this loop iteration so the wizard injection
-                                        // doesn't run while the permission dialog is still dismissing.
-                                        continue;
-                                    }
-                                }
-                            }
-
-                            skipPermission:;
-                            // Poll for whichever toolUseId we know about (active or recently cleared)
-                            var toolUseId = lastSeenToolUseId;
-                            if (string.IsNullOrEmpty(toolUseId) || toolUseId == lastInjectedToolUseId) continue;
-
-                            // Check if an answer is available
-                            var ansResp = await client.GetAsync(
-                                $"{baseUrl}/assembly-lines/{job.AgentDef.AssemblyLineId}/tasks/{job.AgentDef.TaskId}/answer-question?toolUseId={Uri.EscapeDataString(toolUseId)}",
-                                answerLoopCts.Token);
-                            if (!ansResp.IsSuccessStatusCode) continue;
-
-                            var ansJson = await ansResp.Content.ReadAsStringAsync(answerLoopCts.Token);
-                            var ansData = JsonSerializer.Deserialize<JsonElement>(ansJson, JsonOptions);
-                            if (!ansData.TryGetProperty("answer", out var ansEl) || ansEl.ValueKind == JsonValueKind.Null) continue;
-                            var answer = ansEl.GetString() ?? "";
-                            if (string.IsNullOrEmpty(answer)) continue;
-
-                            // Inject answer into the vibecast tmux session.
-                            // Target pane 0 of the "main" window explicitly — pane 1 is the fkeybar
-                            // and may be active, so omitting the pane index drops keys into fkeybar.
-                            //
-                            // Claude Code's ask_followup_question renders two distinct UIs:
-                            //   A) Simple text prompt — user types freely, sends with Enter
-                            //   B) Multi-step selection wizard — each question has option 1 pre-selected,
-                            //      navigate with Enter (select), Tab (next field / Submit), then Enter
-                            //
-                            // The server stores answers as a Q&A block (blank-line-separated pairs) when
-                            // the web UI fills in the wizard. For wizard answers we must NOT type the raw
-                            // text — instead we send Enter for each Q&A pair (accepting the pre-selected
-                            // recommended option) then Tab + Enter to confirm the Submit button.
-                            //
-                            // A "wizard answer" is detected by the presence of blank-line-separated
-                            // Q&A blocks (question line + answer line + blank line).
-                            // A "plain answer" is a single non-empty block without that structure.
-                            _console.MarkupLine($"[green]Injecting answer for toolUseId {toolUseId}: {answer.EscapeMarkup()}[/]");
-                            System.Diagnostics.Activity.Current?.AddEvent(new System.Diagnostics.ActivityEvent("answer_loop.injecting",
-                                tags: new System.Diagnostics.ActivityTagsCollection {
-                                    ["tool_use_id"] = toolUseId,
-                                    ["answer_preview"] = answer.Length > 60 ? answer[..60] + "…" : answer,
-                                }));
-                            // NOTE: lastInjectedToolUseId is set only after the first successful step so that
-                            // a bail-out (wizard not visible yet) causes a retry on the next poll cycle.
-
-                            var debugDir = Path.Combine(vibecastHome, "debug");
-                            var paneTarget = $"{vibecastSession}:main.0";
-                            var paragraphs = answer.Split(new[] { "\n\n" }, StringSplitOptions.RemoveEmptyEntries);
-                            var isWizardAnswer = paragraphs.Length > 1;
-
-                            if (isWizardAnswer)
-                            {
-                                // Wizard mode: for each Q&A block, capture the pane to read the visible
-                                // options, match the answer text to an option number, and send that digit.
-                                // Claude auto-advances to the next question when a valid option number
-                                // is pressed. After all questions, Tab moves to Submit and Enter confirms.
-                                _console.MarkupLine($"[dim]Wizard answer detected ({paragraphs.Length} steps)[/]");
-                                var stepIdx = 0;
-                                var wizardAborted = false;
-                                string? prevStepContent = null;
-                                foreach (var para in paragraphs)
-                                {
-                                    var lines = para.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-                                    if (lines.Length < 2) continue;
-                                    var answerText = lines[1].Trim(); // second line is the answer
-
-                                    // Capture pane, retrying until numbered options are visible.
-                                    // Pass prevStepContent so we wait for the wizard to visually
-                                    // advance (content change) before reading the next question's options.
-                                    // After Enter advances the wizard the next question may take
-                                    // up to ~1.5s to render — retry avoids a spurious free-text fallback.
-                                    var paneContent = await WaitForOptionsAsync(paneTarget, $"wizard_step{stepIdx}_before", debugDir, answerLoopCts.Token, previousContent: prevStepContent);
-                                    var hasAnyOptions = System.Text.RegularExpressions.Regex.IsMatch(
-                                        paneContent, @"^\s*\d+\.\s+\S",
-                                        System.Text.RegularExpressions.RegexOptions.Multiline);
-
-                                    if (!hasAnyOptions)
-                                    {
-                                        // The wizard UI isn't visible at all — we might be between dialogs or
-                                        // the dialog was dismissed already. Bail out without marking as injected
-                                        // so the next poll cycle retries when the wizard actually appears.
-                                        _console.MarkupLine($"[yellow]Wizard not visible at step {stepIdx} (no numbered options), deferring injection[/]");
-                                        wizardAborted = true;
-                                        break;
-                                    }
-
-                                    var optionNumber = MatchOptionNumber(paneContent, answerText);
-
-                                    if (optionNumber > 0)
-                                    {
-                                        // Mark as injected only once we've confirmed the wizard is on screen.
-                                        if (stepIdx == 0) lastInjectedToolUseId = toolUseId;
-
-                                        // The wizard cursor starts at option 1 (❯). Navigate down to the target
-                                        // option with arrow keys, then press Enter to select and advance.
-                                        // The wizard responds to Enter, not digit shortcuts.
-                                        var currentOption = SelectedOptionNumber(paneContent);
-                                        var downs = optionNumber - currentOption;
-                                        _console.MarkupLine($"[dim]  → matched '{answerText.EscapeMarkup()}' to option {optionNumber} (cursor at {currentOption}, {downs} Down(s))[/]");
-                                        for (var d = 0; d < downs; d++)
-                                        {
-                                            await TmuxSendKeyRawAsync(paneTarget, "Down", answerLoopCts.Token);
-                                            await Task.Delay(100, answerLoopCts.Token);
-                                        }
-                                        // Enter selects the highlighted option and advances to the next question
-                                        await TmuxSendKeyRawAsync(paneTarget, "Enter", answerLoopCts.Token);
-                                        prevStepContent = paneContent; // remember so next step waits for change
-                                    }
-                                    else
-                                    {
-                                        // No matching numbered option — navigate to "Type something" if available.
-                                        // Only type free text if "Type something" is visible in the wizard.
-                                        // If it's not present the wizard isn't in the right state; bail out.
-                                        var typeSomethingNum = TypeSomethingOptionNumber(paneContent);
-                                        if (typeSomethingNum > 0)
-                                        {
-                                            if (stepIdx == 0) lastInjectedToolUseId = toolUseId;
-                                            _console.MarkupLine($"[dim]  → no option match for '{answerText.EscapeMarkup()}', typing as free text[/]");
-                                            var currentOption = SelectedOptionNumber(paneContent);
-                                            var downs = typeSomethingNum - currentOption;
-                                            for (var d = 0; d < downs; d++)
-                                            {
-                                                await TmuxSendKeyRawAsync(paneTarget, "Down", answerLoopCts.Token);
-                                                await Task.Delay(100, answerLoopCts.Token);
-                                            }
-                                            await TmuxSendKeyRawAsync(paneTarget, "Enter", answerLoopCts.Token);
-                                            await Task.Delay(300, answerLoopCts.Token);
-                                            await TmuxSendKeysAsync(paneTarget, answerText, answerLoopCts.Token);
-                                            prevStepContent = paneContent; // remember so next step waits for change
-                                        }
-                                        else
-                                        {
-                                            // Check if this is a multi-select answer (comma-separated values).
-                                            // ask_followup_question with allowMultipleSelections renders checkboxes:
-                                            // navigate to each item with arrow keys, Space to toggle, Enter to submit.
-                                            var multiItems = answerText.Split(',')
-                                                .Select(s => s.Trim())
-                                                .Where(s => s.Length > 0)
-                                                .ToList();
-                                            if (multiItems.Count > 1)
-                                            {
-                                                if (stepIdx == 0) lastInjectedToolUseId = toolUseId;
-                                                _console.MarkupLine($"[dim]  → multi-select: selecting {multiItems.Count} items: {answerText.EscapeMarkup()}[/]");
-                                                var currentPane = paneContent;
-                                                foreach (var item in multiItems)
-                                                {
-                                                    var itemNum = MatchOptionNumber(currentPane, item);
-                                                    if (itemNum == 0)
-                                                    {
-                                                        _console.MarkupLine($"[yellow]Multi-select: no option for '{item.EscapeMarkup()}', skipping[/]");
-                                                        continue;
-                                                    }
-                                                    var curr = SelectedOptionNumber(currentPane);
-                                                    var downs = itemNum - curr;
-                                                    _console.MarkupLine($"[dim]    → '{item.EscapeMarkup()}' option {itemNum} (cursor {curr}, {downs} Down(s))[/]");
-                                                    for (var d = 0; d < downs; d++)
-                                                    {
-                                                        await TmuxSendKeyRawAsync(paneTarget, "Down", answerLoopCts.Token);
-                                                        await Task.Delay(100, answerLoopCts.Token);
-                                                    }
-                                                    await TmuxSendKeyRawAsync(paneTarget, "Space", answerLoopCts.Token);
-                                                    await Task.Delay(200, answerLoopCts.Token);
-                                                    currentPane = await TmuxCaptureAndDebugAsync(paneTarget, $"multiselect_{stepIdx}_{item}", debugDir, answerLoopCts.Token);
-                                                }
-                                                await TmuxSendKeyRawAsync(paneTarget, "Enter", answerLoopCts.Token);
-                                                prevStepContent = currentPane;
-                                            }
-                                            else
-                                            {
-                                                // Numbered options exist but none match and there's no free-text slot.
-                                                // This likely means we're in a different dialog (e.g., permission).
-                                                // Bail out without marking as injected — retry next cycle.
-                                                _console.MarkupLine($"[yellow]No option match for '{answerText.EscapeMarkup()}' and no 'Type something' slot — deferring injection[/]");
-                                                wizardAborted = true;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    stepIdx++;
-                                }
-
-                                if (wizardAborted) continue;
-                                // Capture before final Tab+Enter
-                                await TmuxCaptureAndDebugAsync(paneTarget, "wizard_submit_before", debugDir, answerLoopCts.Token);
-                                await TmuxSendKeysToTabAsync(paneTarget, answerLoopCts.Token);
-                                await Task.Delay(300, answerLoopCts.Token);
-                                await TmuxSendKeysAsync(paneTarget, "", answerLoopCts.Token);
-                            }
-                            else
-                            {
-                                // Single-answer mode: capture pane and check if it shows a numbered option list.
-                                // AskUserQuestion with questions.length===1 sends just the label text as the answer
-                                // (no \n\n), but the UI is the same arrow-key selection as the multi-step wizard —
-                                // NOT free-text typing. Try option matching first; fall back to typing only if no match.
-                                var plainPane = await WaitForOptionsAsync(paneTarget, "plain_before", debugDir, answerLoopCts.Token);
-                                var plainHasOptions = System.Text.RegularExpressions.Regex.IsMatch(
-                                    plainPane, @"^\s*\d+\.\s+\S",
-                                    System.Text.RegularExpressions.RegexOptions.Multiline);
-
-                                if (!plainHasOptions)
-                                {
-                                    // No question UI visible — not the right moment to inject.
-                                    // Don't mark as injected so the next poll cycle retries.
-                                    _console.MarkupLine($"[yellow]Single-question: no question UI visible, deferring injection[/]");
-                                    continue;
-                                }
-
-                                lastInjectedToolUseId = toolUseId;
-                                var plainOptionNumber = MatchOptionNumber(plainPane, answer);
-                                if (plainOptionNumber > 0)
-                                {
-                                    var currentOption = SelectedOptionNumber(plainPane);
-                                    var downs = plainOptionNumber - currentOption;
-                                    _console.MarkupLine($"[dim]  → single-question: matched '{answer.EscapeMarkup()}' to option {plainOptionNumber} ({downs} Down(s))[/]");
-                                    for (var d = 0; d < downs; d++)
-                                    {
-                                        await TmuxSendKeyRawAsync(paneTarget, "Down", answerLoopCts.Token);
-                                        await Task.Delay(100, answerLoopCts.Token);
-                                    }
-                                    // Enter selects and auto-submits (no Tab needed for single-question)
-                                    await TmuxSendKeyRawAsync(paneTarget, "Enter", answerLoopCts.Token);
-                                }
-                                else
-                                {
-                                    // Truly free-text: question UI is showing but has no numbered options.
-                                    _console.MarkupLine($"[dim]  → single-question: no option match, typing as free text[/]");
-                                    await TmuxSendKeysAsync(paneTarget, answer, answerLoopCts.Token);
-                                }
-                            }
-                        }
-                        catch (OperationCanceledException) { break; }
-                        catch (Exception ex)
-                        {
-                            _console.MarkupLine($"[yellow]Answer loop error: {ex.Message.EscapeMarkup()}[/]");
-                        }
-                    }
-                    _console.MarkupLine("[cyan]Answer injection loop stopped.[/]");
-                }, answerLoopCts.Token);
-            }
+            // Answer injection is handled by vibecast (broadcast.go startAnswerInjectionLoop).
+            // vibecast polls /api/lives/sessions/{streamId}/pending-answer and injects via tmux send-keys.
+            // The runner must not do tmux operations — in production runner is on the host and vibecast
+            // is inside Docker; they don't share a tmux server.
 
             // 13. Wait for job to complete with activity-based timeout
             var idleTimeoutMs = (job.AgentDef?.IdleTimeoutMinutes ?? 2) * 60 * 1000;
@@ -2503,9 +2165,8 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
                 // We treat either recent websocket activity OR recent OTLP telemetry as "active".
                 // Claude emits spans continuously while thinking/using tools, so OTLP traffic is a
                 // reliable proxy for "Claude is still working" even when there's no terminal output.
-                var otlpIdleSecs = (DateTime.UtcNow - otlpProxy.LastActivityAt).TotalSeconds;
-                var otlpActive = otlpIdleSecs < idleTimeoutMs / 1000.0;
-
+                // When subagents are active the server returns a 3x extended whenTimeout so we don't
+                // false-positive during the orchestrator's silent inference pass after subagents finish.
                 if (streamIdValue != null)
                 {
                     try
@@ -2517,22 +2178,46 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
                         {
                             var actData = JsonSerializer.Deserialize<JsonElement>(
                                 await actResp.Content.ReadAsStringAsync(ct), JsonOptions);
+
+                            var activeSubagentCount = actData.TryGetProperty("activeSubagentCount", out var asc) ? asc.GetInt32() : 0;
+                            var subagentMultiplier = activeSubagentCount > 0 ? 3 : 1;
+                            var effectiveIdleMs = idleTimeoutMs * subagentMultiplier;
+
+                            // Apply same multiplier to the local OTEL proxy signal
+                            var otlpIdleSecs = (DateTime.UtcNow - otlpProxy.LastActivityAt).TotalSeconds;
+                            var otlpActive = otlpIdleSecs < effectiveIdleMs / 1000.0;
+
                             if (actData.TryGetProperty("isActive", out var isActive) && !isActive.GetBoolean())
                             {
-                                // Websocket activity says idle — but check OTLP too before timing out.
-                                // Claude may be processing internally without producing terminal output.
+                                // Server-side activity is idle — but check OTLP too before timing out.
                                 if (otlpActive)
                                 {
-                                    _console.MarkupLine($"[dim]Websocket idle but OTLP active ({otlpIdleSecs:F0}s ago), continuing...[/]");
+                                    _console.MarkupLine($"[dim]Server idle but OTLP active ({otlpIdleSecs:F0}s ago), continuing...[/]");
                                 }
                                 else
                                 {
                                     var idleSince = actData.TryGetProperty("idleSinceMs", out var idleMs) ? idleMs.GetInt64() / 1000 : 0;
-                                    _console.MarkupLine($"[yellow]Agent idle for {idleSince}s (no websocket or OTLP activity), completing job.[/]");
-                                    completionReason = "idle_timeout";
-                                    break;
+                                    if (activeSubagentCount > 0)
+                                    {
+                                        // Should not normally reach here since server applies 3x multiplier,
+                                        // but guard just in case both signals are stale.
+                                        _console.MarkupLine($"[dim]Idle but {activeSubagentCount} subagent(s) active — extending timeout 3x, continuing...[/]");
+                                    }
+                                    else
+                                    {
+                                        _console.MarkupLine($"[yellow]Agent idle for {idleSince}s (no websocket or OTLP activity), completing job.[/]");
+                                        completionReason = "idle_timeout";
+                                        break;
+                                    }
                                 }
                             }
+                            else if (activeSubagentCount > 0)
+                            {
+                                var whenTimeout = actData.TryGetProperty("whenTimeout", out var wt) ? DateTimeOffset.FromUnixTimeMilliseconds(wt.GetInt64()).LocalDateTime.ToString("HH:mm:ss") : "?";
+                                _console.MarkupLine($"[dim]{activeSubagentCount} subagent(s) active — timeout extended to {whenTimeout}[/]");
+                            }
+
+                            waitSpan?.SetTag("active_subagent_count", activeSubagentCount);
                         }
                     }
                     catch
@@ -2568,6 +2253,11 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
 
             // Kill the vibecast tmux session
             await RunProcessAsync("tmux", $"kill-session -t {vibecastTmux}", null, ct);
+
+            // Backup CLAUDE_CONFIG_DIR so a runner on a different machine can restore it
+            // before the next job for this project (cross-machine resume support).
+            await BackupClaudeConfigArchiveAsync(client, baseUrl, registration, ct);
+
             _console.MarkupLine($"[cyan]Marking job as completed (conclusion: {jobConclusion}, reason: {completionReason})...[/]");
             var vibecastLogSummary = await CaptureVibecastLogAsync(vibecastLogFile, ct);
             var patchCompleted = new HttpRequestMessage(HttpMethod.Patch, $"{baseUrl}/runs/{runId}/jobs/{job.Id}");
@@ -2599,18 +2289,90 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         }
         finally
         {
-            // Stop the answer injection loop
-            await answerLoopCts.CancelAsync();
-            if (answerLoopTask != null)
-            {
-                try { await answerLoopTask.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
-            }
-            answerLoopCts.Dispose();
-
             if (jobWorkTree != null)
             {
-                await CleanupWorkTreeAsync(jobWorkTree, settings.Verbose, ct);
+                // Skip cleanup for stable task dirs (/tmp/pks-runner-tasks/…) — they must
+                // persist so a future continue/resume job can find the same CWD and session.
+                // Per-job dirs (/tmp/pks-runner-jobs/…) are still cleaned up as before.
+                var isTaskDir = jobWorkTree.Contains(Path.Combine(Path.GetTempPath(), "pks-runner-tasks"));
+                if (!isTaskDir)
+                    await CleanupWorkTreeAsync(jobWorkTree, settings.Verbose, ct);
+                else
+                    _console.MarkupLine($"[dim]Keeping task dir for future resume: {jobWorkTree}[/]");
             }
+        }
+    }
+
+    /// <summary>
+    /// Download the project's CLAUDE_CONFIG_DIR archive from the server and extract it to
+    /// /tmp/agentic-{owner}-{project}/ so Claude finds prior sessions + memory on this machine.
+    /// </summary>
+    private async Task RestoreClaudeConfigArchiveAsync(
+        HttpClient client, string baseUrl, AgenticsRunnerRegistration registration,
+        CancellationToken ct)
+    {
+        var claudeConfigDir = $"/tmp/agentic-{registration.Owner}-{registration.Project}";
+        try
+        {
+            var req = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/claude-config-archive");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", registration.Token);
+            var resp = await client.SendAsync(req, ct);
+            if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                _console.MarkupLine("[dim]No CLAUDE_CONFIG_DIR archive on server — starting fresh[/]");
+                return;
+            }
+            resp.EnsureSuccessStatusCode();
+
+            var zipBytes = await resp.Content.ReadAsByteArrayAsync(ct);
+            var tmpZip = Path.Combine(Path.GetTempPath(), $"claude-config-{registration.Owner}-{registration.Project}.zip");
+            await File.WriteAllBytesAsync(tmpZip, zipBytes, ct);
+
+            Directory.CreateDirectory(claudeConfigDir);
+            System.IO.Compression.ZipFile.ExtractToDirectory(tmpZip, claudeConfigDir, overwriteFiles: true);
+            File.Delete(tmpZip);
+            _console.MarkupLine($"[green]Restored CLAUDE_CONFIG_DIR ({zipBytes.Length / 1024}KB) → {claudeConfigDir}[/]");
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[yellow]CLAUDE_CONFIG_DIR restore skipped: {ex.Message.EscapeMarkup()}[/]");
+        }
+    }
+
+    /// <summary>
+    /// Zip /tmp/agentic-{owner}-{project}/ and upload it to the server so a future runner
+    /// (possibly on a different machine) can restore it before the next job.
+    /// </summary>
+    private async Task BackupClaudeConfigArchiveAsync(
+        HttpClient client, string baseUrl, AgenticsRunnerRegistration registration,
+        CancellationToken ct)
+    {
+        var claudeConfigDir = $"/tmp/agentic-{registration.Owner}-{registration.Project}";
+        if (!Directory.Exists(claudeConfigDir))
+        {
+            _console.MarkupLine("[dim]No CLAUDE_CONFIG_DIR to backup[/]");
+            return;
+        }
+        try
+        {
+            var tmpZip = Path.Combine(Path.GetTempPath(), $"claude-config-backup-{registration.Owner}-{registration.Project}.zip");
+            if (File.Exists(tmpZip)) File.Delete(tmpZip);
+            System.IO.Compression.ZipFile.CreateFromDirectory(claudeConfigDir, tmpZip);
+
+            var zipBytes = await File.ReadAllBytesAsync(tmpZip, ct);
+            File.Delete(tmpZip);
+
+            var req = new HttpRequestMessage(HttpMethod.Put, $"{baseUrl}/claude-config-archive");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", registration.Token);
+            req.Content = new ByteArrayContent(zipBytes);
+            req.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/zip");
+            var resp = await client.SendAsync(req, ct);
+            resp.EnsureSuccessStatusCode();
+            _console.MarkupLine($"[green]Backed up CLAUDE_CONFIG_DIR ({zipBytes.Length / 1024}KB) → server[/]");
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[yellow]CLAUDE_CONFIG_DIR backup skipped: {ex.Message.EscapeMarkup()}[/]");
         }
     }
 
@@ -2933,7 +2695,17 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         // for VS Code / file-explorer visibility.
         if (!useWorktree)
         {
-            var tmpJobDir = Path.Combine(Path.GetTempPath(), "pks-runner-jobs", job.Id);
+            // Use a stable task-scoped directory when a taskId is available.
+            // This keeps the working directory path constant across all jobs for the same
+            // task, so Claude's project hash (derived from CWD) is always the same.
+            // --resume can then find prior session transcripts without any copying.
+            // Fall back to a per-job dir when no taskId is present.
+            var taskId = job.AgentDef?.TaskId;
+            var tmpJobDir = !string.IsNullOrEmpty(taskId)
+                ? Path.Combine(Path.GetTempPath(), "pks-runner-tasks", taskId)
+                : Path.Combine(Path.GetTempPath(), "pks-runner-jobs", job.Id);
+            var isTaskDir = !string.IsNullOrEmpty(taskId);
+
             Directory.CreateDirectory(tmpJobDir);
 
             var symlinkParent = Path.Combine(workDir, "jobs");
@@ -2942,19 +2714,39 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             if (!Path.Exists(symlinkPath))
                 Directory.CreateSymbolicLink(symlinkPath, tmpJobDir);
 
-            _console.MarkupLine($"[dim]Job dir: {tmpJobDir} (symlink: {symlinkPath})[/]");
+            _console.MarkupLine(isTaskDir
+                ? $"[dim]Task dir (stable): {tmpJobDir} (symlink: {symlinkPath})[/]"
+                : $"[dim]Job dir: {tmpJobDir} (symlink: {symlinkPath})[/]");
 
             // Pre-approve the job directory so Claude Code skips the "Do you trust this folder?"
-            // prompt. Claude checks for an existing project entry in ~/.claude/projects/{encoded}/
+            // prompt. Claude checks for an existing project entry in {CLAUDE_CONFIG_DIR}/projects/{encoded}/
             // to decide whether to show the prompt. Creating the directory signals prior approval.
+            //
+            // CLAUDE_CONFIG_DIR is set to /tmp/agentic-{owner}-{project} so all jobs for the
+            // same project share one config dir. Combined with the stable task CWD above, Claude
+            // sessions accumulate in the same project slot across all jobs for a task.
             try
             {
-                var realHome = await GetRealHomeDirectoryAsync(ct);
+                var claudeConfigDir = $"/tmp/agentic-{registration.Owner}-{registration.Project}";
                 var encodedPath = tmpJobDir.TrimStart('/').Replace("/", "-");
-                var claudeProjectDir = Path.Combine(realHome, ".claude", "projects", encodedPath);
+                var claudeProjectDir = Path.Combine(claudeConfigDir, "projects", encodedPath);
                 Directory.CreateDirectory(claudeProjectDir);
+                _console.MarkupLine($"[dim]CLAUDE_CONFIG_DIR: {claudeConfigDir}[/]");
             }
-            catch { /* non-fatal — Claude will show the trust prompt at worst */ }
+            catch (Exception ex) { _console.MarkupLine($"[yellow]Claude config dir setup: {ex.Message.EscapeMarkup()}[/]"); }
+
+            // For continue jobs on a task dir: if the directory already has content, skip
+            // git clone/init — Claude resumes into the exact state from the prior job.
+            var isResume = !string.IsNullOrEmpty(job.AgentDef?.ResumeSessionId);
+            var dirHasContent = isTaskDir && Directory.Exists(tmpJobDir) &&
+                Directory.GetFileSystemEntries(tmpJobDir).Length > 0;
+            var skipGitSetup = isResume && dirHasContent;
+
+            if (skipGitSetup)
+            {
+                _console.MarkupLine($"[dim]Resume: task dir has existing content — skipping git setup[/]");
+                return tmpJobDir;
+            }
 
             if (!string.IsNullOrEmpty(repository))
             {
@@ -3154,8 +2946,9 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
                 // 3. Kill the runner's vibecast tmux session
                 await RunProcessAsync("tmux", $"kill-session -t {job.VibecastTmuxSession}", null, CancellationToken.None);
 
-                // 4. Clean up worktree
-                if (job.WorkTreePath != null)
+                // 4. Clean up worktree (skip stable task dirs — they persist for future resumes)
+                if (job.WorkTreePath != null &&
+                    !job.WorkTreePath.Contains(Path.Combine(Path.GetTempPath(), "pks-runner-tasks")))
                     await CleanupWorkTreeAsync(job.WorkTreePath, false, CancellationToken.None);
 
                 // 5. Clean up isolated HOME
@@ -3719,6 +3512,8 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         public int? MaxTimeoutMinutes { get; set; }
         public string? StageGitUrl { get; set; }
         public string? StageGitToken { get; set; }
+        /// <summary>Token for the project's main repo.git endpoint — separate from the runner API token (AGENTICS_TOKEN).</summary>
+        public string? ProjectRepoToken { get; set; }
         public Dictionary<string, string>? DevcontainerFiles { get; set; }
         public List<PluginRef>? Plugins { get; set; }
         public List<AgentRef>? Agents { get; set; }

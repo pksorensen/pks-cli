@@ -26,13 +26,14 @@ public class HooksService : IHooksService
         public const string Stop = "Stop";
         public const string SubagentStop = "SubagentStop";
         public const string PreCompact = "PreCompact";
+        public const string PostCompact = "PostCompact";
 
         /// <summary>
         /// All available hook names
         /// </summary>
         public static readonly string[] All = new[]
         {
-            PreToolUse, PostToolUse, UserPromptSubmit, Notification, Stop, SubagentStop, PreCompact
+            PreToolUse, PostToolUse, UserPromptSubmit, Notification, Stop, SubagentStop, PreCompact, PostCompact
         };
 
         /// <summary>
@@ -47,10 +48,11 @@ public class HooksService : IHooksService
             public const string stop = "stop";
             public const string subagentStop = "subagentStop";
             public const string preCompact = "preCompact";
+            public const string postCompact = "postCompact";
 
             public static readonly string[] All = new[]
             {
-                preToolUse, postToolUse, userPromptSubmit, notification, stop, subagentStop, preCompact
+                preToolUse, postToolUse, userPromptSubmit, notification, stop, subagentStop, preCompact, postCompact
             };
         }
     }
@@ -136,6 +138,12 @@ public class HooksService : IHooksService
                         if (hooksNode?[HookNames.Legacy.preCompact] != null && hooksNode?[HookNames.PreCompact] == null)
                             legacyHooksDetected.Add(HookNames.Legacy.preCompact);
                     }
+                    if (hooksNode?[HookNames.PostCompact] != null || hooksNode?[HookNames.Legacy.postCompact] != null)
+                    {
+                        existingHookTypes.Add(HookNames.PostCompact);
+                        if (hooksNode?[HookNames.Legacy.postCompact] != null && hooksNode?[HookNames.PostCompact] == null)
+                            legacyHooksDetected.Add(HookNames.Legacy.postCompact);
+                    }
 
                     // Handle legacy hook migration
                     if (legacyHooksDetected.Any())
@@ -182,6 +190,7 @@ public class HooksService : IHooksService
                     if (ContainsPksCommand(hooksNode[HookNames.Stop]) || ContainsPksCommand(hooksNode[HookNames.Legacy.stop])) pksHooksToOverwrite.Add(HookNames.Stop);
                     if (ContainsPksCommand(hooksNode[HookNames.SubagentStop]) || ContainsPksCommand(hooksNode[HookNames.Legacy.subagentStop])) pksHooksToOverwrite.Add(HookNames.SubagentStop);
                     if (ContainsPksCommand(hooksNode[HookNames.PreCompact]) || ContainsPksCommand(hooksNode[HookNames.Legacy.preCompact])) pksHooksToOverwrite.Add(HookNames.PreCompact);
+                    if (ContainsPksCommand(hooksNode[HookNames.PostCompact]) || ContainsPksCommand(hooksNode[HookNames.Legacy.postCompact])) pksHooksToOverwrite.Add(HookNames.PostCompact);
                 }
 
                 if (pksHooksToOverwrite.Any())
@@ -232,6 +241,7 @@ public class HooksService : IHooksService
             MergeHookType(hooksSection, HookNames.Stop, pksHooksConfig.Stop, force);
             MergeHookType(hooksSection, HookNames.SubagentStop, pksHooksConfig.SubagentStop, force);
             MergeHookType(hooksSection, HookNames.PreCompact, pksHooksConfig.PreCompact, force);
+            MergeHookType(hooksSection, HookNames.PostCompact, pksHooksConfig.PostCompact, force);
 
             // Write updated settings
             var options = new JsonSerializerOptions
@@ -292,7 +302,7 @@ public class HooksService : IHooksService
         {
             "hooks stop", "hooks pre-tool-use", "hooks post-tool-use",
             "hooks user-prompt-submit", "hooks notification",
-            "hooks subagent-stop", "hooks pre-compact"
+            "hooks subagent-stop", "hooks pre-compact", "hooks post-compact"
         };
 
         return knownSubcommands.Any(sub =>
@@ -447,7 +457,8 @@ public class HooksService : IHooksService
             [HookNames.Legacy.notification] = HookNames.Notification,
             [HookNames.Legacy.stop] = HookNames.Stop,
             [HookNames.Legacy.subagentStop] = HookNames.SubagentStop,
-            [HookNames.Legacy.preCompact] = HookNames.PreCompact
+            [HookNames.Legacy.preCompact] = HookNames.PreCompact,
+            [HookNames.Legacy.postCompact] = HookNames.PostCompact
         };
 
         var migratedHooks = new List<string>();
@@ -549,6 +560,16 @@ public class HooksService : IHooksService
                     hooks = new[]
                     {
                         new { type = "command", command = $"{pks} hooks pre-compact" }
+                    }
+                }
+            },
+            PostCompact = new[]
+            {
+                new
+                {
+                    hooks = new[]
+                    {
+                        new { type = "command", command = $"{pks} hooks post-compact" }
                     }
                 }
             }
