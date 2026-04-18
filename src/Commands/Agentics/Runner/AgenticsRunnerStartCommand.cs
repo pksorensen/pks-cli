@@ -870,6 +870,11 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             scriptLines.AppendLine("export VIBECAST_AUTO_APPROVE_IMAGES=1");
         }
 
+        if (!string.IsNullOrEmpty(job.AgentDef?.BroadcastId))
+        {
+            scriptLines.AppendLine($"export BROADCAST_ID={job.AgentDef.BroadcastId}");
+        }
+
         var gitUserName  = settings.GitUserName  ?? "si-14x";
         var gitUserEmail = settings.GitUserEmail ?? "si-14x@agentics.dk";
         scriptLines.AppendLine($"git config --global user.name \"{gitUserName}\"");
@@ -980,8 +985,9 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             $"-d '{{\"promptSharing\":true,\"shareProjectInfo\":true}}'",
             timeoutSeconds: 15);
 
-        // 10. Get streamId and link to task
-        string? streamIdValue = null;
+        // 10. Get sessionId/broadcastId and link to task
+        string? sessionIdValue = null;
+        string? broadcastIdValue = null;
         for (var i = 0; i < 30; i++)
         {
             var status = await _spawnerService.ExecInContainerAsync(containerId,
@@ -989,8 +995,11 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 timeoutSeconds: 5);
             if (status.Output.Contains("\"phase\":\"live\""))
             {
-                var m = System.Text.RegularExpressions.Regex.Match(status.Output, "\"streamId\":\"([^\"]+)\"");
-                if (m.Success) { streamIdValue = m.Groups[1].Value; break; }
+                var sessionIdMatch = System.Text.RegularExpressions.Regex.Match(status.Output, "\"sessionId\":\"([^\"]+)\"");
+                if (sessionIdMatch.Success) { sessionIdValue = sessionIdMatch.Groups[1].Value; }
+                var broadcastIdMatch = System.Text.RegularExpressions.Regex.Match(status.Output, "\"broadcastId\":\"([^\"]+)\"");
+                if (broadcastIdMatch.Success) { broadcastIdValue = broadcastIdMatch.Groups[1].Value; }
+                if (sessionIdValue != null) break;
             }
             await Task.Delay(1000, ct);
         }
@@ -1001,10 +1010,10 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         if (!string.IsNullOrWhiteSpace(vibecastLogSnapshot.Output))
             _console.MarkupLine($"[grey]vibecast log:[/]\n{vibecastLogSnapshot.Output.Trim().EscapeMarkup()}");
 
-        if (streamIdValue != null)
+        if (sessionIdValue != null)
         {
-            _console.MarkupLine($"[green]Streaming live! streamId: {streamIdValue}[/]");
-            await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "in_progress", null, ct, streamIdValue);
+            _console.MarkupLine($"[green]Streaming live! sessionId: {sessionIdValue}[/]");
+            await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "in_progress", null, ct, sessionIdValue, broadcastIdValue);
 
             if (job.AgentDef?.TaskId != null && job.AgentDef?.AssemblyLineId != null)
             {
@@ -1012,7 +1021,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 {
                     var linkReq = new HttpRequestMessage(HttpMethod.Post,
                         $"{baseUrl}/assembly-lines/{job.AgentDef.AssemblyLineId}/tasks/{job.AgentDef.TaskId}/streams");
-                    linkReq.Content = JsonContent.Create(new { streamId = streamIdValue });
+                    linkReq.Content = JsonContent.Create(new { sessionId = sessionIdValue, broadcastId = broadcastIdValue });
                     await client.SendAsync(linkReq, ct);
                     _console.MarkupLine($"[green]Stream linked to task {job.AgentDef.TaskId}[/]");
                 }
@@ -1034,7 +1043,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                     {
                         type = "metadata",
                         subtype = "prompt",
-                        streamId = streamIdValue,
+                        sessionId = sessionIdValue,
                         prompt = jobPrompt,
                         timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     });
@@ -1050,7 +1059,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             // Store task and system prompts on the session so the activity log can display them.
             try
             {
-                var sessionPatchUrl = $"{registration.Server.TrimEnd('/')}/api/lives/sessions/{streamIdValue}";
+                var sessionPatchUrl = $"{registration.Server.TrimEnd('/')}/api/lives/sessions/{sessionIdValue}";
                 var sessionPatchReq = new HttpRequestMessage(HttpMethod.Patch, sessionPatchUrl);
                 sessionPatchReq.Content = JsonContent.Create(new
                 {
@@ -1099,11 +1108,11 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             }
 
             // Poll activity API (runner is on host, server is accessible directly)
-            if (streamIdValue != null)
+            if (sessionIdValue != null)
             {
                 try
                 {
-                    var actUrl = $"{registration.Server.TrimEnd('/')}/api/lives/activity?streamId={streamIdValue}&idleThresholdMs={idleTimeoutMs}";
+                    var actUrl = $"{registration.Server.TrimEnd('/')}/api/lives/activity?streamId={sessionIdValue}&idleThresholdMs={idleTimeoutMs}";
                     var actResp = await client.GetAsync(actUrl, ct);
                     if (actResp.IsSuccessStatusCode)
                     {
@@ -1348,15 +1357,16 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         string status,
         string? conclusion,
         CancellationToken ct,
-        string? streamId = null)
+        string? sessionId = null,
+        string? broadcastId = null)
     {
         try
         {
             var msg = new HttpRequestMessage(
                 HttpMethod.Patch,
                 $"{baseUrl}/runs/{runId}/jobs/{jobId}");
-            msg.Content = streamId != null
-                ? JsonContent.Create(new { status, conclusion, streamId })
+            msg.Content = sessionId != null
+                ? JsonContent.Create(new { status, conclusion, sessionId, broadcastId })
                 : JsonContent.Create(new { status, conclusion });
             var resp = await client.SendAsync(msg, ct);
             if (!resp.IsSuccessStatusCode)
@@ -1880,12 +1890,12 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             var resumeEnv = !string.IsNullOrEmpty(job.AgentDef?.ResumeSessionId)
                 ? $" VIBECAST_RESUME_SESSION_ID={job.AgentDef.ResumeSessionId}"
                 : "";
-            // Do NOT pass STREAM_ID for continue/resume jobs. Reusing an old stream ID causes
+            // Do NOT pass BROADCAST_ID for continue/resume jobs. Reusing an old broadcast ID causes
             // ws-relay to silently reject the broadcaster WebSocket reconnect, so the runner's
             // isActive check never becomes true and the job idle-times out immediately.
-            // Vibecast will generate a fresh stream ID; Claude still resumes via --resume <sessionId>.
-            // if (!string.IsNullOrEmpty(job.AgentDef?.ResumeStreamId))
-            //     resumeEnv += $" STREAM_ID={job.AgentDef.ResumeStreamId}";
+            // Vibecast will generate a fresh session ID; Claude still resumes via --resume <sessionId>.
+            // if (!string.IsNullOrEmpty(job.AgentDef?.ResumeBroadcastId))
+            //     resumeEnv += $" BROADCAST_ID={job.AgentDef.ResumeBroadcastId}";
 
             // Auto-git: tell vibecast's stop hook to block Claude from stopping with uncommitted changes
             var autoGitEnv = "";
@@ -1906,6 +1916,10 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             // Operator: auto-approve image uploads so headless stations don't require TUI interaction
             var autoApproveEnv = job.AgentDef?.OperatorConfig?.AutoApproveImageUploads == true
                 ? " VIBECAST_AUTO_APPROVE_IMAGES=1"
+                : "";
+
+            var broadcastIdEnv = !string.IsNullOrEmpty(job.AgentDef?.BroadcastId)
+                ? $" BROADCAST_ID={job.AgentDef.BroadcastId}"
                 : "";
 
             // initBranch: create a task-scoped branch in the worktree before launching Claude
@@ -1964,7 +1978,7 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             // The log is captured on timeout and included in the job PATCH logs field.
             var vibecastLogRedirect = $" > \"{vibecastLogFile}\" 2>&1";
 
-            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv}{autoApproveEnv}{allowedDirsEnv}{claudeConfigDirEnv}{otelEnv} {vibecastBin}{vibecastLogRedirect}");
+            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv}{autoApproveEnv}{broadcastIdEnv}{allowedDirsEnv}{claudeConfigDirEnv}{otelEnv} {vibecastBin}{vibecastLogRedirect}");
 
             var startProc = Process.Start(startPsi);
             if (startProc != null)
@@ -2016,22 +2030,25 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             await SendControlSocketRequestAsync(controlSocket, "POST", "/start-stream",
                 """{"promptSharing":true,"shareProjectInfo":true}""", ct);
 
-            // 10. Wait for streaming session to be created (vibecast-<streamId>)
+            // 10. Wait for streaming session to be created (vibecast-<sessionId>)
             _console.MarkupLine("[cyan]Waiting for streaming session...[/]");
             string? streamingSession = null;
-            string? streamIdValue = null;
+            string? sessionIdValue = null;
+            string? broadcastIdValue = null;
             for (var i = 0; i < 30; i++)
             {
-                // Check /status on control socket to get streamId
+                // Check /status on control socket to get sessionId and broadcastId
                 var statusJson = await SendControlSocketRequestAsync(controlSocket, "GET", "/status", null, ct);
                 if (statusJson != null)
                 {
                     var statusData = JsonSerializer.Deserialize<JsonElement>(statusJson, JsonOptions);
-                    if (statusData.TryGetProperty("streamId", out var sid) && sid.GetString() is { Length: > 0 } sId)
+                    if (statusData.TryGetProperty("sessionId", out var sid) && sid.GetString() is { Length: > 0 } sId)
                     {
                         if (statusData.TryGetProperty("phase", out var phaseEl) && phaseEl.GetString() == "live")
                         {
-                            streamIdValue = sId;
+                            sessionIdValue = sId;
+                            if (statusData.TryGetProperty("broadcastId", out var bid) && bid.GetString() is { Length: > 0 } bId)
+                                broadcastIdValue = bId;
                             streamingSession = $"vibecast-{sId}";
                             _console.MarkupLine($"[green]Streaming live! Session: {streamingSession}[/]");
                             break;
@@ -2065,15 +2082,16 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
                     $"Streaming session never started (timeout):\n{combinedLog}", ct);
                 throw new InvalidOperationException("vibecast streaming session not found after 30s");
             }
-            agentSpan?.SetTag("stream.id", streamIdValue ?? "");
+            agentSpan?.SetTag("session.id", sessionIdValue ?? "");
+            agentSpan?.SetTag("broadcast.id", broadcastIdValue ?? "");
             agentSpan?.Dispose();
 
-            // 11. Update job with streamId and link stream to project
-            if (streamIdValue != null)
+            // 11. Update job with sessionId/broadcastId and link stream to project
+            if (sessionIdValue != null)
             {
-                _console.MarkupLine($"[cyan]Updating job with streamId: {streamIdValue}[/]");
+                _console.MarkupLine($"[cyan]Updating job with sessionId: {sessionIdValue}[/]");
                 var patchStream = new HttpRequestMessage(HttpMethod.Patch, $"{baseUrl}/runs/{runId}/jobs/{job.Id}");
-                patchStream.Content = JsonContent.Create(new { status = "in_progress", streamId = streamIdValue });
+                patchStream.Content = JsonContent.Create(new { status = "in_progress", sessionId = sessionIdValue, broadcastId = broadcastIdValue });
                 patchStream.Headers.Authorization = new AuthenticationHeaderValue("Bearer", registration.Token);
                 await client.SendAsync(patchStream, ct);
 
@@ -2084,7 +2102,7 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
                     {
                         var linkReq = new HttpRequestMessage(HttpMethod.Post,
                             $"{baseUrl}/assembly-lines/{job.AgentDef.AssemblyLineId}/tasks/{job.AgentDef.TaskId}/streams");
-                        linkReq.Content = JsonContent.Create(new { streamId = streamIdValue });
+                        linkReq.Content = JsonContent.Create(new { sessionId = sessionIdValue, broadcastId = broadcastIdValue });
                         linkReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", registration.Token);
                         await client.SendAsync(linkReq, ct);
                         _console.MarkupLine($"[green]Stream linked to task {job.AgentDef.TaskId}[/]");
@@ -2109,7 +2127,7 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             _console.MarkupLine($"[green]Prompt will be delivered via VIBECAST_INITIAL_PROMPT_FILE ({promptFile})[/]");
 
             // Answer injection is handled by vibecast (broadcast.go startAnswerInjectionLoop).
-            // vibecast polls /api/lives/sessions/{streamId}/pending-answer and injects via tmux send-keys.
+            // vibecast polls /api/lives/sessions/{sessionId}/pending-answer and injects via tmux send-keys.
             // The runner must not do tmux operations — in production runner is on the host and vibecast
             // is inside Docker; they don't share a tmux server.
 
@@ -2121,7 +2139,8 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             using var waitSpan = _activitySource.StartActivity("runner.job.wait_completion");
             waitSpan?.SetTag("idle_timeout_minutes", job.AgentDef?.IdleTimeoutMinutes ?? 2);
             waitSpan?.SetTag("max_timeout_minutes", job.AgentDef?.MaxTimeoutMinutes ?? 60);
-            waitSpan?.SetTag("stream.id", streamIdValue ?? "");
+            waitSpan?.SetTag("session.id", sessionIdValue ?? "");
+            waitSpan?.SetTag("broadcast.id", broadcastIdValue ?? "");
 
             var startTime = DateTime.UtcNow;
             // Track why the loop exited so we report the right conclusion
@@ -2167,12 +2186,12 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
                 // reliable proxy for "Claude is still working" even when there's no terminal output.
                 // When subagents are active the server returns a 3x extended whenTimeout so we don't
                 // false-positive during the orchestrator's silent inference pass after subagents finish.
-                if (streamIdValue != null)
+                if (sessionIdValue != null)
                 {
                     try
                     {
                         var scheme = serverUri.Scheme;
-                        var activityUrl = $"{scheme}://{serverUri.Host}:{serverUri.Port}/api/lives/activity?streamId={streamIdValue}&idleThresholdMs={idleTimeoutMs}";
+                        var activityUrl = $"{scheme}://{serverUri.Host}:{serverUri.Port}/api/lives/activity?streamId={sessionIdValue}&idleThresholdMs={idleTimeoutMs}";
                         var actResp = await client.GetAsync(activityUrl, ct);
                         if (actResp.IsSuccessStatusCode)
                         {
@@ -2268,7 +2287,8 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
                 // completionReason carries the detailed reason (idle_timeout, timeout, success, etc.)
                 // so the server can apply the correct task lifecycle logic without parsing conclusion.
                 completionReason,
-                streamId = streamIdValue,
+                sessionId = sessionIdValue,
+                broadcastId = broadcastIdValue,
                 logs = $"Job completed after {(DateTime.UtcNow - startTime).TotalMinutes:F1} minutes in {jobWorkTree} (reason: {completionReason})\n{vibecastLogSummary}"
             });
             patchCompleted.Headers.Authorization = new AuthenticationHeaderValue("Bearer", registration.Token);
@@ -2279,7 +2299,8 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             // Enrich parent job span with final outcome
             jobSpan?.SetTag("agentics.conclusion", jobConclusion);
             jobSpan?.SetTag("agentics.completion_reason", completionReason);
-            jobSpan?.SetTag("agentics.stream_id", streamIdValue ?? "");
+            jobSpan?.SetTag("agentics.session_id", sessionIdValue ?? "");
+            jobSpan?.SetTag("agentics.broadcast_id", broadcastIdValue ?? "");
             jobSpan?.SetTag("agentics.elapsed_minutes", Math.Round(elapsedMinutes, 2));
             if (jobConclusion != "success")
                 jobSpan?.SetStatus(System.Diagnostics.ActivityStatusCode.Error, completionReason);
@@ -3521,8 +3542,10 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         public string? Traceparent { get; set; }
         /// <summary>claudeSessionId from a prior timed-out run — when set, runner injects VIBECAST_RESUME_SESSION_ID so vibecast can pass --resume to Claude.</summary>
         public string? ResumeSessionId { get; set; }
-        /// <summary>streamId from a prior timed-out run — when set, runner injects STREAM_ID so vibecast reuses the same broadcast channel.</summary>
-        public string? ResumeStreamId { get; set; }
+        /// <summary>broadcastId from a prior timed-out run — when set, runner can pass it to vibecast to reuse the same broadcast channel.</summary>
+        public string? ResumeBroadcastId { get; set; }
+        /// <summary>broadcastId for the assembly line this job belongs to — runner passes BROADCAST_ID so vibecast streams to the right channel.</summary>
+        public string? BroadcastId { get; set; }
         /// <summary>When true, vibecast blocks Claude from stopping until the working tree is clean (no uncommitted changes).</summary>
         public bool AutoGit { get; set; }
         /// <summary>When true, runner creates a task-scoped branch (task-{taskId}) before launching Claude.</summary>
