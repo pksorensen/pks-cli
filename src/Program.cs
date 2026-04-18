@@ -27,6 +27,7 @@ using PKS.Commands.Jira;
 using PKS.Commands.Registry;
 using PKS.Commands.Google;
 using PKS.Commands.Image;
+using PKS.Commands.Tts;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.Text;
@@ -55,6 +56,11 @@ var isGitAskPass = commandArgs.Length > 2 &&
 var isHooksCommand = commandArgs.Length > 1 &&
                      commandArgs[1].Equals("hooks", StringComparison.OrdinalIgnoreCase);
 
+// Skip banner for foundry proxy (eval-capture mode — stdout must only contain env var lines)
+var isFoundryProxy = commandArgs.Length > 2 &&
+                     commandArgs[1].Equals("foundry", StringComparison.OrdinalIgnoreCase) &&
+                     commandArgs[2].Equals("proxy", StringComparison.OrdinalIgnoreCase);
+
 // Skip banner for hooks commands with --json flag OR when it's a hook event command
 var hasJsonFlag = commandArgs.Any(a => a.Equals("--json", StringComparison.OrdinalIgnoreCase) ||
                                       a.Equals("-j", StringComparison.OrdinalIgnoreCase));
@@ -65,7 +71,7 @@ var isHookEventCommand = commandArgs.Length > 2 &&
                             .Contains(commandArgs[2], StringComparer.OrdinalIgnoreCase);
 
 // Display welcome banner with fancy ASCII art (unless we should skip it)
-if (!isMcpStdio && !isGitAskPass && !(isHooksCommand && (hasJsonFlag || isHookEventCommand)))
+if (!isMcpStdio && !isGitAskPass && !isFoundryProxy && !(isHooksCommand && (hasJsonFlag || isHookEventCommand)))
 {
     DisplayWelcomeBanner();
 
@@ -76,10 +82,10 @@ if (!isMcpStdio && !isGitAskPass && !(isHooksCommand && (hasJsonFlag || isHookEv
 // Configure the application
 var services = new ServiceCollection();
 
-// Register logging - suppress console logging for MCP stdio transport
-if (isMcpStdio)
+// Register logging - suppress console logging for MCP stdio transport and foundry proxy
+if (isMcpStdio || isFoundryProxy)
 {
-    // For MCP stdio transport, only log to memory or file to avoid contaminating stdout
+    // For MCP stdio and foundry proxy, suppress console output to keep stdout clean
     services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Error));
 }
 else
@@ -574,6 +580,12 @@ app.Configure(config =>
         foundry.AddCommand<FoundryStatusCommand>("status")
             .WithDescription("Show current Foundry authentication status")
             .WithExample(new[] { "foundry", "status" });
+
+        foundry.AddCommand<FoundryProxyCommand>("proxy")
+            .WithDescription("Start a local HTTP proxy that swaps a proxy token for a real Azure bearer token")
+            .WithExample(new[] { "foundry", "proxy" })
+            .WithExample(new[] { "foundry", "proxy", "--port", "8080" })
+            .WithExample(new[] { "foundry", "proxy", "--token", "my-secret" });
     });
 
     // Add Google AI branch command
@@ -613,6 +625,13 @@ app.Configure(config =>
             .WithExample(new[] { "email", "export", "--after", "2026-01-01", "--folder", "inbox" })
             .WithExample(new[] { "email", "export", "-o", "./my-emails", "--max", "100" });
     });
+
+    // Add TTS command (Azure AI Foundry)
+    config.AddCommand<TtsCommand>("tts")
+        .WithDescription("Generate speech audio from text using Azure AI Foundry TTS")
+        .WithExample(new[] { "tts", "\"Hello world\"" })
+        .WithExample(new[] { "tts", "--text-file", "script.txt", "--voice", "nova", "--output", "speech.mp3" })
+        .WithExample(new[] { "tts", "\"Announcing our launch\"", "--voice", "shimmer", "--output", "launch.mp3" });
 
     // Add image generation command
     config.AddCommand<ImageCommand>("image")
