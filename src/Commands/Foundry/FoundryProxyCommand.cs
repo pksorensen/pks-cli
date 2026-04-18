@@ -100,9 +100,9 @@ public class FoundryProxyCommand : AsyncCommand<FoundryProxyCommand.Settings>
 
         app.MapMethods("{**path}", AllHttpMethods, async (HttpContext ctx) =>
         {
-            // Validate proxy token
-            var authHeader = ctx.Request.Headers.Authorization.FirstOrDefault();
-            if (authHeader == null || authHeader != $"Bearer {proxyToken}")
+            // Validate proxy token — use raw indexer to avoid typed accessor quirks
+            var authHeader = ctx.Request.Headers["Authorization"].FirstOrDefault() ?? "";
+            if (authHeader != $"Bearer {proxyToken}")
             {
                 ctx.Response.StatusCode = 401;
                 await ctx.Response.WriteAsync("Unauthorized: invalid proxy token");
