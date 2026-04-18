@@ -94,20 +94,19 @@ public class TtsCommand : AsyncCommand<TtsCommand.Settings>
             return 1;
         }
 
-        // Resolve deployment from stored credentials if not specified
         var creds = await _authService.GetStoredCredentialsAsync();
-        if (creds == null || string.IsNullOrEmpty(creds.SelectedResourceEndpoint))
+        if (creds == null || string.IsNullOrEmpty(creds.SelectedResourceName))
         {
             _console.MarkupLine("[red]No Foundry resource configured.[/]");
             _console.MarkupLine("[dim]Run [bold]pks foundry init[/] to select a resource.[/]");
             return 1;
         }
 
-        var deployment = settings.Deployment
-            ?? creds.DefaultModel
-            ?? "tts-hd";
-
-        var endpoint = creds.SelectedResourceEndpoint.TrimEnd('/') +
+        // TTS uses the cognitiveservices.azure.com endpoint, not the newer services.ai.azure.com one.
+        // Default deployment is tts-hd (not the chat DefaultModel stored in credentials).
+        var deployment = settings.Deployment ?? "tts-hd";
+        var cognitiveEndpoint = $"https://{creds.SelectedResourceName}.cognitiveservices.azure.com";
+        var endpoint = cognitiveEndpoint +
                        $"/openai/deployments/{deployment}/audio/speech?api-version=2025-03-01-preview";
 
         // Acquire real Azure token
