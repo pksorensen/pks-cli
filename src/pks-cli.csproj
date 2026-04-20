@@ -33,6 +33,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Markdig" Version="0.38.0" />
     <PackageReference Include="ReverseMarkdown" Version="4.6.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.12.0" />
     <PackageReference Include="Spectre.Console" Version="0.47.0" />

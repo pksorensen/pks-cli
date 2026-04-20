@@ -24,6 +24,7 @@ using PKS.Commands.Agentics.Tasks;
 using PKS.Commands.Ado;
 using PKS.Commands.Foundry;
 using PKS.Commands.Jira;
+using PKS.Commands.Confluence;
 using PKS.Commands.Registry;
 using PKS.Commands.Google;
 using PKS.Commands.Image;
@@ -207,6 +208,10 @@ services.AddHttpClient<IAzureFoundryAuthService, AzureFoundryAuthService>();
 // Configure Jira integration
 services.AddSingleton<PKS.Infrastructure.Services.Models.JiraAuthConfig>();
 services.AddHttpClient<IJiraService, JiraService>();
+
+// Configure Confluence integration (reuses Jira auth)
+services.AddSingleton<IConfluenceMarkdownConverter, ConfluenceMarkdownConverter>();
+services.AddHttpClient<IConfluenceService, ConfluenceService>();
 
 // Register GitHub and Project Identity services
 services.AddHttpClient<IGitHubService, GitHubService>();
@@ -555,6 +560,30 @@ app.Configure(config =>
             .WithDescription("View or set Jira field mappings")
             .WithExample(new[] { "jira", "config" })
             .WithExample(new[] { "jira", "config", "--ac-field", "customfield_10064" });
+    });
+
+    // Add Confluence branch command
+    config.AddBranch("confluence", confluence =>
+    {
+        confluence.SetDescription("Edit Confluence pages locally in markdown with git tracking");
+
+        confluence.AddCommand<ConfluenceInitCommand>("init")
+            .WithDescription("Initialize a Confluence workspace in the current directory")
+            .WithExample(new[] { "confluence", "init" })
+            .WithExample(new[] { "confluence", "init", "--space", "OptiDyna" });
+
+        confluence.AddCommand<ConfluenceCheckoutCommand>("checkout")
+            .WithDescription("Sync Confluence pages to local markdown files")
+            .WithExample(new[] { "confluence", "checkout" })
+            .WithExample(new[] { "confluence", "checkout", "12345678" });
+
+        confluence.AddCommand<ConfluenceCommitCommand>("commit")
+            .WithDescription("Push local edits back to Confluence")
+            .WithExample(new[] { "confluence", "commit" });
+
+        confluence.AddCommand<ConfluenceDeleteCommand>("delete")
+            .WithDescription("Stage a page for deletion (applied on commit)")
+            .WithExample(new[] { "confluence", "delete", "12345678" });
     });
 
     // Add Azure AI Foundry branch command
