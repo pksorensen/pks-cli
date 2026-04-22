@@ -77,12 +77,9 @@ public class AppInsightsInitCommand : Command<AppInsightsInitCommand.Settings>
                     .AddChoices(subscriptions.Select(s => s.DisplayName))));
 
         _console.MarkupLine($"[dim]Subscription: [bold]{selectedSub.DisplayName.EscapeMarkup()}[/][/]");
+        _console.MarkupLine("[dim]Discovering Application Insights resources...[/]");
 
-        List<Infrastructure.Services.Models.AppInsightsComponent> components = [];
-        await _console.Status().StartAsync("Discovering Application Insights resources...", async _ =>
-        {
-            components = await _authService.ListAppInsightsResourcesAsync(managementToken, selectedSub.SubscriptionId);
-        });
+        var components = await _authService.ListAppInsightsResourcesAsync(managementToken, selectedSub.SubscriptionId);
 
         if (components.Count == 0)
         {
@@ -90,12 +87,22 @@ public class AppInsightsInitCommand : Command<AppInsightsInitCommand.Settings>
             return 1;
         }
 
-        var selected = components.Count == 1
-            ? components[0]
-            : components.First(c => c.Name == _console.Prompt(
+        AppInsightsComponent selected;
+        if (components.Count == 1)
+        {
+            selected = components[0];
+            var rg = ParseResourceGroup(selected.Id);
+            _console.MarkupLine($"[dim]Resource: [bold]{selected.Name.EscapeMarkup()}[/] ({rg.EscapeMarkup()})[/]");
+        }
+        else
+        {
+            var choices = components.Select(c => $"{c.Name}  ({ParseResourceGroup(c.Id)})").ToList();
+            var pick = _console.Prompt(
                 new SelectionPrompt<string>()
                     .Title("[cyan]Select an Application Insights resource:[/]")
-                    .AddChoices(components.Select(c => c.Name))));
+                    .AddChoices(choices));
+            selected = components[choices.IndexOf(pick)];
+        }
 
         await _configService.StoreConfigAsync(selected.Properties.AppId, selected.Name, selectedSub.SubscriptionId);
 
@@ -103,6 +110,17 @@ public class AppInsightsInitCommand : Command<AppInsightsInitCommand.Settings>
         _console.MarkupLine("[dim]Run [cyan]pks otel errors[/] to query telemetry data.[/]");
 
         return 0;
+    }
+
+    private static string ParseResourceGroup(string resourceId)
+    {
+        var parts = resourceId.Split('/');
+        for (int i = 0; i < parts.Length - 1; i++)
+        {
+            if (parts[i].Equals("resourceGroups", StringComparison.OrdinalIgnoreCase))
+                return parts[i + 1];
+        }
+        return string.Empty;
     }
 
     private async Task<FoundryAuthResult?> AuthenticateAsync(string? tenantIdOverride)
