@@ -221,7 +221,7 @@ public class AzureFileShareProvider : IFileShareProvider
         }
     }
 
-    public async Task<SyncResult> SyncAsync(StorageSyncRequest request, Action<string> progress, CancellationToken ct = default)
+    public async Task<SyncResult> SyncAsync(StorageSyncRequest request, Action<SyncProgressUpdate> progress, CancellationToken ct = default)
     {
         var result = new SyncResult();
         var credentials = await GetStoredCredentialsAsync();
@@ -249,7 +249,7 @@ public class AzureFileShareProvider : IFileShareProvider
                 shareOptions);
 
             if (request.Direction is SyncDirection.Download or SyncDirection.Bidirectional)
-                await DownloadDirectoryAsync(shareClient.GetRootDirectoryClient(), request.LocalDirectory, request, result, progress, ct);
+                await DownloadParallelAsync(shareClient.GetRootDirectoryClient(), request, result, progress, ct);
 
             if (request.Direction is SyncDirection.Upload or SyncDirection.Bidirectional)
                 await UploadDirectoryAsync(shareClient.GetRootDirectoryClient(), request.LocalDirectory, request, result, progress, ct);
@@ -571,53 +571,93 @@ public class AzureFileShareProvider : IFileShareProvider
 
     // ── File sync helpers ──────────────────────────────────────────────────
 
-    private async Task DownloadDirectoryAsync(
-        Azure.Storage.Files.Shares.ShareDirectoryClient remoteDir,
-        string localDir,
+    private async Task DownloadParallelAsync(
+        Azure.Storage.Files.Shares.ShareDirectoryClient rootDir,
         StorageSyncRequest request,
         SyncResult result,
-        Action<string> progress,
+        Action<SyncProgressUpdate> progress,
         CancellationToken ct)
     {
-        Directory.CreateDirectory(localDir);
+        // Producer-consumer: enumeration writes to channel as files are discovered;
+        // N consumer tasks start downloading immediately without waiting for enumeration to finish.
+        var channel = System.Threading.Channels.Channel.CreateUnbounded<(
+            Azure.Storage.Files.Shares.ShareFileClient Client,
+            string LocalPath,
+            string RelPath)>(new System.Threading.Channels.UnboundedChannelOptions
+            {
+                SingleWriter = true,
+                SingleReader = false,
+                AllowSynchronousContinuations = false
+            });
 
-        await foreach (var item in remoteDir.GetFilesAndDirectoriesAsync(cancellationToken: ct))
+        var discovered = 0;
+        var downloaded = 0;
+        var bytesTransferred = 0L;
+        var errors = new System.Collections.Concurrent.ConcurrentBag<string>();
+
+        progress(new SyncProgressUpdate(0, 0, "Discovering..."));
+
+        // Producer: enumerate remote files and push to channel
+        async Task ProduceAsync(Azure.Storage.Files.Shares.ShareDirectoryClient dir, string localDir, string relBase)
         {
-            if (item.IsDirectory)
+            await foreach (var item in dir.GetFilesAndDirectoriesAsync(cancellationToken: ct))
             {
-                await DownloadDirectoryAsync(
-                    remoteDir.GetSubdirectoryClient(item.Name),
-                    Path.Combine(localDir, item.Name),
-                    request, result, progress, ct);
+                var rel = relBase.Length == 0 ? item.Name : $"{relBase}/{item.Name}";
+                if (item.IsDirectory)
+                {
+                    var subLocal = Path.Combine(localDir, item.Name);
+                    Directory.CreateDirectory(subLocal);
+                    await ProduceAsync(dir.GetSubdirectoryClient(item.Name), subLocal, rel);
+                }
+                else
+                {
+                    Interlocked.Increment(ref discovered);
+                    await channel.Writer.WriteAsync(
+                        (dir.GetFileClient(item.Name), Path.Combine(localDir, item.Name), rel), ct);
+                }
             }
-            else
-            {
-                var localPath = Path.Combine(localDir, item.Name);
-                var fileClient = remoteDir.GetFileClient(item.Name);
+        }
 
+        var producer = Task.Run(async () =>
+        {
+            try { await ProduceAsync(rootDir, request.LocalDirectory, string.Empty); }
+            finally { channel.Writer.Complete(); }
+        }, ct);
+
+        // Consumers: MaxParallelism tasks reading from channel
+        var consumers = Enumerable.Range(0, request.MaxParallelism).Select(_ => Task.Run(async () =>
+        {
+            await foreach (var (client, localPath, rel) in channel.Reader.ReadAllAsync(ct))
+            {
+                var disc = Volatile.Read(ref discovered);
                 if (request.DryRun)
                 {
-                    progress($"[dry-run] Would download: {item.Name}");
-                    result.FilesDownloaded++;
+                    var done = Interlocked.Increment(ref downloaded);
+                    progress(new SyncProgressUpdate(done, disc, rel));
                     continue;
                 }
 
                 try
                 {
-                    progress($"Downloading: {item.Name}");
-                    var download = await fileClient.DownloadAsync(cancellationToken: ct);
+                    var dl = await client.DownloadAsync(cancellationToken: ct);
                     await using var fs = File.OpenWrite(localPath);
-                    await download.Value.Content.CopyToAsync(fs, ct);
-                    result.FilesDownloaded++;
-                    result.BytesTransferred += download.Value.ContentLength;
+                    await dl.Value.Content.CopyToAsync(fs, ct);
+                    var done = Interlocked.Increment(ref downloaded);
+                    Interlocked.Add(ref bytesTransferred, dl.Value.ContentLength);
+                    progress(new SyncProgressUpdate(done, Volatile.Read(ref discovered), rel));
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Failed to download {File}", item.Name);
-                    result.Errors.Add($"Download failed: {item.Name} — {ex.Message}");
+                    _logger.LogError(ex, "Failed to download {File}", rel);
+                    errors.Add($"Download failed: {rel} — {ex.Message}");
                 }
             }
-        }
+        }, ct));
+
+        await Task.WhenAll(new[] { producer }.Concat(consumers));
+        result.FilesDownloaded = downloaded;
+        result.BytesTransferred += bytesTransferred;
+        result.Errors.AddRange(errors);
     }
 
     private async Task UploadDirectoryAsync(
@@ -625,7 +665,7 @@ public class AzureFileShareProvider : IFileShareProvider
         string localDir,
         StorageSyncRequest request,
         SyncResult result,
-        Action<string> progress,
+        Action<SyncProgressUpdate> progress,
         CancellationToken ct)
     {
         if (!Directory.Exists(localDir)) return;
@@ -640,14 +680,14 @@ public class AzureFileShareProvider : IFileShareProvider
 
             if (request.DryRun)
             {
-                progress($"[dry-run] Would upload: {fileName}");
+                progress(new SyncProgressUpdate(result.FilesUploaded + 1, 0, fileName));
                 result.FilesUploaded++;
                 continue;
             }
 
             try
             {
-                progress($"Uploading: {fileName}");
+                progress(new SyncProgressUpdate(result.FilesUploaded + 1, 0, fileName));
                 await fileClient.CreateAsync(fileInfo.Length, cancellationToken: ct);
                 await using var fs = File.OpenRead(localFile);
                 await fileClient.UploadAsync(fs, cancellationToken: ct);

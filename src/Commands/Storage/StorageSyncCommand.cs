@@ -191,15 +191,40 @@ public class StorageSyncCommand : Command<StorageSyncCommand.Settings>
         SyncResult syncResult = default!;
         await _console.Progress()
             .AutoClear(false)
-            .Columns(new TaskDescriptionColumn(), new SpinnerColumn())
+            .HideCompleted(false)
+            .Columns(
+                new TaskDescriptionColumn() { Alignment = Justify.Left },
+                new ProgressBarColumn(),
+                new PercentageColumn(),
+                new RemainingTimeColumn(),
+                new SpinnerColumn())
             .StartAsync(async ctx =>
             {
-                var task = ctx.AddTask($"[cyan]Syncing {Markup.Escape(shareName)}...[/]");
-                syncResult = await provider.SyncAsync(request, msg =>
+                ProgressTask? fileTask = null;
+
+                syncResult = await provider.SyncAsync(request, update =>
                 {
-                    task.Description = $"[cyan]{Markup.Escape(msg)}[/]";
+                    // Total grows as the producer discovers files — update MaxValue to track it
+                    if (update.Total == 0)
+                    {
+                        // Still discovering, no files yet
+                        fileTask ??= ctx.AddTask("[dim]Discovering...[/]", maxValue: 1);
+                        fileTask.Description = "[dim]Discovering...[/]";
+                        return;
+                    }
+
+                    if (fileTask == null)
+                        fileTask = ctx.AddTask("[dim]Discovering...[/]", maxValue: update.Total);
+
+                    // Grow MaxValue as more files are discovered
+                    if (update.Total > fileTask.MaxValue)
+                        fileTask.MaxValue = update.Total;
+
+                    fileTask.Description = $"[cyan]{update.Completed}/{update.Total}[/]  [dim]{Markup.Escape(update.CurrentFile)}[/]";
+                    fileTask.Value = update.Completed;
                 });
-                task.StopTask();
+
+                fileTask?.StopTask();
             });
 
         // Summary table

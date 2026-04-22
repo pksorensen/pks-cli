@@ -27,7 +27,7 @@ public class StorageCommandTests
             {
                 new() { ProviderKey = key, ProviderName = name, AccountName = "mystorage", ResourceName = "myshare", Description = "100 GiB · SMB" }
             });
-        mock.Setup(p => p.SyncAsync(It.IsAny<StorageSyncRequest>(), It.IsAny<Action<string>>(), It.IsAny<CancellationToken>()))
+        mock.Setup(p => p.SyncAsync(It.IsAny<StorageSyncRequest>(), It.IsAny<Action<SyncProgressUpdate>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SyncResult { FilesDownloaded = 3, BytesTransferred = 1024 });
         return mock;
     }
@@ -119,7 +119,7 @@ public class StorageCommandTests
         result.Should().Be(0);
         provider.Verify(p => p.SyncAsync(
             It.Is<StorageSyncRequest>(r => r.Direction == SyncDirection.Download),
-            It.IsAny<Action<string>>(),
+            It.IsAny<Action<SyncProgressUpdate>>(),
             It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -147,7 +147,7 @@ public class StorageCommandTests
         // SyncAsync must never be called for blocked write operations
         provider.Verify(p => p.SyncAsync(
             It.IsAny<StorageSyncRequest>(),
-            It.IsAny<Action<string>>(),
+            It.IsAny<Action<SyncProgressUpdate>>(),
             It.IsAny<CancellationToken>()),
             Times.Never);
     }
@@ -175,7 +175,7 @@ public class StorageCommandTests
         console.Output.ToLowerInvariant().Should().Contain("dry run");
         provider.Verify(p => p.SyncAsync(
             It.Is<StorageSyncRequest>(r => r.DryRun),
-            It.IsAny<Action<string>>(),
+            It.IsAny<Action<SyncProgressUpdate>>(),
             It.IsAny<CancellationToken>()),
             Times.Once);
     }

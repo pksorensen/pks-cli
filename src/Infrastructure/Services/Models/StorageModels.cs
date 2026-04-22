@@ -34,3 +34,5 @@ public class SyncResult
     public List<string> Errors { get; set; } = new();
     public bool Success => Errors.Count == 0;
 }
+
+public record SyncProgressUpdate(int Completed, int Total, string CurrentFile);
