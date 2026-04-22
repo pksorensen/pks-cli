@@ -49,6 +49,37 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.8.0](https://github.com/pksorensen/pks-cli/compare/v6.7.1...v6.8.0) (2026-04-22)
+
+
+### Features
+
+* add pks foundry proxy and pks tts commands ([bebdb84](https://github.com/pksorensen/pks-cli/commit/bebdb847b43820cf3537145fbf55bb83f38f3149))
+* added confluence commands ([3dae75f](https://github.com/pksorensen/pks-cli/commit/3dae75f779d0a25c8a525452deb2d909de55e820))
+* added fileshare, storage, firecracher, otel support ([50e2321](https://github.com/pksorensen/pks-cli/commit/50e23216d7a77fc4feb095f9186a0688ea447521))
+* **agentics:** add support for broadcastId and sessionId in job processing ([ab0a579](https://github.com/pksorensen/pks-cli/commit/ab0a579a42d420c02a9d405666fef151810577d9))
+* **appinsights:** redesign init to use Azure subscription discovery via PKCE auth ([bdcdd5c](https://github.com/pksorensen/pks-cli/commit/bdcdd5c232950afba8b129be869351e89d69f0a7))
+* Enhance GitHub integration with authentication and task management ([ced345c](https://github.com/pksorensen/pks-cli/commit/ced345ccf8cd7b3b2e31409b04dfc9e15ca90519))
+* **hooks:** add PostCompact hook for enhanced integration ([d92d35a](https://github.com/pksorensen/pks-cli/commit/d92d35a009150ebd4f8dd1de224f7e5c8bebfb5a))
+* Implement Microsoft Graph Email Export Service ([ef04cd3](https://github.com/pksorensen/pks-cli/commit/ef04cd3809211136e6e8b27d912ccce05796c6e1))
+* **jira:** enhance issue fetching with parallel processing and throttling ([c5a4bf7](https://github.com/pksorensen/pks-cli/commit/c5a4bf7c5d875f4650ad842ac26169d1da47f7c6))
+* **jira:** enhance pagination handling for Jira Cloud integration using nextPageToken ([54a8131](https://github.com/pksorensen/pks-cli/commit/54a8131613a2394b6325a00abd175a063c162f05))
+* parallel download ([144629b](https://github.com/pksorensen/pks-cli/commit/144629b2a0159ef42c6393cdbefadeb50cd4b109))
+* **runner:** implement lightweight OTLP HTTP broadcast proxy for job telemetry ([d13a702](https://github.com/pksorensen/pks-cli/commit/d13a70277d99db65e9cc9e7efba4e79bb515e137))
+* **runner:** update runner start command, devcontainer spawner, and project file ([04f075c](https://github.com/pksorensen/pks-cli/commit/04f075c3977bdf3123ea1459667480f4e0c96d03))
+* **storage:** added filtering support ([9e59451](https://github.com/pksorensen/pks-cli/commit/9e594515c43f1a691bb3c1dbbd100f1ceb2891e3))
+
+
+### Bug Fixes
+
+* **appinsights:** init triggers PKCE auth itself instead of requiring pks foundry init ([86dfe0a](https://github.com/pksorensen/pks-cli/commit/86dfe0aa7939f2d5b2e062cf0bf5c30bebf583de))
+* **appinsights:** show resource group in selection prompt and remove Status spinner ([c8ce25a](https://github.com/pksorensen/pks-cli/commit/c8ce25a5b848b5369f6080d73ad5c5ddbd0a258b))
+* auth on appinsights ([144629b](https://github.com/pksorensen/pks-cli/commit/144629b2a0159ef42c6393cdbefadeb50cd4b109))
+* improve Jira issue pagination handling and add related tests ([a252818](https://github.com/pksorensen/pks-cli/commit/a252818b610ff2ed6381cb347bdf12b842ad0456))
+* **otel:** parse arbitrary Nh/Nd/Nm durations and add --verbose debug flag ([301ec39](https://github.com/pksorensen/pks-cli/commit/301ec39ec07a0985c804c1aa25c6a2382a9c633c))
+* **proxy:** use raw header indexer for Authorization check to avoid typed accessor quirks ([2c2b1de](https://github.com/pksorensen/pks-cli/commit/2c2b1de72a3eea6c40b9ca6a7843868bb5154d69))
+* **tts:** use cognitiveservices.azure.com endpoint and default to tts-hd deployment ([c4d1e6f](https://github.com/pksorensen/pks-cli/commit/c4d1e6f9e62b821f6f7252ad0ca00312fd539d80))
+
 ## [6.7.1](https://github.com/pksorensen/pks-cli/compare/v6.7.0...v6.7.1) (2026-04-04)
 
 
