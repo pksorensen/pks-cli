@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.8.1](https://github.com/pksorensen/pks-cli/compare/v6.8.0...v6.8.1) (2026-04-22)
+
+
+### Bug Fixes
+
+* **ci:** correct release-please output key for CLI package ([a452b73](https://github.com/pksorensen/pks-cli/commit/a452b73a6cf45929d3060ff33487753e6d9416b8))
+
 ## [6.8.0](https://github.com/pksorensen/pks-cli/compare/v6.7.1...v6.8.0) (2026-04-22)
 
 
