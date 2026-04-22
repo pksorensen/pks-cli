@@ -1,5 +1,5 @@
 {
-  ".": "6.7.1",
+  ".": "6.8.0",
   "templates/devcontainer": "5.0.0",
   "templates/claude-dotnet-9": "4.0.0",
   "templates/claude-dotnet-10-full": "5.0.0",
