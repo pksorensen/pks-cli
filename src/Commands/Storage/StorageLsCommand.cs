@@ -126,7 +126,7 @@ public class StorageLsCommand : Command<StorageLsCommand.Settings>
         _console.MarkupLine($"[bold]{Markup.Escape(result.ShareName)}[/][dim]:{Markup.Escape(result.Path)}[/]");
         _console.WriteLine();
 
-        var dirs  = result.Items.Where(i => i.Type == StorageItemType.Directory).ToList();
+        var dirs = result.Items.Where(i => i.Type == StorageItemType.Directory).ToList();
         var files = result.Items.Where(i => i.Type == StorageItemType.File).ToList();
 
         foreach (var dir in dirs)

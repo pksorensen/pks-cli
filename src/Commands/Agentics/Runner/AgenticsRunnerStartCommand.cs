@@ -122,7 +122,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             // ── OTEL startup diagnostics ──────────────────────────────────────────────
             {
                 var otlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
-                var serviceName  = Environment.GetEnvironmentVariable("OTEL_SERVICE_NAME");
+                var serviceName = Environment.GetEnvironmentVariable("OTEL_SERVICE_NAME");
                 var resourceAttrs = Environment.GetEnvironmentVariable("OTEL_RESOURCE_ATTRIBUTES");
                 if (!string.IsNullOrEmpty(otlpEndpoint))
                 {
@@ -647,15 +647,15 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         // Stamp the container with labels so we can rediscover it after pks-cli restarts
         spawnOptions.IdLabels = new Dictionary<string, string>
         {
-            ["pks.agentics.owner"]       = registration.Owner,
-            ["pks.agentics.project"]     = registration.Project,
+            ["pks.agentics.owner"] = registration.Owner,
+            ["pks.agentics.project"] = registration.Project,
             ["pks.agentics.fingerprint"] = fingerprint,
         };
 
         // Acquire plugins and agent plugin dirs on the Runner side, populating a Docker volume
         // mounted at /run/alp/plugins inside the devcontainer.
         var hasPlugins = job.AgentDef?.Plugins?.Count > 0;
-        var hasAgents  = job.AgentDef?.Agents?.Count  > 0;
+        var hasAgents = job.AgentDef?.Agents?.Count > 0;
         string? pluginVolumeName = null;
         var pluginContainerPaths = new List<string>();
 
@@ -744,8 +744,8 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
         // 6. Write prompt file into the container (base64 to avoid quoting issues)
         var vibecastHome = $"/tmp/vibecast-job-{job.Id}";
-        var promptFile   = $"{vibecastHome}/initial-prompt.txt";
-        var jobPrompt    = job.AgentDef?.Prompt ?? "";
+        var promptFile = $"{vibecastHome}/initial-prompt.txt";
+        var jobPrompt = job.AgentDef?.Prompt ?? "";
         await _spawnerService.ExecInContainerAsync(containerId,
             $"bash -c 'mkdir -p {vibecastHome}'",
             timeoutSeconds: 30);
@@ -771,9 +771,9 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             var lines = string.Join("\n", job.AgentDef.GitignoreLines.Select(l => $"  {l}"));
             appendPrompt = $"Ensure the project's .gitignore file contains the following lines (add them if missing):\n{lines}\n\n" + appendPrompt;
         }
-        var stageGitUrl   = job.AgentDef?.StageGitUrl ?? "";
+        var stageGitUrl = job.AgentDef?.StageGitUrl ?? "";
         var stageGitToken = job.AgentDef?.StageGitToken ?? "";
-        var stageDir      = $"{vibecastHome}/stage";
+        var stageDir = $"{vibecastHome}/stage";
 
         // Rebase stage git URL onto the container-accessible server (same host/port as AGENTIC_SERVER).
         // The stage git server IS the agentic server, so we reuse hostForContainer + serverUri.Port.
@@ -782,8 +782,8 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             var stageUri = new Uri(stageGitUrl);
             var rebased = new UriBuilder(stageUri)
             {
-                Host   = hostForContainer,
-                Port   = serverUri.Port,
+                Host = hostForContainer,
+                Port = serverUri.Port,
                 Scheme = serverUri.Scheme,
             };
             stageGitUrl = rebased.Uri.ToString();
@@ -875,7 +875,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             scriptLines.AppendLine($"export BROADCAST_ID={job.AgentDef.BroadcastId}");
         }
 
-        var gitUserName  = settings.GitUserName  ?? "si-14x";
+        var gitUserName = settings.GitUserName ?? "si-14x";
         var gitUserEmail = settings.GitUserEmail ?? "si-14x@agentics.dk";
         scriptLines.AppendLine($"git config --global user.name \"{gitUserName}\"");
         scriptLines.AppendLine($"git config --global user.email \"{gitUserEmail}\"");
@@ -947,7 +947,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             {
                 var log = await _spawnerService.ExecInContainerAsync(containerId,
                     $"tail -5 {vibecastHome}/vibecast.log 2>/dev/null || echo '(no log yet)'", timeoutSeconds: 5);
-                _console.MarkupLine($"[grey]vibecast log (t+{i+1}s):[/] {log.Output.Trim().EscapeMarkup()}");
+                _console.MarkupLine($"[grey]vibecast log (t+{i + 1}s):[/] {log.Output.Trim().EscapeMarkup()}");
 
                 // Also check if the tmux session is still alive
                 var alive = await _spawnerService.ExecInContainerAsync(containerId,
@@ -1080,8 +1080,8 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         }
 
         // 11. Wait for job to complete (tmux session ends, idle timeout, or max timeout)
-        var idleTimeoutMs  = (job.AgentDef?.IdleTimeoutMinutes ?? 5) * 60_000;
-        var maxTimeout     = TimeSpan.FromMinutes(job.AgentDef?.MaxTimeoutMinutes ?? 60);
+        var idleTimeoutMs = (job.AgentDef?.IdleTimeoutMinutes ?? 5) * 60_000;
+        var maxTimeout = TimeSpan.FromMinutes(job.AgentDef?.MaxTimeoutMinutes ?? 60);
         _console.MarkupLine($"[cyan]Waiting up to {maxTimeout.TotalMinutes:0}min (idle: {idleTimeoutMs / 60000}min)...[/]");
 
         var startTime = DateTime.UtcNow;
@@ -2073,7 +2073,8 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
                 var tmuxLog = await CaptureTmuxPaneAsync(vibecastTmux, "main", ct);
                 var combinedLog = $"--- vibecast ---\n{vibecastLog}\n--- claude pane ---\n{tmuxLog}";
                 agentSpan?.AddEvent(new System.Diagnostics.ActivityEvent("vibecast.stream_timeout",
-                    tags: new System.Diagnostics.ActivityTagsCollection {
+                    tags: new System.Diagnostics.ActivityTagsCollection
+                    {
                         ["vibecast.log"] = vibecastLog,
                         ["tmux.pane"] = tmuxLog
                     }));
@@ -2788,9 +2789,9 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
                 await File.WriteAllTextAsync(Path.Combine(tmpJobDir, ".gitignore"), ".claude/\n", ct);
                 var initGitEnv = new Dictionary<string, string>(gitEnv ?? [])
                 {
-                    ["GIT_AUTHOR_NAME"]     = "pks-runner",
-                    ["GIT_AUTHOR_EMAIL"]    = "runner@agentics.dk",
-                    ["GIT_COMMITTER_NAME"]  = "pks-runner",
+                    ["GIT_AUTHOR_NAME"] = "pks-runner",
+                    ["GIT_AUTHOR_EMAIL"] = "runner@agentics.dk",
+                    ["GIT_COMMITTER_NAME"] = "pks-runner",
                     ["GIT_COMMITTER_EMAIL"] = "runner@agentics.dk",
                 };
                 await RunGitAsync($"-C {tmpJobDir} add .gitignore", null, verbose, ct, initGitEnv);
@@ -3302,12 +3303,12 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         // Remove any previous binary so we always inject the latest local build.
         await _spawnerService.ExecInContainerAsync(containerId, $"rm -f {dest}", timeoutSeconds: 5);
 
-        var psi  = new ProcessStartInfo("docker")
+        var psi = new ProcessStartInfo("docker")
         {
-            RedirectStandardInput  = true,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
-            RedirectStandardError  = true,
-            UseShellExecute        = false,
+            RedirectStandardError = true,
+            UseShellExecute = false,
         };
         psi.ArgumentList.Add("exec");
         psi.ArgumentList.Add("-i");
@@ -3367,7 +3368,7 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             if (resStream == null) continue;
 
             var destPath = $"/tmp/{resourceName}";
-            var destDir  = System.IO.Path.GetDirectoryName(destPath)!.Replace('\\', '/');
+            var destDir = System.IO.Path.GetDirectoryName(destPath)!.Replace('\\', '/');
 
             // Ensure destination directory exists
             await _spawnerService.ExecInContainerAsync(containerId, $"mkdir -p {destDir}", timeoutSeconds: 5);

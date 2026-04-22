@@ -49,7 +49,8 @@ internal sealed class OtlpProxy : IAsyncDisposable
         _forwardClient = new HttpClient(new HttpClientHandler
         {
             ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
-        }) { Timeout = TimeSpan.FromSeconds(10) };
+        })
+        { Timeout = TimeSpan.FromSeconds(10) };
         _loopTask = Task.Run(() => RunLoopAsync(_cts.Token));
     }
 

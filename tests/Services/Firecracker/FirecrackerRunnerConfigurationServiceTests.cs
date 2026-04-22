@@ -281,20 +281,32 @@ public class FirecrackerRunnerConfigurationServiceTests : TestBase
         // Arrange
         await _service.AddRegistrationAsync(new FirecrackerRunnerRegistration
         {
-            Id = "reg-1", Name = "runner-1", Token = "tok1",
-            Owner = "owner1", Project = "project1", Server = "https://api.github.com",
+            Id = "reg-1",
+            Name = "runner-1",
+            Token = "tok1",
+            Owner = "owner1",
+            Project = "project1",
+            Server = "https://api.github.com",
             RegisteredAt = DateTime.UtcNow
         });
         await _service.AddRegistrationAsync(new FirecrackerRunnerRegistration
         {
-            Id = "reg-2", Name = "runner-2", Token = "tok2",
-            Owner = "owner2", Project = "project2", Server = "https://api.github.com",
+            Id = "reg-2",
+            Name = "runner-2",
+            Token = "tok2",
+            Owner = "owner2",
+            Project = "project2",
+            Server = "https://api.github.com",
             RegisteredAt = DateTime.UtcNow
         });
         await _service.AddRegistrationAsync(new FirecrackerRunnerRegistration
         {
-            Id = "reg-3", Name = "runner-3", Token = "tok3",
-            Owner = "owner3", Project = "project3", Server = "https://api.github.com",
+            Id = "reg-3",
+            Name = "runner-3",
+            Token = "tok3",
+            Owner = "owner3",
+            Project = "project3",
+            Server = "https://api.github.com",
             RegisteredAt = DateTime.UtcNow
         });
 
@@ -316,15 +328,23 @@ public class FirecrackerRunnerConfigurationServiceTests : TestBase
         // Arrange
         var target = new FirecrackerRunnerRegistration
         {
-            Id = "target-id", Name = "target-runner", Token = "tok_target",
-            Owner = "targetowner", Project = "targetproject", Server = "https://api.github.com",
+            Id = "target-id",
+            Name = "target-runner",
+            Token = "tok_target",
+            Owner = "targetowner",
+            Project = "targetproject",
+            Server = "https://api.github.com",
             RegisteredAt = DateTime.UtcNow
         };
         await _service.AddRegistrationAsync(target);
         await _service.AddRegistrationAsync(new FirecrackerRunnerRegistration
         {
-            Id = "other-id", Name = "other-runner", Token = "tok_other",
-            Owner = "other", Project = "other", Server = "https://api.github.com",
+            Id = "other-id",
+            Name = "other-runner",
+            Token = "tok_other",
+            Owner = "other",
+            Project = "other",
+            Server = "https://api.github.com",
             RegisteredAt = DateTime.UtcNow
         });
 
@@ -344,8 +364,12 @@ public class FirecrackerRunnerConfigurationServiceTests : TestBase
         // Arrange
         await _service.AddRegistrationAsync(new FirecrackerRunnerRegistration
         {
-            Id = "existing-id", Name = "runner", Token = "tok",
-            Owner = "owner", Project = "project", Server = "https://api.github.com",
+            Id = "existing-id",
+            Name = "runner",
+            Token = "tok",
+            Owner = "owner",
+            Project = "project",
+            Server = "https://api.github.com",
             RegisteredAt = DateTime.UtcNow
         });
 
