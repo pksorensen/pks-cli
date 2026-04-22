@@ -1,7 +1,6 @@
 using System.ComponentModel;
 using System.Text.Json;
 using PKS.Infrastructure.Services;
-using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -45,8 +44,21 @@ public class OtelErrorsCommand : Command<OtelErrorsCommand.Settings>
             return 1;
         }
 
+        var since = settings.ParsedSince;
+
+        if (settings.Verbose)
+        {
+            var appId = await _queryService.GetConfiguredAppIdAsync();
+            var kql = AppInsightsQueryService.BuildErrorsKql(since, settings.Limit, settings.AppName, settings.OperationId);
+            _console.MarkupLine($"[dim]App ID  : {(appId ?? "unknown").EscapeMarkup()}[/]");
+            _console.MarkupLine($"[dim]Window  : {since.TotalHours:0.#}h ({settings.Since})[/]");
+            _console.MarkupLine($"[dim]KQL     :[/]");
+            _console.MarkupLine($"[dim]{kql.EscapeMarkup()}[/]");
+            _console.WriteLine();
+        }
+
         var errors = await _queryService.QueryErrorsAsync(
-            settings.ParsedSince, settings.Limit, settings.AppName, settings.OperationId);
+            since, settings.Limit, settings.AppName, settings.OperationId);
 
         if (settings.Format.Equals("Json", StringComparison.OrdinalIgnoreCase))
         {

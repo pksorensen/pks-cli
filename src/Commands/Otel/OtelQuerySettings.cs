@@ -24,11 +24,22 @@ public class OtelQuerySettings : OtelSettings
     [DefaultValue("Table")]
     public string Format { get; set; } = "Table";
 
-    public TimeSpan ParsedSince => Since?.ToLowerInvariant() switch
+    [CommandOption("--verbose|-v")]
+    [Description("Show query details: app ID, time window, KQL sent")]
+    public bool Verbose { get; set; }
+
+    public TimeSpan ParsedSince
     {
-        "6h" => TimeSpan.FromHours(6),
-        "24h" => TimeSpan.FromHours(24),
-        "7d" => TimeSpan.FromDays(7),
-        _ => TimeSpan.FromHours(1)
-    };
+        get
+        {
+            var s = Since?.Trim().ToLowerInvariant() ?? "1h";
+            if (s.EndsWith('d') && int.TryParse(s[..^1], out var days) && days > 0)
+                return TimeSpan.FromDays(days);
+            if (s.EndsWith('h') && int.TryParse(s[..^1], out var hours) && hours > 0)
+                return TimeSpan.FromHours(hours);
+            if (s.EndsWith('m') && int.TryParse(s[..^1], out var mins) && mins > 0)
+                return TimeSpan.FromMinutes(mins);
+            return TimeSpan.FromHours(1);
+        }
+    }
 }

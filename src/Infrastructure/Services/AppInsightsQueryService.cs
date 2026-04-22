@@ -80,6 +80,7 @@ public interface IAppInsightsQueryService
     Task<List<OtelTrace>> QueryTracesAsync(TimeSpan since, int limit, bool? hasError = null, string? appName = null, CancellationToken ct = default);
     Task<List<OtelLog>> QueryLogsAsync(TimeSpan since, string? severity = null, string? traceId = null, string? appName = null, CancellationToken ct = default);
     Task<List<OtelSpan>> QuerySpansAsync(string operationId, CancellationToken ct = default);
+    Task<string?> GetConfiguredAppIdAsync(CancellationToken ct = default);
 }
 
 public class AppInsightsQueryService : IAppInsightsQueryService
@@ -167,6 +168,12 @@ public class AppInsightsQueryService : IAppInsightsQueryService
         return MapSpans(response);
     }
 
+    public async Task<string?> GetConfiguredAppIdAsync(CancellationToken ct = default)
+    {
+        var config = await _configService.GetConfigAsync();
+        return config?.AppId;
+    }
+
     private async Task<(AppInsightsConfig config, string token)> RequireConfigAndTokenAsync(CancellationToken ct)
     {
         var config = await _configService.GetConfigAsync()
@@ -183,7 +190,7 @@ public class AppInsightsQueryService : IAppInsightsQueryService
         return $"{(int)since.TotalMinutes}m";
     }
 
-    private static string BuildErrorsKql(TimeSpan since, int limit, string? appName, string? operationId)
+    internal static string BuildErrorsKql(TimeSpan since, int limit, string? appName, string? operationId)
     {
         var sb = new StringBuilder();
         sb.AppendLine("exceptions");
@@ -198,7 +205,7 @@ public class AppInsightsQueryService : IAppInsightsQueryService
         return sb.ToString().TrimEnd();
     }
 
-    private static string BuildTracesKql(TimeSpan since, int limit, bool? hasError, string? appName)
+    internal static string BuildTracesKql(TimeSpan since, int limit, bool? hasError, string? appName)
     {
         var sb = new StringBuilder();
         sb.AppendLine("requests");
@@ -213,7 +220,7 @@ public class AppInsightsQueryService : IAppInsightsQueryService
         return sb.ToString().TrimEnd();
     }
 
-    private static string BuildLogsKql(TimeSpan since, string? severity, string? traceId, string? appName)
+    internal static string BuildLogsKql(TimeSpan since, string? severity, string? traceId, string? appName)
     {
         var sb = new StringBuilder();
         sb.AppendLine("traces");
