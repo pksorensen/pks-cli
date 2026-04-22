@@ -1,0 +1,61 @@
+FROM ubuntu:24.04
+
+ARG SSH_PUB_KEY=""
+
+RUN apt-get update && apt-get install -y \
+    systemd \
+    systemd-sysv \
+    openssh-server \
+    docker.io \
+    docker-compose-v2 \
+    git \
+    curl \
+    wget \
+    sudo \
+    ca-certificates \
+    iproute2 \
+    dnsutils \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Configure SSH
+RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh
+RUN echo "${SSH_PUB_KEY}" > /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
+
+# Enable services for systemd boot
+RUN systemctl enable ssh
+RUN systemctl enable docker
+
+# Disable services that don't work well in Firecracker
+RUN systemctl mask systemd-resolved \
+    systemd-networkd-wait-online \
+    systemd-timesyncd \
+    snapd.service \
+    snapd.socket \
+    multipathd.service
+
+# Configure serial console for Firecracker
+RUN echo "ttyS0" >> /etc/securetty
+RUN mkdir -p /etc/systemd/system/serial-getty@ttyS0.service.d
+RUN echo -e '[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin root --noclear %I 115200 linux' \
+    > /etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf
+
+# Network setup script that runs on boot
+COPY setup-network.sh /usr/local/bin/setup-network.sh
+RUN chmod +x /usr/local/bin/setup-network.sh
+
+# Create systemd service for network setup
+RUN echo -e '[Unit]\nDescription=Setup VM Network\nBefore=network.target\nWants=network.target\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/setup-network.sh\nRemainAfterExit=yes\n\n[Install]\nWantedBy=multi-user.target' \
+    > /etc/systemd/system/setup-network.service
+RUN systemctl enable setup-network
+
+# Create agent user with Docker access
+RUN useradd -m -s /bin/bash -G docker agent \
+    && echo "agent:agent" | chpasswd \
+    && echo "agent ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/agent
+
+# Set root password for emergency access
+RUN echo "root:root" | chpasswd
+
+# DNS configuration (resolv.conf is read-only during docker build;
+# setup-network.sh configures DNS at boot time instead)

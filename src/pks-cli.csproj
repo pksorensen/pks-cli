@@ -21,6 +21,10 @@
     <RepositoryUrl>https://github.com/pks-team/pks-cli</RepositoryUrl>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="PKS.CLI.Tests" />
+  </ItemGroup>
+
   <!-- Self-Contained Build Configuration (for npm distribution) -->
   <PropertyGroup Condition="'$(PublishSelfContained)' == 'true'">
     <SelfContained>true</SelfContained>
@@ -48,6 +52,8 @@
     <!-- Model Context Protocol SDK -->
     <PackageReference Include="ModelContextProtocol" Version="0.3.0-preview.3" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="0.3.0-preview.3" />
+    <!-- Azure File Share sync -->
+    <PackageReference Include="Azure.Storage.Files.Shares" Version="12.21.0" />
     <!-- Docker integration -->
     <PackageReference Include="Docker.DotNet" Version="3.125.15" />
     <!-- OpenTelemetry: ActivitySource + OTLP export to Aspire -->
@@ -74,6 +80,14 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Infrastructure\Resources\bootstrap.Dockerfile" />
+  </ItemGroup>
+
+  <!-- Firecracker scripts: copy alongside binary so docker cp gets everything -->
+  <ItemGroup>
+    <Content Include="../firecracker/**/*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>firecracker/%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </Content>
   </ItemGroup>
 
   <!-- Local testing only: embed vibecast linux-amd64 binary and claude-plugin dir so

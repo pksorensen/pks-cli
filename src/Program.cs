@@ -21,12 +21,19 @@ using PKS.Commands.GitHub.Runner;
 using PKS.Commands.Agentics;
 using PKS.Commands.Agentics.Runner;
 using PKS.Commands.Agentics.Tasks;
+using PKS.Commands.Firecracker;
+using PKS.Commands.Firecracker.Runner;
+using PKS.Infrastructure.Services.Firecracker;
 using PKS.Commands.Ado;
 using PKS.Commands.Foundry;
+using PKS.Commands.FileShares;
+using PKS.Commands.Storage;
 using PKS.Commands.Jira;
 using PKS.Commands.Confluence;
 using PKS.Commands.Registry;
 using PKS.Commands.Google;
+using PKS.Commands.AppInsights;
+using PKS.Commands.Otel;
 using PKS.Commands.Image;
 using PKS.Commands.Tts;
 using Spectre.Console;
@@ -205,6 +212,12 @@ services.AddHttpClient<IAzureDevOpsAuthService, AzureDevOpsAuthService>();
 services.AddSingleton<PKS.Infrastructure.Services.Models.AzureFoundryAuthConfig>();
 services.AddHttpClient<IAzureFoundryAuthService, AzureFoundryAuthService>();
 
+// Configure Azure File Share provider
+services.AddSingleton<PKS.Infrastructure.Services.Models.AzureFileShareAuthConfig>();
+services.AddHttpClient<AzureFileShareProvider>();
+services.AddSingleton<IFileShareProvider>(sp => sp.GetRequiredService<AzureFileShareProvider>());
+services.AddSingleton<FileShareProviderRegistry>();
+
 // Configure Jira integration
 services.AddSingleton<PKS.Infrastructure.Services.Models.JiraAuthConfig>();
 services.AddHttpClient<IJiraService, JiraService>();
@@ -242,6 +255,9 @@ services.AddSingleton<ICoolifyLookupService, CoolifyLookupService>();
 services.AddSingleton<ICoolifyApiService, CoolifyApiService>();
 services.AddSingleton<IRunnerConfigurationService, RunnerConfigurationService>();
 services.AddSingleton<IAgenticsRunnerConfigurationService, AgenticsRunnerConfigurationService>();
+services.AddSingleton<IFirecrackerRunnerConfigurationService, FirecrackerRunnerConfigurationService>();
+services.AddSingleton<IFirecrackerService, FirecrackerService>();
+services.AddSingleton<FirecrackerNetworkManager>();
 services.AddSingleton<IGitHubActionsService, GitHubActionsService>();
 services.AddSingleton<IProcessRunner, ProcessRunner>();
 services.AddSingleton<IRunnerContainerService, RunnerContainerService>();
@@ -255,6 +271,11 @@ services.AddSingleton<ISystemInformationService, SystemInformationService>();
 
 // Register Template Packaging service
 services.AddSingleton<ITemplatePackagingService, TemplatePackagingService>();
+
+// Register Application Insights services
+services.AddSingleton<IAppInsightsConfigService, AppInsightsConfigService>();
+services.AddHttpClient<IAppInsightsHttpAdapter, DefaultAppInsightsHttpAdapter>();
+services.AddSingleton<IAppInsightsQueryService, AppInsightsQueryService>();
 
 // Register Google AI service
 services.AddHttpClient<IGoogleAiService, GoogleAiService>();
@@ -419,6 +440,31 @@ app.Configure(config =>
                 .WithDescription("Submit a task to an assembly line (for use in CI/CD pipelines)")
                 .WithExample(new[] { "agentics", "task", "submit", "--assembly-line-url", "https://agentics.dk/p/owner/project/assembly-lines/stage-id", "--title", "Fix failing tests" })
                 .WithExample(new[] { "agentics", "task", "submit", "--assembly-line-url", "https://agentics.dk/p/owner/project/assembly-lines/stage-id", "--title", "CI Failure", "--description", "Build step failed" });
+        });
+    });
+
+    config.AddBranch<FirecrackerSettings>("firecracker", firecracker =>
+    {
+        firecracker.SetDescription("Manage Firecracker microVM runners for isolated job execution");
+
+        firecracker.AddCommand<FirecrackerRunnerInitCommand>("init")
+            .WithDescription("Initialize Firecracker runner (download kernel, build rootfs, configure)")
+            .WithExample(new[] { "firecracker", "init" })
+            .WithExample(new[] { "firecracker", "init", "--vcpus", "4", "--mem-mib", "4096" });
+
+        firecracker.AddCommand<FirecrackerTestCommand>("test")
+            .WithDescription("Boot a test VM and run smoke tests to verify Firecracker setup")
+            .WithExample(new[] { "firecracker", "test" })
+            .WithExample(new[] { "firecracker", "test", "--keep-vm" });
+
+        firecracker.AddBranch<FirecrackerRunnerSettings>("runner", runner =>
+        {
+            runner.SetDescription("Manage Firecracker runner daemon");
+
+            runner.AddCommand<FirecrackerRunnerStartCommand>("start")
+                .WithDescription("Start polling for jobs and execute in Firecracker microVMs")
+                .WithExample(new[] { "firecracker", "runner", "start", "--server", "agentics.dk" })
+                .WithExample(new[] { "firecracker", "runner", "start", "--project", "owner/project" });
         });
     });
 
@@ -615,6 +661,82 @@ app.Configure(config =>
             .WithExample(new[] { "foundry", "proxy" })
             .WithExample(new[] { "foundry", "proxy", "--port", "8080" })
             .WithExample(new[] { "foundry", "proxy", "--token", "my-secret" });
+    });
+
+    // Add fileshare branch (provider auth management)
+    config.AddBranch<FileShareSettings>("fileshare", fs =>
+    {
+        fs.SetDescription("Manage file share provider credentials");
+
+        fs.AddCommand<FileShareInitCommand>("init")
+            .WithDescription("Authenticate with a file share provider")
+            .WithExample(["fileshare", "init"])
+            .WithExample(["fileshare", "init", "--force"]);
+
+        fs.AddCommand<FileShareStatusCommand>("status")
+            .WithDescription("Show authentication status for all file share providers")
+            .WithExample(["fileshare", "status"]);
+    });
+
+    // Add storage branch (universal agent-safe operations)
+    config.AddBranch<StorageSettings>("storage", storage =>
+    {
+        storage.SetDescription("Universal storage operations — download is agent-safe, upload requires consent");
+
+        storage.AddCommand<StorageListCommand>("list")
+            .WithDescription("List storage resources across authenticated providers")
+            .WithExample(["storage", "list"]);
+
+        storage.AddCommand<StorageSyncCommand>("sync")
+            .WithDescription("Sync files between storage and local directory")
+            .WithExample(["storage", "sync", "--direction", "download", "./local"])
+            .WithExample(["storage", "sync", "--direction", "upload", "./local"])
+            .WithExample(["storage", "sync", "--dry-run"]);
+    });
+
+    // Add Application Insights branch command
+    config.AddBranch<AppInsightsSettings>("appinsights", ai =>
+    {
+        ai.SetDescription("Manage Application Insights configuration for telemetry queries");
+
+        ai.AddCommand<AppInsightsInitCommand>("init")
+            .WithDescription("Configure Application Insights App ID and API key")
+            .WithExample(new[] { "appinsights", "init" })
+            .WithExample(new[] { "appinsights", "init", "--force" });
+
+        ai.AddCommand<AppInsightsStatusCommand>("status")
+            .WithDescription("Show Application Insights configuration and connection status")
+            .WithExample(new[] { "appinsights", "status" });
+    });
+
+    // Add otel branch for telemetry queries
+    config.AddBranch<OtelSettings>("otel", otel =>
+    {
+        otel.SetDescription("Query structured telemetry data from Application Insights");
+
+        otel.AddCommand<OtelErrorsCommand>("errors")
+            .WithDescription("List recent exceptions (most recent first)")
+            .WithExample(new[] { "otel", "errors" })
+            .WithExample(new[] { "otel", "errors", "my-app", "--since", "6h", "--limit", "50" })
+            .WithExample(new[] { "otel", "errors", "--format", "Json" })
+            .WithExample(new[] { "otel", "errors", "--operation-id", "abc123" });
+
+        otel.AddCommand<OtelTracesCommand>("traces")
+            .WithDescription("List recent requests/traces")
+            .WithExample(new[] { "otel", "traces" })
+            .WithExample(new[] { "otel", "traces", "--has-error", "--since", "24h" })
+            .WithExample(new[] { "otel", "traces", "--format", "Json" });
+
+        otel.AddCommand<OtelLogsCommand>("logs")
+            .WithDescription("List structured log entries")
+            .WithExample(new[] { "otel", "logs" })
+            .WithExample(new[] { "otel", "logs", "--severity", "Error", "--since", "7d" })
+            .WithExample(new[] { "otel", "logs", "--trace-id", "abc123", "--format", "Json" });
+
+        otel.AddCommand<OtelSpansCommand>("spans")
+            .WithDescription("List spans for a specific trace")
+            .WithExample(new[] { "otel", "spans", "--operation-id", "abc123" })
+            .WithExample(new[] { "otel", "spans", "--operation-id", "abc123", "--format", "Json" });
     });
 
     // Add Google AI branch command
