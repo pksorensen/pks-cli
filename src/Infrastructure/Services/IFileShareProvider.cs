@@ -11,4 +11,5 @@ public interface IFileShareProvider
     Task<bool> AuthenticateAsync(IAnsiConsole console, CancellationToken ct = default);
     Task<IEnumerable<StorageResource>> ListResourcesAsync(CancellationToken ct = default);
     Task<SyncResult> SyncAsync(StorageSyncRequest request, Action<SyncProgressUpdate> progress, CancellationToken ct = default);
+    Task<StorageListResult> ListDirectoryAsync(string accountName, string resourceName, StorageListRequest request, CancellationToken ct = default);
 }

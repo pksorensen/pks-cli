@@ -692,6 +692,12 @@ app.Configure(config =>
             .WithExample(["storage", "sync", "--direction", "download", "./local"])
             .WithExample(["storage", "sync", "--direction", "upload", "./local"])
             .WithExample(["storage", "sync", "--dry-run"]);
+
+        storage.AddCommand<StorageLsCommand>("ls")
+            .WithDescription("List files and directories in a share (agent-safe)")
+            .WithExample(["storage", "ls"])
+            .WithExample(["storage", "ls", "/users", "--count"])
+            .WithExample(["storage", "ls", "--json"]);
     });
 
     // Add Application Insights branch command

@@ -54,6 +54,7 @@
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="0.3.0-preview.3" />
     <!-- Azure File Share sync -->
     <PackageReference Include="Azure.Storage.Files.Shares" Version="12.21.0" />
+    <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.0" />
     <!-- Docker integration -->
     <PackageReference Include="Docker.DotNet" Version="3.125.15" />
     <!-- OpenTelemetry: ActivitySource + OTLP export to Aspire -->

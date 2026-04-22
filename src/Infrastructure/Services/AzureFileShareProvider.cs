@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using Azure.Core;
 using Azure.Core.Pipeline;
+using Microsoft.Extensions.FileSystemGlobbing;
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
@@ -261,6 +262,81 @@ public class AzureFileShareProvider : IFileShareProvider
         }
 
         return result;
+    }
+
+    public async Task<StorageListResult> ListDirectoryAsync(
+        string accountName, string resourceName,
+        StorageListRequest request, CancellationToken ct = default)
+    {
+        var result = new StorageListResult
+        {
+            ShareName = resourceName,
+            Path = request.Path
+        };
+
+        var storageToken = await GetAccessTokenAsync(_config.StorageScope, ct);
+        if (string.IsNullOrEmpty(storageToken))
+            return result;
+
+        try
+        {
+            var credential = new BearerTokenCredential(storageToken);
+            var shareOptions = new Azure.Storage.Files.Shares.ShareClientOptions();
+            shareOptions.AddPolicy(new FileRequestIntentPolicy(), HttpPipelinePosition.PerCall);
+            var shareClient = new Azure.Storage.Files.Shares.ShareClient(
+                new Uri($"https://{accountName}.file.core.windows.net/{resourceName}"),
+                credential,
+                shareOptions);
+
+            var normalizedPath = request.Path.Trim('/');
+            var dirClient = string.IsNullOrEmpty(normalizedPath)
+                ? shareClient.GetRootDirectoryClient()
+                : shareClient.GetDirectoryClient(normalizedPath);
+
+            var count = 0;
+            await foreach (var item in dirClient.GetFilesAndDirectoriesAsync(cancellationToken: ct))
+            {
+                if (request.DirsOnly && !item.IsDirectory)
+                    continue;
+
+                if (count >= request.Limit)
+                {
+                    result.Truncated = true;
+                    break;
+                }
+
+                var listItem = new StorageListItem
+                {
+                    Name = item.Name,
+                    Type = item.IsDirectory ? StorageItemType.Directory : StorageItemType.File,
+                    SizeBytes = item.IsDirectory ? null : item.FileSize
+                };
+
+                if (request.IncludeCount && item.IsDirectory)
+                {
+                    listItem.ItemCount = await CountItemsAsync(
+                        dirClient.GetSubdirectoryClient(item.Name), ct);
+                }
+
+                result.Items.Add(listItem);
+                count++;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "ListDirectory failed for {Path}", request.Path);
+        }
+
+        return result;
+    }
+
+    private static async Task<int> CountItemsAsync(
+        Azure.Storage.Files.Shares.ShareDirectoryClient dir, CancellationToken ct)
+    {
+        var count = 0;
+        await foreach (var _ in dir.GetFilesAndDirectoriesAsync(cancellationToken: ct))
+            count++;
+        return count;
     }
 
     // ── Internal ARM helpers ────────────────────────────────────────────────
@@ -591,13 +667,17 @@ public class AzureFileShareProvider : IFileShareProvider
             });
 
         var discovered = 0;
+        var skipped = 0;
         var downloaded = 0;
         var bytesTransferred = 0L;
         var errors = new System.Collections.Concurrent.ConcurrentBag<string>();
 
+        // Build glob matcher once (null = match everything)
+        var matcher = BuildMatcher(request.Include, request.Exclude);
+
         progress(new SyncProgressUpdate(0, 0, "Discovering..."));
 
-        // Producer: enumerate remote files and push to channel
+        // Producer: enumerate remote files and push to channel (filtered)
         async Task ProduceAsync(Azure.Storage.Files.Shares.ShareDirectoryClient dir, string localDir, string relBase)
         {
             await foreach (var item in dir.GetFilesAndDirectoriesAsync(cancellationToken: ct))
@@ -611,6 +691,11 @@ public class AzureFileShareProvider : IFileShareProvider
                 }
                 else
                 {
+                    if (matcher != null && !MatcherExtensions.Match(matcher, rel).HasMatches)
+                    {
+                        Interlocked.Increment(ref skipped);
+                        continue;
+                    }
                     Interlocked.Increment(ref discovered);
                     await channel.Writer.WriteAsync(
                         (dir.GetFileClient(item.Name), Path.Combine(localDir, item.Name), rel), ct);
@@ -656,8 +741,27 @@ public class AzureFileShareProvider : IFileShareProvider
 
         await Task.WhenAll(new[] { producer }.Concat(consumers));
         result.FilesDownloaded = downloaded;
+        result.FilesSkipped += skipped;
         result.BytesTransferred += bytesTransferred;
         result.Errors.AddRange(errors);
+    }
+
+    private static Matcher? BuildMatcher(string[] include, string[] exclude)
+    {
+        if (include.Length == 0 && exclude.Length == 0)
+            return null;
+
+        var matcher = new Matcher(StringComparison.OrdinalIgnoreCase);
+
+        if (include.Length > 0)
+            foreach (var p in include) matcher.AddInclude(p);
+        else
+            matcher.AddInclude("**");
+
+        foreach (var p in exclude)
+            matcher.AddExclude(p);
+
+        return matcher;
     }
 
     private async Task UploadDirectoryAsync(

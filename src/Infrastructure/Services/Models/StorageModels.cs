@@ -22,6 +22,8 @@ public class StorageSyncRequest
     public bool Delete { get; set; }
     public bool VerifyChecksum { get; set; }
     public int MaxParallelism { get; set; } = 4;
+    public string[] Include { get; set; } = [];
+    public string[] Exclude { get; set; } = [];
 }
 
 public class SyncResult
@@ -36,3 +38,29 @@ public class SyncResult
 }
 
 public record SyncProgressUpdate(int Completed, int Total, string CurrentFile);
+
+public enum StorageItemType { File, Directory }
+
+public class StorageListItem
+{
+    public string Name { get; set; } = string.Empty;
+    public StorageItemType Type { get; set; }
+    public long? SizeBytes { get; set; }
+    public int? ItemCount { get; set; }
+}
+
+public class StorageListRequest
+{
+    public string Path { get; set; } = "/";
+    public int Limit { get; set; } = 100;
+    public bool IncludeCount { get; set; }
+    public bool DirsOnly { get; set; }
+}
+
+public class StorageListResult
+{
+    public string ShareName { get; set; } = string.Empty;
+    public string Path { get; set; } = "/";
+    public List<StorageListItem> Items { get; set; } = new();
+    public bool Truncated { get; set; }
+}

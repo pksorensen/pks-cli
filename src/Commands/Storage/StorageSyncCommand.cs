@@ -55,6 +55,14 @@ public class StorageSyncCommand : Command<StorageSyncCommand.Settings>
         [CommandOption("--parallel")]
         [Description("Maximum parallel file transfers (default: 4)")]
         public int MaxParallelism { get; set; } = 4;
+
+        [CommandOption("--include")]
+        [Description("Glob pattern for files to include, e.g. '*.json' or 'users/**'. Can be repeated.")]
+        public string[] Include { get; set; } = [];
+
+        [CommandOption("--exclude")]
+        [Description("Glob pattern for files to exclude, e.g. '*.tmp'. Can be repeated.")]
+        public string[] Exclude { get; set; } = [];
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -185,8 +193,15 @@ public class StorageSyncCommand : Command<StorageSyncCommand.Settings>
             DryRun = settings.DryRun,
             Delete = settings.Delete,
             VerifyChecksum = settings.VerifyChecksum,
-            MaxParallelism = settings.MaxParallelism
+            MaxParallelism = settings.MaxParallelism,
+            Include = settings.Include,
+            Exclude = settings.Exclude
         };
+
+        if (settings.Include.Length > 0)
+            _console.MarkupLine($"[dim]Include: {string.Join(", ", settings.Include.Select(Markup.Escape))}[/]");
+        if (settings.Exclude.Length > 0)
+            _console.MarkupLine($"[dim]Exclude: {string.Join(", ", settings.Exclude.Select(Markup.Escape))}[/]");
 
         SyncResult syncResult = default!;
         await _console.Progress()
