@@ -38,7 +38,9 @@ public class AppInsightsCommandTests
         bool isAuthenticated = true,
         string? managementToken = "mgmt-token",
         List<AzureSubscription>? subscriptions = null,
-        List<AppInsightsComponent>? components = null)
+        List<AppInsightsComponent>? components = null,
+        FoundryAuthResult? authResult = null,
+        Exception? initLoginException = null)
     {
         var configMock = new Mock<IAppInsightsConfigService>();
         var authMock = new Mock<IAzureFoundryAuthService>();
@@ -54,6 +56,18 @@ public class AppInsightsCommandTests
         authMock.Setup(m => m.IsAuthenticatedAsync()).ReturnsAsync(isAuthenticated);
         authMock.Setup(m => m.GetAccessTokenAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(managementToken);
+        authMock.Setup(m => m.DiscoverTenantAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("common");
+        authMock.Setup(m => m.StoreCredentialsAsync(It.IsAny<FoundryStoredCredentials>()))
+            .Returns(Task.CompletedTask);
+
+        if (initLoginException is not null)
+            authMock.Setup(m => m.InitiateLoginAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(initLoginException);
+        else
+            authMock.Setup(m => m.InitiateLoginAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(authResult ?? new FoundryAuthResult { RefreshToken = "refresh-tok" });
+
         authMock.Setup(m => m.ListSubscriptionsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(subscriptions ?? [new AzureSubscription { SubscriptionId = "sub-123", DisplayName = "My Sub" }]);
         authMock.Setup(m => m.ListAppInsightsResourcesAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -132,15 +146,33 @@ public class AppInsightsCommandTests
     }
 
     [Fact]
-    public void Init_ReturnsOne_WhenNotAuthenticated()
+    public void Init_TriggersAuthFlow_WhenNotAuthenticated()
     {
-        var (configMock, authMock, console) = CreateInitMocks(isAuthenticated: false);
+        var (configMock, authMock, console) = CreateInitMocks(
+            isAuthenticated: false,
+            subscriptions: [new AzureSubscription { SubscriptionId = "sub-001", DisplayName = "My Subscription" }],
+            components: [new AppInsightsComponent { Name = "My AppInsights", Properties = new AppInsightsComponentProperties { AppId = "ai-app-id-001" } }]);
         var cmd = new AppInsightsInitCommand(configMock.Object, authMock.Object, console);
 
-        var result = cmd.Execute(CreateContext("init"), new AppInsightsInitCommand.Settings());
+        var result = cmd.Execute(CreateContext("init"), new AppInsightsInitCommand.Settings { TenantId = "common" });
+
+        result.Should().Be(0);
+        authMock.Verify(m => m.InitiateLoginAsync("common", It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
+        authMock.Verify(m => m.StoreCredentialsAsync(It.IsAny<FoundryStoredCredentials>()), Times.Once);
+    }
+
+    [Fact]
+    public void Init_ReturnsOne_WhenAuthTimesOut()
+    {
+        var (configMock, authMock, console) = CreateInitMocks(
+            isAuthenticated: false,
+            initLoginException: new OperationCanceledException("timed out"));
+        var cmd = new AppInsightsInitCommand(configMock.Object, authMock.Object, console);
+
+        var result = cmd.Execute(CreateContext("init"), new AppInsightsInitCommand.Settings { TenantId = "common" });
 
         result.Should().Be(1);
-        console.Output.Should().ContainAny("Not signed in", "not signed", "pks foundry");
+        console.Output.Should().ContainAny("timed out", "Authentication timed out");
     }
 
     [Fact]

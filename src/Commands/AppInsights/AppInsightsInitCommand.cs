@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -13,6 +14,10 @@ public class AppInsightsInitCommand : Command<AppInsightsInitCommand.Settings>
         [CommandOption("-f|--force")]
         [Description("Re-configure even if already configured")]
         public bool Force { get; set; }
+
+        [CommandOption("-t|--tenant")]
+        [Description("Azure AD tenant ID (defaults to 'common' or auto-discovered from email)")]
+        public string? TenantId { get; set; }
     }
 
     private readonly IAppInsightsConfigService _configService;
@@ -46,9 +51,8 @@ public class AppInsightsInitCommand : Command<AppInsightsInitCommand.Settings>
 
         if (!await _authService.IsAuthenticatedAsync())
         {
-            _console.MarkupLine("[yellow]Not signed in to Azure.[/]");
-            _console.MarkupLine("[dim]Run [cyan]pks foundry init[/] first to authenticate.[/]");
-            return 1;
+            var authResult = await AuthenticateAsync(settings.TenantId);
+            if (authResult is null) return 1;
         }
 
         var managementToken = await _authService.GetAccessTokenAsync("https://management.azure.com/.default");
@@ -99,5 +103,63 @@ public class AppInsightsInitCommand : Command<AppInsightsInitCommand.Settings>
         _console.MarkupLine("[dim]Run [cyan]pks otel errors[/] to query telemetry data.[/]");
 
         return 0;
+    }
+
+    private async Task<FoundryAuthResult?> AuthenticateAsync(string? tenantIdOverride)
+    {
+        string tenantId;
+        string? loginHint = null;
+
+        if (!string.IsNullOrEmpty(tenantIdOverride))
+        {
+            tenantId = tenantIdOverride;
+        }
+        else
+        {
+            var email = _console.Prompt(
+                new TextPrompt<string>("[cyan]Enter your email address[/] [dim](or press Enter to sign in with 'common' tenant)[/]:")
+                    .AllowEmpty());
+
+            if (!string.IsNullOrWhiteSpace(email))
+            {
+                loginHint = email.Trim();
+                _console.MarkupLine("[dim]Discovering tenant...[/]");
+                var discovered = await _authService.DiscoverTenantAsync(loginHint);
+                tenantId = string.IsNullOrEmpty(discovered) ? "common" : discovered;
+                if (!string.IsNullOrEmpty(discovered))
+                    _console.MarkupLine($"[dim]Tenant: [bold]{tenantId.EscapeMarkup()}[/][/]");
+            }
+            else
+            {
+                tenantId = "common";
+            }
+        }
+
+        _console.MarkupLine("[cyan]Starting Azure authentication...[/]");
+        _console.MarkupLine("[dim]A browser window will open. If it doesn't, use the URL printed below.[/]");
+        _console.WriteLine();
+
+        try
+        {
+            var result = await _authService.InitiateLoginAsync(tenantId, loginHint);
+            await _authService.StoreCredentialsAsync(new FoundryStoredCredentials
+            {
+                TenantId = tenantId,
+                RefreshToken = result.RefreshToken ?? string.Empty,
+                CreatedAt = DateTime.UtcNow,
+                LastRefreshedAt = DateTime.UtcNow,
+            });
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            _console.MarkupLine("[red]Authentication timed out.[/]");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[red]Authentication failed: {ex.Message.EscapeMarkup()}[/]");
+            return null;
+        }
     }
 }
