@@ -38,7 +38,7 @@ public interface IAppInsightsHttpAdapter
 {
     Task<AppInsightsQueryResponse> QueryAsync(
         string appId,
-        string apiKey,
+        string bearerToken,
         string kql,
         CancellationToken ct = default);
 }
@@ -54,11 +54,11 @@ internal class DefaultAppInsightsHttpAdapter : IAppInsightsHttpAdapter
     }
 
     public async Task<AppInsightsQueryResponse> QueryAsync(
-        string appId, string apiKey, string kql, CancellationToken ct = default)
+        string appId, string bearerToken, string kql, CancellationToken ct = default)
     {
         var url = $"https://api.applicationinsights.io/v1/apps/{appId}/query";
         var request = new HttpRequestMessage(HttpMethod.Post, url);
-        request.Headers.Add("x-api-key", apiKey);
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", bearerToken);
         request.Content = new StringContent(
             JsonSerializer.Serialize(new { query = kql }),
             Encoding.UTF8,
@@ -94,15 +94,20 @@ public class AppInsightsQueryService : IAppInsightsQueryService
         ["critical"] = 4
     };
 
+    private const string QueryScope = "https://api.applicationinsights.io/.default";
+
     private readonly IAppInsightsConfigService _configService;
     private readonly IAppInsightsHttpAdapter _httpAdapter;
+    private readonly IAzureFoundryAuthService _authService;
 
     public AppInsightsQueryService(
         IAppInsightsConfigService configService,
-        IAppInsightsHttpAdapter httpAdapter)
+        IAppInsightsHttpAdapter httpAdapter,
+        IAzureFoundryAuthService authService)
     {
         _configService = configService;
         _httpAdapter = httpAdapter;
+        _authService = authService;
     }
 
     public async Task<AppInsightsConnectionResult> TestConnectionAsync(CancellationToken ct = default)
@@ -113,13 +118,17 @@ public class AppInsightsQueryService : IAppInsightsQueryService
             if (config is null)
                 return new AppInsightsConnectionResult { Success = false, ErrorMessage = "Not configured" };
 
+            var token = await _authService.GetAccessTokenAsync(QueryScope, ct);
+            if (string.IsNullOrEmpty(token))
+                return new AppInsightsConnectionResult { Success = false, ErrorMessage = "Not authenticated. Run 'pks foundry init' first." };
+
             var kql = "requests | take 1 | project cloud_RoleName";
-            var response = await _httpAdapter.QueryAsync(config.AppId, config.ApiKey, kql, ct);
+            var response = await _httpAdapter.QueryAsync(config.AppId, token, kql, ct);
 
             var resourceName = response.Tables.FirstOrDefault()?.Rows.FirstOrDefault()
                 ?.ElementAtOrDefault(0).GetString();
 
-            return new AppInsightsConnectionResult { Success = true, ResourceName = resourceName };
+            return new AppInsightsConnectionResult { Success = true, ResourceName = resourceName ?? config.ResourceName };
         }
         catch (Exception ex)
         {
@@ -130,45 +139,41 @@ public class AppInsightsQueryService : IAppInsightsQueryService
     public async Task<List<OtelError>> QueryErrorsAsync(
         TimeSpan since, int limit, string? appName = null, string? operationId = null, CancellationToken ct = default)
     {
-        var config = await RequireConfigAsync();
-        var kql = BuildErrorsKql(since, limit, appName, operationId);
-        var response = await _httpAdapter.QueryAsync(config.AppId, config.ApiKey, kql, ct);
+        var (config, token) = await RequireConfigAndTokenAsync(ct);
+        var response = await _httpAdapter.QueryAsync(config.AppId, token, BuildErrorsKql(since, limit, appName, operationId), ct);
         return MapErrors(response);
     }
 
     public async Task<List<OtelTrace>> QueryTracesAsync(
         TimeSpan since, int limit, bool? hasError = null, string? appName = null, CancellationToken ct = default)
     {
-        var config = await RequireConfigAsync();
-        var kql = BuildTracesKql(since, limit, hasError, appName);
-        var response = await _httpAdapter.QueryAsync(config.AppId, config.ApiKey, kql, ct);
+        var (config, token) = await RequireConfigAndTokenAsync(ct);
+        var response = await _httpAdapter.QueryAsync(config.AppId, token, BuildTracesKql(since, limit, hasError, appName), ct);
         return MapTraces(response);
     }
 
     public async Task<List<OtelLog>> QueryLogsAsync(
         TimeSpan since, string? severity = null, string? traceId = null, string? appName = null, CancellationToken ct = default)
     {
-        var config = await RequireConfigAsync();
-        var kql = BuildLogsKql(since, severity, traceId, appName);
-        var response = await _httpAdapter.QueryAsync(config.AppId, config.ApiKey, kql, ct);
+        var (config, token) = await RequireConfigAndTokenAsync(ct);
+        var response = await _httpAdapter.QueryAsync(config.AppId, token, BuildLogsKql(since, severity, traceId, appName), ct);
         return MapLogs(response);
     }
 
     public async Task<List<OtelSpan>> QuerySpansAsync(string operationId, CancellationToken ct = default)
     {
-        var config = await RequireConfigAsync();
-        var kql = BuildSpansKql(operationId);
-        var response = await _httpAdapter.QueryAsync(config.AppId, config.ApiKey, kql, ct);
+        var (config, token) = await RequireConfigAndTokenAsync(ct);
+        var response = await _httpAdapter.QueryAsync(config.AppId, token, BuildSpansKql(operationId), ct);
         return MapSpans(response);
     }
 
-    private async Task<AppInsightsConfig> RequireConfigAsync()
+    private async Task<(AppInsightsConfig config, string token)> RequireConfigAndTokenAsync(CancellationToken ct)
     {
-        var config = await _configService.GetConfigAsync();
-        if (config is null)
-            throw new InvalidOperationException(
-                "Application Insights not configured. Run 'pks appinsights init' first.");
-        return config;
+        var config = await _configService.GetConfigAsync()
+            ?? throw new InvalidOperationException("Application Insights not configured. Run 'pks appinsights init' first.");
+        var token = await _authService.GetAccessTokenAsync(QueryScope, ct)
+            ?? throw new InvalidOperationException("Not authenticated. Run 'pks foundry init' to sign in.");
+        return (config, token);
     }
 
     private static string FormatSince(TimeSpan since)

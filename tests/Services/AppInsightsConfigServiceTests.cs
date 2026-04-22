@@ -44,25 +44,21 @@ public class AppInsightsConfigServiceTests
     }
 
     [Fact]
-    public async Task IsConfiguredAsync_ReturnsFalse_WhenOnlyAppIdStored()
+    public async Task IsConfiguredAsync_ReturnsTrue_WhenAppIdPresent()
     {
         var mock = CreateConfigMock(new Dictionary<string, string?> { ["appinsights.app_id"] = "my-app-id" });
         var svc = CreateService(mock);
         var result = await svc.IsConfiguredAsync();
-        result.Should().BeFalse();
+        result.Should().BeTrue();
     }
 
     [Fact]
-    public async Task IsConfiguredAsync_ReturnsTrue_WhenBothKeysPresent()
+    public async Task IsConfiguredAsync_ReturnsFalse_WhenAppIdIsEmpty()
     {
-        var mock = CreateConfigMock(new Dictionary<string, string?>
-        {
-            ["appinsights.app_id"] = "my-app-id",
-            ["appinsights.api_key"] = "my-api-key"
-        });
+        var mock = CreateConfigMock(new Dictionary<string, string?> { ["appinsights.app_id"] = "" });
         var svc = CreateService(mock);
         var result = await svc.IsConfiguredAsync();
-        result.Should().BeTrue();
+        result.Should().BeFalse();
     }
 
     [Fact]
@@ -80,8 +76,8 @@ public class AppInsightsConfigServiceTests
         var mock = CreateConfigMock(new Dictionary<string, string?>
         {
             ["appinsights.app_id"] = "my-app-id",
-            ["appinsights.api_key"] = "my-api-key",
             ["appinsights.resource_name"] = "My App Insights",
+            ["appinsights.subscription_id"] = "sub-999",
             ["appinsights.registered_at"] = registeredAt
         });
         var svc = CreateService(mock);
@@ -90,8 +86,8 @@ public class AppInsightsConfigServiceTests
 
         result.Should().NotBeNull();
         result!.AppId.Should().Be("my-app-id");
-        result.ApiKey.Should().Be("my-api-key");
         result.ResourceName.Should().Be("My App Insights");
+        result.SubscriptionId.Should().Be("sub-999");
     }
 
     [Fact]
@@ -100,11 +96,11 @@ public class AppInsightsConfigServiceTests
         var mock = CreateConfigMock();
         var svc = CreateService(mock);
 
-        await svc.StoreConfigAsync("app-id-123", "api-key-456", "My Resource");
+        await svc.StoreConfigAsync("app-id-123", "My Resource", "sub-456");
 
         mock.Verify(m => m.SetAsync("appinsights.app_id", "app-id-123", true, false), Times.Once);
-        mock.Verify(m => m.SetAsync("appinsights.api_key", "api-key-456", true, false), Times.Once);
         mock.Verify(m => m.SetAsync("appinsights.resource_name", "My Resource", true, false), Times.Once);
+        mock.Verify(m => m.SetAsync("appinsights.subscription_id", "sub-456", true, false), Times.Once);
         mock.Verify(m => m.SetAsync("appinsights.registered_at", It.IsAny<string>(), true, false), Times.Once);
     }
 
@@ -114,7 +110,7 @@ public class AppInsightsConfigServiceTests
         var mock = CreateConfigMock();
         var svc = CreateService(mock);
 
-        await svc.StoreConfigAsync("app-id-123", "api-key-456", null);
+        await svc.StoreConfigAsync("app-id-123", null, null);
 
         mock.Verify(m => m.SetAsync("appinsights.resource_name", string.Empty, true, false), Times.Once);
     }
@@ -128,8 +124,8 @@ public class AppInsightsConfigServiceTests
         await svc.ClearConfigAsync();
 
         mock.Verify(m => m.DeleteAsync("appinsights.app_id"), Times.Once);
-        mock.Verify(m => m.DeleteAsync("appinsights.api_key"), Times.Once);
         mock.Verify(m => m.DeleteAsync("appinsights.resource_name"), Times.Once);
+        mock.Verify(m => m.DeleteAsync("appinsights.subscription_id"), Times.Once);
         mock.Verify(m => m.DeleteAsync("appinsights.registered_at"), Times.Once);
     }
 }

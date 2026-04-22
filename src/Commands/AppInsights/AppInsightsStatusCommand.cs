@@ -41,14 +41,11 @@ public class AppInsightsStatusCommand : Command<AppInsightsStatusCommand.Setting
         var config = await _configService.GetConfigAsync();
         if (config is null) return 0;
 
-        var maskedKey = config.ApiKey.Length > 8
-            ? config.ApiKey[..4] + "***" + config.ApiKey[^4..]
-            : "***";
-
         var table = new Table().Border(TableBorder.Rounded).AddColumn("Setting").AddColumn("Value");
         table.AddRow("App ID", config.AppId);
-        table.AddRow("API Key", maskedKey);
         table.AddRow("Resource", config.ResourceName ?? "[dim]not set[/]");
+        table.AddRow("Subscription", config.SubscriptionId ?? "[dim]not set[/]");
+        table.AddRow("Auth", "[dim]Azure AD (via pks foundry)[/]");
         table.AddRow("Configured At", config.RegisteredAt == DateTime.MinValue
             ? "[dim]unknown[/]"
             : config.RegisteredAt.ToString("yyyy-MM-dd HH:mm") + " UTC");

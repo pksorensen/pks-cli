@@ -6,15 +6,15 @@ public interface IAppInsightsConfigService
 {
     Task<bool> IsConfiguredAsync();
     Task<AppInsightsConfig?> GetConfigAsync();
-    Task StoreConfigAsync(string appId, string apiKey, string? resourceName);
+    Task StoreConfigAsync(string appId, string? resourceName, string? subscriptionId);
     Task ClearConfigAsync();
 }
 
 public class AppInsightsConfigService : IAppInsightsConfigService
 {
     private const string KeyAppId = "appinsights.app_id";
-    private const string KeyApiKey = "appinsights.api_key";
     private const string KeyResourceName = "appinsights.resource_name";
+    private const string KeySubscriptionId = "appinsights.subscription_id";
     private const string KeyRegisteredAt = "appinsights.registered_at";
 
     private readonly IConfigurationService _config;
@@ -27,8 +27,7 @@ public class AppInsightsConfigService : IAppInsightsConfigService
     public async Task<bool> IsConfiguredAsync()
     {
         var appId = await _config.GetAsync(KeyAppId);
-        var apiKey = await _config.GetAsync(KeyApiKey);
-        return !string.IsNullOrWhiteSpace(appId) && !string.IsNullOrWhiteSpace(apiKey);
+        return !string.IsNullOrWhiteSpace(appId);
     }
 
     public async Task<AppInsightsConfig?> GetConfigAsync()
@@ -40,26 +39,26 @@ public class AppInsightsConfigService : IAppInsightsConfigService
         return new AppInsightsConfig
         {
             AppId = appId,
-            ApiKey = await _config.GetAsync(KeyApiKey) ?? string.Empty,
             ResourceName = await _config.GetAsync(KeyResourceName),
+            SubscriptionId = await _config.GetAsync(KeySubscriptionId),
             RegisteredAt = DateTime.TryParse(
                 await _config.GetAsync(KeyRegisteredAt), out var dt) ? dt : DateTime.MinValue
         };
     }
 
-    public async Task StoreConfigAsync(string appId, string apiKey, string? resourceName)
+    public async Task StoreConfigAsync(string appId, string? resourceName, string? subscriptionId)
     {
         await _config.SetAsync(KeyAppId, appId, global: true);
-        await _config.SetAsync(KeyApiKey, apiKey, global: true);
         await _config.SetAsync(KeyResourceName, resourceName ?? string.Empty, global: true);
+        await _config.SetAsync(KeySubscriptionId, subscriptionId ?? string.Empty, global: true);
         await _config.SetAsync(KeyRegisteredAt, DateTime.UtcNow.ToString("O"), global: true);
     }
 
     public async Task ClearConfigAsync()
     {
         await _config.DeleteAsync(KeyAppId);
-        await _config.DeleteAsync(KeyApiKey);
         await _config.DeleteAsync(KeyResourceName);
+        await _config.DeleteAsync(KeySubscriptionId);
         await _config.DeleteAsync(KeyRegisteredAt);
     }
 }

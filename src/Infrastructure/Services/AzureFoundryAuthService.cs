@@ -19,6 +19,7 @@ public interface IAzureFoundryAuthService
     Task<string?> GetAccessTokenAsync(string scope, CancellationToken cancellationToken = default);
     Task<List<AzureSubscription>> ListSubscriptionsAsync(string accessToken, CancellationToken cancellationToken = default);
     Task<List<CognitiveServicesAccount>> ListFoundryResourcesAsync(string accessToken, string subscriptionId, CancellationToken cancellationToken = default);
+    Task<List<AppInsightsComponent>> ListAppInsightsResourcesAsync(string accessToken, string subscriptionId, CancellationToken cancellationToken = default);
     Task<List<FoundryDeployment>> ListDeploymentsAsync(string accessToken, string subscriptionId, string resourceGroup, string accountName, CancellationToken cancellationToken = default);
     Task<bool> IsAuthenticatedAsync();
     Task<FoundryStoredCredentials?> GetStoredCredentialsAsync();
@@ -244,6 +245,20 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
             a.Kind.Contains("AIServices", StringComparison.OrdinalIgnoreCase) ||
             a.Properties.Endpoint.Contains(".services.ai.azure.com", StringComparison.OrdinalIgnoreCase)
         ).ToList();
+    }
+
+    public async Task<List<AppInsightsComponent>> ListAppInsightsResourcesAsync(string accessToken, string subscriptionId, CancellationToken cancellationToken = default)
+    {
+        var url = $"https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.Insights/components?api-version=2020-02-02";
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+
+        var response = await _httpClient.SendAsync(request, cancellationToken);
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var result = JsonSerializer.Deserialize<AppInsightsComponentListResponse>(content);
+        return result?.Value ?? new List<AppInsightsComponent>();
     }
 
     public async Task<List<FoundryDeployment>> ListDeploymentsAsync(string accessToken, string subscriptionId, string resourceGroup, string accountName, CancellationToken cancellationToken = default)

@@ -1,11 +1,44 @@
+using System.Text.Json.Serialization;
+
 namespace PKS.Infrastructure.Services.Models;
 
 public class AppInsightsConfig
 {
     public string AppId { get; set; } = string.Empty;
-    public string ApiKey { get; set; } = string.Empty;
     public string? ResourceName { get; set; }
+    public string? SubscriptionId { get; set; }
     public DateTime RegisteredAt { get; set; }
+}
+
+// ARM resource models for Microsoft.Insights/components
+public class AppInsightsComponent
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("location")]
+    public string Location { get; set; } = string.Empty;
+
+    [JsonPropertyName("properties")]
+    public AppInsightsComponentProperties Properties { get; set; } = new();
+}
+
+public class AppInsightsComponentProperties
+{
+    [JsonPropertyName("AppId")]
+    public string AppId { get; set; } = string.Empty;
+
+    [JsonPropertyName("ApplicationType")]
+    public string ApplicationType { get; set; } = string.Empty;
+}
+
+public class AppInsightsComponentListResponse
+{
+    [JsonPropertyName("value")]
+    public List<AppInsightsComponent> Value { get; set; } = new();
 }
 
 public class AppInsightsConnectionResult

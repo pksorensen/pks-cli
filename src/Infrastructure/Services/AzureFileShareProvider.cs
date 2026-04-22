@@ -4,6 +4,8 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Azure.Core;
+using Azure.Core.Pipeline;
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
@@ -239,9 +241,12 @@ public class AzureFileShareProvider : IFileShareProvider
         try
         {
             var credential = new BearerTokenCredential(storageToken);
+            var shareOptions = new Azure.Storage.Files.Shares.ShareClientOptions();
+            shareOptions.AddPolicy(new FileRequestIntentPolicy(), HttpPipelinePosition.PerCall);
             var shareClient = new Azure.Storage.Files.Shares.ShareClient(
                 new Uri($"https://{request.AccountName}.file.core.windows.net/{request.ResourceName}"),
-                credential);
+                credential,
+                shareOptions);
 
             if (request.Direction is SyncDirection.Download or SyncDirection.Bidirectional)
                 await DownloadDirectoryAsync(shareClient.GetRootDirectoryClient(), request.LocalDirectory, request, result, progress, ct);
@@ -660,6 +665,26 @@ public class AzureFileShareProvider : IFileShareProvider
         {
             var dirName = Path.GetFileName(subDir);
             await UploadDirectoryAsync(remoteDir.GetSubdirectoryClient(dirName), subDir, request, result, progress, ct);
+        }
+    }
+
+    // ── Azure File Share pipeline policies ─────────────────────────────────
+
+    // Azure requires x-ms-file-request-intent: backup when using OAuth (bearer token) auth
+    private sealed class FileRequestIntentPolicy : HttpPipelinePolicy
+    {
+        public override void Process(HttpMessage message, ReadOnlyMemory<HttpPipelinePolicy> pipeline)
+        {
+            if (!message.Request.Headers.Contains("x-ms-file-request-intent"))
+                message.Request.Headers.Add("x-ms-file-request-intent", "backup");
+            ProcessNext(message, pipeline);
+        }
+
+        public override ValueTask ProcessAsync(HttpMessage message, ReadOnlyMemory<HttpPipelinePolicy> pipeline)
+        {
+            if (!message.Request.Headers.Contains("x-ms-file-request-intent"))
+                message.Request.Headers.Add("x-ms-file-request-intent", "backup");
+            return ProcessNextAsync(message, pipeline);
         }
     }
 

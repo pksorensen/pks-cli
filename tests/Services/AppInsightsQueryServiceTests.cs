@@ -18,10 +18,17 @@ public class AppInsightsQueryServiceTests
             mock.Setup(m => m.GetConfigAsync()).ReturnsAsync(new AppInsightsConfig
             {
                 AppId = "test-app-id",
-                ApiKey = "test-api-key",
                 ResourceName = "Test Resource"
             });
         }
+        return mock;
+    }
+
+    private static Mock<IAzureFoundryAuthService> CreateAuthMock(string? token = "test-bearer-token")
+    {
+        var mock = new Mock<IAzureFoundryAuthService>();
+        mock.Setup(m => m.GetAccessTokenAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(token);
         return mock;
     }
 
@@ -39,11 +46,13 @@ public class AppInsightsQueryServiceTests
 
     private static AppInsightsQueryService CreateService(
         Mock<IAppInsightsConfigService>? configMock = null,
-        Mock<IAppInsightsHttpAdapter>? httpMock = null)
+        Mock<IAppInsightsHttpAdapter>? httpMock = null,
+        Mock<IAzureFoundryAuthService>? authMock = null)
     {
         return new AppInsightsQueryService(
             (configMock ?? CreateConfigMock()).Object,
-            (httpMock ?? CreateHttpMock()).Object);
+            (httpMock ?? CreateHttpMock()).Object,
+            (authMock ?? CreateAuthMock()).Object);
     }
 
     // Helper to build a mock AppInsightsQueryResponse with given rows
