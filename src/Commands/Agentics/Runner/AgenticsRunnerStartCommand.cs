@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.AgenticsProxy;
 using PKS.Infrastructure.Services.Models;
 using PKS.Infrastructure.Services.Runner;
 using Spectre.Console;
@@ -21,6 +22,8 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
     private readonly IDevcontainerSpawnerService _spawnerService;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IGitHubAuthenticationService _githubAuth;
+    private readonly IAzureFoundryAuthService _foundryAuthService;
+    private readonly AzureFoundryAuthConfig _foundryConfig;
     private readonly IAnsiConsole _console;
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
@@ -99,12 +102,16 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         IDevcontainerSpawnerService spawnerService,
         IHttpClientFactory httpClientFactory,
         IGitHubAuthenticationService githubAuth,
+        IAzureFoundryAuthService foundryAuthService,
+        AzureFoundryAuthConfig foundryConfig,
         IAnsiConsole console)
     {
         _configService = configService ?? throw new ArgumentNullException(nameof(configService));
         _spawnerService = spawnerService ?? throw new ArgumentNullException(nameof(spawnerService));
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _githubAuth = githubAuth ?? throw new ArgumentNullException(nameof(githubAuth));
+        _foundryAuthService = foundryAuthService ?? throw new ArgumentNullException(nameof(foundryAuthService));
+        _foundryConfig = foundryConfig ?? throw new ArgumentNullException(nameof(foundryConfig));
         _console = console ?? throw new ArgumentNullException(nameof(console));
     }
 
@@ -609,6 +616,12 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         GitCredentialServer credentialServer,
         CancellationToken ct)
     {
+        // Start AgenticsProxy for the duration of this job so the container can reach external APIs
+        // via a credential-injecting proxy. Containers use host.docker.internal to reach runner localhost.
+        var agenticsProxyOptions = await BuildAgenticsProxyOptionsAsync(job, ct);
+        await using var agenticsProxy = await AgenticsProxy.StartAsync(agenticsProxyOptions, _foundryAuthService, createSocket: true, ct: ct);
+        _console.MarkupLine($"[dim]AgenticsProxy listening on port {agenticsProxy.Port} ({agenticsProxyOptions.AllowedHosts.Count} allowed host(s))[/]");
+
         using var client = _httpClientFactory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", registration.Token);
@@ -635,6 +648,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         // 2. Check for a warm container via Docker labels (survives pks-cli restarts)
         var storedToken = await _githubAuth.GetStoredTokenAsync();
         var spawnOptions = BuildSpawnOptions(job, credentialServer.SocketPath, registration, storedToken?.AccessToken);
+        spawnOptions.AgenticsProxySocketDir = agenticsProxy.SocketDir;
 
         // Patch claude config volume to a stable name so credentials persist across container respawns
         spawnOptions.InlineDevcontainerFiles = PatchDevcontainerVolumes(
@@ -749,6 +763,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         await _spawnerService.ExecInContainerAsync(containerId,
             $"bash -c 'mkdir -p {vibecastHome}'",
             timeoutSeconds: 30);
+
         if (!string.IsNullOrEmpty(jobPrompt))
         {
             var promptB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(jobPrompt));
@@ -842,6 +857,10 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             scriptLines.AppendLine($"export VIBECAST_EXTRA_PLUGINS=\"{string.Join(":", pluginContainerPaths)}\"");
         }
 
+        // AgenticsProxy socket (bind-mounted from host): agents use curl --unix-socket to reach proxy
+        scriptLines.AppendLine("export AGENTICS_PROXY_SOCKET=/var/run/pks-agentics/proxy.sock");
+        scriptLines.AppendLine($"export AGENTICS_PROXY_TOKEN=\"{agenticsProxyOptions.BootstrapToken}\"");
+
         // Propagate W3C trace context for log correlation with the server-side trace.
         if (!string.IsNullOrEmpty(job.AgentDef?.Traceparent))
         {
@@ -874,6 +893,10 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         {
             scriptLines.AppendLine($"export BROADCAST_ID={job.AgentDef.BroadcastId}");
         }
+
+        // AgenticsProxy: containers use host.docker.internal to reach runner's localhost
+        scriptLines.AppendLine($"export AGENTICS_PROXY_URL=http://host.docker.internal:{agenticsProxy.Port}");
+        scriptLines.AppendLine($"export AGENTICS_PROXY_TOKEN={agenticsProxyOptions.BootstrapToken}");
 
         var gitUserName  = settings.GitUserName  ?? "si-14x";
         var gitUserEmail = settings.GitUserEmail ?? "si-14x@agentics.dk";
@@ -1705,6 +1728,13 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             // (for per-project analysis via /api/otel). Resource attrs are injected via
             // OTEL_RESOURCE_ATTRIBUTES so vibecast spans are correlated to this job.
             await using var otlpProxy = OtlpProxy.Start(analysisBaseUrl: agenticsBaseUrl);
+
+            var agenticsProxyOptions = await BuildAgenticsProxyOptionsAsync(job, ct);
+            await using var agenticsProxy = await AgenticsProxy.StartAsync(agenticsProxyOptions, _foundryAuthService, ct: ct);
+            var agenticsProxyEnv = $" AGENTICS_PROXY_URL=\"http://localhost:{agenticsProxy.Port}\""
+                                 + $" AGENTICS_PROXY_TOKEN=\"{agenticsProxyOptions.BootstrapToken}\"";
+            _console.MarkupLine($"[dim]AgenticsProxy listening on port {agenticsProxy.Port} ({agenticsProxyOptions.AllowedHosts.Count} allowed host(s))[/]");
+
             var resourceAttrs = $"job.id={job.Id},run.id={runId}";
             if (!string.IsNullOrEmpty(job.AgentDef?.TaskId))
                 resourceAttrs += $",task.id={job.AgentDef.TaskId}";
@@ -1779,12 +1809,17 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
             // In-process mode: the runner runs on the same machine as the developer's host Aspire
             // session. Warn Claude so it verifies before killing any aspire/system process.
+            // Also warn about the DOTNET_RESOURCE_SERVICE_ENDPOINT_URL port (22057) that the host
+            // session reserves — new AppHost projects must override this in launchSettings.json.
             appendPrompt = "⚠️  IN-PROCESS ENVIRONMENT: This job runs on the same machine as the developer's " +
                            "host Aspire session (Next.js, ws-relay, Keycloak, etc. are already running). " +
                            "Before using pkill, aspire stop, or similar commands: verify the target process " +
                            "belongs to your job (check PIDs, cwd, or session names). " +
                            "When starting Aspire in this job, always use `aspire run --isolated` to avoid " +
-                           "port conflicts with the host session.\n\n" +
+                           "port conflicts with the host session. " +
+                           "IMPORTANT: the host session reserves port 22057 via DOTNET_RESOURCE_SERVICE_ENDPOINT_URL. " +
+                           "If you create a new AppHost project, override this in launchSettings.json — " +
+                           "e.g. set DOTNET_RESOURCE_SERVICE_ENDPOINT_URL=https://localhost:28057.\n\n" +
                            appendPrompt;
             // Inherit VIBECAST_KEYBOARD_PIN from environment if set
             var keyboardPin = Environment.GetEnvironmentVariable("VIBECAST_KEYBOARD_PIN");
@@ -1918,6 +1953,20 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
                 ? " VIBECAST_AUTO_APPROVE_IMAGES=1"
                 : "";
 
+            // Operator: disable Claude Code background tasks to prevent subagent stalling
+            var disableBackgroundTasksEnv = job.AgentDef?.OperatorConfig?.DisableBackgroundTasks == true
+                ? " CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1"
+                : "";
+
+            // SubagentStart hook: inject additionalContext into every spawned subagent
+            var subagentSuffixEnv = "";
+            if (!string.IsNullOrWhiteSpace(job.AgentDef?.SubagentPromptAppendix))
+            {
+                var suffixFile = Path.Combine(vibecastHome, "subagent-prompt-suffix.txt");
+                await File.WriteAllTextAsync(suffixFile, job.AgentDef.SubagentPromptAppendix, ct);
+                subagentSuffixEnv = $" SUBAGENT_PROMPT_SUFFIX_FILE={suffixFile}";
+            }
+
             var broadcastIdEnv = !string.IsNullOrEmpty(job.AgentDef?.BroadcastId)
                 ? $" BROADCAST_ID={job.AgentDef.BroadcastId}"
                 : "";
@@ -1978,7 +2027,7 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             // The log is captured on timeout and included in the job PATCH logs field.
             var vibecastLogRedirect = $" > \"{vibecastLogFile}\" 2>&1";
 
-            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv}{autoApproveEnv}{broadcastIdEnv}{allowedDirsEnv}{claudeConfigDirEnv}{otelEnv} {vibecastBin}{vibecastLogRedirect}");
+            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv}{autoApproveEnv}{disableBackgroundTasksEnv}{subagentSuffixEnv}{broadcastIdEnv}{allowedDirsEnv}{claudeConfigDirEnv}{otelEnv}{agenticsProxyEnv} {vibecastBin}{vibecastLogRedirect}");
 
             var startProc = Process.Start(startPsi);
             if (startProc != null)
@@ -2395,6 +2444,31 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         {
             _console.MarkupLine($"[yellow]CLAUDE_CONFIG_DIR backup skipped: {ex.Message.EscapeMarkup()}[/]");
         }
+    }
+
+    private async Task<AgenticsProxyOptions> BuildAgenticsProxyOptionsAsync(RunnerJob job, CancellationToken ct)
+    {
+        var options = new AgenticsProxyOptions { JobId = job.Id };
+
+        if (!await _foundryAuthService.IsAuthenticatedAsync())
+            return options;
+
+        var creds = await _foundryAuthService.GetStoredCredentialsAsync();
+        if (creds?.SelectedResourceName is not { } resourceName)
+            return options;
+
+        var scope = _foundryConfig.CognitiveScope;
+        foreach (var host in new[]
+        {
+            $"{resourceName}.cognitiveservices.azure.com",
+            $"{resourceName}.services.ai.azure.com",
+            $"{resourceName}.openai.azure.com",
+        })
+        {
+            options.AllowedHosts[host] = new HostPolicy { TokenScope = scope };
+        }
+
+        return options;
     }
 
     private static string ResolveVibecastBinary(string? explicitPath)
@@ -3526,6 +3600,7 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         public string? Branch { get; set; }
         public string? Prompt { get; set; }
         public string? AppendSystemPrompt { get; set; }
+        public string? SubagentPromptAppendix { get; set; }
         public List<string> Labels { get; set; } = new();
         public string? TaskId { get; set; }
         public string? AssemblyLineId { get; set; }
@@ -3572,6 +3647,7 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
     private class RunnerOperatorConfig
     {
         public bool AutoApproveImageUploads { get; set; }
+        public bool DisableBackgroundTasks { get; set; }
     }
 
     private class PluginRef
