@@ -19,6 +19,9 @@ public interface IConfluenceService
     Task<bool> DeletePageAsync(string pageId);
     Task<string> UploadAttachmentAsync(string pageId, string filePath, string? comment = null);
 
+    /// <summary>Fetch all footer + inline comments on a page, including nested replies. Read-only.</summary>
+    Task<List<ConfluenceComment>> GetPageCommentsAsync(string pageId);
+
     Task<ConfluenceWorkspaceConfig?> LoadWorkspaceConfigAsync(string workingDir);
     Task SaveWorkspaceConfigAsync(string workingDir, ConfluenceWorkspaceConfig config);
 }

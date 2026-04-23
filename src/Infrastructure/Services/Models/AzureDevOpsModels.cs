@@ -8,8 +8,7 @@ namespace PKS.Infrastructure.Services.Models;
 public class AzureDevOpsAuthConfig
 {
     public string ClientId { get; set; } = "872cd9fa-d31f-45e0-9eab-6e460a02d1f1";
-    public string AuthorizeUrl { get; set; } = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
-    public string TokenUrl { get; set; } = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
+    public string AuthorityBase { get; set; } = "https://login.microsoftonline.com";
     public string ProfileUrl { get; set; } = "https://app.vssps.visualstudio.com/_apis/profile/profiles/me?api-version=7.1";
     public string AccountsUrl { get; set; } = "https://app.vssps.visualstudio.com/_apis/accounts?api-version=7.1";
     /// <summary>
@@ -18,6 +17,9 @@ public class AzureDevOpsAuthConfig
     /// </summary>
     public string Scope { get; set; } = "499b84ac-1321-427f-aa17-267ca6975798/.default offline_access";
     public int CallbackTimeoutSeconds { get; set; } = 120;
+
+    public string GetAuthorizeUrl(string tenantId) => $"{AuthorityBase}/{tenantId}/oauth2/v2.0/authorize";
+    public string GetTokenUrl(string tenantId) => $"{AuthorityBase}/{tenantId}/oauth2/v2.0/token";
 }
 
 /// <summary>
@@ -108,6 +110,7 @@ public class AdoStoredCredentials
 {
     public string RefreshToken { get; set; } = string.Empty;
     public string SelectedOrg { get; set; } = string.Empty;
+    public string TenantId { get; set; } = "common";
     public AdoUserProfile Profile { get; set; } = new();
     public DateTime CreatedAt { get; set; }
     public DateTime LastRefreshedAt { get; set; }

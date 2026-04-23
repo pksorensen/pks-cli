@@ -209,6 +209,42 @@ public class ConfluenceCommitCommand : Command<ConfluenceCommitCommand.Settings>
             {
                 var content = await File.ReadAllTextAsync(filePath);
                 var body = _converter.ExtractBody(content);
+
+                // Precheck: every non-URL image reference must resolve to a local file.
+                // If any are missing we abort this file's commit — otherwise Confluence
+                // would end up with <ac:image> tags pointing at attachments we never upload,
+                // producing "preview not available" placeholders.
+                var imageRefs = System.Text.RegularExpressions.Regex.Matches(body, @"!\[([^\]]*)\]\(([^)]+)\)");
+                var missingImages = new List<string>();
+                var resolvedImages = new Dictionary<string, string>();
+                foreach (System.Text.RegularExpressions.Match imgMatch in imageRefs)
+                {
+                    var imgPath = imgMatch.Groups[2].Value;
+                    if (imgPath.StartsWith("http://") || imgPath.StartsWith("https://"))
+                        continue;
+                    if (resolvedImages.ContainsKey(imgPath))
+                        continue;
+
+                    var resolved = ResolveImagePath(imgPath, filePath, workingDir, config.ConfigRoot);
+                    if (resolved == null)
+                        missingImages.Add(imgPath);
+                    else
+                        resolvedImages[imgPath] = resolved;
+                }
+
+                if (missingImages.Count > 0)
+                {
+                    var list = string.Join(", ", missingImages.Select(Markup.Escape));
+                    results.AddRow(Markup.Escape(frontmatter.Title),
+                        $"[red]Aborted — {missingImages.Count} image(s) not found: {list}[/]");
+                    _console.MarkupLine($"[red]Commit aborted for {Markup.Escape(frontmatter.Title)} — image(s) cannot be located:[/]");
+                    foreach (var m in missingImages)
+                        _console.MarkupLine($"[red]  · {Markup.Escape(m)}[/]");
+                    _console.MarkupLine($"[dim]  Searched: markdown dir, workspace ({Markup.Escape(workingDir)}), project root ({Markup.Escape(config.ConfigRoot)})[/]");
+                    _console.MarkupLine("[dim]  Fix the path (relative to project root) or copy the file into _pending/ before committing.[/]");
+                    continue;
+                }
+
                 var storageHtml = _converter.MarkdownToStorage(body);
 
                 ConfluencePage updatedPage = null!;
@@ -253,36 +289,18 @@ public class ConfluenceCommitCommand : Command<ConfluenceCommitCommand.Settings>
                         }
                     });
 
-                // Upload local image attachments referenced in the markdown
+                // Upload local image attachments referenced in the markdown.
+                // All paths were validated in the precheck above, so every entry in
+                // resolvedImages exists on disk.
                 var pageId = updatedPage.Id;
-                var imageRefs = System.Text.RegularExpressions.Regex.Matches(body, @"!\[([^\]]*)\]\(([^)]+)\)");
-                foreach (System.Text.RegularExpressions.Match imgMatch in imageRefs)
+                foreach (var (_, resolvedPath) in resolvedImages)
                 {
-                    var imgPath = imgMatch.Groups[2].Value;
-                    if (imgPath.StartsWith("http://") || imgPath.StartsWith("https://"))
-                        continue;
-
-                    // Resolve relative to the markdown file's directory, then fall back to project root
-                    var resolvedPath = Path.Combine(Path.GetDirectoryName(filePath)!, imgPath);
-                    if (!File.Exists(resolvedPath))
-                        resolvedPath = Path.Combine(workingDir, imgPath);
-                    if (!File.Exists(resolvedPath))
-                    {
-                        // Try common locations
-                        var projectRoot = Path.GetDirectoryName(workingDir);
-                        if (projectRoot != null)
-                            resolvedPath = Path.Combine(projectRoot, imgPath);
-                    }
-
-                    if (File.Exists(resolvedPath))
-                    {
-                        await _console.Status()
-                            .Spinner(Spinner.Known.Dots)
-                            .StartAsync($"[cyan]Uploading {Path.GetFileName(resolvedPath)}...[/]", async _ =>
-                            {
-                                await _confluenceService.UploadAttachmentAsync(pageId, resolvedPath);
-                            });
-                    }
+                    await _console.Status()
+                        .Spinner(Spinner.Known.Dots)
+                        .StartAsync($"[cyan]Uploading {Path.GetFileName(resolvedPath)}...[/]", async _ =>
+                        {
+                            await _confluenceService.UploadAttachmentAsync(pageId, resolvedPath);
+                        });
                 }
 
                 // Track created page ID for pending: parent resolution by child pages
@@ -406,6 +424,20 @@ public class ConfluenceCommitCommand : Command<ConfluenceCommitCommand.Settings>
 
                 Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
                 await File.WriteAllTextAsync(fullPath, markdown);
+
+                try
+                {
+                    var sidecarPath = Path.Combine(workingDir, relativePath, ConfluenceCommentsWriter.FullSyncFilename);
+                    var pageComments = await _confluenceService.GetPageCommentsAsync(page.Id);
+                    await ConfluenceCommentsWriter.WriteSidecarAsync(
+                        sidecarPath, page.Id, page.Title,
+                        page.Space?.Key ?? config.SpaceKey, config.SiteUrl,
+                        pageComments, now);
+                }
+                catch
+                {
+                    // Comments are best-effort during resync; page markdown already wrote successfully.
+                }
             }
 
             RunGit(workingDir, "add -A");
@@ -416,6 +448,32 @@ public class ConfluenceCommitCommand : Command<ConfluenceCommitCommand.Settings>
         {
             _console.MarkupLine($"[yellow]Resync failed: {Markup.Escape(ex.Message)}[/]");
         }
+    }
+
+    /// <summary>
+    /// Resolves an image path from a markdown file, in order:
+    /// absolute path → sibling of the markdown file → workspace root → project root (dir containing <c>.confluence/</c>).
+    /// Returns null if the image can't be located.
+    /// </summary>
+    internal static string? ResolveImagePath(string imgPath, string markdownFilePath, string workingDir, string configRoot)
+    {
+        if (Path.IsPathRooted(imgPath) && File.Exists(imgPath))
+            return imgPath;
+
+        var candidates = new List<string>
+        {
+            Path.Combine(Path.GetDirectoryName(markdownFilePath)!, imgPath),
+            Path.Combine(workingDir, imgPath)
+        };
+        if (!string.IsNullOrEmpty(configRoot))
+            candidates.Add(Path.Combine(configRoot, imgPath));
+
+        foreach (var candidate in candidates)
+        {
+            if (File.Exists(candidate))
+                return Path.GetFullPath(candidate);
+        }
+        return null;
     }
 
     private static string EscapeGitMessage(string message)

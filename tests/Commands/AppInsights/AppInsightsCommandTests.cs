@@ -62,10 +62,10 @@ public class AppInsightsCommandTests
             .Returns(Task.CompletedTask);
 
         if (initLoginException is not null)
-            authMock.Setup(m => m.InitiateLoginAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            authMock.Setup(m => m.InitiateLoginAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
                 .ThrowsAsync(initLoginException);
         else
-            authMock.Setup(m => m.InitiateLoginAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            authMock.Setup(m => m.InitiateLoginAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(authResult ?? new FoundryAuthResult { RefreshToken = "refresh-tok" });
 
         authMock.Setup(m => m.ListSubscriptionsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -157,7 +157,7 @@ public class AppInsightsCommandTests
         var result = cmd.Execute(CreateContext("init"), new AppInsightsInitCommand.Settings { TenantId = "common" });
 
         result.Should().Be(0);
-        authMock.Verify(m => m.InitiateLoginAsync("common", It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
+        authMock.Verify(m => m.InitiateLoginAsync("common", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
         authMock.Verify(m => m.StoreCredentialsAsync(It.IsAny<FoundryStoredCredentials>()), Times.Once);
     }
 

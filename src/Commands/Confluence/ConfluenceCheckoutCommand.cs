@@ -36,6 +36,10 @@ public class ConfluenceCheckoutCommand : Command<ConfluenceCheckoutCommand.Setti
         [CommandOption("--parent|-p")]
         [Description("Parent page ID when creating a new page (defaults to root page)")]
         public string? ParentId { get; set; }
+
+        [CommandOption("--no-comments")]
+        [Description("Skip fetching Confluence comments as sidecar files")]
+        public bool NoComments { get; set; }
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -45,6 +49,9 @@ public class ConfluenceCheckoutCommand : Command<ConfluenceCheckoutCommand.Setti
 
     private async Task<int> ExecuteAsync(Settings settings)
     {
+        if (settings.Debug && _confluenceService is ConfluenceService svc)
+            svc.DebugWriter = msg => _console.MarkupLine(msg);
+
         var config = await _confluenceService.LoadWorkspaceConfigAsync(Directory.GetCurrentDirectory());
         if (config == null)
         {
@@ -67,13 +74,13 @@ public class ConfluenceCheckoutCommand : Command<ConfluenceCheckoutCommand.Setti
         }
 
         if (string.IsNullOrEmpty(settings.Page))
-            return await FullCheckout(workingDir, config);
+            return await FullCheckout(workingDir, config, settings.NoComments);
         else
             return await SingleCheckout(workingDir, config, settings);
     }
 
     /// <summary>Full sync: fetch entire page tree and write to folder hierarchy.</summary>
-    private async Task<int> FullCheckout(string workingDir, ConfluenceWorkspaceConfig config)
+    private async Task<int> FullCheckout(string workingDir, ConfluenceWorkspaceConfig config, bool noComments)
     {
         if (string.IsNullOrEmpty(config.RootPageId))
         {
@@ -142,6 +149,25 @@ public class ConfluenceCheckoutCommand : Command<ConfluenceCheckoutCommand.Setti
             Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
             await File.WriteAllTextAsync(fullPath, markdown);
             writtenFiles.Add(relativePath + "/index.md");
+
+            if (!noComments)
+            {
+                var sidecarPath = Path.Combine(workingDir, relativePath, ConfluenceCommentsWriter.FullSyncFilename);
+                try
+                {
+                    var pageComments = await _confluenceService.GetPageCommentsAsync(page.Id);
+                    await ConfluenceCommentsWriter.WriteSidecarAsync(
+                        sidecarPath, page.Id, page.Title,
+                        page.Space?.Key ?? config.SpaceKey, config.SiteUrl,
+                        pageComments, now);
+                    if (pageComments.Count > 0)
+                        writtenFiles.Add(relativePath + "/" + ConfluenceCommentsWriter.FullSyncFilename);
+                }
+                catch (Exception ex)
+                {
+                    _console.MarkupLine($"[yellow]Comments fetch failed for {Markup.Escape(page.Title)}: {Markup.Escape(ex.Message)}[/]");
+                }
+            }
         }
 
         // Git commit
@@ -279,11 +305,49 @@ public class ConfluenceCheckoutCommand : Command<ConfluenceCheckoutCommand.Setti
 
         await File.WriteAllTextAsync(filePath, markdown);
 
+        // Comments live next to the synced page in the workspace hierarchy
+        // (never in _pending/ — that folder is for files going OUT to Confluence).
+        string? sidecarRelative = null;
+        var commentCount = 0;
+        if (!settings.NoComments)
+        {
+            try
+            {
+                var pageComments = await _confluenceService.GetPageCommentsAsync(page.Id);
+                commentCount = pageComments.Count;
+
+                var hierarchySegments = new List<string>();
+                foreach (var ancestor in page.Ancestors)
+                {
+                    if (ancestor.Id == config.RootPageId)
+                        continue;
+                    hierarchySegments.Add(Slugify(ancestor.Title));
+                }
+                hierarchySegments.Add(Slugify(page.Title));
+                var hierarchyRelative = Path.Combine(hierarchySegments.ToArray());
+                var sidecarAbsolute = Path.Combine(workingDir, hierarchyRelative, ConfluenceCommentsWriter.FullSyncFilename);
+                sidecarRelative = Path.Combine(hierarchyRelative, ConfluenceCommentsWriter.FullSyncFilename);
+
+                await ConfluenceCommentsWriter.WriteSidecarAsync(
+                    sidecarAbsolute, page.Id, page.Title,
+                    page.Space?.Key ?? config.SpaceKey, config.SiteUrl,
+                    pageComments, DateTime.UtcNow);
+            }
+            catch (Exception ex)
+            {
+                _console.MarkupLine($"[yellow]Comments fetch failed: {Markup.Escape(ex.Message)}[/]");
+            }
+        }
+
         // Git add + commit so edits show as diff
         RunGit(workingDir, $"add \"{Path.Combine("_pending", filename)}\"");
+        if (sidecarRelative != null && File.Exists(Path.Combine(workingDir, sidecarRelative)))
+            RunGit(workingDir, $"add \"{sidecarRelative}\"");
         RunGit(workingDir, $"commit -m \"checkout: {EscapeGitMessage(page.Title)} checked out for editing\"");
 
         _console.MarkupLine($"[green]Checked out to:[/] _pending/{Markup.Escape(filename)}");
+        if (commentCount > 0 && sidecarRelative != null)
+            _console.MarkupLine($"[dim]Refreshed {commentCount} comment thread(s) → {Markup.Escape(sidecarRelative)} (read-only, not synced back)[/]");
         _console.MarkupLine("[dim]Edit the file, then run [bold]pks confluence commit[/] to push changes back.[/]");
 
         return 0;

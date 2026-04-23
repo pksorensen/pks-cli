@@ -253,14 +253,14 @@ public class FoundryInitCommandTests
         var settings = new FoundryInitCommand.Settings { Force = true };
 
         // Setup InitiateLoginAsync to throw so we can verify it was called
-        authMock.Setup(x => x.InitiateLoginAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+        authMock.Setup(x => x.InitiateLoginAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Login attempted"));
 
         // Act
         var result = command.Execute(null!, settings);
 
         // Assert — InitiateLoginAsync was called (force bypasses the already-authenticated check)
-        authMock.Verify(x => x.InitiateLoginAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
+        authMock.Verify(x => x.InitiateLoginAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
 
         // The command returns 1 because the login threw an exception
         result.Should().Be(1);
@@ -285,7 +285,7 @@ public class FoundryInitCommandTests
             .ReturnsAsync("discovered-tenant-id");
 
         // Setup InitiateLoginAsync to throw so we can verify the tenant that was passed
-        authMock.Setup(x => x.InitiateLoginAsync("discovered-tenant-id", It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+        authMock.Setup(x => x.InitiateLoginAsync("discovered-tenant-id", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Login attempted"));
 
         // Act
@@ -293,7 +293,7 @@ public class FoundryInitCommandTests
 
         // Assert — InitiateLoginAsync was called with the discovered tenant
         authMock.Verify(x => x.DiscoverTenantAsync("user@contoso.com", It.IsAny<CancellationToken>()), Times.Once);
-        authMock.Verify(x => x.InitiateLoginAsync("discovered-tenant-id", It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
+        authMock.Verify(x => x.InitiateLoginAsync("discovered-tenant-id", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
 
         var output = console.Output;
         output.Should().Contain("Found tenant");
@@ -312,7 +312,7 @@ public class FoundryInitCommandTests
         var command = new FoundryInitCommand(authMock.Object, config, console);
         var settings = new FoundryInitCommand.Settings();
 
-        authMock.Setup(x => x.InitiateLoginAsync("common", It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+        authMock.Setup(x => x.InitiateLoginAsync("common", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Login attempted"));
 
         // Act
@@ -320,7 +320,7 @@ public class FoundryInitCommandTests
 
         // Assert — uses "common" tenant, no discovery call
         authMock.Verify(x => x.DiscoverTenantAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
-        authMock.Verify(x => x.InitiateLoginAsync("common", It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
+        authMock.Verify(x => x.InitiateLoginAsync("common", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -334,7 +334,7 @@ public class FoundryInitCommandTests
         var command = new FoundryInitCommand(authMock.Object, config, console);
         var settings = new FoundryInitCommand.Settings { TenantId = "explicit-tenant" };
 
-        authMock.Setup(x => x.InitiateLoginAsync("explicit-tenant", It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+        authMock.Setup(x => x.InitiateLoginAsync("explicit-tenant", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Login attempted"));
 
         // Act
@@ -342,6 +342,6 @@ public class FoundryInitCommandTests
 
         // Assert — uses explicit tenant, no discovery, no prompt
         authMock.Verify(x => x.DiscoverTenantAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
-        authMock.Verify(x => x.InitiateLoginAsync("explicit-tenant", It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
+        authMock.Verify(x => x.InitiateLoginAsync("explicit-tenant", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 }

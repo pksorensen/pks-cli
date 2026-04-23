@@ -49,13 +49,20 @@ public class AppInsightsInitCommand : Command<AppInsightsInitCommand.Settings>
             return 0;
         }
 
+        if (settings.Force)
+            await _authService.ClearCredentialsAsync();
+
+        string? managementToken = null;
         if (!await _authService.IsAuthenticatedAsync())
         {
             var authResult = await AuthenticateAsync(settings.TenantId);
             if (authResult is null) return 1;
+            managementToken = authResult.AccessToken;
         }
 
-        var managementToken = await _authService.GetAccessTokenAsync("https://management.azure.com/.default");
+        if (string.IsNullOrEmpty(managementToken))
+            managementToken = await _authService.GetAccessTokenAsync("https://management.azure.com/.default");
+
         if (string.IsNullOrEmpty(managementToken))
         {
             _console.MarkupLine("[red]Failed to obtain Azure management token.[/]");
@@ -134,22 +141,27 @@ public class AppInsightsInitCommand : Command<AppInsightsInitCommand.Settings>
         }
         else
         {
-            var email = _console.Prompt(
-                new TextPrompt<string>("[cyan]Enter your email address[/] [dim](or press Enter to sign in with 'common' tenant)[/]:")
+            var input = _console.Prompt(
+                new TextPrompt<string>("[cyan]Enter your email or tenant ID[/] [dim](or press Enter to sign in with 'common' tenant)[/]:")
                     .AllowEmpty());
 
-            if (!string.IsNullOrWhiteSpace(email))
+            if (string.IsNullOrWhiteSpace(input))
             {
-                loginHint = email.Trim();
+                tenantId = "common";
+            }
+            else if (Guid.TryParse(input.Trim(), out _))
+            {
+                tenantId = input.Trim();
+                _console.MarkupLine($"[dim]Tenant: [bold]{tenantId.EscapeMarkup()}[/][/]");
+            }
+            else
+            {
+                loginHint = input.Trim();
                 _console.MarkupLine("[dim]Discovering tenant...[/]");
                 var discovered = await _authService.DiscoverTenantAsync(loginHint);
                 tenantId = string.IsNullOrEmpty(discovered) ? "common" : discovered;
                 if (!string.IsNullOrEmpty(discovered))
                     _console.MarkupLine($"[dim]Tenant: [bold]{tenantId.EscapeMarkup()}[/][/]");
-            }
-            else
-            {
-                tenantId = "common";
             }
         }
 
@@ -159,7 +171,10 @@ public class AppInsightsInitCommand : Command<AppInsightsInitCommand.Settings>
 
         try
         {
-            var result = await _authService.InitiateLoginAsync(tenantId, loginHint);
+            var result = await _authService.InitiateLoginAsync(
+                tenantId,
+                loginHint,
+                scopeOverride: "https://management.azure.com/.default offline_access");
             await _authService.StoreCredentialsAsync(new FoundryStoredCredentials
             {
                 TenantId = tenantId,

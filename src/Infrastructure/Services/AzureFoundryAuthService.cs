@@ -15,7 +15,7 @@ namespace PKS.Infrastructure.Services;
 public interface IAzureFoundryAuthService
 {
     Task<string?> DiscoverTenantAsync(string email, CancellationToken cancellationToken = default);
-    Task<FoundryAuthResult> InitiateLoginAsync(string tenantId, string? loginHint = null, CancellationToken cancellationToken = default);
+    Task<FoundryAuthResult> InitiateLoginAsync(string tenantId, string? loginHint = null, string? scopeOverride = null, CancellationToken cancellationToken = default);
     Task<string?> GetAccessTokenAsync(string scope, CancellationToken cancellationToken = default);
     Task<List<AzureSubscription>> ListSubscriptionsAsync(string accessToken, CancellationToken cancellationToken = default);
     Task<List<CognitiveServicesAccount>> ListFoundryResourcesAsync(string accessToken, string subscriptionId, CancellationToken cancellationToken = default);
@@ -111,8 +111,9 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
         }
     }
 
-    public async Task<FoundryAuthResult> InitiateLoginAsync(string tenantId, string? loginHint = null, CancellationToken cancellationToken = default)
+    public async Task<FoundryAuthResult> InitiateLoginAsync(string tenantId, string? loginHint = null, string? scopeOverride = null, CancellationToken cancellationToken = default)
     {
+        var scope = string.IsNullOrWhiteSpace(scopeOverride) ? _config.InitialScope : scopeOverride;
         var pkce = GeneratePkce();
         var state = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         var port = GetFreePort();
@@ -122,7 +123,7 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
             $"?client_id={Uri.EscapeDataString(_config.ClientId)}" +
             $"&response_type=code" +
             $"&redirect_uri={Uri.EscapeDataString(redirectUri)}" +
-            $"&scope={Uri.EscapeDataString(_config.InitialScope)}" +
+            $"&scope={Uri.EscapeDataString(scope)}" +
             $"&state={Uri.EscapeDataString(state)}" +
             $"&code_challenge={Uri.EscapeDataString(pkce.CodeChallenge)}" +
             $"&code_challenge_method=S256" +
@@ -147,7 +148,7 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
         var code = await WaitForCallbackAsync(listener, state, cancellationToken);
 
         // Exchange code for tokens
-        var tokenResponse = await ExchangeCodeForTokensAsync(code, redirectUri, pkce.CodeVerifier, tenantId, cancellationToken);
+        var tokenResponse = await ExchangeCodeForTokensAsync(code, redirectUri, pkce.CodeVerifier, tenantId, scope, cancellationToken);
 
         return new FoundryAuthResult
         {
@@ -420,7 +421,7 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
     }
 
     private async Task<FoundryTokenResponse> ExchangeCodeForTokensAsync(
-        string code, string redirectUri, string codeVerifier, string tenantId, CancellationToken cancellationToken)
+        string code, string redirectUri, string codeVerifier, string tenantId, string scope, CancellationToken cancellationToken)
     {
         var requestBody = new FormUrlEncodedContent(new Dictionary<string, string>
         {
@@ -429,7 +430,7 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
             ["code"] = code,
             ["redirect_uri"] = redirectUri,
             ["code_verifier"] = codeVerifier,
-            ["scope"] = _config.InitialScope
+            ["scope"] = scope
         });
 
         var tokenUrl = _config.GetTokenUrl(tenantId);

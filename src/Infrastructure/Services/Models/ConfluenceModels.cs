@@ -9,6 +9,13 @@ public class ConfluenceWorkspaceConfig
     /// <summary>Relative path from config location to the workspace folder (e.g. "docs/confluence").</summary>
     public string WorkDir { get; set; } = "docs/confluence";
     public DateTime CreatedAt { get; set; }
+
+    /// <summary>
+    /// Absolute path to the directory containing <c>.confluence/config.json</c> (the project root).
+    /// Populated during <c>LoadWorkspaceConfigAsync</c>, never persisted.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string ConfigRoot { get; set; } = string.Empty;
 }
 
 /// <summary>YAML frontmatter metadata embedded in each synced markdown file</summary>
@@ -84,4 +91,23 @@ public class ConfluenceSpaceInfo
     public string Name { get; set; } = string.Empty;
     public string Type { get; set; } = string.Empty;
     public string? HomepageId { get; set; }
+}
+
+/// <summary>Page comment (footer or inline), including recursive replies.</summary>
+public class ConfluenceComment
+{
+    public string Id { get; set; } = string.Empty;
+    public string AuthorName { get; set; } = string.Empty;
+    public string? AuthorEmail { get; set; }
+    public DateTime Created { get; set; }
+    public DateTime? Updated { get; set; }
+    /// <summary>Confluence storage format HTML of the comment body.</summary>
+    public string BodyStorageHtml { get; set; } = string.Empty;
+    /// <summary>"inline" or "footer".</summary>
+    public string Location { get; set; } = "footer";
+    /// <summary>Selected text the inline comment is anchored to (null for footer comments).</summary>
+    public string? InlineSelection { get; set; }
+    /// <summary>"open", "resolved", "reopened", or "dangling" — or null if not an inline comment.</summary>
+    public string? ResolutionStatus { get; set; }
+    public List<ConfluenceComment> Replies { get; set; } = new();
 }

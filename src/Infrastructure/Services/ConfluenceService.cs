@@ -257,6 +257,13 @@ public class ConfluenceService : IConfluenceService
         var fileName = Path.GetFileName(filePath);
         var fileBytes = await File.ReadAllBytesAsync(filePath);
 
+        // Upsert semantics: POST /child/attachment fails 400 when a file with the
+        // same name already exists on the page (including empty placeholders left
+        // by a previous page update that referenced a <ac:image> before the data
+        // was uploaded). If one exists, target its /data endpoint to upload a new
+        // version instead.
+        var existingAttachmentId = await FindAttachmentIdByFilenameAsync(apiBase, credentials, pageId, fileName);
+
         using var content = new MultipartFormDataContent();
         var fileContent = new ByteArrayContent(fileBytes);
         fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(
@@ -267,8 +274,11 @@ public class ConfluenceService : IConfluenceService
         if (!string.IsNullOrEmpty(comment))
             content.Add(new StringContent(comment), "comment");
 
-        var request = new HttpRequestMessage(HttpMethod.Post,
-            $"{apiBase}/{pageId}/child/attachment")
+        var url = existingAttachmentId == null
+            ? $"{apiBase}/{pageId}/child/attachment"
+            : $"{apiBase}/{pageId}/child/attachment/{existingAttachmentId}/data";
+
+        var request = new HttpRequestMessage(HttpMethod.Post, url)
         {
             Content = content
         };
@@ -286,11 +296,72 @@ public class ConfluenceService : IConfluenceService
 
         var responseBody = await response.Content.ReadAsStringAsync();
         var doc = JsonDocument.Parse(responseBody);
-        var results = doc.RootElement.GetProperty("results");
-        if (results.GetArrayLength() > 0)
+
+        // Create returns { results: [...] }, update-data returns the attachment object directly.
+        if (doc.RootElement.TryGetProperty("results", out var results) && results.GetArrayLength() > 0)
             return results[0].GetProperty("title").GetString() ?? fileName;
+        if (doc.RootElement.TryGetProperty("title", out var titleProp))
+            return titleProp.GetString() ?? fileName;
 
         return fileName;
+    }
+
+    private async Task<string?> FindAttachmentIdByFilenameAsync(string apiBase, JiraStoredCredentials credentials, string pageId, string fileName)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get,
+            $"{apiBase}/{pageId}/child/attachment?filename={Uri.EscapeDataString(fileName)}&limit=1");
+        ApplyAuth(request, credentials);
+
+        var response = await SendWithDebugAsync(request);
+        if (!response.IsSuccessStatusCode)
+            return null;
+
+        var body = await response.Content.ReadAsStringAsync();
+        var doc = JsonDocument.Parse(body);
+        if (!doc.RootElement.TryGetProperty("results", out var results) || results.GetArrayLength() == 0)
+            return null;
+
+        return results[0].GetProperty("id").GetString();
+    }
+
+    public async Task<List<ConfluenceComment>> GetPageCommentsAsync(string pageId)
+    {
+        var credentials = await GetCredentialsOrThrow();
+        var apiBase = GetConfluenceApiBase(credentials);
+        const string expand = "body.storage,history.createdBy,extensions.location,extensions.resolution,extensions.inlineProperties,children.comment.body.storage,children.comment.history.createdBy,children.comment.extensions.location,children.comment.extensions.resolution,children.comment.extensions.inlineProperties";
+
+        var comments = new List<ConfluenceComment>();
+        var start = 0;
+        const int limit = 100;
+
+        while (true)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get,
+                $"{apiBase}/{pageId}/child/comment?expand={expand}&start={start}&limit={limit}&depth=all");
+            ApplyAuth(request, credentials);
+
+            var response = await SendWithDebugAsync(request);
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                return comments;
+            response.EnsureSuccessStatusCode();
+
+            var content = await response.Content.ReadAsStringAsync();
+            var doc = JsonDocument.Parse(content);
+            var results = doc.RootElement.GetProperty("results");
+
+            foreach (var el in results.EnumerateArray())
+            {
+                var parsed = ParseComment(el);
+                if (parsed != null)
+                    comments.Add(parsed);
+            }
+
+            if (results.GetArrayLength() < limit)
+                break;
+            start += limit;
+        }
+
+        return comments;
     }
 
     public async Task<bool> DeletePageAsync(string pageId)
@@ -331,6 +402,7 @@ public class ConfluenceService : IConfluenceService
                     // Resolve WorkDir relative to where config was found
                     config.WorkDir = Path.GetFullPath(
                         Path.Combine(dir.FullName, config.WorkDir));
+                    config.ConfigRoot = dir.FullName;
                 }
                 return Task.FromResult(config);
             }
@@ -439,8 +511,9 @@ public class ConfluenceService : IConfluenceService
             var responseBody = await response.Content.ReadAsStringAsync();
             if (!string.IsNullOrEmpty(responseBody))
             {
-                var display = responseBody.Length > 2000 ? responseBody[..2000] + "..." : responseBody;
-                DebugWriter($"[dim]{Spectre.Console.Markup.Escape(display)}[/]");
+                // With --debug we dump the full body so inline-comment-markers and other
+                // nested storage details are visible during round-trip diagnostics.
+                DebugWriter($"[dim]{Spectre.Console.Markup.Escape(responseBody)}[/]");
             }
             // Re-create content since we consumed it
             response.Content = new StringContent(responseBody, Encoding.UTF8,
@@ -493,5 +566,78 @@ public class ConfluenceService : IConfluenceService
         }
 
         return page;
+    }
+
+    private static ConfluenceComment? ParseComment(JsonElement el)
+    {
+        if (!el.TryGetProperty("id", out var idEl))
+            return null;
+
+        var comment = new ConfluenceComment
+        {
+            Id = idEl.GetString() ?? string.Empty
+        };
+
+        if (el.TryGetProperty("body", out var body) && body.TryGetProperty("storage", out var storage) &&
+            storage.TryGetProperty("value", out var storageVal))
+        {
+            comment.BodyStorageHtml = storageVal.GetString() ?? string.Empty;
+        }
+
+        if (el.TryGetProperty("history", out var history))
+        {
+            if (history.TryGetProperty("createdDate", out var createdEl) &&
+                DateTime.TryParse(createdEl.GetString(), out var createdDt))
+            {
+                comment.Created = createdDt;
+            }
+
+            if (history.TryGetProperty("createdBy", out var createdBy))
+            {
+                if (createdBy.TryGetProperty("displayName", out var displayName))
+                    comment.AuthorName = displayName.GetString() ?? string.Empty;
+                if (createdBy.TryGetProperty("email", out var emailEl))
+                    comment.AuthorEmail = emailEl.GetString();
+            }
+
+            if (history.TryGetProperty("lastUpdated", out var lastUpdated) &&
+                lastUpdated.TryGetProperty("when", out var whenEl) &&
+                DateTime.TryParse(whenEl.GetString(), out var updatedDt))
+            {
+                comment.Updated = updatedDt;
+            }
+        }
+
+        if (el.TryGetProperty("extensions", out var ext))
+        {
+            if (ext.TryGetProperty("location", out var locEl))
+                comment.Location = locEl.GetString() ?? "footer";
+
+            if (ext.TryGetProperty("resolution", out var resEl) &&
+                resEl.TryGetProperty("status", out var statusEl))
+            {
+                comment.ResolutionStatus = statusEl.GetString();
+            }
+
+            if (ext.TryGetProperty("inlineProperties", out var inlineProps) &&
+                inlineProps.TryGetProperty("originalSelection", out var selEl))
+            {
+                comment.InlineSelection = selEl.GetString();
+            }
+        }
+
+        if (el.TryGetProperty("children", out var children) &&
+            children.TryGetProperty("comment", out var childComments) &&
+            childComments.TryGetProperty("results", out var childResults))
+        {
+            foreach (var childEl in childResults.EnumerateArray())
+            {
+                var reply = ParseComment(childEl);
+                if (reply != null)
+                    comment.Replies.Add(reply);
+            }
+        }
+
+        return comment;
     }
 }

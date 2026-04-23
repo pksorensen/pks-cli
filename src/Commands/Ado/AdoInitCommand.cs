@@ -28,6 +28,10 @@ public class AdoInitCommand : Command<AdoInitCommand.Settings>
         [CommandOption("-f|--force")]
         [Description("Force re-authentication even if already authenticated")]
         public bool Force { get; set; }
+
+        [CommandOption("-t|--tenant")]
+        [Description("Azure AD tenant ID (defaults to 'common' — prompts for email/tenant if omitted)")]
+        public string? TenantId { get; set; }
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -45,6 +49,11 @@ public class AdoInitCommand : Command<AdoInitCommand.Settings>
             return 0;
         }
 
+        if (settings.Force)
+            await _authService.ClearStoredCredentialsAsync();
+
+        var (tenantId, loginHint) = ResolveTenant(settings.TenantId);
+
         _console.MarkupLine("[cyan]Starting Azure DevOps authentication...[/]");
         _console.MarkupLine("[dim]A browser window will open. If it doesn't, use the URL printed below.[/]");
         _console.WriteLine();
@@ -52,7 +61,7 @@ public class AdoInitCommand : Command<AdoInitCommand.Settings>
         AdoAuthResult result;
         try
         {
-            result = await _authService.InitiateAsync();
+            result = await _authService.InitiateAsync(tenantId, loginHint);
         }
         catch (OperationCanceledException)
         {
@@ -87,7 +96,7 @@ public class AdoInitCommand : Command<AdoInitCommand.Settings>
             selectedOrg = result.Accounts.First(a => a.AccountName == orgName);
         }
 
-        await _authService.CompleteAsync(result, selectedOrg);
+        await _authService.CompleteAsync(result, selectedOrg, tenantId);
 
         // Display success
         _console.WriteLine();
@@ -100,6 +109,7 @@ public class AdoInitCommand : Command<AdoInitCommand.Settings>
 
         table.AddRow("User", Markup.Escape(result.Profile.DisplayName));
         table.AddRow("Email", Markup.Escape(result.Profile.EmailAddress));
+        table.AddRow("Tenant", Markup.Escape(tenantId));
         table.AddRow("Organization", Markup.Escape(selectedOrg.AccountName));
         table.AddRow("Org URL", Markup.Escape($"https://dev.azure.com/{selectedOrg.AccountName}"));
 
@@ -110,5 +120,28 @@ public class AdoInitCommand : Command<AdoInitCommand.Settings>
         _console.MarkupLine("[dim]  export GIT_ASKPASS=\"pks git askpass\"[/]");
 
         return 0;
+    }
+
+    private (string tenantId, string? loginHint) ResolveTenant(string? tenantIdOverride)
+    {
+        if (!string.IsNullOrWhiteSpace(tenantIdOverride))
+            return (tenantIdOverride.Trim(), null);
+
+        var input = _console.Prompt(
+            new TextPrompt<string>("[cyan]Enter your email or tenant ID[/] [dim](or press Enter to sign in with 'common' tenant)[/]:")
+                .AllowEmpty());
+
+        if (string.IsNullOrWhiteSpace(input))
+            return ("common", null);
+
+        var trimmed = input.Trim();
+        if (Guid.TryParse(trimmed, out _))
+        {
+            _console.MarkupLine($"[dim]Tenant: [bold]{Markup.Escape(trimmed)}[/][/]");
+            return (trimmed, null);
+        }
+
+        // Treat as email — Entra will route to the right tenant via login_hint + select_account.
+        return ("common", trimmed);
     }
 }

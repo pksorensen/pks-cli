@@ -40,6 +40,13 @@ public partial class ConfluenceMarkdownConverter : IConfluenceMarkdownConverter
 
         var markdown = converter.Convert(preprocessed);
 
+        // Turn the inline-comment-marker sentinels we injected in pre-processing
+        // into custom inline tags that Markdig treats as inline HTML (and thus wraps
+        // in a <p>). HTML comments at column 0 would be parsed as a block and lose
+        // that wrapping — Confluence then rejects the bare marker.
+        markdown = CcOpenSentinelRegex().Replace(markdown, m => $"<ac-cc ref=\"{m.Groups[1].Value}\">");
+        markdown = CcCloseSentinelRegex().Replace(markdown, "</ac-cc>");
+
         var sb = new StringBuilder();
         sb.AppendLine("---");
         sb.AppendLine("confluence:");
@@ -64,6 +71,11 @@ public partial class ConfluenceMarkdownConverter : IConfluenceMarkdownConverter
 
         // Post-process: wrap fenced code blocks in ac:structured-macro
         html = PostProcessCodeBlocks(html);
+
+        // Rewrite our custom <ac-cc ref="..."> inline-comment markers back to the
+        // Confluence storage format so existing comment anchors are preserved.
+        html = AcCcOpenTagRegex().Replace(html, m => $"<ac:inline-comment-marker ac:ref=\"{m.Groups[1].Value}\">");
+        html = AcCcCloseTagRegex().Replace(html, "</ac:inline-comment-marker>");
 
         return html;
     }
@@ -124,6 +136,19 @@ public partial class ConfluenceMarkdownConverter : IConfluenceMarkdownConverter
     /// </summary>
     private static string PreProcessStorageToMarkdown(string html)
     {
+        // Inline-comment-markers (anchors for Confluence inline comments) must round-trip
+        // intact or Confluence drops the anchor on the next PUT. Replace each pair with
+        // plain-text sentinels that survive HTML→Markdown conversion; StorageToMarkdown
+        // then rewrites them to HTML comments before writing to disk.
+        html = AcInlineCommentMarkerRegex().Replace(html, match =>
+        {
+            var id = match.Groups[1].Value;
+            var inner = match.Groups[2].Value;
+            // No underscores in the sentinel — ReverseMarkdown escapes `_` to `\_` which
+            // would break the post-conversion regex below.
+            return $"\u2983CCOPEN{id}\u2984{inner}\u2983CCCLOSE\u2984";
+        });
+
         // Convert ac:code macros to <pre><code>
         html = AcCodeMacroRegex().Replace(html, match =>
         {
@@ -226,7 +251,7 @@ public partial class ConfluenceMarkdownConverter : IConfluenceMarkdownConverter
     [GeneratedRegex(@"<ri:url ri:value=""([^""]*)""\s*/>")]
     private static partial Regex AcImageUrlRegex();
 
-    [GeneratedRegex(@"<ri:attachment ri:filename=""([^""]*)""\s*/>")]
+    [GeneratedRegex(@"<ri:attachment\s+ri:filename=""([^""]*)""[^>]*/>")]
     private static partial Regex AcImageAttachmentRegex();
 
     [GeneratedRegex(@"<pre><code([^>]*)>(.*?)</code></pre>", RegexOptions.Singleline)]
@@ -237,4 +262,20 @@ public partial class ConfluenceMarkdownConverter : IConfluenceMarkdownConverter
 
     [GeneratedRegex(@"<img\s+src=""([^""]+)""[^>]*/?>")]
     private static partial Regex ImgTagRegex();
+
+    // Inline comment anchor round-trip.
+    [GeneratedRegex(@"<ac:inline-comment-marker\s+ac:ref=""([^""]+)"">(.*?)</ac:inline-comment-marker>", RegexOptions.Singleline)]
+    private static partial Regex AcInlineCommentMarkerRegex();
+
+    [GeneratedRegex(@"\u2983CCOPEN([^\u2984]+)\u2984")]
+    private static partial Regex CcOpenSentinelRegex();
+
+    [GeneratedRegex(@"\u2983CCCLOSE\u2984")]
+    private static partial Regex CcCloseSentinelRegex();
+
+    [GeneratedRegex(@"<ac-cc\s+ref=""([^""]+)"">")]
+    private static partial Regex AcCcOpenTagRegex();
+
+    [GeneratedRegex(@"</ac-cc>")]
+    private static partial Regex AcCcCloseTagRegex();
 }
