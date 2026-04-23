@@ -49,6 +49,19 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.9.0](https://github.com/pksorensen/pks-cli/compare/v6.8.1...v6.9.0) (2026-04-23)
+
+
+### Features
+
+* confluence, appinsights fixes ([ccb1b67](https://github.com/pksorensen/pks-cli/commit/ccb1b67a53298adc84590ff2f52d2de853f291a8))
+
+
+### Bug Fixes
+
+* **packaging:** include dotfiles in NuGet tool package ([09ea2cc](https://github.com/pksorensen/pks-cli/commit/09ea2cc1a9b3f9af19f9fc2e18511c1276b388bf))
+* pks report --bug ([7f35281](https://github.com/pksorensen/pks-cli/commit/7f3528136d2b9d513d7c7c1b9a250df37305286e))
+
 ## [6.8.1](https://github.com/pksorensen/pks-cli/compare/v6.8.0...v6.8.1) (2026-04-22)
 
 
