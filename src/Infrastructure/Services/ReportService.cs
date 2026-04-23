@@ -12,17 +12,20 @@ public class ReportService : IReportService
     private readonly ISystemInformationService _systemInformationService;
     private readonly ITelemetryService _telemetryService;
     private readonly IConfigurationService _configurationService;
+    private readonly IGitHubAuthenticationService _authService;
 
     public ReportService(
         IGitHubService gitHubService,
         ISystemInformationService systemInformationService,
         ITelemetryService telemetryService,
-        IConfigurationService configurationService)
+        IConfigurationService configurationService,
+        IGitHubAuthenticationService authService)
     {
         _gitHubService = gitHubService;
         _systemInformationService = systemInformationService;
         _telemetryService = telemetryService;
         _configurationService = configurationService;
+        _authService = authService;
     }
 
     public async Task<ReportResult> CreateReportAsync(CreateReportRequest request)
@@ -120,16 +123,18 @@ public class ReportService : IReportService
     {
         try
         {
-            // Check if we have a valid GitHub token
             var token = await _configurationService.GetAsync("github.token");
             if (string.IsNullOrEmpty(token))
             {
-                return false;
+                var stored = await _authService.GetStoredTokenAsync();
+                token = stored?.AccessToken;
             }
 
-            // Validate the token
+            if (string.IsNullOrEmpty(token))
+                return false;
+
             var validation = await _gitHubService.ValidateTokenAsync(token);
-            return validation.IsValid && validation.Scopes.Contains("repo");
+            return validation.IsValid;
         }
         catch
         {

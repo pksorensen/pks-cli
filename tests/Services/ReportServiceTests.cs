@@ -12,6 +12,7 @@ public class ReportServiceTests
     private readonly ISystemInformationService _mockSystemInformationService;
     private readonly ITelemetryService _mockTelemetryService;
     private readonly IConfigurationService _mockConfigurationService;
+    private readonly IGitHubAuthenticationService _mockAuthService;
     private readonly ReportService _reportService;
 
     public ReportServiceTests()
@@ -20,12 +21,14 @@ public class ReportServiceTests
         _mockSystemInformationService = Substitute.For<ISystemInformationService>();
         _mockTelemetryService = Substitute.For<ITelemetryService>();
         _mockConfigurationService = Substitute.For<IConfigurationService>();
+        _mockAuthService = Substitute.For<IGitHubAuthenticationService>();
 
         _reportService = new ReportService(
             _mockGitHubService,
             _mockSystemInformationService,
             _mockTelemetryService,
-            _mockConfigurationService);
+            _mockConfigurationService,
+            _mockAuthService);
     }
 
     [Fact]
@@ -82,6 +85,7 @@ public class ReportServiceTests
         };
 
         _mockConfigurationService.GetAsync("github.token").Returns((string?)null);
+        _mockAuthService.GetStoredTokenAsync().Returns((GitHubStoredToken?)null);
 
         // Act
         var result = await _reportService.CreateReportAsync(request);
@@ -89,6 +93,52 @@ public class ReportServiceTests
         // Assert
         Assert.False(result.Success);
         Assert.Contains("GitHub authentication is required", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task CreateReportAsync_WithDeviceFlowToken_ShouldCreateGitHubIssue()
+    {
+        // Arrange — no PAT in config, but device-flow token present via auth service
+        var request = new CreateReportRequest
+        {
+            Message = "Bug from device flow user",
+            Title = "Bug: device flow",
+            IsBug = true,
+            Repository = "owner/repo"
+        };
+
+        _mockConfigurationService.GetAsync("github.token").Returns((string?)null);
+        _mockAuthService.GetStoredTokenAsync().Returns(new GitHubStoredToken
+        {
+            AccessToken = "gho_device_flow_token",
+            IsValid = true,
+            Scopes = new[] { "repo" }
+        });
+        _mockGitHubService.ValidateTokenAsync("gho_device_flow_token").Returns(new GitHubTokenValidation
+        {
+            IsValid = true,
+            Scopes = new[] { "repo" }
+        });
+
+        SetupMockServices();
+
+        var expectedIssue = new GitHubIssue
+        {
+            Number = 42,
+            Title = "Bug: device flow",
+            HtmlUrl = "https://github.com/owner/repo/issues/42",
+            CreatedAt = DateTime.UtcNow
+        };
+
+        _mockGitHubService.CreateIssueAsync("owner", "repo", request.Title, Arg.Any<string>(), Arg.Any<string[]>())
+            .Returns(expectedIssue);
+
+        // Act
+        var result = await _reportService.CreateReportAsync(request);
+
+        // Assert
+        Assert.True(result.Success);
+        Assert.Equal(42, result.IssueNumber);
     }
 
     [Fact]
@@ -245,6 +295,16 @@ public class ReportServiceTests
 
     private void SetupMockServices()
     {
+        _mockSystemInformationService.GetPksCliInfoAsync().Returns(new PksCliInfo
+        {
+            Version = "1.0.0",
+            AssemblyVersion = "1.0.0.0",
+            ProductVersion = "1.0.0",
+            GitCommit = "abc123",
+            BuildDate = DateTime.UtcNow,
+            BuildConfiguration = "Release"
+        });
+
         _mockSystemInformationService.GetSystemInformationAsync().Returns(new SystemInformation
         {
             PksCliInfo = new PksCliInfo
