@@ -1813,8 +1813,13 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             // session reserves — new AppHost projects must override this in launchSettings.json.
             appendPrompt = "⚠️  IN-PROCESS ENVIRONMENT: This job runs on the same machine as the developer's " +
                            "host Aspire session (Next.js, ws-relay, Keycloak, etc. are already running). " +
-                           "Before using pkill, aspire stop, or similar commands: verify the target process " +
-                           "belongs to your job (check PIDs, cwd, or session names). " +
+                           "Before using pkill, kill $(pgrep ...), kill $(lsof ...), aspire stop, or ANY " +
+                           "pattern-based process kill: verify EVERY matched PID belongs to your job " +
+                           "(check /proc/<pid>/cwd or ps -p <pid>). Never use broad patterns like " +
+                           "`pgrep -f \"aspire run\"` without scoping to your job's PID list — " +
+                           "the host session's aspire process will match and be killed. " +
+                           "Track your own background PIDs explicitly (e.g. `aspire run & MY_PID=$!`) " +
+                           "and kill only those. " +
                            "When starting Aspire in this job, always use `aspire run --isolated` to avoid " +
                            "port conflicts with the host session. " +
                            "IMPORTANT: the host session reserves port 22057 via DOTNET_RESOURCE_SERVICE_ENDPOINT_URL. " +
