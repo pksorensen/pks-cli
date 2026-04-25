@@ -478,6 +478,12 @@ public class DevcontainerSpawnOptions
     public string? CredentialSocketPath { get; set; }
 
     /// <summary>
+    /// Directory containing the AgenticsProxy Unix socket (proxy.sock).
+    /// When set, the directory is bind-mounted into the devcontainer at /var/run/pks-agentics.
+    /// </summary>
+    public string? AgenticsProxySocketDir { get; set; }
+
+    /// <summary>
     /// Name of a Docker volume pre-populated with cloned ALP plugins by the Runner.
     /// When set, the volume is mounted at /run/alp/plugins inside the devcontainer so
     /// the Operator (vibecast) can pass each plugin dir to Claude via --plugin-dir.

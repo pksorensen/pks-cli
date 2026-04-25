@@ -346,6 +346,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                     options.DockerConfigPath,
                     configHash,
                     options.CredentialSocketPath,
+                    options.AgenticsProxySocketDir,
                     options.RemoteEnv,
                     options.IdLabels,
                     options.RemoveExistingContainer,
@@ -2736,6 +2737,7 @@ DEVCONTAINER_EOF";
         string? dockerConfigPath = null,
         string? configHash = null,
         string? credentialSocketPath = null,
+        string? agenticsProxySocketDir = null,
         Dictionary<string, string>? remoteEnv = null,
         Dictionary<string, string>? idLabels = null,
         bool removeExistingContainer = false,
@@ -2822,6 +2824,14 @@ DEVCONTAINER_EOF";
             }
         }
 
+        string? proxyMountArg = null;
+        if (!string.IsNullOrEmpty(agenticsProxySocketDir))
+        {
+            _logger.LogInformation("Mounting AgenticsProxy socket dir at /var/run/pks-agentics");
+            var normalizedDir = agenticsProxySocketDir.Replace('\\', '/');
+            proxyMountArg = $" --mount type=bind,source={normalizedDir},target=/var/run/pks-agentics";
+        }
+
         // Build command using --override-config (if successfully created)
         // Based on source code analysis: override config completely replaces base config
         // Must contain ALL properties including features for feature metadata processing to work
@@ -2840,13 +2850,13 @@ DEVCONTAINER_EOF";
             // The override config has workspaceMount/workspaceFolder removed, and we use --mount for the volume
             // This avoids the bind mount issue while preserving feature metadata processing
             _logger.LogInformation("Using override config approach with file: {OverrideConfig}", overrideConfigPath);
-            devcontainerCommand = $"devcontainer up --config {workspaceFolder}/.devcontainer/devcontainer.json --override-config {overrideConfigPath} --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg}{pluginVolumeMountArg} --update-remote-user-uid-default off --include-configuration --include-merged-configuration";
+            devcontainerCommand = $"devcontainer up --config {workspaceFolder}/.devcontainer/devcontainer.json --override-config {overrideConfigPath} --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg}{proxyMountArg}{pluginVolumeMountArg} --update-remote-user-uid-default off --include-configuration --include-merged-configuration";
         }
         else
         {
             // Fallback: use workspace-folder without override-config
             _logger.LogWarning("Using fallback approach without override config");
-            devcontainerCommand = $"devcontainer up --workspace-folder {workspaceFolder} --config {workspaceFolder}/.devcontainer/devcontainer.json --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg}{pluginVolumeMountArg} --update-remote-user-uid-default off --mount-workspace-git-root false --include-configuration --include-merged-configuration";
+            devcontainerCommand = $"devcontainer up --workspace-folder {workspaceFolder} --config {workspaceFolder}/.devcontainer/devcontainer.json --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg}{proxyMountArg}{pluginVolumeMountArg} --update-remote-user-uid-default off --mount-workspace-git-root false --include-configuration --include-merged-configuration";
         }
 
         // Append extra remote-env, id-labels, and ephemeral flag if provided
