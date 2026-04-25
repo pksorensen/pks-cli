@@ -97,30 +97,30 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
             string? configHash = null;
             if (!string.IsNullOrEmpty(options.ProjectPath))
             {
-            onProgress?.Invoke("Computing configuration hash...");
-            _logger.LogInformation("Computing configuration hash...");
-            try
-            {
-                var devcontainerPath = Path.Combine(options.ProjectPath, ".devcontainer");
-                var hashResult = await _configHashService.ComputeConfigurationHashWithDetailsAsync(
-                    options.ProjectPath,
-                    devcontainerPath);
-
-                configHash = hashResult.Hash;
-                _logger.LogInformation("Configuration hash computed: {Hash} (from {FileCount} files)",
-                    configHash.Substring(0, 16) + "...",
-                    hashResult.IncludedFiles.Count);
-
-                foreach (var file in hashResult.IncludedFiles)
+                onProgress?.Invoke("Computing configuration hash...");
+                _logger.LogInformation("Computing configuration hash...");
+                try
                 {
-                    _logger.LogDebug("  - {File}: {Hash}", file, hashResult.FileHashes[file].Substring(0, 8));
+                    var devcontainerPath = Path.Combine(options.ProjectPath, ".devcontainer");
+                    var hashResult = await _configHashService.ComputeConfigurationHashWithDetailsAsync(
+                        options.ProjectPath,
+                        devcontainerPath);
+
+                    configHash = hashResult.Hash;
+                    _logger.LogInformation("Configuration hash computed: {Hash} (from {FileCount} files)",
+                        configHash.Substring(0, 16) + "...",
+                        hashResult.IncludedFiles.Count);
+
+                    foreach (var file in hashResult.IncludedFiles)
+                    {
+                        _logger.LogDebug("  - {File}: {Hash}", file, hashResult.FileHashes[file].Substring(0, 8));
+                    }
                 }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to compute configuration hash, continuing without hash");
-                // Continue without hash - not a critical failure
-            }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to compute configuration hash, continuing without hash");
+                    // Continue without hash - not a critical failure
+                }
             } // end if (!string.IsNullOrEmpty(options.ProjectPath))
 
             // Check for existing container if reuse is enabled

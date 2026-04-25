@@ -97,11 +97,11 @@ public class ClaudeStatsCommand : AsyncCommand<ClaudeStatsSettings>
         // ── Aggregate ────────────────────────────────────────────────────────
         var cutoff = points[^1].Timestamp.AddDays(-settings.RecentDays);
         var recentPts = points.Where(p => p.Timestamp >= cutoff).ToList();
-        var priorPts  = points.Where(p => p.Timestamp <  cutoff).ToList();
+        var priorPts = points.Where(p => p.Timestamp < cutoff).ToList();
 
         double recentMedian = Median(recentPts.Select(p => p.MsPerOutputToken));
-        double priorMedian  = Median(priorPts.Select(p => p.MsPerOutputToken));
-        double pctChange    = priorPts.Count > 0
+        double priorMedian = Median(priorPts.Select(p => p.MsPerOutputToken));
+        double pctChange = priorPts.Count > 0
             ? (recentMedian - priorMedian) / priorMedian * 100
             : 0;
 
@@ -138,8 +138,8 @@ public class ClaudeStatsCommand : AsyncCommand<ClaudeStatsSettings>
 
     private static async Task<List<RequestDataPoint>> ParseSessionAsync(string path)
     {
-        var userMsgs    = new Dictionary<string, DateTime>();    // uuid → timestamp
-        var requestMap  = new Dictionary<string, RequestEntry>(); // requestId → last entry
+        var userMsgs = new Dictionary<string, DateTime>();    // uuid → timestamp
+        var requestMap = new Dictionary<string, RequestEntry>(); // requestId → last entry
 
         foreach (var line in await File.ReadAllLinesAsync(path))
         {
@@ -244,7 +244,7 @@ public class ClaudeStatsCommand : AsyncCommand<ClaudeStatsSettings>
         var sign = isSlower ? "+" : "";
 
         var dateFrom = points[0].Timestamp.ToString("yyyy-MM-dd");
-        var dateTo   = points[^1].Timestamp.ToString("yyyy-MM-dd");
+        var dateTo = points[^1].Timestamp.ToString("yyyy-MM-dd");
 
         AnsiConsole.MarkupLine($"[dim]Scope:[/] {Markup.Escape(scope)}");
         AnsiConsole.MarkupLine($"[dim]Range:[/] {dateFrom} → {dateTo}   [dim]|[/]   {points.Count} requests");
@@ -254,10 +254,10 @@ public class ClaudeStatsCommand : AsyncCommand<ClaudeStatsSettings>
         grid.AddColumn(); grid.AddColumn(); grid.AddColumn(); grid.AddColumn();
 
         grid.AddRow(
-            CardPanel($"Last {recentDays} days",  $"[bold cyan]{recentMedian:F0} ms/tok[/]"),
-            CardPanel("Prior period",              $"[bold dim]{priorMedian:F0} ms/tok[/]"),
-            CardPanel("Change",                    $"[bold {changeColor}]{sign}{pctChange:F1}% {changeArrow} {changeLabel}[/]"),
-            CardPanel("Total requests",            $"[bold white]{points.Count:N0}[/]")
+            CardPanel($"Last {recentDays} days", $"[bold cyan]{recentMedian:F0} ms/tok[/]"),
+            CardPanel("Prior period", $"[bold dim]{priorMedian:F0} ms/tok[/]"),
+            CardPanel("Change", $"[bold {changeColor}]{sign}{pctChange:F1}% {changeArrow} {changeLabel}[/]"),
+            CardPanel("Total requests", $"[bold white]{points.Count:N0}[/]")
         );
 
         AnsiConsole.Write(grid);
@@ -275,11 +275,11 @@ public class ClaudeStatsCommand : AsyncCommand<ClaudeStatsSettings>
     private static readonly string[] Blocks = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
     // ANSI codes — bypasses Spectre markup for per-character coloring
-    private const string R   = "\x1b[0m";       // reset
+    private const string R = "\x1b[0m";       // reset
     private const string Dim = "\x1b[2m";
-    private const string Cy  = "\x1b[36m";      // cyan  – prior
-    private const string Re  = "\x1b[91m";      // red   – recent
-    private const string Ye  = "\x1b[33m";      // yellow – median line
+    private const string Cy = "\x1b[36m";      // cyan  – prior
+    private const string Re = "\x1b[91m";      // red   – recent
+    private const string Ye = "\x1b[33m";      // yellow – median line
 
     private static void RenderTimeSeriesChart(List<DailyStat> byDay, DateTime cutoff)
     {
@@ -303,11 +303,11 @@ public class ClaudeStatsCommand : AsyncCommand<ClaudeStatsSettings>
 
         // ── Bar width: expand to fill full chart width ────────────────────────
         int numBars = Math.Min(byDay.Count, chartW);
-        var data    = byDay.TakeLast(numBars).ToList();
+        var data = byDay.TakeLast(numBars).ToList();
 
         // Each bar gets an equal slice of chartW; gap only when bars are wide enough
-        int colW  = Math.Max(1, chartW / Math.Max(1, data.Count));
-        int gapW  = colW >= 3 ? 1 : 0;
+        int colW = Math.Max(1, chartW / Math.Max(1, data.Count));
+        int gapW = colW >= 3 ? 1 : 0;
         // Recalc colW accounting for gaps
         if (gapW > 0)
             colW = Math.Max(1, (chartW - (data.Count - 1)) / Math.Max(1, data.Count));
@@ -316,10 +316,10 @@ public class ClaudeStatsCommand : AsyncCommand<ClaudeStatsSettings>
         // ── Scale ─────────────────────────────────────────────────────────────
         double rawMax = data.Max(d => d.Median);
         double rawMin = data.Min(d => d.Median);
-        double yMax   = Math.Ceiling(rawMax * 1.15 / 5) * 5;
-        double yMin   = Math.Max(0, Math.Floor(rawMin * 0.80 / 5) * 5);
-        double range  = Math.Max(1, yMax - yMin);
-        double rowH   = range / chartH;
+        double yMax = Math.Ceiling(rawMax * 1.15 / 5) * 5;
+        double yMin = Math.Max(0, Math.Floor(rawMin * 0.80 / 5) * 5);
+        double range = Math.Max(1, yMax - yMin);
+        double rowH = range / chartH;
 
         double globalMedian = Median(data.Select(d => d.Median));
 
@@ -391,12 +391,12 @@ public class ClaudeStatsCommand : AsyncCommand<ClaudeStatsSettings>
         void PlaceLabel(int barIndex, string lbl, bool clearAround = false)
         {
             int center = yAxisW + barIndex * stride + colW / 2;
-            int xPos   = center - lbl.Length / 2;
+            int xPos = center - lbl.Length / 2;
             xPos = Math.Clamp(xPos, 0, lineLen - lbl.Length);
             if (clearAround)
             {
                 int from = Math.Max(0, xPos - 1);
-                int to   = Math.Min(lineLen, xPos + lbl.Length + 1);
+                int to = Math.Min(lineLen, xPos + lbl.Length + 1);
                 for (int c = from; c < to; c++) xLine[c] = ' ';
             }
             for (int c = 0; c < lbl.Length && xPos + c < lineLen; c++)
@@ -445,7 +445,7 @@ public class ClaudeStatsCommand : AsyncCommand<ClaudeStatsSettings>
         foreach (var g in byModel)
         {
             var vals = g.Select(p => p.MsPerOutputToken).OrderBy(x => x).ToList();
-            var p75  = vals[(int)(vals.Count * 0.75)];
+            var p75 = vals[(int)(vals.Count * 0.75)];
             table.AddRow(
                 Markup.Escape(g.Key),
                 g.Count().ToString("N0"),
@@ -492,7 +492,7 @@ public class ClaudeStatsCommand : AsyncCommand<ClaudeStatsSettings>
         try
         {
             var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("stty", "size")
-                { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false });
+            { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false });
             var raw = p?.StandardOutput.ReadLine()?.Trim().Split(' ');
             p?.WaitForExit();
             if (raw?.Length == 2 && int.TryParse(raw[1], out int c) && c > 10) return c;
@@ -510,7 +510,7 @@ public class ClaudeStatsCommand : AsyncCommand<ClaudeStatsSettings>
         try
         {
             var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("stty", "size")
-                { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false });
+            { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false });
             var raw = p?.StandardOutput.ReadLine()?.Trim().Split(' ');
             p?.WaitForExit();
             if (raw?.Length == 2 && int.TryParse(raw[0], out int r) && r > 10) return r;

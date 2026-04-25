@@ -14,8 +14,8 @@ namespace PKS.Infrastructure.Services;
 /// </summary>
 public interface IAzureDevOpsAuthService
 {
-    Task<AdoAuthResult> InitiateAsync(CancellationToken cancellationToken = default);
-    Task CompleteAsync(AdoAuthResult result, AdoAccount selectedOrg);
+    Task<AdoAuthResult> InitiateAsync(string tenantId = "common", string? loginHint = null, CancellationToken cancellationToken = default);
+    Task CompleteAsync(AdoAuthResult result, AdoAccount selectedOrg, string tenantId = "common");
     Task<string?> RefreshAccessTokenAsync(CancellationToken cancellationToken = default);
     Task<bool> IsAuthenticatedAsync();
     Task<AdoStoredCredentials?> GetStoredCredentialsAsync();
@@ -47,21 +47,28 @@ public class AzureDevOpsAuthService : IAzureDevOpsAuthService
         _config = config ?? new AzureDevOpsAuthConfig();
     }
 
-    public async Task<AdoAuthResult> InitiateAsync(CancellationToken cancellationToken = default)
+    public async Task<AdoAuthResult> InitiateAsync(string tenantId = "common", string? loginHint = null, CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(tenantId))
+            tenantId = "common";
+
         var pkce = GeneratePkce();
         var state = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         var port = GetFreePort();
         var redirectUri = $"http://localhost:{port}";
 
-        var authorizeUrl = $"{_config.AuthorizeUrl}" +
+        var authorizeUrl = $"{_config.GetAuthorizeUrl(tenantId)}" +
             $"?client_id={Uri.EscapeDataString(_config.ClientId)}" +
             $"&response_type=code" +
             $"&redirect_uri={Uri.EscapeDataString(redirectUri)}" +
             $"&scope={Uri.EscapeDataString(_config.Scope)}" +
             $"&state={Uri.EscapeDataString(state)}" +
             $"&code_challenge={Uri.EscapeDataString(pkce.CodeChallenge)}" +
-            $"&code_challenge_method=S256";
+            $"&code_challenge_method=S256" +
+            $"&prompt=select_account";
+
+        if (!string.IsNullOrEmpty(loginHint))
+            authorizeUrl += $"&login_hint={Uri.EscapeDataString(loginHint)}";
 
         // Start listener BEFORE opening browser to avoid race condition
         using var listener = new HttpListener();
@@ -78,7 +85,7 @@ public class AzureDevOpsAuthService : IAzureDevOpsAuthService
         var code = await WaitForCallbackAsync(listener, state, cancellationToken);
 
         // Exchange code for tokens
-        var tokenResponse = await ExchangeCodeForTokensAsync(code, redirectUri, pkce.CodeVerifier, cancellationToken);
+        var tokenResponse = await ExchangeCodeForTokensAsync(code, redirectUri, pkce.CodeVerifier, tenantId, cancellationToken);
 
         // Fetch profile and accounts
         var profile = await FetchProfileAsync(tokenResponse.AccessToken, cancellationToken);
@@ -94,12 +101,13 @@ public class AzureDevOpsAuthService : IAzureDevOpsAuthService
         };
     }
 
-    public async Task CompleteAsync(AdoAuthResult result, AdoAccount selectedOrg)
+    public async Task CompleteAsync(AdoAuthResult result, AdoAccount selectedOrg, string tenantId = "common")
     {
         var credentials = new AdoStoredCredentials
         {
             RefreshToken = result.RefreshToken ?? string.Empty,
             SelectedOrg = selectedOrg.AccountName,
+            TenantId = string.IsNullOrWhiteSpace(tenantId) ? "common" : tenantId,
             Profile = result.Profile,
             CreatedAt = DateTime.UtcNow,
             LastRefreshedAt = DateTime.UtcNow
@@ -127,7 +135,8 @@ public class AzureDevOpsAuthService : IAzureDevOpsAuthService
                 ["refresh_token"] = credentials.RefreshToken
             });
 
-            var response = await _httpClient.PostAsync(_config.TokenUrl, requestBody, cancellationToken);
+            var tenantId = string.IsNullOrWhiteSpace(credentials.TenantId) ? "common" : credentials.TenantId;
+            var response = await _httpClient.PostAsync(_config.GetTokenUrl(tenantId), requestBody, cancellationToken);
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
 
             if (!response.IsSuccessStatusCode)
@@ -302,7 +311,7 @@ public class AzureDevOpsAuthService : IAzureDevOpsAuthService
     }
 
     private async Task<AdoTokenResponse> ExchangeCodeForTokensAsync(
-        string code, string redirectUri, string codeVerifier, CancellationToken cancellationToken)
+        string code, string redirectUri, string codeVerifier, string tenantId, CancellationToken cancellationToken)
     {
         var requestBody = new FormUrlEncodedContent(new Dictionary<string, string>
         {
@@ -313,7 +322,7 @@ public class AzureDevOpsAuthService : IAzureDevOpsAuthService
             ["code_verifier"] = codeVerifier
         });
 
-        var response = await _httpClient.PostAsync(_config.TokenUrl, requestBody, cancellationToken);
+        var response = await _httpClient.PostAsync(_config.GetTokenUrl(tenantId), requestBody, cancellationToken);
         var content = await response.Content.ReadAsStringAsync(cancellationToken);
         response.EnsureSuccessStatusCode();
 

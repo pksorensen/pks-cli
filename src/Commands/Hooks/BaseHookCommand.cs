@@ -208,7 +208,7 @@ public abstract class BaseHookCommand : AsyncCommand<HooksSettings>
         var outputBuilder = new System.Text.StringBuilder();
         process.StartInfo = startInfo;
         process.OutputDataReceived += (_, e) => { if (e.Data != null) outputBuilder.AppendLine(e.Data); };
-        process.ErrorDataReceived  += (_, e) => { if (e.Data != null) outputBuilder.AppendLine(e.Data); };
+        process.ErrorDataReceived += (_, e) => { if (e.Data != null) outputBuilder.AppendLine(e.Data); };
 
         process.Start();
         process.BeginOutputReadLine();

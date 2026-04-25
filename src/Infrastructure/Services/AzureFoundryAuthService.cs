@@ -15,10 +15,11 @@ namespace PKS.Infrastructure.Services;
 public interface IAzureFoundryAuthService
 {
     Task<string?> DiscoverTenantAsync(string email, CancellationToken cancellationToken = default);
-    Task<FoundryAuthResult> InitiateLoginAsync(string tenantId, string? loginHint = null, CancellationToken cancellationToken = default);
+    Task<FoundryAuthResult> InitiateLoginAsync(string tenantId, string? loginHint = null, string? scopeOverride = null, CancellationToken cancellationToken = default);
     Task<string?> GetAccessTokenAsync(string scope, CancellationToken cancellationToken = default);
     Task<List<AzureSubscription>> ListSubscriptionsAsync(string accessToken, CancellationToken cancellationToken = default);
     Task<List<CognitiveServicesAccount>> ListFoundryResourcesAsync(string accessToken, string subscriptionId, CancellationToken cancellationToken = default);
+    Task<List<AppInsightsComponent>> ListAppInsightsResourcesAsync(string accessToken, string subscriptionId, CancellationToken cancellationToken = default);
     Task<List<FoundryDeployment>> ListDeploymentsAsync(string accessToken, string subscriptionId, string resourceGroup, string accountName, CancellationToken cancellationToken = default);
     Task<bool> IsAuthenticatedAsync();
     Task<FoundryStoredCredentials?> GetStoredCredentialsAsync();
@@ -110,8 +111,9 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
         }
     }
 
-    public async Task<FoundryAuthResult> InitiateLoginAsync(string tenantId, string? loginHint = null, CancellationToken cancellationToken = default)
+    public async Task<FoundryAuthResult> InitiateLoginAsync(string tenantId, string? loginHint = null, string? scopeOverride = null, CancellationToken cancellationToken = default)
     {
+        var scope = string.IsNullOrWhiteSpace(scopeOverride) ? _config.InitialScope : scopeOverride;
         var pkce = GeneratePkce();
         var state = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         var port = GetFreePort();
@@ -121,7 +123,7 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
             $"?client_id={Uri.EscapeDataString(_config.ClientId)}" +
             $"&response_type=code" +
             $"&redirect_uri={Uri.EscapeDataString(redirectUri)}" +
-            $"&scope={Uri.EscapeDataString(_config.InitialScope)}" +
+            $"&scope={Uri.EscapeDataString(scope)}" +
             $"&state={Uri.EscapeDataString(state)}" +
             $"&code_challenge={Uri.EscapeDataString(pkce.CodeChallenge)}" +
             $"&code_challenge_method=S256" +
@@ -146,7 +148,7 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
         var code = await WaitForCallbackAsync(listener, state, cancellationToken);
 
         // Exchange code for tokens
-        var tokenResponse = await ExchangeCodeForTokensAsync(code, redirectUri, pkce.CodeVerifier, tenantId, cancellationToken);
+        var tokenResponse = await ExchangeCodeForTokensAsync(code, redirectUri, pkce.CodeVerifier, tenantId, scope, cancellationToken);
 
         return new FoundryAuthResult
         {
@@ -244,6 +246,20 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
             a.Kind.Contains("AIServices", StringComparison.OrdinalIgnoreCase) ||
             a.Properties.Endpoint.Contains(".services.ai.azure.com", StringComparison.OrdinalIgnoreCase)
         ).ToList();
+    }
+
+    public async Task<List<AppInsightsComponent>> ListAppInsightsResourcesAsync(string accessToken, string subscriptionId, CancellationToken cancellationToken = default)
+    {
+        var url = $"https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.Insights/components?api-version=2020-02-02";
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+
+        var response = await _httpClient.SendAsync(request, cancellationToken);
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var result = JsonSerializer.Deserialize<AppInsightsComponentListResponse>(content);
+        return result?.Value ?? new List<AppInsightsComponent>();
     }
 
     public async Task<List<FoundryDeployment>> ListDeploymentsAsync(string accessToken, string subscriptionId, string resourceGroup, string accountName, CancellationToken cancellationToken = default)
@@ -405,7 +421,7 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
     }
 
     private async Task<FoundryTokenResponse> ExchangeCodeForTokensAsync(
-        string code, string redirectUri, string codeVerifier, string tenantId, CancellationToken cancellationToken)
+        string code, string redirectUri, string codeVerifier, string tenantId, string scope, CancellationToken cancellationToken)
     {
         var requestBody = new FormUrlEncodedContent(new Dictionary<string, string>
         {
@@ -414,7 +430,7 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
             ["code"] = code,
             ["redirect_uri"] = redirectUri,
             ["code_verifier"] = codeVerifier,
-            ["scope"] = _config.InitialScope
+            ["scope"] = scope
         });
 
         var tokenUrl = _config.GetTokenUrl(tenantId);

@@ -22,9 +22,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       releases_created: ${{ steps.release.outputs.releases_created }}
-      cli_release_created: ${{ steps.release.outputs['.--release_created'] }}
-      cli_version: ${{ steps.release.outputs['.--version'] }}
-      cli_tag_name: ${{ steps.release.outputs['.--tag_name'] }}
+      cli_release_created: ${{ steps.release.outputs['release_created'] }}
+      cli_version: ${{ steps.release.outputs['version'] }}
+      cli_tag_name: ${{ steps.release.outputs['tag_name'] }}
       devcontainer_release_created: ${{ steps.release.outputs['templates/devcontainer--release_created'] }}
       devcontainer_version: ${{ steps.release.outputs['templates/devcontainer--version'] }}
       devcontainer_tag_name: ${{ steps.release.outputs['templates/devcontainer--tag_name'] }}
