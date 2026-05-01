@@ -34,6 +34,7 @@ dotnet publish "$SCRIPT_DIR/src/pks-cli.csproj" \
     --self-contained true \
     -p:PublishSingleFile=true \
     -p:EmbedVibecast=true \
+    -p:EmbedClaudePlugin=true \
     -o "$SCRIPT_DIR/bin/win-x64" \
     --nologo
 

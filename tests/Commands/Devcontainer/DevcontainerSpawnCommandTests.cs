@@ -74,6 +74,13 @@ public class DevcontainerSpawnCommandTests : TestBase
 
         services.AddSingleton<IDevcontainerSpawnerService>(_mockSpawnerService!.Object);
         services.AddSingleton<IAnsiConsole>(_console);
+
+        // Register a no-op SSH target service so the command can be resolved
+        var sshMock = new Mock<ISshTargetConfigurationService>();
+        sshMock.Setup(x => x.ListTargetsAsync()).ReturnsAsync(new System.Collections.Generic.List<SshTarget>());
+        sshMock.Setup(x => x.FindTargetAsync(It.IsAny<string>())).ReturnsAsync((SshTarget?)null);
+        services.AddSingleton<ISshTargetConfigurationService>(sshMock.Object);
+
         services.AddTransient<DevcontainerSpawnCommand>();
     }
 
