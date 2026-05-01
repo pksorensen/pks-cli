@@ -49,6 +49,28 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.9.0](https://github.com/pksorensen/pks-cli/compare/v6.8.1...v6.9.0) (2026-05-01)
+
+
+### Features
+
+* confluence, appinsights fixes ([ccb1b67](https://github.com/pksorensen/pks-cli/commit/ccb1b67a53298adc84590ff2f52d2de853f291a8))
+* Enhance AgenticsProxy to support external socket directories ([4bfb5b3](https://github.com/pksorensen/pks-cli/commit/4bfb5b3ae8bee3a139b9f1a27fae84b3eff4214e))
+* Enhance build-local.sh and DevcontainerSpawnCommand for improved Docker checks and remote devcontainer management ([4bc354d](https://github.com/pksorensen/pks-cli/commit/4bc354d8fb3647486b298a5d6b6f6b3d3afb2adf))
+* Implement AgenticsRunnerCleanupCommand for orphan container management ([4bfb5b3](https://github.com/pksorensen/pks-cli/commit/4bfb5b3ae8bee3a139b9f1a27fae84b3eff4214e))
+* Introduce Devcontainer template rendering service ([4bfb5b3](https://github.com/pksorensen/pks-cli/commit/4bfb5b3ae8bee3a139b9f1a27fae84b3eff4214e))
+* **proxy:** add AgenticsProxy with Unix socket forwarding for spawn-mode jobs ([26e4132](https://github.com/pksorensen/pks-cli/commit/26e41326ead02936acf687aae6d09dbb146a224f))
+* **runner:** propagate subagentPromptAppendix as SUBAGENT_PROMPT_SUFFIX_FILE ([7b9cd0e](https://github.com/pksorensen/pks-cli/commit/7b9cd0edb3a34b7cff969aa6570d09d9bee87055))
+
+
+### Bug Fixes
+
+* **packaging:** include dotfiles in NuGet tool package ([09ea2cc](https://github.com/pksorensen/pks-cli/commit/09ea2cc1a9b3f9af19f9fc2e18511c1276b388bf))
+* pks report --bug ([7f35281](https://github.com/pksorensen/pks-cli/commit/7f3528136d2b9d513d7c7c1b9a250df37305286e))
+* **runner:** harden pkill guidance in in-process job prompt ([3ea6dcc](https://github.com/pksorensen/pks-cli/commit/3ea6dccb75cd9c4758e23ea0e633f594d285897b))
+* Update devcontainer configuration generation logic ([4bfb5b3](https://github.com/pksorensen/pks-cli/commit/4bfb5b3ae8bee3a139b9f1a27fae84b3eff4214e))
+* Update project file for vibecast embedding options ([4bfb5b3](https://github.com/pksorensen/pks-cli/commit/4bfb5b3ae8bee3a139b9f1a27fae84b3eff4214e))
+
 ## [6.8.1](https://github.com/pksorensen/pks-cli/compare/v6.8.0...v6.8.1) (2026-04-22)
 
 
