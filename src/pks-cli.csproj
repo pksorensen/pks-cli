@@ -14,7 +14,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>pks</ToolCommandName>
     <PackageId>pks-cli</PackageId>
-    <PackageVersion>6.8.1</PackageVersion>
+    <PackageVersion>6.9.0</PackageVersion>
     <Authors>PKS Team</Authors>
     <Description>The next agentic CLI for .NET developers - Poul's Killer Swarms</Description>
     <PackageTags>cli;dotnet;agentic;developer-tools</PackageTags>
@@ -128,9 +128,9 @@
   </ItemGroup>
 
   <Target Name="VerifyEmbedVibecastBinary" BeforeTargets="CoreCompile" Condition="'$(EmbedVibecast)' == 'true'">
-    <Error Condition="!Exists('$(EmbedVibecastPath)')" Text="EmbedVibecast=true but vibecast binary not found at: $(EmbedVibecastPath). Set -p:EmbedVibecastPath=&lt;abs-path&gt; or build vibecast and copy it there." />
-    <Message Importance="high" Text="Embedding vibecast: $(EmbedVibecastPath)" />
-    <Message Importance="high" Condition="Exists('$(EmbedVibecastPluginPath)\.mcp.json')" Text="Embedding claude-plugin from: $(EmbedVibecastPluginPath)" />
+    <Error Condition="!Exists('$(EmbedVibecastPath)')" Text="EmbedVibecast=true but vibecast binary not found at: $(EmbedVibecastPath). Set -p:EmbedVibecastPath=&lt;abs-path&gt; or build vibecast and copy it there."/>
+    <Message Importance="high" Text="Embedding vibecast: $(EmbedVibecastPath)"/>
+    <Message Importance="high" Condition="Exists('$(EmbedVibecastPluginPath)\.mcp.json')" Text="Embedding claude-plugin from: $(EmbedVibecastPluginPath)"/>
   </Target>
 
 </Project>
