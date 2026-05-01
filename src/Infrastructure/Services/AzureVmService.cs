@@ -22,6 +22,8 @@ public interface IAzureVmService
     Task<string?> GetVmStatusAsync(string accessToken, string subscriptionId, string resourceGroup, string vmName, CancellationToken ct = default);
     /// <summary>Starts a deallocated or stopped VM. Returns when the start command is accepted (VM may still be booting).</summary>
     Task StartVmAsync(string accessToken, string subscriptionId, string resourceGroup, string vmName, CancellationToken ct = default);
+    /// <summary>Deallocates a running VM (stops billing for compute). Returns when the deallocate command is accepted.</summary>
+    Task DeallocateVmAsync(string accessToken, string subscriptionId, string resourceGroup, string vmName, CancellationToken ct = default);
     Task SetScheduledShutdownAsync(string accessToken, string subscriptionId, string resourceGroup,
         string vmName, string location, string vmId, string timeUtc, CancellationToken ct = default);
     Task DisableScheduledShutdownAsync(string accessToken, string subscriptionId, string resourceGroup,
@@ -703,6 +705,20 @@ public class AzureVmService : IAzureVmService
         {
             var body = await response.Content.ReadAsStringAsync(ct);
             throw new HttpRequestException($"ARM {(int)response.StatusCode} starting VM: {body}");
+        }
+    }
+
+    public async Task DeallocateVmAsync(string accessToken, string subscriptionId, string resourceGroup, string vmName, CancellationToken ct = default)
+    {
+        var url = $"https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{resourceGroup}/providers/Microsoft.Compute/virtualMachines/{vmName}/deallocate?api-version={ApiVersion}";
+        var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        request.Content = new StringContent(string.Empty, System.Text.Encoding.UTF8, "application/json");
+        var response = await _httpClient.SendAsync(request, ct);
+        if (!response.IsSuccessStatusCode && response.StatusCode != System.Net.HttpStatusCode.Accepted)
+        {
+            var body = await response.Content.ReadAsStringAsync(ct);
+            throw new HttpRequestException($"ARM {(int)response.StatusCode} deallocating VM: {body}");
         }
     }
 

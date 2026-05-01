@@ -6,9 +6,30 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CLI_DIR="$(cd "$SCRIPT_DIR/../../src/apps/cli" && pwd)"
+# CLI_DIR points at the vibecast Go source. Override with CLI_DIR=... when the
+# checkout layout differs (e.g. pks-cli used as a submodule alongside vibecast).
+if [ -z "${CLI_DIR:-}" ]; then
+    for candidate in "$SCRIPT_DIR/../../src/apps/cli" "$SCRIPT_DIR/../vibecast"; do
+        if [ -d "$candidate" ]; then CLI_DIR="$(cd "$candidate" && pwd)"; break; fi
+    done
+fi
+if [ -z "${CLI_DIR:-}" ] || [ ! -d "$CLI_DIR" ]; then
+    echo "error: vibecast source dir not found. Set CLI_DIR=/abs/path/to/vibecast." >&2
+    exit 1
+fi
 RESOURCE_DIR="$SCRIPT_DIR/src/Infrastructure/Resources"
 PLUGIN_SRC="$CLI_DIR/claude-plugin"
+
+# Ensure `go` is on PATH; some devcontainers install it under $HOME/go/bin.
+if ! command -v go >/dev/null 2>&1; then
+    for candidate in "$HOME/go/bin" "/usr/local/go/bin"; do
+        if [ -x "$candidate/go" ]; then PATH="$candidate:$PATH"; break; fi
+    done
+fi
+if ! command -v go >/dev/null 2>&1; then
+    echo "error: 'go' not found on PATH. Install Go 1.24+ (see CLAUDE.md)." >&2
+    exit 1
+fi
 
 echo "[1/4] Building vibecast linux/amd64..."
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \

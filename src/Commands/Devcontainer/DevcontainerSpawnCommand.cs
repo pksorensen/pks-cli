@@ -18,6 +18,12 @@ namespace PKS.Commands.Devcontainer;
 internal record DevcontainerRemoteResult(bool Success, string? ContainerId, string? RemoteWorkspaceFolder, string? Error);
 
 /// <summary>
+/// Existing devcontainer discovered on a remote host via docker labels.
+/// </summary>
+internal record RemoteDevcontainerInfo(
+    string Id, string Name, string Status, bool IsRunning, string LocalFolder, string? VolumeName);
+
+/// <summary>
 /// Command to spawn a devcontainer in a Docker volume for an existing project
 /// </summary>
 public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCommand.Settings>
@@ -569,6 +575,66 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         if (!await EnsureVmRunningAsync(target))
             return 1;
 
+        var sshArgs = BuildSshArgs(target);
+
+        // Check Docker on remote (try full path as fallback — non-interactive SSH may have a stripped PATH)
+        var dockerCheck = await RunSshCommandAsync(sshArgs, target, "docker --version || /usr/bin/docker --version");
+        if (Environment.GetEnvironmentVariable("PKS_DEBUG") == "1")
+            DisplayInfo($"docker check: exit={dockerCheck.Success} output={Markup.Escape(dockerCheck.Output.Trim())}");
+
+        if (!dockerCheck.Success)
+        {
+            DisplayWarning($"Could not confirm Docker on remote host ({Markup.Escape(dockerCheck.Output.Trim().Split('\n')[0])}).");
+            var proceedDocker = Console.Confirm("[cyan]Docker check failed — proceed anyway?[/]", defaultValue: false);
+            if (!proceedDocker)
+                return 1;
+        }
+        else
+        {
+            DisplaySuccess($"Docker available: {Markup.Escape(dockerCheck.Output.Trim().Split('\n')[0])}");
+        }
+
+        // Offer to attach to an existing devcontainer on this host before going through template/spawn flow
+        var existingContainers = await DiscoverRemoteDevcontainersAsync(sshArgs, target, projectName);
+        if (existingContainers.Count > 0)
+        {
+            const string CreateNewOption = "Create new devcontainer...";
+            var hostChoices = existingContainers
+                .Select(c => $"{(c.IsRunning ? "▶" : "■")} {c.Name}  [dim]{c.Status}[/]  [dim]({c.LocalFolder})[/]")
+                .ToList();
+            hostChoices.Add(CreateNewOption);
+
+            var hostChoice = Console.Prompt(
+                new SelectionPrompt<string>()
+                    .Title($"[cyan]Existing devcontainers on {target.Label ?? target.Host}:[/]")
+                    .AddChoices(hostChoices));
+
+            if (hostChoice != CreateNewOption)
+            {
+                var picked = existingContainers[hostChoices.IndexOf(hostChoice)];
+
+                if (!picked.IsRunning)
+                {
+                    DisplayInfo($"Starting container {picked.Id[..Math.Min(12, picked.Id.Length)]}...");
+                    var startResult = await RunSshCommandAsync(sshArgs, target, $"docker start {picked.Id}");
+                    if (!startResult.Success)
+                    {
+                        DisplayError($"Failed to start container: {Markup.Escape(startResult.Output.Trim())}");
+                        return 1;
+                    }
+                }
+
+                // VS Code/devcontainer CLI mounts the local folder at /workspaces/<basename>
+                var insideFolder = $"/workspaces/{Path.GetFileName(picked.LocalFolder.TrimEnd('/'))}";
+                var pickedVolumeName = picked.VolumeName ?? string.Empty;
+
+                DisplaySuccess($"Attaching to existing container: {picked.Name} ({picked.Id[..Math.Min(12, picked.Id.Length)]})");
+                await OnAfterRemoteSpawnAsync(
+                    target, sshArgs, projectName, picked.Id, insideFolder, pickedVolumeName, settings);
+                return 0;
+            }
+        }
+
         // Ask for template — discover from NuGet first
         const string UseExistingOption = "Use existing .devcontainer";
         var templateChoices = new List<string> { UseExistingOption };
@@ -600,24 +666,6 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
             new SelectionPrompt<string>()
                 .Title("[cyan]Devcontainer template:[/]")
                 .AddChoices(templateChoices));
-
-        // Check Docker on remote (try full path as fallback — non-interactive SSH may have a stripped PATH)
-        var sshArgs = BuildSshArgs(target);
-        var dockerCheck = await RunSshCommandAsync(sshArgs, target, "docker --version || /usr/bin/docker --version");
-        if (Environment.GetEnvironmentVariable("PKS_DEBUG") == "1")
-            DisplayInfo($"docker check: exit={dockerCheck.Success} output={Markup.Escape(dockerCheck.Output.Trim())}");
-
-        if (!dockerCheck.Success)
-        {
-            DisplayWarning($"Could not confirm Docker on remote host ({Markup.Escape(dockerCheck.Output.Trim().Split('\n')[0])}).");
-            var proceed = Console.Confirm("[cyan]Docker check failed — proceed anyway?[/]", defaultValue: false);
-            if (!proceed)
-                return 1;
-        }
-        else
-        {
-            DisplaySuccess($"Docker available: {Markup.Escape(dockerCheck.Output.Trim().Split('\n')[0])}");
-        }
 
         // Check devcontainer exists and node >= 18 — use grep on version string, no JS quoting issues
         var dcCheck = await RunSshCommandAsync(sshArgs, target,
@@ -944,6 +992,70 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
             args += $" -i \"{target.KeyPath}\"";
         args += $" -p {target.Port}";
         return args;
+    }
+
+    /// <summary>
+    /// Lists devcontainer-managed containers on the remote host that match the given project name
+    /// (matched by basename of the devcontainer.local_folder label).
+    /// </summary>
+    private async Task<List<RemoteDevcontainerInfo>> DiscoverRemoteDevcontainersAsync(
+        string sshArgs, SshTarget target, string projectName)
+    {
+        var result = new List<RemoteDevcontainerInfo>();
+        try
+        {
+            var ps = await RunSshCommandAsync(sshArgs, target,
+                "docker ps -a --filter label=devcontainer.local_folder --format json");
+            if (!ps.Success) return result;
+
+            foreach (var line in ps.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var trimmed = line.Trim();
+                if (trimmed.Length == 0 || trimmed[0] != '{') continue;
+
+                JsonElement root;
+                try { root = JsonDocument.Parse(trimmed).RootElement; }
+                catch { continue; }
+
+                var id = root.TryGetProperty("ID", out var idEl) ? idEl.GetString() ?? "" : "";
+                var name = root.TryGetProperty("Names", out var nEl) ? nEl.GetString() ?? "" : "";
+                var status = root.TryGetProperty("Status", out var sEl) ? sEl.GetString() ?? "" : "";
+                var state = root.TryGetProperty("State", out var stEl) ? stEl.GetString() ?? "" : "";
+                var labelsRaw = root.TryGetProperty("Labels", out var lEl) ? lEl.GetString() ?? "" : "";
+
+                string? localFolder = null;
+                string? volumeName = null;
+                foreach (var kv in labelsRaw.Split(','))
+                {
+                    var eq = kv.IndexOf('=');
+                    if (eq <= 0) continue;
+                    var k = kv[..eq];
+                    var v = kv[(eq + 1)..];
+                    if (k == "devcontainer.local_folder") localFolder = v;
+                    else if (k == "vsc.devcontainer.volume.name") volumeName = v;
+                }
+
+                if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(localFolder)) continue;
+
+                var basename = Path.GetFileName(localFolder.Replace('\\', '/').TrimEnd('/'));
+                if (!string.Equals(basename, projectName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                result.Add(new RemoteDevcontainerInfo(
+                    Id: id,
+                    Name: name,
+                    Status: status,
+                    IsRunning: string.Equals(state, "running", StringComparison.OrdinalIgnoreCase),
+                    LocalFolder: localFolder,
+                    VolumeName: volumeName));
+            }
+        }
+        catch (Exception ex)
+        {
+            if (Environment.GetEnvironmentVariable("PKS_DEBUG") == "1")
+                DisplayWarning($"Discovery failed: {ex.Message}");
+        }
+        return result;
     }
 
     protected static async Task<(bool Success, string Output)> RunSshCommandAsync(
