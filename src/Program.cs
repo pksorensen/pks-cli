@@ -78,8 +78,15 @@ var isHookEventCommand = commandArgs.Length > 2 &&
                         new[] { "pre-tool-use", "post-tool-use", "user-prompt-submit", "stop" }
                             .Contains(commandArgs[2], StringComparer.OrdinalIgnoreCase);
 
+// Skip banner when --no-logo flag is passed
+var noLogo = commandArgs.Any(a => a.Equals("--no-logo", StringComparison.OrdinalIgnoreCase));
+
+// Enable debug output when --debug flag is passed
+if (commandArgs.Any(a => a.Equals("--debug", StringComparison.OrdinalIgnoreCase)))
+    Environment.SetEnvironmentVariable("PKS_DEBUG", "1");
+
 // Display welcome banner with fancy ASCII art (unless we should skip it)
-if (!isMcpStdio && !isGitAskPass && !isFoundryProxy && !(isHooksCommand && (hasJsonFlag || isHookEventCommand)))
+if (!isMcpStdio && !isGitAskPass && !isFoundryProxy && !noLogo && !(isHooksCommand && (hasJsonFlag || isHookEventCommand)))
 {
     DisplayWelcomeBanner();
 
@@ -212,6 +219,14 @@ services.AddHttpClient<IAzureDevOpsAuthService, AzureDevOpsAuthService>();
 // Configure Azure AI Foundry authentication
 services.AddSingleton<PKS.Infrastructure.Services.Models.AzureFoundryAuthConfig>();
 services.AddHttpClient<IAzureFoundryAuthService, AzureFoundryAuthService>();
+
+// Generic Azure authentication
+services.AddSingleton<PKS.Infrastructure.Services.Models.AzureAuthConfig>();
+services.AddHttpClient<PKS.Infrastructure.Services.IAzureAuthService, PKS.Infrastructure.Services.AzureAuthService>();
+
+// Azure VM provisioning
+services.AddHttpClient<PKS.Infrastructure.Services.IAzureVmService, PKS.Infrastructure.Services.AzureVmService>();
+services.AddSingleton<PKS.Infrastructure.Services.IAzureVmMetadataService, PKS.Infrastructure.Services.AzureVmMetadataService>();
 
 // Configure Azure File Share provider
 services.AddSingleton<PKS.Infrastructure.Services.Models.AzureFileShareAuthConfig>();
@@ -561,7 +576,15 @@ app.Configure(config =>
         ssh.AddCommand<PKS.Commands.Ssh.SshRemoveCommand>("remove")
             .WithDescription("Remove a registered SSH target")
             .WithExample(new[] { "ssh", "remove", "projects.si14agents.com" });
+
+        ssh.AddCommand<PKS.Commands.Ssh.SshConnectCommand>("connect")
+            .WithDescription("Open an interactive SSH session to a registered target")
+            .WithExample(new[] { "ssh", "connect", "pks-vm-2e93" });
     });
+
+    config.AddCommand<PKS.Commands.Vibecast.VibecastCommand>("vibecast")
+        .WithDescription("SSH into a registered target and run npx -y vibecast")
+        .WithExample(new[] { "vibecast", "pks-vm-2e93" });
 
     // Add registry branch command
     config.AddBranch<RegistrySettings>("registry", registry =>
@@ -668,6 +691,32 @@ app.Configure(config =>
             .WithExample(new[] { "foundry", "proxy" })
             .WithExample(new[] { "foundry", "proxy", "--port", "8080" })
             .WithExample(new[] { "foundry", "proxy", "--token", "my-secret" });
+    });
+
+    // Add Azure branch command
+    config.AddBranch<PKS.Commands.Azure.AzureSettings>("azure", azure =>
+    {
+        azure.SetDescription("Manage Azure authentication and resources");
+        azure.AddCommand<PKS.Commands.Azure.AzureInitCommand>("init")
+            .WithDescription("Authenticate with Azure and select a subscription")
+            .WithExample(new[] { "azure", "init" });
+    });
+
+    // Add vm branch command
+    config.AddBranch<PKS.Commands.Vm.VmSettings>("vm", vm =>
+    {
+        vm.SetDescription("Manage virtual machines");
+        vm.AddCommand<PKS.Commands.Vm.VmInitCommand>("init")
+            .WithDescription("Provision a new VM and register it as an SSH target")
+            .WithExample(new[] { "vm", "init" });
+        vm.AddCommand<PKS.Commands.Vm.VmAutoshutdownCommand>("autoshutdown")
+            .WithDescription("Configure auto-shutdown for a VM")
+            .WithExample(new[] { "vm", "autoshutdown", "my-vm", "--idle", "30" })
+            .WithExample(new[] { "vm", "autoshutdown", "my-vm", "--scheduled", "22:00" })
+            .WithExample(new[] { "vm", "autoshutdown", "my-vm", "--disable" });
+        vm.AddCommand<PKS.Commands.Vm.VmListCommand>("list")
+            .WithDescription("List VMs provisioned with pks vm init")
+            .WithExample(new[] { "vm", "list" });
     });
 
     // Add fileshare branch (provider auth management)
@@ -863,6 +912,10 @@ app.Configure(config =>
     });
 
     // Add PRD branch command with subcommands
+    config.AddCommand<PKS.Commands.Vm.VmScheduleCommand>("schedule")
+        .WithDescription("Interactively configure scheduled start/stop for a VM")
+        .WithExample(new[] { "schedule" });
+
     config.AddBranch<PrdSettings>("prd", prd =>
     {
         prd.SetDescription("Manage Product Requirements Documents (PRDs) with AI-powered generation");
@@ -898,7 +951,13 @@ app.Configure(config =>
 using var tracerProvider = SetupTracing();
 using var meterProvider = SetupMetrics();
 
-return await app.RunAsync(args);
+// Strip meta-flags before Spectre parses args (it doesn't know about them)
+var filteredArgs = args
+    .Where(a => !a.Equals("--no-logo", StringComparison.OrdinalIgnoreCase)
+             && !a.Equals("--debug", StringComparison.OrdinalIgnoreCase))
+    .ToArray();
+
+return await app.RunAsync(filteredArgs);
 
 static TracerProvider? SetupTracing()
 {
