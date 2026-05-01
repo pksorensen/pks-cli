@@ -93,12 +93,44 @@
   </ItemGroup>
 
   <!-- Local testing only: embed vibecast linux-amd64 binary and claude-plugin dir so
-       spawned containers use the local build instead of npx. Build with -p:EmbedVibecast=true. -->
+       spawned containers use the local build instead of npx.
+
+       Two ways to point at the binary:
+         dotnet build -p:EmbedVibecast=true
+           Looks for the binary at the legacy static path
+           (Infrastructure/Resources/vibecast-linux-amd64). Useful when a CI artifact has
+           been dropped there.
+
+         dotnet build -p:EmbedVibecastPath=/abs/path/to/vibecast [-p:EmbedVibecastPluginPath=/abs/path/to/claude-plugin]
+           Embeds the binary directly from the given path — no copying required.
+           Implies EmbedVibecast=true. PluginPath is optional; when omitted only the
+           binary is embedded.
+
+       All embedded resources use Condition="Exists(...)" so a missing optional file
+       (e.g. claude-plugin assets) won't break the build. -->
+  <PropertyGroup Condition="'$(EmbedVibecastPath)' != ''">
+    <EmbedVibecast>true</EmbedVibecast>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(EmbedVibecast)' == 'true' And '$(EmbedVibecastPath)' == ''">
+    <EmbedVibecastPath>$(MSBuildThisFileDirectory)Infrastructure\Resources\vibecast-linux-amd64</EmbedVibecastPath>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(EmbedVibecast)' == 'true' And '$(EmbedVibecastPluginPath)' == ''">
+    <EmbedVibecastPluginPath>$(MSBuildThisFileDirectory)Infrastructure\Resources\claude-plugin</EmbedVibecastPluginPath>
+  </PropertyGroup>
+
   <ItemGroup Condition="'$(EmbedVibecast)' == 'true'">
-    <EmbeddedResource Include="Infrastructure\Resources\vibecast-linux-amd64" LogicalName="vibecast-linux-amd64"/>
-    <EmbeddedResource Include="Infrastructure\Resources\claude-plugin\.mcp.json" LogicalName="claude-plugin/.mcp.json"/>
-    <EmbeddedResource Include="Infrastructure\Resources\claude-plugin\.claude-plugin\plugin.json" LogicalName="claude-plugin/.claude-plugin/plugin.json"/>
-    <EmbeddedResource Include="Infrastructure\Resources\claude-plugin\hooks\hooks.json" LogicalName="claude-plugin/hooks/hooks.json"/>
+    <EmbeddedResource Condition="Exists('$(EmbedVibecastPath)')" Include="$(EmbedVibecastPath)" LogicalName="vibecast-linux-amd64"/>
+    <EmbeddedResource Condition="Exists('$(EmbedVibecastPluginPath)\.mcp.json')" Include="$(EmbedVibecastPluginPath)\.mcp.json" LogicalName="claude-plugin/.mcp.json"/>
+    <EmbeddedResource Condition="Exists('$(EmbedVibecastPluginPath)\.claude-plugin\plugin.json')" Include="$(EmbedVibecastPluginPath)\.claude-plugin\plugin.json" LogicalName="claude-plugin/.claude-plugin/plugin.json"/>
+    <EmbeddedResource Condition="Exists('$(EmbedVibecastPluginPath)\hooks\hooks.json')" Include="$(EmbedVibecastPluginPath)\hooks\hooks.json" LogicalName="claude-plugin/hooks/hooks.json"/>
   </ItemGroup>
+
+  <Target Name="VerifyEmbedVibecastBinary" BeforeTargets="CoreCompile" Condition="'$(EmbedVibecast)' == 'true'">
+    <Error Condition="!Exists('$(EmbedVibecastPath)')" Text="EmbedVibecast=true but vibecast binary not found at: $(EmbedVibecastPath). Set -p:EmbedVibecastPath=&lt;abs-path&gt; or build vibecast and copy it there." />
+    <Message Importance="high" Text="Embedding vibecast: $(EmbedVibecastPath)" />
+    <Message Importance="high" Condition="Exists('$(EmbedVibecastPluginPath)\.mcp.json')" Text="Embedding claude-plugin from: $(EmbedVibecastPluginPath)" />
+  </Target>
 
 </Project>

@@ -59,18 +59,22 @@ public sealed class AgenticsProxy : IAsyncDisposable
     private static readonly string[] AllHttpMethods =
         ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
+    private readonly bool _socketDirIsExternal;
+
     private AgenticsProxy(
         int port,
         string? socketDir,
         string? socketPath,
         AgenticsProxyOptions options,
-        IAzureFoundryAuthService authService)
+        IAzureFoundryAuthService authService,
+        bool socketDirIsExternal = false)
     {
         Port = port;
         SocketDir = socketDir;
         SocketPath = socketPath;
         _options = options;
         _authService = authService;
+        _socketDirIsExternal = socketDirIsExternal;
 
         var builder = WebApplication.CreateSlimBuilder(Array.Empty<string>());
         builder.WebHost.UseSetting("suppressStatusMessages", "true");
@@ -95,20 +99,30 @@ public sealed class AgenticsProxy : IAsyncDisposable
         AgenticsProxyOptions options,
         IAzureFoundryAuthService authService,
         bool createSocket = false,
+        string? socketDirOverride = null,
         CancellationToken ct = default)
     {
         var port = FindFreePort();
 
         string? socketDir = null;
         string? socketPath = null;
+        bool socketDirIsExternal = false;
         if (createSocket)
         {
-            socketDir = Path.Combine(Path.GetTempPath(), $"pks-agentics-{options.JobId}");
+            // socketDirOverride lets the runner use a stable per-task path so the warm container's
+            // bind mount stays valid across job cycles within the same task — see ADR 0003.
+            // Without it, every job created /tmp/pks-agentics-{jobId} but the container's mount
+            // kept pointing at the FIRST job's dir.
+            socketDir = socketDirOverride ?? Path.Combine(Path.GetTempPath(), $"pks-agentics-{options.JobId}");
+            socketDirIsExternal = socketDirOverride != null;
             Directory.CreateDirectory(socketDir);
             socketPath = Path.Combine(socketDir, "proxy.sock");
+            // Unix sockets don't bind over an existing file — remove any stale one from a
+            // previous proxy that wrote to this dir.
+            try { if (File.Exists(socketPath)) File.Delete(socketPath); } catch { }
         }
 
-        var proxy = new AgenticsProxy(port, socketDir, socketPath, options, authService);
+        var proxy = new AgenticsProxy(port, socketDir, socketPath, options, authService, socketDirIsExternal);
         await proxy._app.StartAsync(ct);
 
         if (socketPath != null && File.Exists(socketPath) &&
@@ -317,6 +331,13 @@ public sealed class AgenticsProxy : IAsyncDisposable
         _tokens.Clear();
         await _app.StopAsync();
         await _app.DisposeAsync();
+        // Externally-managed dir (per-task per ADR 0003): leave it in place so the warm
+        // container's bind mount remains valid for the next job. Just clean the socket file.
+        if (_socketDirIsExternal && SocketPath != null)
+        {
+            try { if (File.Exists(SocketPath)) File.Delete(SocketPath); } catch { }
+            return;
+        }
         if (SocketDir != null && Directory.Exists(SocketDir))
             Directory.Delete(SocketDir, recursive: true);
     }

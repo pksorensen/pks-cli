@@ -42,8 +42,12 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
     /// <summary>Global monotonic counter so debug captures sort correctly across concurrent jobs.</summary>
     private static int _captureSeq = 0;
 
-    // Container reuse is tracked via Docker labels (pks.agentics.fingerprint) rather than
-    // in-memory state, so containers survive pks-cli restarts.
+    // Container reuse is tracked via Docker labels. We require BOTH a fingerprint match AND
+    // a runner-instance match before reusing a warm container. Runner-instance bounds the
+    // container's lifetime to this runner-process — restart the runner and the next job spawns
+    // a fresh container with new bind mounts (so per-job sockets / OTLP / etc. all stay valid).
+    // See docs/adr/0002-runner-container-lifetime.md for the reasoning.
+    private static readonly string _runnerInstanceId = Guid.NewGuid().ToString("N")[..16];
 
     // Track active job resources for cleanup on shutdown
     private readonly List<ActiveJobContext> _activeJobs = new();
@@ -180,10 +184,20 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 DisplayInfo($"Polling interval: {settings.PollingInterval}s");
             }
 
-            // GitHub authentication pre-flight: ensure a valid token is stored so
-            // the credential server can serve it and git clones succeed.
-            // Flow: check stored token → try refresh → device code login.
+            // GitHub authentication pre-flight: only run when the project actually
+            // points at github.com. Self-hosted projects (repo on the agentics server)
+            // never need GitHub credentials, so prompting would be both unnecessary and
+            // surprising. The runner queries the server to find out.
+            var requiresGitHub = false;
             if (!settings.InProcess)
+            {
+                requiresGitHub = await ProjectRequiresGitHubAsync(registration);
+                if (!requiresGitHub && settings.Verbose)
+                {
+                    DisplayInfo("Project does not use GitHub — skipping GitHub auth preflight.");
+                }
+            }
+            if (!settings.InProcess && requiresGitHub)
             {
                 var isAuthenticated = await _githubAuth.IsAuthenticatedAsync();
 
@@ -571,6 +585,32 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         return caps;
     }
 
+    /// <summary>
+    /// Asks the server whether the project this runner is registered for needs GitHub
+    /// access. Falls back to <c>true</c> on any error so we keep the historical behavior
+    /// of prompting (better to ask once than fail a job mid-clone).
+    /// </summary>
+    private async Task<bool> ProjectRequiresGitHubAsync(AgenticsRunnerRegistration registration)
+    {
+        try
+        {
+            using var client = _httpClientFactory.CreateClient();
+            client.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", registration.Token);
+            var url = $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}/repo-info";
+            using var response = await client.GetAsync(url);
+            if (!response.IsSuccessStatusCode)
+                return true;
+            var json = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.TryGetProperty("requiresGitHub", out var v) && v.GetBoolean();
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
     private async Task<RunnerJob?> PollForJobAsync(AgenticsRunnerRegistration registration, IReadOnlyList<string> capabilities, CancellationToken ct)
     {
         using var client = _httpClientFactory.CreateClient();
@@ -616,11 +656,34 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         GitCredentialServer credentialServer,
         CancellationToken ct)
     {
-        // Start AgenticsProxy for the duration of this job so the container can reach external APIs
-        // via a credential-injecting proxy. Containers use host.docker.internal to reach runner localhost.
+        // Start AgenticsProxy + OtlpProxy. Per ADR 0003, socket dirs are stable per-task so the
+        // warm container's bind mount remains valid across job cycles within the same task.
+        // Falls back to per-job dirs for legacy/jobless dispatches with no taskId.
+        var taskKeyForSockets = job.AgentDef?.TaskId is { Length: > 0 } tid ? $"task-{tid}" : null;
         var agenticsProxyOptions = await BuildAgenticsProxyOptionsAsync(job, ct);
-        await using var agenticsProxy = await AgenticsProxy.StartAsync(agenticsProxyOptions, _foundryAuthService, createSocket: true, ct: ct);
+        var agenticsSocketDir = taskKeyForSockets != null
+            ? Path.Combine(Path.GetTempPath(), $"pks-agentics-{taskKeyForSockets}")
+            : null;
+        await using var agenticsProxy = await AgenticsProxy.StartAsync(
+            agenticsProxyOptions, _foundryAuthService,
+            createSocket: true,
+            socketDirOverride: agenticsSocketDir,
+            ct: ct);
         _console.MarkupLine($"[dim]AgenticsProxy listening on port {agenticsProxy.Port} ({agenticsProxyOptions.AllowedHosts.Count} allowed host(s))[/]");
+
+        // OtlpProxy: same per-task stable dir pattern. Container-side TCP→Unix bridge (in start.sh)
+        // forwards localhost:4318 to /var/run/pks-otlp/otlp.sock.
+        var otlpAnalysisBaseUrl = $"{new Uri(registration.Server).Scheme}://{new Uri(registration.Server).Host}{(new Uri(registration.Server).IsDefaultPort ? "" : $":{new Uri(registration.Server).Port}")}";
+        var otlpSocketDir = taskKeyForSockets != null
+            ? Path.Combine(Path.GetTempPath(), $"pks-otlp-{taskKeyForSockets}")
+            : null;
+        await using var otlpProxy = await OtlpProxy.StartAsync(
+            analysisBaseUrl: otlpAnalysisBaseUrl,
+            jobId: job.Id,
+            createSocket: true,
+            socketDirOverride: otlpSocketDir,
+            ct: ct);
+        _console.MarkupLine($"[dim]OtlpProxy listening on host port {otlpProxy.Port} (socket: {otlpProxy.SocketPath})[/]");
 
         using var client = _httpClientFactory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
@@ -645,76 +708,72 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         var claimData = JsonSerializer.Deserialize<JsonElement>(claimJson, JsonOptions);
         var runId = claimData.GetProperty("runId").GetString()!;
 
-        // 2. Check for a warm container via Docker labels (survives pks-cli restarts)
+        // 2. Check for a warm container via Docker labels (survives pks-cli restarts).
+        // Per ADR 0003 the fingerprint includes taskId, so each task gets its own dedicated
+        // container. taskId may be empty for ad-hoc/legacy dispatches → falls back to project-scoped.
         var storedToken = await _githubAuth.GetStoredTokenAsync();
         var spawnOptions = BuildSpawnOptions(job, credentialServer.SocketPath, registration, storedToken?.AccessToken);
+        var taskId = job.AgentDef?.TaskId;
         spawnOptions.AgenticsProxySocketDir = agenticsProxy.SocketDir;
+        spawnOptions.OtlpProxySocketDir = otlpProxy.SocketDir;
 
-        // Patch claude config volume to a stable name so credentials persist across container respawns
-        spawnOptions.InlineDevcontainerFiles = PatchDevcontainerVolumes(
-            spawnOptions.InlineDevcontainerFiles, registration.Owner, registration.Project);
+        // Patch the claude config volume to a stable name so credentials persist. Scope (task /
+        // project / runner) controls how broadly the credentials are shared — see ADR 0004.
+        var (patchedFiles, claudeVolumeName) = PatchDevcontainerVolumes(
+            spawnOptions.InlineDevcontainerFiles, registration.Owner, registration.Project,
+            taskId, job.AgentDef?.ClaudeCredentialsScope);
+        spawnOptions.InlineDevcontainerFiles = patchedFiles;
+        var claudeScope = job.AgentDef?.ClaudeCredentialsScope ?? "project";
+        _console.MarkupLine($"[dim]Claude credentials volume: [cyan]{claudeVolumeName.EscapeMarkup()}[/] (scope: {claudeScope})[/]");
 
-        // Fingerprint computed AFTER patching so cache key matches what gets deployed
+        // Fingerprint = (project + task + devcontainer config + template). Per ADR 0003 each task
+        // gets its own container; retries/continues of the SAME task reuse it. Different stations
+        // of the same task swap plugins inside the container, not by recreating it.
         var fingerprint = ComputeDevcontainerFingerprint(
-            registration.Owner, registration.Project, spawnOptions.InlineDevcontainerFiles);
+            registration.Owner,
+            registration.Project,
+            taskId,
+            spawnOptions.InlineDevcontainerFiles,
+            spawnOptions.DevcontainerTemplate);
 
-        // Stamp the container with labels so we can rediscover it after pks-cli restarts
+        // Stamp the container with labels so we can rediscover warm containers across job
+        // dispatches inside this runner process. runner-instance binds the container's reusability
+        // to this runner-process — see ADR 0002.
         spawnOptions.IdLabels = new Dictionary<string, string>
         {
             ["pks.agentics.owner"] = registration.Owner,
             ["pks.agentics.project"] = registration.Project,
             ["pks.agentics.fingerprint"] = fingerprint,
+            ["pks.agentics.runner-instance"] = _runnerInstanceId,
         };
+        if (!string.IsNullOrEmpty(taskId))
+            spawnOptions.IdLabels["pks.agentics.task"] = taskId;
 
-        // Acquire plugins and agent plugin dirs on the Runner side, populating a Docker volume
-        // mounted at /run/alp/plugins inside the devcontainer.
+        // Plugins are no longer a Docker volume per ADR 0003 — they're files inside the container
+        // at $HOME/.alp/plugins/, swapped on every job dispatch (after the container is up).
         var hasPlugins = job.AgentDef?.Plugins?.Count > 0;
         var hasAgents = job.AgentDef?.Agents?.Count > 0;
-        string? pluginVolumeName = null;
         var pluginContainerPaths = new List<string>();
 
-        if (hasPlugins || hasAgents)
-        {
-            var volumeName = $"alp-plugins-{job.Id}";
-            var createResult = await RunCaptureAsync("docker", new[] { "volume", "create", volumeName }, ct);
-            if (createResult.ExitCode == 0)
-            {
-                pluginVolumeName = volumeName;
-                _console.MarkupLine($"[cyan]Created ALP plugin volume: {volumeName}[/]");
-
-                if (hasPlugins)
-                {
-                    var clonedPaths = await ClonePluginsIntoVolumeAsync(
-                        job.AgentDef!.Plugins!, volumeName, ct);
-                    pluginContainerPaths.AddRange(clonedPaths);
-                }
-
-                if (hasAgents)
-                {
-                    var agentPluginPath = await WriteAgentPluginDirInVolumeAsync(
-                        job.AgentDef!.Agents!, volumeName, job.Id, ct);
-                    if (agentPluginPath != null)
-                        pluginContainerPaths.Add(agentPluginPath);
-                }
-            }
-            else
-            {
-                _console.MarkupLine($"[red]Failed to create plugin volume {volumeName}: {createResult.Stderr.EscapeMarkup()}[/]");
-            }
-        }
-
-        if (pluginVolumeName != null)
-            spawnOptions.PluginVolumeName = pluginVolumeName;
-
         string containerId;
-        var warmId = await FindContainerByLabelAsync($"pks.agentics.fingerprint={fingerprint}");
+        // Require BOTH fingerprint AND runner-instance to match — see ADR 0002.
+        var warmId = await FindContainerByLabelsAsync(
+            $"pks.agentics.fingerprint={fingerprint}",
+            $"pks.agentics.runner-instance={_runnerInstanceId}");
         if (warmId != null)
         {
-            _console.MarkupLine($"[green]Reusing warm container:[/] {warmId[..12]} (devcontainer unchanged)");
+            _console.MarkupLine($"[green]Reusing warm container:[/] {warmId[..12]} (same runner instance, devcontainer unchanged)");
             containerId = warmId;
         }
         else
         {
+            // Detect orphaned containers from a previous runner instance — log a hint, don't auto-remove.
+            var orphanId = await FindContainerByLabelAsync($"pks.agentics.fingerprint={fingerprint}");
+            if (orphanId != null)
+            {
+                _console.MarkupLine($"[grey]Skipping warm container {orphanId[..12]} from previous runner instance — run [italic]pks agentics runner cleanup[/] to remove orphans[/]");
+            }
+
             // 3. Spawn the devcontainer (clones repo, runs devcontainer up)
             var logPath = Path.Combine(Path.GetTempPath(), $"pks-runner-{job.Id}-build.log");
             _console.MarkupLine($"[dim]Build log (streaming): {logPath}[/]");
@@ -745,6 +804,64 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         // 4. PATCH to in_progress now that the container is running
         await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "in_progress", null, ct);
 
+        // 4b. Install plugins INSIDE the container at $HOME/.alp/plugins (per ADR 0003).
+        // Clean slate every job so station transitions get the right tool belt without
+        // recreating the container. No Docker volume → no "volume in use" cleanup races.
+        if (hasPlugins || hasAgents)
+        {
+            await _spawnerService.ExecInContainerAsync(containerId,
+                "bash -c 'rm -rf $HOME/.alp/plugins/* $HOME/.alp/plugins/.* 2>/dev/null; mkdir -p $HOME/.alp/plugins'",
+                timeoutSeconds: 30);
+
+            if (hasPlugins)
+            {
+                foreach (var plugin in job.AgentDef!.Plugins!)
+                {
+                    var pluginUrl = plugin.SourceUrl;
+                    var pluginName = plugin.Name;
+                    if (string.IsNullOrEmpty(pluginUrl) || string.IsNullOrEmpty(pluginName))
+                    {
+                        _console.MarkupLine($"[yellow]Skipping plugin with missing url or name[/]");
+                        continue;
+                    }
+                    var dest = $"$HOME/.alp/plugins/{pluginName}";
+                    var cloneRes = await _spawnerService.ExecInContainerAsync(containerId,
+                        $"bash -c 'git clone --depth 1 \"{pluginUrl}\" \"{dest}\" 2>&1'",
+                        timeoutSeconds: 60);
+                    if (cloneRes.ExitCode != 0)
+                    {
+                        _console.MarkupLine($"[red]Failed to clone plugin {pluginName}: {cloneRes.Output.Trim().EscapeMarkup()}[/]");
+                        continue;
+                    }
+                    pluginContainerPaths.Add(dest);
+                    _console.MarkupLine($"  [green]✓[/] cloned {pluginName} → {dest}");
+                }
+            }
+
+            if (hasAgents)
+            {
+                // Mirror the existing layout: a synthetic plugin dir with .claude-plugin/plugin.json
+                // and agents/{agentId}.md. Vibecast picks it up as just another plugin.
+                var agentDir = $"$HOME/.alp/plugins/agents-{job.Id}";
+                var pluginJson = $$"""{"name":"task-agents","version":"1.0.0","description":"Agents for job {{job.Id}}"}""";
+                var pluginJsonB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(pluginJson));
+                await _spawnerService.ExecInContainerAsync(containerId,
+                    $"bash -c 'mkdir -p {agentDir}/.claude-plugin {agentDir}/agents && " +
+                    $"printf \"%s\" \"{pluginJsonB64}\" | base64 -d > {agentDir}/.claude-plugin/plugin.json'",
+                    timeoutSeconds: 10);
+                foreach (var agent in job.AgentDef!.Agents!)
+                {
+                    if (string.IsNullOrEmpty(agent.Id) || string.IsNullOrEmpty(agent.Content)) continue;
+                    var b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(agent.Content));
+                    await _spawnerService.ExecInContainerAsync(containerId,
+                        $"bash -c 'printf \"%s\" \"{b64}\" | base64 -d > {agentDir}/agents/{agent.Id}.md'",
+                        timeoutSeconds: 10);
+                }
+                pluginContainerPaths.Add(agentDir);
+                _console.MarkupLine($"  [green]✓[/] wrote {job.AgentDef.Agents!.Count} agent file(s) → {agentDir}");
+            }
+        }
+
         // 5. Determine workspace folder and AGENTIC_SERVER for inside the container
         var repoName = spawnOptions.ProjectName;
         var workspaceFolder = $"/workspaces/{repoName}";
@@ -764,14 +881,31 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             $"bash -c 'mkdir -p {vibecastHome}'",
             timeoutSeconds: 30);
 
+        // Local helper to write arbitrary file content into the container without shell quoting issues.
+        // Uses base64 transport — caller's content can contain any bytes, including newlines, quotes, $, ()
+        // — none of it is interpreted by bash.
+        async Task WriteContainerFileAsync(string path, string content, int timeoutSeconds = 30)
+        {
+            var b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(content));
+            await _spawnerService.ExecInContainerAsync(containerId,
+                $"bash -c 'mkdir -p \"$(dirname {path})\" && printf \"%s\" \"{b64}\" | base64 -d > {path}'",
+                timeoutSeconds: timeoutSeconds);
+        }
+
         if (!string.IsNullOrEmpty(jobPrompt))
         {
-            var promptB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(jobPrompt));
             _console.MarkupLine($"[cyan]Writing prompt to {promptFile}...[/]");
-            await _spawnerService.ExecInContainerAsync(containerId,
-                $"bash -c 'printf \"%s\" \"{promptB64}\" | base64 -d > {promptFile}'",
-                timeoutSeconds: 30);
+            await WriteContainerFileAsync(promptFile, jobPrompt);
         }
+
+        // 6b. Materialize user-uploaded task assets into {workspace}/.agentics/assets/
+        await SyncTaskAssetsAsync(
+            client,
+            job.AgentDef?.TaskAssets,
+            jobWorkTree: null,
+            containerId: containerId,
+            workspaceFolderInContainer: workspaceFolder,
+            ct);
 
         // 7. Build and write a launch script into the container to avoid shell quoting issues
         var vibecastTmux = $"vibecast-{job.Id[..8]}";
@@ -804,6 +938,45 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             stageGitUrl = rebased.Uri.ToString();
         }
 
+        // Write appendSystemPrompt to a file (matches in-process behaviour). Avoids any shell
+        // escaping concerns regardless of what's in the markdown.
+        var appendPromptFile = $"{vibecastHome}/append-system-prompt.txt";
+        await WriteContainerFileAsync(appendPromptFile, appendPrompt);
+
+        // SubagentStart hook: inject SubagentPromptAppendix into every spawned subagent.
+        // Written to a file the hook reads at runtime; env var below points at it.
+        string? subagentSuffixFile = null;
+        if (!string.IsNullOrWhiteSpace(job.AgentDef?.SubagentPromptAppendix))
+        {
+            subagentSuffixFile = $"{vibecastHome}/subagent-prompt-suffix.txt";
+            await WriteContainerFileAsync(subagentSuffixFile, job.AgentDef.SubagentPromptAppendix);
+        }
+
+        // Pre-write .claude/ config so Claude Code (1) anchors project-root detection at the
+        // workspace and doesn't walk past it, and (2) doesn't TUI-prompt for permission on every
+        // settings.local.json write. Mirrors the in-process pre-flight at line 2071-2128.
+        var workspaceClaudeDir = $"{workspaceFolder}/.claude";
+        await WriteContainerFileAsync($"{workspaceClaudeDir}/settings.json", "{}\n");
+        await WriteContainerFileAsync($"{workspaceClaudeDir}/settings.local.json", """
+            {
+              "permissions": {
+                "allow": [
+                  "Write(.claude/**)",
+                  "Edit(.claude/**)",
+                  "Bash(mkdir**)"
+                ]
+              }
+            }
+            """);
+        await WriteContainerFileAsync($"{workspaceClaudeDir}/.gitignore",
+            "# Runner-injected — never commit\nsettings.local.json\n");
+        await WriteContainerFileAsync($"{workspaceFolder}/CLAUDE.md", $"""
+            # Job Environment
+
+            This is a runner job container. Your workspace is `{workspaceFolder}`.
+            All files must be created under `{workspaceFolder}` — do not write to parent directories.
+            """);
+
         var launchScript = $"{vibecastHome}/start.sh";
         var scriptLines = new System.Text.StringBuilder();
         scriptLines.AppendLine("#!/bin/bash");
@@ -813,6 +986,17 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         scriptLines.AppendLine("unset TMUX");
         // Ensure user-local bin is on PATH so claude is found (e.g. /home/node/.local/bin)
         scriptLines.AppendLine("export PATH=\"$HOME/.local/bin:/home/node/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"");
+        // Locale + terminal capabilities. In-process mode inherits these from the runner host
+        // shell; spawn mode runs inside a fresh container where they're empty by default. Without
+        // LANG/LC_ALL set to a UTF-8 locale, libc falls back to "C" (ASCII-only) and Unicode block
+        // characters in Claude's banner / spinners render as "_". C.UTF-8 is universally available
+        // in Debian/Alpine/etc base images (en_US.UTF-8 often isn't generated). xterm-256color +
+        // COLORTERM=truecolor + FORCE_COLOR=3 turn on full ANSI color in Claude/syntax highlighting.
+        scriptLines.AppendLine("export LANG=${LANG:-C.UTF-8}");
+        scriptLines.AppendLine("export LC_ALL=${LC_ALL:-C.UTF-8}");
+        scriptLines.AppendLine("export TERM=${TERM:-xterm-256color}");
+        scriptLines.AppendLine("export COLORTERM=${COLORTERM:-truecolor}");
+        scriptLines.AppendLine("export FORCE_COLOR=${FORCE_COLOR:-3}");
         scriptLines.AppendLine($"export VIBECAST_HOME={vibecastHome}");
         scriptLines.AppendLine($"export AGENTICS_SERVER={agenticServerForContainer}");
         scriptLines.AppendLine($"export AGENTIC_SERVER={agenticServerForContainer}"); // deprecated, kept for backwards compat
@@ -847,11 +1031,29 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             scriptLines.AppendLine($"export STAGE_GIT_TOKEN={stageGitToken}");
             scriptLines.AppendLine($"export STAGE_DIR={stageDir}");
         }
-        scriptLines.AppendLine($"export VIBECAST_APPEND_SYSTEM_PROMPT=\"{appendPrompt}\"");
+        // Use FILE form (matches in-process). Bullet-proof against any prompt content; no shell
+        // parsing of the markdown happens.
+        scriptLines.AppendLine($"export VIBECAST_APPEND_SYSTEM_PROMPT_FILE={appendPromptFile}");
+
+        // Tell vibecast it's running as a job (used for behaviour gating in vibecast itself).
+        scriptLines.AppendLine("export AGENTICS_JOB_MODE=1");
+
+        // Resume Claude session on retry-after-timeout. Spawn-mode used to silently drop this.
+        if (!string.IsNullOrEmpty(job.AgentDef?.ResumeSessionId))
+            scriptLines.AppendLine($"export VIBECAST_RESUME_SESSION_ID={job.AgentDef.ResumeSessionId}");
+
+        // SubagentStart hook reads this file when set (subagent prompt appendix).
+        if (subagentSuffixFile is not null)
+            scriptLines.AppendLine($"export SUBAGENT_PROMPT_SUFFIX_FILE={subagentSuffixFile}");
+
+        // Operator: stop Claude Code from spawning long-lived background tasks (used by
+        // stations that hit subagent-stall issues with background work).
+        if (job.AgentDef?.OperatorConfig?.DisableBackgroundTasks == true)
+            scriptLines.AppendLine("export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1");
 
         // Expose pre-cloned plugins via VIBECAST_EXTRA_PLUGINS so vibecast passes --plugin-dir
         // to Claude for each one. Plugins are cloned by the Runner (pks-cli) before container
-        // spawn and mounted at /run/alp/plugins via a dedicated Docker volume — see PreparePluginVolumeAsync.
+        // spawn and mounted at $HOME/.alp/plugins via a dedicated Docker volume — see PreparePluginVolumeAsync.
         if (pluginContainerPaths.Count > 0)
         {
             scriptLines.AppendLine($"export VIBECAST_EXTRA_PLUGINS=\"{string.Join(":", pluginContainerPaths)}\"");
@@ -860,6 +1062,55 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         // AgenticsProxy socket (bind-mounted from host): agents use curl --unix-socket to reach proxy
         scriptLines.AppendLine("export AGENTICS_PROXY_SOCKET=/var/run/pks-agentics/proxy.sock");
         scriptLines.AppendLine($"export AGENTICS_PROXY_TOKEN=\"{agenticsProxyOptions.BootstrapToken}\"");
+
+        // OTLP bridge: vibecast/Claude expect a TCP HTTP endpoint, but our OtlpProxy is reachable
+        // only via a Unix socket bind-mounted at /var/run/pks-otlp/otlp.sock. A tiny Node TCP→Unix
+        // bridge listens on 127.0.0.1:4318 and forwards each connection to the socket.
+        const string otlpBridgePath = "/tmp/otlp-bridge.js";
+        const string otlpBridgeJs = @"const net = require('net');
+const TCP_PORT = 4318;
+const SOCK = '/var/run/pks-otlp/otlp.sock';
+const server = net.createServer((client) => {
+  const upstream = net.createConnection(SOCK);
+  client.pipe(upstream);
+  upstream.pipe(client);
+  upstream.on('error', () => { try { client.destroy(); } catch (_) {} });
+  client.on('error', () => { try { upstream.destroy(); } catch (_) {} });
+});
+server.on('error', (e) => { console.error('otlp-bridge:', e.message); process.exit(1); });
+server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:' + TCP_PORT + ' -> ' + SOCK));
+";
+        await WriteContainerFileAsync(otlpBridgePath, otlpBridgeJs);
+        scriptLines.AppendLine($"node {otlpBridgePath} > {vibecastHome}/otlp-bridge.log 2>&1 &");
+
+        // OTEL env vars — mirror in-process mode but point at the in-container bridge
+        var otelResourceAttrs = $"job.id={job.Id},run.id={runId}";
+        if (!string.IsNullOrEmpty(job.AgentDef?.TaskId))
+            otelResourceAttrs += $",task.id={job.AgentDef.TaskId}";
+        if (!string.IsNullOrEmpty(job.AgentDef?.AssemblyLineId))
+            otelResourceAttrs += $",assembly_line.id={job.AgentDef.AssemblyLineId}";
+        const string otelBase = "http://localhost:4318";
+        scriptLines.AppendLine($"export OTEL_EXPORTER_OTLP_ENDPOINT=\"{otelBase}\"");
+        scriptLines.AppendLine($"export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=\"{otelBase}/v1/traces\"");
+        scriptLines.AppendLine($"export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=\"{otelBase}/v1/logs\"");
+        scriptLines.AppendLine($"export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=\"{otelBase}/v1/metrics\"");
+        scriptLines.AppendLine("export OTEL_EXPORTER_OTLP_INSECURE=true");
+        scriptLines.AppendLine("export OTEL_EXPORTER_OTLP_PROTOCOL=\"http/json\"");
+        scriptLines.AppendLine("export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=\"http/json\"");
+        scriptLines.AppendLine("export OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=\"http/json\"");
+        scriptLines.AppendLine("export OTEL_SERVICE_NAME=\"vibecast-job\"");
+        scriptLines.AppendLine($"export OTEL_RESOURCE_ATTRIBUTES=\"{otelResourceAttrs}\"");
+        scriptLines.AppendLine("export CLAUDE_CODE_ENABLE_TELEMETRY=1");
+        scriptLines.AppendLine("export CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1");
+        scriptLines.AppendLine("export OTEL_TRACES_EXPORTER=otlp");
+        scriptLines.AppendLine("export OTEL_LOGS_EXPORTER=otlp");
+        scriptLines.AppendLine("export OTEL_TRACES_EXPORT_INTERVAL=5000");
+        scriptLines.AppendLine("export OTEL_LOGS_EXPORT_INTERVAL=5000");
+
+        // Note: Claude's first-run gates (theme picker, login-method picker, OAuth URL +
+        // code paste, workspace trust) are handled by vibecast's pane-grep detectors so
+        // env-var providers (ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, CLAUDE_CODE_USE_BEDROCK)
+        // can still suppress them upstream. See vibecast/internal/broadcast/broadcast.go.
 
         // Propagate W3C trace context for log correlation with the server-side trace.
         if (!string.IsNullOrEmpty(job.AgentDef?.Traceparent))
@@ -954,6 +1205,35 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         // 8. Wait for vibecast control socket, printing tmux pane output every 5s for visibility
         var controlSocket = $"{vibecastHome}/.vibecast/control.sock";
         _console.MarkupLine($"[cyan]Waiting for control socket...[/]");
+        // Track which onboarding prompts we've already surfaced so we don't re-print every 5s tail.
+        var shownOnboardingIds = new HashSet<string>();
+        var onboardingLineRe = new System.Text.RegularExpressions.Regex(
+            @"\[onboarding-prompt\]\s+kind=(?<kind>\S+)\s+provider=(?<provider>\S+)\s+questionId=(?<qid>\S+)\s+url=(?<url>\S+)",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        void SurfaceOnboardingPrompts(string logChunk)
+        {
+            foreach (System.Text.RegularExpressions.Match m in onboardingLineRe.Matches(logChunk))
+            {
+                var qid = m.Groups["qid"].Value;
+                if (!shownOnboardingIds.Add(qid)) continue;
+                var kind = m.Groups["kind"].Value;
+                var provider = m.Groups["provider"].Value;
+                var url = m.Groups["url"].Value;
+                _console.WriteLine();
+                _console.Write(new Spectre.Console.Panel(
+                    $"[bold]Provider:[/] {provider.EscapeMarkup()}    [bold]Kind:[/] {kind.EscapeMarkup()}\n\n" +
+                    $"[bold]Open this URL in your browser:[/]\n[link={url}]{url.EscapeMarkup()}[/]\n\n" +
+                    $"After signing in, paste the returned code on the task page in the dashboard.")
+                {
+                    Header = new Spectre.Console.PanelHeader("[yellow]⚠ Agent paused — sign-in required[/]"),
+                    Border = Spectre.Console.BoxBorder.Double,
+                    BorderStyle = new Spectre.Console.Style(Spectre.Console.Color.Yellow),
+                });
+                _console.WriteLine();
+            }
+        }
+
         var socketReady = false;
         for (var i = 0; i < 60; i++)
         {
@@ -967,6 +1247,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 var log = await _spawnerService.ExecInContainerAsync(containerId,
                     $"tail -5 {vibecastHome}/vibecast.log 2>/dev/null || echo '(no log yet)'", timeoutSeconds: 5);
                 _console.MarkupLine($"[grey]vibecast log (t+{i + 1}s):[/] {log.Output.Trim().EscapeMarkup()}");
+                SurfaceOnboardingPrompts(log.Output);
 
                 // Also check if the tmux session is still alive
                 var alive = await _spawnerService.ExecInContainerAsync(containerId,
@@ -1004,24 +1285,56 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             $"-d '{{\"promptSharing\":true,\"shareProjectInfo\":true}}'",
             timeoutSeconds: 15);
 
-        // 10. Get sessionId/broadcastId and link to task
+        // 10. Get sessionId/broadcastId and link to task. Link as soon as sessionId is known
+        // (any phase) — vibecast detectors that fire BEFORE phase=live (theme/login pickers,
+        // OAuth) need the task↔session linkage so their alp_pane / onboarding_external posts
+        // can find the task. Wait for phase=live separately for start-stream confirmation.
         string? sessionIdValue = null;
         string? broadcastIdValue = null;
+        bool sessionLinked = false;
+        async Task TryLinkSessionToTaskAsync()
+        {
+            if (sessionLinked || sessionIdValue == null) return;
+            if (job.AgentDef?.TaskId == null || job.AgentDef?.AssemblyLineId == null) return;
+            try
+            {
+                var linkReq = new HttpRequestMessage(HttpMethod.Post,
+                    $"{baseUrl}/assembly-lines/{job.AgentDef.AssemblyLineId}/tasks/{job.AgentDef.TaskId}/streams");
+                linkReq.Content = JsonContent.Create(new { sessionId = sessionIdValue, broadcastId = broadcastIdValue });
+                await client.SendAsync(linkReq, ct);
+                sessionLinked = true;
+                _console.MarkupLine($"[green]Stream linked to task {job.AgentDef.TaskId} (sessionId={sessionIdValue})[/]");
+            }
+            catch (Exception ex)
+            {
+                _console.MarkupLine($"[yellow]Failed to link stream to task: {ex.Message.EscapeMarkup()}[/]");
+            }
+        }
+
+        bool sawLive = false;
         for (var i = 0; i < 30; i++)
         {
             var status = await _spawnerService.ExecInContainerAsync(containerId,
                 $"curl -sf --unix-socket {controlSocket} http://localhost/status",
                 timeoutSeconds: 5);
-            if (status.Output.Contains("\"phase\":\"live\""))
+            // Extract sessionId/broadcastId regardless of phase so onboarding questions
+            // posted by vibecast BEFORE phase=live can find the task by sessionId.
+            if (sessionIdValue == null)
             {
                 var sessionIdMatch = System.Text.RegularExpressions.Regex.Match(status.Output, "\"sessionId\":\"([^\"]+)\"");
-                if (sessionIdMatch.Success) { sessionIdValue = sessionIdMatch.Groups[1].Value; }
-                var broadcastIdMatch = System.Text.RegularExpressions.Regex.Match(status.Output, "\"broadcastId\":\"([^\"]+)\"");
-                if (broadcastIdMatch.Success) { broadcastIdValue = broadcastIdMatch.Groups[1].Value; }
-                if (sessionIdValue != null) break;
+                if (sessionIdMatch.Success)
+                {
+                    sessionIdValue = sessionIdMatch.Groups[1].Value;
+                    var broadcastIdMatch = System.Text.RegularExpressions.Regex.Match(status.Output, "\"broadcastId\":\"([^\"]+)\"");
+                    if (broadcastIdMatch.Success) broadcastIdValue = broadcastIdMatch.Groups[1].Value;
+                    await TryLinkSessionToTaskAsync(); // link immediately so server can route alp_pane to the task
+                }
             }
+            if (status.Output.Contains("\"phase\":\"live\"")) { sawLive = true; break; }
             await Task.Delay(1000, ct);
         }
+        if (!sawLive)
+            _console.MarkupLine($"[yellow]phase=live not seen in 30s; sessionId={(sessionIdValue ?? "(none)")} continuing[/]");
 
         // Print vibecast log so far to help diagnose connection issues
         var vibecastLogSnapshot = await _spawnerService.ExecInContainerAsync(containerId,
@@ -1033,22 +1346,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         {
             _console.MarkupLine($"[green]Streaming live! sessionId: {sessionIdValue}[/]");
             await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "in_progress", null, ct, sessionIdValue, broadcastIdValue);
-
-            if (job.AgentDef?.TaskId != null && job.AgentDef?.AssemblyLineId != null)
-            {
-                try
-                {
-                    var linkReq = new HttpRequestMessage(HttpMethod.Post,
-                        $"{baseUrl}/assembly-lines/{job.AgentDef.AssemblyLineId}/tasks/{job.AgentDef.TaskId}/streams");
-                    linkReq.Content = JsonContent.Create(new { sessionId = sessionIdValue, broadcastId = broadcastIdValue });
-                    await client.SendAsync(linkReq, ct);
-                    _console.MarkupLine($"[green]Stream linked to task {job.AgentDef.TaskId}[/]");
-                }
-                catch (Exception ex)
-                {
-                    _console.MarkupLine($"[yellow]Failed to link stream to task: {ex.Message.EscapeMarkup()}[/]");
-                }
-            }
+            // Linkage already happened eagerly inside the polling loop above (TryLinkSessionToTaskAsync).
 
             // Seed the activity bar with the initial prompt so viewers see it immediately,
             // even before Claude Code processes it (hooks only fire once Claude is running).
@@ -1148,6 +1446,17 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 catch { /* best-effort */ }
             }
 
+            // Tail vibecast.log so onboarding prompts that fire AFTER socket-ready (e.g. OAuth
+            // gate during Claude's first launch) get surfaced in this pks-runner pane via
+            // SurfaceOnboardingPrompts. Helper is idempotent — already-shown IDs are skipped.
+            try
+            {
+                var logTail = await _spawnerService.ExecInContainerAsync(containerId,
+                    $"tail -50 {vibecastHome}/vibecast.log 2>/dev/null", timeoutSeconds: 5);
+                SurfaceOnboardingPrompts(logTail.Output);
+            }
+            catch { /* best-effort */ }
+
             var elapsed = DateTime.UtcNow - startTime;
             if ((int)elapsed.TotalSeconds % 60 < 30)
                 _console.MarkupLine($"[dim]{elapsed.Minutes}m elapsed...[/]");
@@ -1168,16 +1477,14 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         // 13. PATCH to completed
         await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "success", ct);
         await ReportJobResultAsync(registration, "success", null, ct);
-
-        // 14. Remove plugin volume now that the job is done
-        if (pluginVolumeName != null)
-            await RemovePluginVolumeAsync(pluginVolumeName);
+        // No plugin-volume teardown — per ADR 0003 plugins live as files inside the container,
+        // wiped + repopulated on the next job dispatch.
     }
 
     /// <summary>
     /// Creates a Docker volume named <c>alp-plugins-{jobId}</c>, clones each declared plugin
     /// into it via a short-lived alpine/git container, and returns the container-side paths
-    /// (<c>/run/alp/plugins/{pluginId}</c>) to expose via <c>VIBECAST_EXTRA_PLUGINS</c>.
+    /// (<c>$HOME/.alp/plugins/{pluginId}</c>) to expose via <c>VIBECAST_EXTRA_PLUGINS</c>.
     ///
     /// Cloning happens here (Runner process) so marketplace URLs such as <c>localhost:40145</c>
     /// are reachable — the Runner has access to the host network, the devcontainer does not.
@@ -1200,7 +1507,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
             if (cloneResult.ExitCode == 0)
             {
-                containerPaths.Add($"/run/alp/plugins/{plugin.Id}");
+                containerPaths.Add($"$HOME/.alp/plugins/{plugin.Id}");
                 _console.MarkupLine($"[green]  ✓ {plugin.Id}[/]");
             }
             else
@@ -1260,7 +1567,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
         _console.MarkupLine($"[cyan]Written {agents.Count} agent(s) as plugin dir {dirName} in volume {volumeName}[/]");
 
-        return $"/run/alp/plugins/{dirName}";
+        return $"$HOME/.alp/plugins/{dirName}";
     }
 
     /// <summary>
@@ -1366,6 +1673,153 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         var stderr = await proc.StandardError.ReadToEndAsync(ct);
         await proc.WaitForExitAsync(ct);
         return (stdout.Trim(), stderr.Trim(), proc.ExitCode);
+    }
+
+    /// <summary>
+    /// Synchronizes user-uploaded task assets into the workspace at <c>.agentics/assets/</c>
+    /// before vibecast/Claude starts. Runs every dispatch (replace-each-time semantics) so
+    /// assets added between stations are picked up. The assets folder is gitignored so it
+    /// doesn't end up in commits.
+    ///
+    /// Two materialization paths:
+    /// - <b>In-process / --worktree mode</b>: <paramref name="jobWorkTree"/> is a host path.
+    ///   Files are written directly with <see cref="File.WriteAllBytesAsync"/>.
+    /// - <b>Container mode</b>: the workspace is a Docker volume mounted in the running
+    ///   devcontainer. Bytes are downloaded on the host then pushed in via <c>docker cp</c>;
+    ///   <c>mkdir</c> and gitignore append happen via <see cref="DevcontainerSpawnerService.ExecInContainerAsync"/>.
+    /// </summary>
+    private async Task SyncTaskAssetsAsync(
+        HttpClient client,
+        IList<TaskAssetDef>? assets,
+        string? jobWorkTree,
+        string? containerId,
+        string? workspaceFolderInContainer,
+        CancellationToken ct)
+    {
+        if (assets == null || assets.Count == 0) return;
+
+        var inContainer = containerId != null && workspaceFolderInContainer != null;
+        var inProcess = jobWorkTree != null;
+        if (!inContainer && !inProcess) return;
+
+        _console.MarkupLine($"[cyan]Syncing {assets.Count} task asset(s) to .agentics/assets/...[/]");
+
+        // Download all bytes once on the host (HttpClient already carries the runner Bearer token)
+        var staged = new List<(TaskAssetDef Meta, byte[] Bytes)>();
+        foreach (var asset in assets)
+        {
+            try
+            {
+                using var resp = await client.GetAsync(asset.Url, ct);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    _console.MarkupLine($"[yellow]  ✗ {asset.FileName}: HTTP {(int)resp.StatusCode}[/]");
+                    continue;
+                }
+                var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
+                staged.Add((asset, bytes));
+                _console.MarkupLine($"[green]  ✓ fetched {asset.FileName} ({bytes.Length} bytes)[/]");
+            }
+            catch (Exception ex)
+            {
+                _console.MarkupLine($"[yellow]  ✗ {asset.FileName}: {ex.Message.EscapeMarkup()}[/]");
+            }
+        }
+
+        if (staged.Count == 0)
+        {
+            _console.MarkupLine("[yellow]No task assets fetched successfully — skipping workspace sync.[/]");
+            return;
+        }
+
+        var manifestObj = staged.Select(s => new
+        {
+            fileName = s.Meta.FileName,
+            mimeType = s.Meta.MimeType,
+            size = (long)s.Bytes.Length,
+            url = s.Meta.Url,
+        });
+        var manifestJson = JsonSerializer.Serialize(manifestObj, new JsonSerializerOptions { WriteIndented = true });
+
+        if (inProcess)
+        {
+            var assetsDir = Path.Combine(jobWorkTree!, ".agentics", "assets");
+            if (Directory.Exists(assetsDir))
+            {
+                try { Directory.Delete(assetsDir, recursive: true); } catch { /* best-effort */ }
+            }
+            Directory.CreateDirectory(assetsDir);
+
+            foreach (var (meta, bytes) in staged)
+            {
+                await File.WriteAllBytesAsync(Path.Combine(assetsDir, meta.FileName), bytes, ct);
+            }
+            await File.WriteAllTextAsync(Path.Combine(assetsDir, "manifest.json"), manifestJson, ct);
+
+            // Append /.agentics/assets/ to .gitignore if missing (idempotent)
+            var gitignorePath = Path.Combine(jobWorkTree!, ".gitignore");
+            const string ignoreLine = "/.agentics/assets/";
+            var current = File.Exists(gitignorePath) ? await File.ReadAllTextAsync(gitignorePath, ct) : "";
+            var alreadyPresent = current
+                .Split('\n')
+                .Select(l => l.TrimEnd('\r').Trim())
+                .Any(l => l == ignoreLine || l == ".agentics/assets/");
+            if (!alreadyPresent)
+            {
+                var prefix = current.Length > 0 && !current.EndsWith('\n') ? "\n" : "";
+                await File.AppendAllTextAsync(gitignorePath, $"{prefix}{ignoreLine}\n", ct);
+            }
+        }
+        else
+        {
+            var workspace = workspaceFolderInContainer!;
+            var assetsDir = $"{workspace}/.agentics/assets";
+
+            // Wipe + recreate inside the container
+            await _spawnerService.ExecInContainerAsync(
+                containerId!,
+                $"bash -c 'rm -rf {assetsDir} && mkdir -p {assetsDir}'",
+                timeoutSeconds: 30);
+
+            // Stage on host then docker cp each file in
+            var hostStaging = Path.Combine(Path.GetTempPath(), $"task-assets-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(hostStaging);
+            try
+            {
+                foreach (var (meta, bytes) in staged)
+                {
+                    var hostPath = Path.Combine(hostStaging, meta.FileName);
+                    await File.WriteAllBytesAsync(hostPath, bytes, ct);
+                    var cpResult = await RunCaptureAsync("docker", new[]
+                    {
+                        "cp", hostPath, $"{containerId!}:{assetsDir}/{meta.FileName}",
+                    }, ct);
+                    if (cpResult.ExitCode != 0)
+                    {
+                        _console.MarkupLine($"[yellow]  docker cp failed for {meta.FileName}: {cpResult.Stderr.Trim().EscapeMarkup()}[/]");
+                    }
+                }
+
+                var manifestHostPath = Path.Combine(hostStaging, "manifest.json");
+                await File.WriteAllTextAsync(manifestHostPath, manifestJson, ct);
+                await RunCaptureAsync("docker", new[]
+                {
+                    "cp", manifestHostPath, $"{containerId!}:{assetsDir}/manifest.json",
+                }, ct);
+            }
+            finally
+            {
+                try { Directory.Delete(hostStaging, recursive: true); } catch { /* best-effort */ }
+            }
+
+            // Append to .gitignore inside the container if missing
+            await _spawnerService.ExecInContainerAsync(
+                containerId!,
+                $"bash -c 'touch {workspace}/.gitignore && grep -qxF \"/.agentics/assets/\" {workspace}/.gitignore || echo \"/.agentics/assets/\" >> {workspace}/.gitignore'",
+                timeoutSeconds: 15);
+        }
+
+        _console.MarkupLine("[green]Task assets synced to .agentics/assets/[/]");
     }
 
     private async Task PatchJobStatusAsync(
@@ -1695,6 +2149,17 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             // This enables cross-machine resume: the previous runner's CLAUDE_CONFIG_DIR
             // (sessions, memory, settings) is restored here before Claude starts.
             await RestoreClaudeConfigArchiveAsync(client, baseUrl, registration, ct);
+
+            // 2c. Materialize user-uploaded task assets into {jobWorkTree}/.agentics/assets/.
+            // Runs on every dispatch (replace-each-time) so resumed jobs and downstream
+            // stations pick up any assets the user added since the last run.
+            await SyncTaskAssetsAsync(
+                client,
+                job.AgentDef?.TaskAssets,
+                jobWorkTree: jobWorkTree,
+                containerId: null,
+                workspaceFolderInContainer: null,
+                ct);
 
             // 3. PATCH to in_progress
             _console.MarkupLine($"[cyan]InProcess: executing job {job.Id} in {jobWorkTree}...[/]");
@@ -3291,16 +3756,36 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
     }
 
     /// <summary>
-    /// Replaces the ephemeral claude-code-config-${devcontainerId} volume with a stable
-    /// named volume so credentials persist across container respawns for the same project.
+    /// Replaces the ephemeral claude-code-config-${devcontainerId} volume with a stable named
+    /// volume so credentials persist across container respawns. The naming strategy is controlled
+    /// by <paramref name="scope"/> per ADR 0004:
+    /// <list type="bullet">
+    ///   <item>"task" → pks-claude-{owner}-{project}-task-{taskId} (full isolation, OAuth per task)</item>
+    ///   <item>"project" (default) → pks-claude-{owner}-{project} (shared across tasks of one project)</item>
+    ///   <item>"runner" → pks-claude-{owner} (shared across all the operator's projects)</item>
+    /// </list>
+    /// Returns the (possibly patched) file map AND the chosen volume name so the caller can log it.
     /// </summary>
-    private static Dictionary<string, string>? PatchDevcontainerVolumes(
-        Dictionary<string, string>? files, string owner, string project)
+    private static (Dictionary<string, string>? Files, string VolumeName) PatchDevcontainerVolumes(
+        Dictionary<string, string>? files, string owner, string project, string? taskId, string? scope)
     {
-        if (files == null) return null;
         static string Sanitize(string s) =>
             System.Text.RegularExpressions.Regex.Replace(s.ToLowerInvariant(), @"[^a-z0-9]", "-");
-        var stableVolume = $"pks-claude-{Sanitize(owner)}-{Sanitize(project)}";
+
+        var effectiveScope = scope?.ToLowerInvariant() switch
+        {
+            "task" or "project" or "runner" => scope!.ToLowerInvariant(),
+            _ => "project",
+        };
+        var stableVolume = effectiveScope switch
+        {
+            "task" when !string.IsNullOrEmpty(taskId) =>
+                $"pks-claude-{Sanitize(owner)}-{Sanitize(project)}-task-{Sanitize(taskId)}",
+            "runner" => $"pks-claude-{Sanitize(owner)}",
+            _ => $"pks-claude-{Sanitize(owner)}-{Sanitize(project)}",
+        };
+
+        if (files == null) return (null, stableVolume);
         var patched = new Dictionary<string, string>(files);
         const string key = ".devcontainer/devcontainer.json";
         if (patched.TryGetValue(key, out var content))
@@ -3308,21 +3793,39 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
                 content,
                 @"source=claude-code-config-\$\{devcontainerId\}",
                 $"source={stableVolume}");
-        return patched;
+        return (patched, stableVolume);
     }
 
     /// <summary>
     /// Computes a short fingerprint for the devcontainer config.
     /// Same owner/project + same devcontainer files → same fingerprint → container can be reused.
     /// </summary>
+    /// <summary>
+    /// Bumped whenever the runner's hardcoded fallback devcontainer config changes (e.g. when
+    /// we switched the fallback image to one that installs tmux). Including it in the
+    /// fingerprint forces a rebuild of warm containers that were created before the change.
+    /// </summary>
+    private const string FallbackConfigVersion = "v2-tmux";
+
     private static string ComputeDevcontainerFingerprint(
-        string owner, string project, Dictionary<string, string>? devcontainerFiles)
+        string owner,
+        string project,
+        string? taskId,
+        Dictionary<string, string>? devcontainerFiles,
+        DevcontainerTemplateRef? template)
     {
         var content = devcontainerFiles == null ? string.Empty :
             string.Concat(devcontainerFiles
                 .OrderBy(kv => kv.Key)
                 .Select(kv => $"{kv.Key}:{kv.Value}"));
-        var input = System.Text.Encoding.UTF8.GetBytes($"{owner}/{project}/{content}");
+        var templatePart = template == null
+            ? string.Empty
+            : $"tpl:{template.Id}|{template.Source ?? "nuget"}|{template.Version ?? "latest"}";
+        // taskId is part of the fingerprint per ADR 0003 — each task gets its own dedicated container.
+        // null taskId (jobless / migration path) keeps the old project-scoped behaviour.
+        var taskPart = string.IsNullOrEmpty(taskId) ? string.Empty : $"task:{taskId}/";
+        var input = System.Text.Encoding.UTF8.GetBytes(
+            $"{owner}/{project}/{taskPart}fb={FallbackConfigVersion}/{templatePart}/{content}");
         var hash = SHA256.HashData(input);
         return Convert.ToHexString(hash)[..16];
     }
@@ -3365,11 +3868,17 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
     {
         var asm = System.Reflection.Assembly.GetExecutingAssembly();
         using var stream = asm.GetManifestResourceStream("vibecast-linux-amd64");
-        if (stream == null) return null;
+        if (stream == null)
+        {
+            _console.MarkupLine("[grey]No embedded vibecast in pks-cli build — container will use [italic]npx --yes vibecast[/] from registry. " +
+                "(To embed your local build: rebuild pks-cli with [italic]-p:EmbedVibecastPath=/abs/path/to/vibecast[/].)[/]");
+
+            return null;
+        }
 
         using var ms = new System.IO.MemoryStream();
         await stream.CopyToAsync(ms);
-        _console.MarkupLine($"[dim]Injecting vibecast binary ({ms.Length / 1024} KB) into container via stdin pipe...[/]");
+        _console.MarkupLine($"[cyan]Injecting embedded vibecast ({ms.Length / 1024} KB) into container...[/]");
 
         // Pipe the raw binary via `docker exec -i ... cat > dest` — avoids docker cp
         // Windows path issues and base64 command-length limits.
@@ -3415,10 +3924,11 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         if (proc.ExitCode != 0)
         {
             _console.MarkupLine($"[yellow]vibecast inject failed (exit {proc.ExitCode}): {stderr.Trim().EscapeMarkup()} — falling back to npx[/]");
+
             return null;
         }
 
-        _console.MarkupLine("[dim]Vibecast binary injected.[/]");
+        _console.MarkupLine($"[green]✓ Embedded vibecast active inside container at {dest}[/]");
 
         // Also extract the claude-plugin directory next to the binary so vibecast's
         // PluginDir() lookup (filepath.Dir(exe)/claude-plugin) finds it at /tmp/claude-plugin.
@@ -3484,16 +3994,30 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
     }
 
     private static async Task<string?> FindContainerByLabelAsync(string labelFilter)
+        => await FindContainerByLabelsAsync(labelFilter);
+
+    /// <summary>
+    /// Finds a running container that matches ALL of the given label filters
+    /// (e.g. "pks.agentics.fingerprint=abc123" + "pks.agentics.runner-instance=def456").
+    /// Used by the warm-container reuse check — see ADR 0002.
+    /// </summary>
+    private static async Task<string?> FindContainerByLabelsAsync(params string[] labelFilters)
     {
         try
         {
-            var psi = new ProcessStartInfo("docker",
-                $"ps --filter label={labelFilter} --filter status=running --format {{{{.ID}}}}")
+            var args = new List<string> { "ps", "--filter", "status=running", "--format", "{{.ID}}" };
+            foreach (var lf in labelFilters)
+            {
+                args.Add("--filter");
+                args.Add($"label={lf}");
+            }
+            var psi = new ProcessStartInfo("docker")
             {
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
             };
+            foreach (var a in args) psi.ArgumentList.Add(a);
             var proc = Process.Start(psi);
             if (proc == null) return null;
             var output = await proc.StandardOutput.ReadToEndAsync();
@@ -3519,8 +4043,12 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             if (repo.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
                 repo.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
             {
-                // Already a full URL — embed token if available
-                if (!string.IsNullOrEmpty(gitToken))
+                // Already a full URL — embed token only if there is no existing userinfo.
+                // Without this guard, a URL like http://x-access-token:T1@host/... gets a
+                // second credential prepended, producing two `@` separators which libcurl
+                // rejects with "Port number was not a decimal number".
+                var alreadyHasCredentials = System.Text.RegularExpressions.Regex.IsMatch(repo, @"^https?://[^/]*@");
+                if (!alreadyHasCredentials && !string.IsNullOrEmpty(gitToken))
                     gitUrl = System.Text.RegularExpressions.Regex.Replace(repo, @"^(https?://)", $"$1x-access-token:{gitToken}@");
                 else
                     gitUrl = repo;
@@ -3534,9 +4062,11 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             }
         }
 
-        // Use the repo name as ProjectName so the clone lands at /workspace/{repo}
-        var repoName = job.AgentDef?.Repository?.Split('/').LastOrDefault()
-            ?? job.ProjectName
+        // Use the project slug as ProjectName so the clone lands at /workspace/{slug}.
+        // Falling back to the URL's last segment yields ugly names like "repo.git" for
+        // self-hosted URLs (.../{owner}/{project}/repo.git), so prefer job.ProjectName.
+        var repoName = job.ProjectName
+            ?? job.AgentDef?.Repository?.Split('/').LastOrDefault()?.Replace(".git", "")
             ?? $"{registration.Owner}-{registration.Project}-{job.Id[..8]}";
 
         // Fingerprint is computed later (after PatchDevcontainerVolumes), so we set a placeholder
@@ -3555,6 +4085,7 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             GitBranch = gitBranch,
             RemoveExistingContainer = true,
             InlineDevcontainerFiles = job.AgentDef?.DevcontainerFiles,
+            DevcontainerTemplate = job.AgentDef?.DevcontainerTemplate,
         };
     }
 
@@ -3613,6 +4144,20 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         /// <summary>Token for the project's main repo.git endpoint — separate from the runner API token (AGENTICS_TOKEN).</summary>
         public string? ProjectRepoToken { get; set; }
         public Dictionary<string, string>? DevcontainerFiles { get; set; }
+        /// <summary>
+        /// Curated template reference. Used when DevcontainerFiles is null/empty —
+        /// the runner resolves it (default source: nuget.org) and writes the rendered
+        /// files into the workspace before `devcontainer up`.
+        /// </summary>
+        public DevcontainerTemplateRef? DevcontainerTemplate { get; set; }
+        /// <summary>
+        /// Operator-controlled scope for the Claude credentials Docker volume — see ADR 0004.
+        /// "task": one volume per task (full isolation, OAuth per task).
+        /// "project" (default): one volume per (owner, project), shared across tasks of that project.
+        /// "runner": one volume per owner, shared across all the operator's projects.
+        /// Anything else (or null) falls back to "project".
+        /// </summary>
+        public string? ClaudeCredentialsScope { get; set; }
         public List<PluginRef>? Plugins { get; set; }
         public List<AgentRef>? Agents { get; set; }
         /// <summary>W3C traceparent header from the server-side span that dispatched this job.</summary>

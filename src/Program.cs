@@ -177,6 +177,7 @@ services.AddSingleton<Docker.DotNet.IDockerClient>(sp =>
 });
 
 services.AddHttpClient<INuGetTemplateDiscoveryService, NuGetTemplateDiscoveryService>();
+services.AddSingleton<PKS.Infrastructure.Services.Templates.IDevcontainerTemplateRendererService, PKS.Infrastructure.Services.Templates.DevcontainerTemplateRendererService>();
 
 // Register PRD branch command
 services.AddTransient<PrdBranchCommand>();
@@ -430,6 +431,12 @@ app.Configure(config =>
             runner.AddCommand<AgenticsRunnerStartCommand>("start")
                 .WithDescription("Start the runner daemon to poll for and execute jobs")
                 .WithExample(new[] { "agentics", "runner", "start" });
+
+            runner.AddCommand<AgenticsRunnerCleanupCommand>("cleanup")
+                .WithDescription("Remove devcontainers from previous runner instances (see ADR 0002)")
+                .WithExample(new[] { "agentics", "runner", "cleanup" })
+                .WithExample(new[] { "agentics", "runner", "cleanup", "--dry-run" })
+                .WithExample(new[] { "agentics", "runner", "cleanup", "--all" });
         });
 
         agentics.AddBranch<AgenticsSettings>("task", task =>

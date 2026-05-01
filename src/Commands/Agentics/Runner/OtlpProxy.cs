@@ -1,125 +1,174 @@
 using System.Net;
 using System.Net.Sockets;
-using System.Text;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace PKS.Commands.Agentics.Runner;
 
 /// <summary>
 /// Lightweight OTLP HTTP broadcast proxy for runner job telemetry.
 ///
-/// Uses TcpListener (HttpListener is broken on Linux/.NET 10 — it starts without
-/// error but silently never accepts connections).
+/// Implemented on Kestrel with a dual-bind: TCP loopback for in-process callers
+/// (vibecast/Claude on the runner host) and an optional Unix socket for spawn-mode
+/// containers. The container side runs a tiny TCP→Unix bridge so vibecast/Claude
+/// keep using the standard OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 form.
 ///
-/// Listens on a random localhost port. Vibecast and Claude point their
-/// OTEL_EXPORTER_OTLP_ENDPOINT here. The proxy fans out each request to:
+/// Listens on a random localhost port. Each received OTLP request is fanned out to:
 ///   1. The real Aspire OTLP endpoint (from OTEL_EXPORTER_OTLP_ENDPOINT env var)
-///   2. The Next.js /api/otel endpoint (for project-level analysis)
+///   2. The Next.js /api/otel endpoint (for project-level analysis) — JSON only
 ///
-/// Only JSON-format requests are forwarded to Next.js (protobuf-only to Aspire).
-/// Add OTEL_EXPORTER_OTLP_PROTOCOL=http/json to vibecast's env to enable
-/// both targets simultaneously.
+/// Add OTEL_EXPORTER_OTLP_PROTOCOL=http/json on the agent so both targets receive data.
 ///
-/// Resource attribute enrichment (job.id, run.id, task.id) is via
-/// OTEL_RESOURCE_ATTRIBUTES — no protobuf parsing needed.
+/// Resource attribute enrichment (job.id, run.id, task.id) is via OTEL_RESOURCE_ATTRIBUTES
+/// — no protobuf parsing needed.
 /// </summary>
 internal sealed class OtlpProxy : IAsyncDisposable
 {
-    private readonly TcpListener _listener;
+    private readonly WebApplication _app;
     private readonly HttpClient _forwardClient;
     private readonly string? _aspireEndpoint;
     private readonly string? _aspireHeaders;
-    private readonly string? _analysisEndpoint; // e.g. "http://localhost:37411/api/otel"
-    private readonly CancellationTokenSource _cts = new();
-    private readonly Task _loopTask;
+    private readonly string? _analysisEndpoint;
     private long _lastActivityTicks = DateTime.UtcNow.Ticks;
 
     public int Port { get; }
 
+    /// <summary>Socket directory bind-mounted into spawn-mode containers (null for in-process).</summary>
+    public string? SocketDir { get; }
+
+    /// <summary>Full path to the Unix socket file (null when no socket was created).</summary>
+    public string? SocketPath { get; }
+
     /// <summary>UTC time of the last OTLP request received (from any sender).</summary>
     public DateTime LastActivityAt => new DateTime(Volatile.Read(ref _lastActivityTicks), DateTimeKind.Utc);
 
-    private OtlpProxy(TcpListener listener, int port, string? aspireEndpoint, string? analysisEndpoint)
+    private readonly bool _socketDirIsExternal;
+
+    private OtlpProxy(int port, string? socketDir, string? socketPath, string? aspireEndpoint, string? analysisEndpoint, bool socketDirIsExternal = false)
     {
-        _listener = listener;
         Port = port;
+        SocketDir = socketDir;
+        SocketPath = socketPath;
+        _socketDirIsExternal = socketDirIsExternal;
         _aspireEndpoint = aspireEndpoint?.TrimEnd('/');
         _aspireHeaders = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS");
         _analysisEndpoint = analysisEndpoint?.TrimEnd('/');
+
         // Disable SSL validation for localhost OTLP endpoints (Aspire uses a self-signed cert).
         _forwardClient = new HttpClient(new HttpClientHandler
         {
             ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
         })
         { Timeout = TimeSpan.FromSeconds(10) };
-        _loopTask = Task.Run(() => RunLoopAsync(_cts.Token));
+
+        var builder = WebApplication.CreateSlimBuilder(Array.Empty<string>());
+        builder.WebHost.UseSetting("suppressStatusMessages", "true");
+        builder.WebHost.ConfigureKestrel(kestrel =>
+        {
+            kestrel.ListenLocalhost(port);
+            if (socketPath != null)
+                kestrel.ListenUnixSocket(socketPath);
+        });
+        builder.Logging.ClearProviders();
+        builder.Logging.SetMinimumLevel(LogLevel.None);
+
+        _app = builder.Build();
+
+        _app.MapMethods("/v1/{**path}", new[] { "POST", "PUT", "GET" }, HandleOtlpAsync);
+        _app.MapMethods("{**path}", new[] { "POST", "PUT", "GET" }, HandleOtlpAsync);
     }
 
     /// <summary>
-    /// Start the proxy. Returns immediately; proxy runs in the background.
+    /// Start the proxy. Returns when bound and ready.
     /// <paramref name="analysisBaseUrl"/> is the base URL of the ws-relay/Next.js
     /// server (e.g. "http://localhost:37411") — /api/otel will be appended.
+    /// When <paramref name="createSocket"/> is true, an additional Unix socket is
+    /// created in a per-job directory suitable for bind-mounting into a container.
     /// </summary>
-    public static OtlpProxy Start(string? analysisBaseUrl = null)
+    public static async Task<OtlpProxy> StartAsync(
+        string? analysisBaseUrl = null,
+        string? jobId = null,
+        bool createSocket = false,
+        string? socketDirOverride = null,
+        CancellationToken ct = default)
     {
         var aspireEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
         var analysisEndpoint = string.IsNullOrEmpty(analysisBaseUrl)
             ? null
             : analysisBaseUrl.TrimEnd('/') + "/api/otel";
 
-        var port = FindFreePort();
-        var listener = new TcpListener(IPAddress.Loopback, port);
-        listener.Start();
-
-        return new OtlpProxy(listener, port, aspireEndpoint, analysisEndpoint);
-    }
-
-    private async Task RunLoopAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
+        string? socketDir = null;
+        string? socketPath = null;
+        bool socketDirIsExternal = false;
+        if (createSocket)
         {
-            TcpClient client;
-            try
+            // socketDirOverride keeps the dir stable per task (ADR 0003) so the warm container's
+            // bind mount stays valid across job cycles.
+            if (socketDirOverride != null)
             {
-                client = await _listener.AcceptTcpClientAsync(ct);
+                socketDir = socketDirOverride;
+                socketDirIsExternal = true;
             }
-            catch (OperationCanceledException) { break; }
-            catch { break; }
-
-            // Fire-and-forget each connection
-            _ = Task.Run(() => HandleClientAsync(client, ct), ct);
+            else
+            {
+                var dirSuffix = string.IsNullOrEmpty(jobId) ? Guid.NewGuid().ToString("N") : jobId;
+                socketDir = Path.Combine(Path.GetTempPath(), $"pks-otlp-{dirSuffix}");
+            }
+            Directory.CreateDirectory(socketDir);
+            socketPath = Path.Combine(socketDir, "otlp.sock");
+            try { if (File.Exists(socketPath)) File.Delete(socketPath); } catch { }
         }
+
+        var port = FindFreePort();
+        var proxy = new OtlpProxy(port, socketDir, socketPath, aspireEndpoint, analysisEndpoint, socketDirIsExternal);
+        await proxy._app.StartAsync(ct);
+
+        if (socketPath != null && File.Exists(socketPath) &&
+            (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS()))
+        {
+            File.SetUnixFileMode(socketPath,
+                UnixFileMode.UserRead  | UnixFileMode.UserWrite  | UnixFileMode.UserExecute  |
+                UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
+                UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+        }
+
+        return proxy;
     }
 
-    private async Task HandleClientAsync(TcpClient tcpClient, CancellationToken ct)
+    /// <summary>
+    /// Backwards-compatible synchronous-looking entry point used by in-process mode.
+    /// Equivalent to <see cref="StartAsync(string?, string?, bool, CancellationToken)"/> with no socket.
+    /// </summary>
+    public static OtlpProxy Start(string? analysisBaseUrl = null)
+        => StartAsync(analysisBaseUrl).GetAwaiter().GetResult();
+
+    private async Task HandleOtlpAsync(HttpContext ctx)
     {
         // Record activity — any OTLP request means the job is actively working.
         Volatile.Write(ref _lastActivityTicks, DateTime.UtcNow.Ticks);
 
-        using (tcpClient)
-        {
-            try
-            {
-                using var stream = tcpClient.GetStream();
-                var (method, path, contentType, body) = await ReadHttpRequestAsync(stream, ct);
+        var contentType = ctx.Request.ContentType ?? "application/x-protobuf";
+        using var ms = new MemoryStream();
+        await ctx.Request.Body.CopyToAsync(ms, ctx.RequestAborted);
+        var body = ms.ToArray();
 
-                // Fan out to both upstreams in parallel
-                var tasks = new List<Task>();
-                if (!string.IsNullOrEmpty(_aspireEndpoint))
-                    tasks.Add(ForwardToAspireAsync(method, path, contentType, body, ct));
-                if (!string.IsNullOrEmpty(_analysisEndpoint))
-                    tasks.Add(ForwardToAnalysisAsync(method, path, contentType, body, ct));
+        var path = ctx.Request.Path.Value ?? "/";
+        var method = ctx.Request.Method;
 
-                await Task.WhenAll(tasks);
+        var tasks = new List<Task>();
+        if (!string.IsNullOrEmpty(_aspireEndpoint))
+            tasks.Add(ForwardToAspireAsync(method, path, contentType, body, ctx.RequestAborted));
+        if (!string.IsNullOrEmpty(_analysisEndpoint))
+            tasks.Add(ForwardToAnalysisAsync(method, path, contentType, body, ctx.RequestAborted));
 
-                // Return OTLP success response
-                var ok = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 22\r\nConnection: close\r\n\r\n{\"partialSuccess\":{}}"u8.ToArray();
-                await stream.WriteAsync(ok, ct);
-            }
-            catch
-            {
-                // Ignore per-connection errors
-            }
-        }
+        try { await Task.WhenAll(tasks); } catch { /* per-target errors swallowed below */ }
+
+        ctx.Response.StatusCode = 200;
+        ctx.Response.ContentType = "application/json";
+        await ctx.Response.WriteAsync("{\"partialSuccess\":{}}", ctx.RequestAborted);
     }
 
     private async Task ForwardToAspireAsync(string method, string path, string contentType, byte[] body, CancellationToken ct)
@@ -151,7 +200,7 @@ internal sealed class OtlpProxy : IAsyncDisposable
     private async Task ForwardToAnalysisAsync(string method, string path, string contentType, byte[] body, CancellationToken ct)
     {
         // Next.js routes use request.json() so only forward JSON-encoded payloads.
-        // Set OTEL_EXPORTER_OTLP_PROTOCOL=http/json in vibecast's env to enable this path.
+        // Set OTEL_EXPORTER_OTLP_PROTOCOL=http/json on the agent to enable this path.
         if (!contentType.Contains("json", StringComparison.OrdinalIgnoreCase))
             return;
 
@@ -167,73 +216,6 @@ internal sealed class OtlpProxy : IAsyncDisposable
         catch { /* analysis endpoint unreachable */ }
     }
 
-    /// <summary>
-    /// Reads a single HTTP/1.1 request from the stream and extracts
-    /// method, path, content-type, and body.
-    /// </summary>
-    private static async Task<(string method, string path, string contentType, byte[] body)>
-        ReadHttpRequestAsync(NetworkStream stream, CancellationToken ct)
-    {
-        // Read header section (terminated by \r\n\r\n)
-        var headerBuf = new List<byte>(4096);
-        var tail = new byte[4];
-        while (true)
-        {
-            var b = await ReadByteAsync(stream, ct);
-            if (b < 0) break;
-            headerBuf.Add((byte)b);
-
-            // Shift tail window and check for \r\n\r\n
-            tail[0] = tail[1]; tail[1] = tail[2]; tail[2] = tail[3]; tail[3] = (byte)b;
-            if (tail[0] == '\r' && tail[1] == '\n' && tail[2] == '\r' && tail[3] == '\n')
-                break;
-        }
-
-        var headerText = Encoding.ASCII.GetString(headerBuf.ToArray());
-        var lines = headerText.Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
-
-        // Parse request line: "POST /v1/traces HTTP/1.1"
-        var requestLine = lines.Length > 0 ? lines[0].Split(' ') : [];
-        var method = requestLine.Length > 0 ? requestLine[0] : "POST";
-        var path = requestLine.Length > 1 ? requestLine[1] : "/";
-
-        var contentType = "application/x-protobuf";
-        var contentLength = 0;
-        foreach (var line in lines.Skip(1))
-        {
-            var colon = line.IndexOf(':');
-            if (colon < 0) continue;
-            var name = line[..colon].Trim();
-            var value = line[(colon + 1)..].Trim();
-            if (name.Equals("Content-Type", StringComparison.OrdinalIgnoreCase))
-                contentType = value;
-            else if (name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
-                int.TryParse(value, out contentLength);
-        }
-
-        // Read body
-        var body = new byte[Math.Max(contentLength, 0)];
-        if (contentLength > 0)
-        {
-            var read = 0;
-            while (read < contentLength)
-            {
-                var n = await stream.ReadAsync(body.AsMemory(read, contentLength - read), ct);
-                if (n == 0) break;
-                read += n;
-            }
-        }
-
-        return (method, path, contentType, body);
-    }
-
-    private static async Task<int> ReadByteAsync(NetworkStream stream, CancellationToken ct)
-    {
-        var buf = new byte[1];
-        var n = await stream.ReadAsync(buf.AsMemory(0, 1), ct);
-        return n == 0 ? -1 : buf[0];
-    }
-
     private static int FindFreePort()
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -245,10 +227,18 @@ internal sealed class OtlpProxy : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await _cts.CancelAsync();
-        _listener.Stop();
-        try { await _loopTask; } catch { }
+        try { await _app.StopAsync(); } catch { }
+        await _app.DisposeAsync();
         _forwardClient.Dispose();
-        _cts.Dispose();
+        // Externally-managed dir (per-task per ADR 0003): leave it in place. Just clean the socket.
+        if (_socketDirIsExternal && SocketPath != null)
+        {
+            try { if (File.Exists(SocketPath)) File.Delete(SocketPath); } catch { }
+            return;
+        }
+        if (SocketDir != null && Directory.Exists(SocketDir))
+        {
+            try { Directory.Delete(SocketDir, recursive: true); } catch { }
+        }
     }
 }

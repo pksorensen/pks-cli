@@ -20,6 +20,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
     private readonly IAnsiConsole? _console;
     private readonly IConfigurationHashService _configHashService;
     private readonly ISshCommandRunner? _sshCommandRunner;
+    private readonly PKS.Infrastructure.Services.Templates.IDevcontainerTemplateRendererService? _templateRenderer;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DevcontainerSpawnerService"/> class
@@ -29,18 +30,21 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
     /// <param name="configHashService">Service for computing configuration hashes</param>
     /// <param name="console">Optional console for progress indicators</param>
     /// <param name="sshCommandRunner">Optional SSH command runner for remote spawning</param>
+    /// <param name="templateRenderer">Optional renderer that resolves a DevcontainerTemplateRef into in-memory files.</param>
     public DevcontainerSpawnerService(
         ILogger<DevcontainerSpawnerService> logger,
         IDockerClient dockerClient,
         IConfigurationHashService configHashService,
         IAnsiConsole? console = null,
-        ISshCommandRunner? sshCommandRunner = null)
+        ISshCommandRunner? sshCommandRunner = null,
+        PKS.Infrastructure.Services.Templates.IDevcontainerTemplateRendererService? templateRenderer = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _dockerClient = dockerClient ?? throw new ArgumentNullException(nameof(dockerClient));
         _configHashService = configHashService ?? throw new ArgumentNullException(nameof(configHashService));
         _console = console;
         _sshCommandRunner = sshCommandRunner;
+        _templateRenderer = templateRenderer;
     }
 
     /// <inheritdoc/>
@@ -323,12 +327,14 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                 }
 
                 // Step 6b: Ensure .devcontainer/devcontainer.json exists in the volume.
-                // If InlineDevcontainerFiles is set, write those files (overriding any existing .devcontainer).
-                // Otherwise, fall back to creating a minimal default if no devcontainer config is found.
+                // Resolution order: InlineDevcontainerFiles → DevcontainerTemplate (NuGet render)
+                // → existing .devcontainer in repo → minimal default.
                 await EnsureDevcontainerConfigAsync(
                     bootstrapContainer.ContainerId,
                     $"/workspaces/{options.ProjectName}",
                     options.InlineDevcontainerFiles,
+                    options.DevcontainerTemplate,
+                    options.ProjectName,
                     onProgress);
 
                 // Step 7: Run devcontainer up inside bootstrap container
@@ -347,6 +353,7 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                     configHash,
                     options.CredentialSocketPath,
                     options.AgenticsProxySocketDir,
+                    options.OtlpProxySocketDir,
                     options.RemoteEnv,
                     options.IdLabels,
                     options.RemoveExistingContainer,
@@ -2738,6 +2745,7 @@ DEVCONTAINER_EOF";
         string? configHash = null,
         string? credentialSocketPath = null,
         string? agenticsProxySocketDir = null,
+        string? otlpProxySocketDir = null,
         Dictionary<string, string>? remoteEnv = null,
         Dictionary<string, string>? idLabels = null,
         bool removeExistingContainer = false,
@@ -2832,6 +2840,14 @@ DEVCONTAINER_EOF";
             proxyMountArg = $" --mount type=bind,source={normalizedDir},target=/var/run/pks-agentics";
         }
 
+        string? otlpMountArg = null;
+        if (!string.IsNullOrEmpty(otlpProxySocketDir))
+        {
+            _logger.LogInformation("Mounting OtlpProxy socket dir at /var/run/pks-otlp");
+            var normalizedDir = otlpProxySocketDir.Replace('\\', '/');
+            otlpMountArg = $" --mount type=bind,source={normalizedDir},target=/var/run/pks-otlp";
+        }
+
         // Build command using --override-config (if successfully created)
         // Based on source code analysis: override config completely replaces base config
         // Must contain ALL properties including features for feature metadata processing to work
@@ -2850,13 +2866,13 @@ DEVCONTAINER_EOF";
             // The override config has workspaceMount/workspaceFolder removed, and we use --mount for the volume
             // This avoids the bind mount issue while preserving feature metadata processing
             _logger.LogInformation("Using override config approach with file: {OverrideConfig}", overrideConfigPath);
-            devcontainerCommand = $"devcontainer up --config {workspaceFolder}/.devcontainer/devcontainer.json --override-config {overrideConfigPath} --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg}{proxyMountArg}{pluginVolumeMountArg} --update-remote-user-uid-default off --include-configuration --include-merged-configuration";
+            devcontainerCommand = $"devcontainer up --config {workspaceFolder}/.devcontainer/devcontainer.json --override-config {overrideConfigPath} --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg}{proxyMountArg}{otlpMountArg}{pluginVolumeMountArg} --update-remote-user-uid-default off --include-configuration --include-merged-configuration";
         }
         else
         {
             // Fallback: use workspace-folder without override-config
             _logger.LogWarning("Using fallback approach without override config");
-            devcontainerCommand = $"devcontainer up --workspace-folder {workspaceFolder} --config {workspaceFolder}/.devcontainer/devcontainer.json --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg}{proxyMountArg}{pluginVolumeMountArg} --update-remote-user-uid-default off --mount-workspace-git-root false --include-configuration --include-merged-configuration";
+            devcontainerCommand = $"devcontainer up --workspace-folder {workspaceFolder} --config {workspaceFolder}/.devcontainer/devcontainer.json --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg}{proxyMountArg}{otlpMountArg}{pluginVolumeMountArg} --update-remote-user-uid-default off --mount-workspace-git-root false --include-configuration --include-merged-configuration";
         }
 
         // Append extra remote-env, id-labels, and ephemeral flag if provided
@@ -3005,8 +3021,36 @@ DEVCONTAINER_EOF";
         string bootstrapContainerId,
         string workspaceFolder,
         Dictionary<string, string>? inlineFiles,
+        DevcontainerTemplateRef? template,
+        string projectName,
         Action<string>? onProgress)
     {
+        // Resolution order:
+        //   1. inlineFiles (explicit operator override) — write as-is.
+        //   2. template (server picked a curated one) — render via NuGet, write result.
+        //   3. repo already has .devcontainer/devcontainer.json — leave it alone.
+        //   4. fall back to the minimal default below (includes tmux for vibecast).
+        if ((inlineFiles is null || inlineFiles.Count == 0) && template is not null && _templateRenderer is not null
+            && !string.IsNullOrWhiteSpace(template.Id))
+        {
+            onProgress?.Invoke($"Resolving devcontainer template '{template.Id}'...");
+            var rendered = await _templateRenderer.RenderAsync(
+                template,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    { "ProjectName", projectName ?? string.Empty },
+                    { "Template", template.Id },
+                });
+            if (rendered is { Count: > 0 })
+            {
+                inlineFiles = rendered;
+            }
+            else
+            {
+                onProgress?.Invoke($"Template '{template.Id}' could not be resolved — falling back to default.");
+            }
+        }
+
         if (inlineFiles is { Count: > 0 })
         {
             _logger.LogInformation(
@@ -3063,11 +3107,17 @@ DEVCONTAINER_EOF";
             "No .devcontainer/devcontainer.json in {WorkspaceFolder} — generating default config", workspaceFolder);
         onProgress?.Invoke("No devcontainer.json found — creating default config...");
 
+        // Default fallback used only when:
+        //   1) the cloned repo has no .devcontainer/devcontainer.json, AND
+        //   2) no template was provided via InlineDevcontainerFiles by the server.
+        // Includes tmux because vibecast (the agent host) requires it. Prefer a
+        // server-provided template via assembly-line settings for richer setups.
         const string defaultConfig = """
             {
               "name": "Agentics Runner",
-              "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+              "image": "mcr.microsoft.com/devcontainers/typescript-node:20",
               "features": {},
+              "postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends tmux && sudo rm -rf /var/lib/apt/lists/*",
               "remoteEnv": {}
             }
             """;

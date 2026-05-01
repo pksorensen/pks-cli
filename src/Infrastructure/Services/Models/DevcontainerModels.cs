@@ -484,6 +484,13 @@ public class DevcontainerSpawnOptions
     public string? AgenticsProxySocketDir { get; set; }
 
     /// <summary>
+    /// Directory containing the OtlpProxy Unix socket (otlp.sock).
+    /// When set, the directory is bind-mounted into the devcontainer at /var/run/pks-otlp
+    /// so a small in-container TCP→Unix bridge can forward OTLP traffic to the runner host.
+    /// </summary>
+    public string? OtlpProxySocketDir { get; set; }
+
+    /// <summary>
     /// Name of a Docker volume pre-populated with cloned ALP plugins by the Runner.
     /// When set, the volume is mounted at /run/alp/plugins inside the devcontainer so
     /// the Operator (vibecast) can pass each plugin dir to Claude via --plugin-dir.
@@ -523,6 +530,37 @@ public class DevcontainerSpawnOptions
     /// Key = relative path from workspace root (e.g. ".devcontainer/Dockerfile").
     /// </summary>
     public Dictionary<string, string>? InlineDevcontainerFiles { get; set; }
+
+    /// <summary>
+    /// If set (and InlineDevcontainerFiles is null/empty), the runner resolves this template
+    /// at job time and writes the rendered files into the workspace .devcontainer folder.
+    /// Mutually exclusive with InlineDevcontainerFiles — explicit files always take precedence.
+    /// </summary>
+    public DevcontainerTemplateRef? DevcontainerTemplate { get; set; }
+}
+
+/// <summary>
+/// Reference to a curated devcontainer template that the runner resolves at job time.
+/// Currently only Source = "nuget" is implemented; the field exists so future resolvers
+/// (e.g. "local", "git", "internal-feed") can be added without changing the schema.
+/// </summary>
+public class DevcontainerTemplateRef
+{
+    /// <summary>
+    /// Identifier within the chosen Source. For nuget, this is the NuGet package id
+    /// (e.g. "PKS.Templates.PksFullstack").
+    /// </summary>
+    public string Id { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Resolver kind. Defaults to "nuget" when null/empty.
+    /// </summary>
+    public string? Source { get; set; }
+
+    /// <summary>
+    /// Optional version pin. When null, the renderer resolves the latest non-prerelease version.
+    /// </summary>
+    public string? Version { get; set; }
 }
 
 /// <summary>
