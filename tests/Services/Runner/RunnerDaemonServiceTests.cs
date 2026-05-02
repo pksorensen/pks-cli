@@ -131,7 +131,8 @@ public class RunnerDaemonServiceTests : IDisposable
                 It.IsAny<RunnerRegistration>(), run.Id, run.HeadBranch,
                 "ghp_test123", jitConfig,
                 It.IsAny<Action<string>?>(),
-                It.IsAny<CancellationToken>()))
+                It.IsAny<CancellationToken>(),
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(new RunnerJobState { RunId = run.Id, Status = RunnerJobStatus.Completed });
     }
 
@@ -247,6 +248,7 @@ public class RunnerDaemonServiceTests : IDisposable
                 It.IsAny<CancellationToken>(),
                 "my-app-dev",
                 It.IsAny<string?>(),
+                It.IsAny<string?>(),
                 It.IsAny<string?>()))
             .ReturnsAsync(new RunnerJobState
             {
@@ -309,6 +311,7 @@ public class RunnerDaemonServiceTests : IDisposable
                 "jit",
                 It.IsAny<Action<string>?>(),
                 It.IsAny<CancellationToken>(),
+                It.IsAny<string?>(),
                 It.IsAny<string?>()))
             .ReturnsAsync(new RunnerJobState { RunId = 12345, Status = RunnerJobStatus.Completed });
 
@@ -321,13 +324,15 @@ public class RunnerDaemonServiceTests : IDisposable
             "jit",
             It.IsAny<Action<string>?>(),
             It.IsAny<CancellationToken>(),
+            It.IsAny<string?>(),
             It.IsAny<string?>()), Times.Once);
 
         _mockContainerService.Verify(c => c.ExecuteJobAsync(
             It.IsAny<RunnerRegistration>(), It.IsAny<long>(), It.IsAny<string>(),
             It.IsAny<string>(), It.IsAny<string>(),
             It.IsAny<Action<string>?>(),
-            It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<CancellationToken>(),
+            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
     }
 
     [Fact]
@@ -357,7 +362,8 @@ public class RunnerDaemonServiceTests : IDisposable
                 It.IsAny<RunnerRegistration>(), 12345L, "main",
                 "ghp_test123", "jit",
                 It.IsAny<Action<string>?>(),
-                It.IsAny<CancellationToken>()))
+                It.IsAny<CancellationToken>(),
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(new RunnerJobState { RunId = 12345, Status = RunnerJobStatus.Completed });
 
         await _service.RunAsync(cts.Token);
@@ -390,7 +396,8 @@ public class RunnerDaemonServiceTests : IDisposable
             c => c.ExecuteJobAsync(
                 It.IsAny<RunnerRegistration>(), It.IsAny<long>(), It.IsAny<string>(),
                 It.IsAny<string>(), It.IsAny<string>(),
-                It.IsAny<Action<string>?>(), It.IsAny<CancellationToken>()),
+                It.IsAny<Action<string>?>(), It.IsAny<CancellationToken>(),
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()),
             Times.Never);
     }
 
@@ -500,7 +507,8 @@ public class RunnerDaemonServiceTests : IDisposable
                 It.IsAny<RunnerRegistration>(), 100L, "main",
                 It.IsAny<string>(), It.IsAny<string>(),
                 It.IsAny<Action<string>?>(),
-                It.IsAny<CancellationToken>()))
+                It.IsAny<CancellationToken>(),
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .Returns(blockingTcs.Task);
 
         await _service.RunAsync(cts.Token);

@@ -19,6 +19,13 @@ public interface IRunnerContainerService
     /// <param name="onProgress">Optional callback for progress reporting</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <param name="credentialSocketPath">Optional path to Unix socket for git credential server</param>
+    /// <param name="environment">Optional GitHub Actions environment name (e.g. "staging")</param>
+    /// <param name="lookupBranch">
+    /// Optional branch to use for Coolify app lookup. When null, falls back to <paramref name="branch"/>.
+    /// For pull_request events the daemon passes the PR base ref here so the lookup matches the
+    /// deploy-target branch rather than the PR source branch (which is what <paramref name="branch"/>
+    /// remains, so the actual checkout still uses the PR's code).
+    /// </param>
     /// <returns>The final job state</returns>
     Task<RunnerJobState> ExecuteJobAsync(
         RunnerRegistration registration,
@@ -29,7 +36,8 @@ public interface IRunnerContainerService
         Action<string>? onProgress = null,
         CancellationToken cancellationToken = default,
         string? credentialSocketPath = null,
-        string? environment = null);
+        string? environment = null,
+        string? lookupBranch = null);
 
     /// <summary>
     /// Execute a full job lifecycle with a named container that persists after the job.
@@ -45,7 +53,8 @@ public interface IRunnerContainerService
         CancellationToken cancellationToken,
         string? containerName,
         string? credentialSocketPath = null,
-        string? environment = null);
+        string? environment = null,
+        string? lookupBranch = null);
 
     /// <summary>
     /// Execute a job in an existing named container. Skips clone and devcontainer up.
@@ -62,7 +71,8 @@ public interface IRunnerContainerService
         string encodedJitConfig,
         Action<string>? onProgress = null,
         CancellationToken cancellationToken = default,
-        string? credentialSocketPath = null);
+        string? credentialSocketPath = null,
+        string? lookupBranch = null);
 
     /// <summary>
     /// Cleanup a job's resources (container and clone directory)

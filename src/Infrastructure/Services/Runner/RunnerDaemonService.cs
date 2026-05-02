@@ -524,7 +524,8 @@ public class RunnerDaemonService : IRunnerDaemonService
                     progress => OnStatusChanged($"Run {run.Id}: {progress}"),
                     cancellationToken,
                     credentialSocketPath: _credentialSocketPath,
-                    environment: job.Environment);
+                    environment: job.Environment,
+                    lookupBranch: run.GetCoolifyLookupBranch());
             }
 
             jobState.Status = result.Status;
@@ -602,7 +603,8 @@ public class RunnerDaemonService : IRunnerDaemonService
                     encodedJitConfig,
                     progress => OnStatusChanged($"Run {run.Id}: {progress}"),
                     cancellationToken,
-                    credentialSocketPath: _credentialSocketPath);
+                    credentialSocketPath: _credentialSocketPath,
+                    lookupBranch: run.GetCoolifyLookupBranch());
             }
 
             // Container is dead — remove from pool and create fresh
@@ -624,7 +626,8 @@ public class RunnerDaemonService : IRunnerDaemonService
             cancellationToken,
             containerName: containerName,
             credentialSocketPath: _credentialSocketPath,
-            environment: job.Environment);
+            environment: job.Environment,
+            lookupBranch: run.GetCoolifyLookupBranch());
 
         // Register in pool (labels were already set via --id-label during devcontainer up)
         if (!string.IsNullOrEmpty(result.ContainerId))

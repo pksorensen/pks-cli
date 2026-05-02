@@ -56,15 +56,6 @@ public class DevcontainerSpawnRemoteTests
         return mock;
     }
 
-    private static Mock<IAzureVmMetadataService> CreateVmMetadataMock()
-        => new Mock<IAzureVmMetadataService>();
-
-    private static Mock<IAzureAuthService> CreateAzureAuthMock()
-        => new Mock<IAzureAuthService>();
-
-    private static Mock<IAzureVmService> CreateVmServiceMock()
-        => new Mock<IAzureVmService>();
-
     // ═════════════════════════════════════════════
     //  Remote spawn tests
     // ═════════════════════════════════════════════
@@ -86,7 +77,7 @@ public class DevcontainerSpawnRemoteTests
         // Select "Local (this machine)" to avoid full remote flow
         console.Input.PushKey(ConsoleKey.Enter); // first choice = Local
 
-        var command = new DevcontainerSpawnCommand(spawnerMock.Object, sshMock.Object, CreateNuGetTemplateMock().Object, CreateVmMetadataMock().Object, CreateAzureAuthMock().Object, CreateVmServiceMock().Object, console);
+        var command = new DevcontainerSpawnCommand(spawnerMock.Object, sshMock.Object, CreateNuGetTemplateMock().Object, Mock.Of<IAzureVmMetadataService>(), Mock.Of<IAzureAuthService>(), Mock.Of<IAzureVmService>(), console);
 
         var tmpDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tmpDir);
@@ -135,7 +126,7 @@ public class DevcontainerSpawnRemoteTests
 
         var console = new TestConsole();
 
-        var command = new DevcontainerSpawnCommand(spawnerMock.Object, sshMock.Object, CreateNuGetTemplateMock().Object, CreateVmMetadataMock().Object, CreateAzureAuthMock().Object, CreateVmServiceMock().Object, console);
+        var command = new DevcontainerSpawnCommand(spawnerMock.Object, sshMock.Object, CreateNuGetTemplateMock().Object, Mock.Of<IAzureVmMetadataService>(), Mock.Of<IAzureAuthService>(), Mock.Of<IAzureVmService>(), console);
 
         var tmpDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tmpDir);
@@ -182,7 +173,7 @@ public class DevcontainerSpawnRemoteTests
 
         var console = new TestConsole();
 
-        var command = new DevcontainerSpawnCommand(spawnerMock.Object, sshMock.Object, CreateNuGetTemplateMock().Object, CreateVmMetadataMock().Object, CreateAzureAuthMock().Object, CreateVmServiceMock().Object, console);
+        var command = new DevcontainerSpawnCommand(spawnerMock.Object, sshMock.Object, CreateNuGetTemplateMock().Object, Mock.Of<IAzureVmMetadataService>(), Mock.Of<IAzureAuthService>(), Mock.Of<IAzureVmService>(), console);
 
         var tmpDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tmpDir);
