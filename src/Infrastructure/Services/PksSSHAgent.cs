@@ -141,8 +141,8 @@ public sealed class PksSSHAgent : IAsyncDisposable
                 byte[] response = msgType switch
                 {
                     SSH2_AGENTC_REQUEST_IDENTITIES => HandleRequestIdentities(),
-                    SSH2_AGENTC_SIGN_REQUEST       => HandleSignRequest(msg),
-                    _                              => BuildFailure()
+                    SSH2_AGENTC_SIGN_REQUEST => HandleSignRequest(msg),
+                    _ => BuildFailure()
                 };
 
                 // Write 4-byte length + response
@@ -202,8 +202,8 @@ public sealed class PksSSHAgent : IAsyncDisposable
         {
             var r = new SshReader(msg, 1); // skip message type byte
             var keyBlob = r.ReadString();
-            var data    = r.ReadString();
-            var flags   = r.ReadUint32();
+            var data = r.ReadString();
+            var flags = r.ReadUint32();
 
             // Verify the key blob matches our key
             if (!keyBlob.SequenceEqual(_keyInfo.PublicKeyBlob))
@@ -212,8 +212,8 @@ public sealed class PksSSHAgent : IAsyncDisposable
             byte[] signatureBlob = _keyInfo.KeyType switch
             {
                 SshKeyType.Ed25519 => SignEd25519(data),
-                SshKeyType.Rsa     => SignRsa(data, flags),
-                _                  => throw new CryptographicException("Unsupported key type")
+                SshKeyType.Rsa => SignRsa(data, flags),
+                _ => throw new CryptographicException("Unsupported key type")
             };
 
             var w = new SshWriter();
@@ -248,9 +248,9 @@ public sealed class PksSSHAgent : IAsyncDisposable
         HashAlgorithmName hashAlg;
         RSASignaturePadding padding = RSASignaturePadding.Pkcs1;
 
-        if ((flags & SSH_AGENT_RSA_SHA2_512) != 0)      { algName = "rsa-sha2-512"; hashAlg = HashAlgorithmName.SHA512; }
+        if ((flags & SSH_AGENT_RSA_SHA2_512) != 0) { algName = "rsa-sha2-512"; hashAlg = HashAlgorithmName.SHA512; }
         else if ((flags & SSH_AGENT_RSA_SHA2_256) != 0) { algName = "rsa-sha2-256"; hashAlg = HashAlgorithmName.SHA256; }
-        else                                             { algName = "ssh-rsa";      hashAlg = HashAlgorithmName.SHA1;   }
+        else { algName = "ssh-rsa"; hashAlg = HashAlgorithmName.SHA1; }
 
         var rawSig = _keyInfo!.RsaKey!.SignData(data, hashAlg, padding);
 
@@ -321,14 +321,14 @@ public sealed class PksSSHAgent : IAsyncDisposable
         return keyType switch
         {
             "ssh-ed25519" => ParseEd25519Key(rp, pubKeyBlob),
-            "ssh-rsa"     => ParseRsaKey(rp, pubKeyBlob),
-            _             => throw new NotSupportedException($"Key type '{keyType}' is not supported.")
+            "ssh-rsa" => ParseRsaKey(rp, pubKeyBlob),
+            _ => throw new NotSupportedException($"Key type '{keyType}' is not supported.")
         };
     }
 
     private static SshKeyInfo ParseEd25519Key(SshReader rp, byte[] pubKeyBlob)
     {
-        var pub32  = rp.ReadString();  // 32-byte public key
+        var pub32 = rp.ReadString();  // 32-byte public key
         var priv64 = rp.ReadString();  // 64-byte private+public
         var comment = Encoding.UTF8.GetString(rp.ReadString());
 
@@ -339,10 +339,10 @@ public sealed class PksSSHAgent : IAsyncDisposable
 
         return new SshKeyInfo
         {
-            KeyType           = SshKeyType.Ed25519,
-            PublicKeyBlob     = pubKeyBlob,
+            KeyType = SshKeyType.Ed25519,
+            PublicKeyBlob = pubKeyBlob,
             Ed25519PrivateSeed = privSeed,
-            Comment           = comment
+            Comment = comment
         };
     }
 
@@ -350,12 +350,12 @@ public sealed class PksSSHAgent : IAsyncDisposable
     {
         // RSA private key fields (OpenSSH order):
         // n, e, d, iqmp, p, q
-        var n    = rp.ReadMpint();
-        var e    = rp.ReadMpint();
-        var d    = rp.ReadMpint();
+        var n = rp.ReadMpint();
+        var e = rp.ReadMpint();
+        var d = rp.ReadMpint();
         var iqmp = rp.ReadMpint();
-        var p    = rp.ReadMpint();
-        var q    = rp.ReadMpint();
+        var p = rp.ReadMpint();
+        var q = rp.ReadMpint();
         var comment = Encoding.UTF8.GetString(rp.ReadString());
 
         // Reconstruct CRT parameters: dp = d mod (p-1), dq = d mod (q-1)
@@ -377,22 +377,22 @@ public sealed class PksSSHAgent : IAsyncDisposable
         var rsa = RSA.Create();
         rsa.ImportParameters(new RSAParameters
         {
-            Modulus  = BigIntToUnsignedBigEndian(bn),
+            Modulus = BigIntToUnsignedBigEndian(bn),
             Exponent = BigIntToUnsignedBigEndian(be),
-            D        = BigIntToUnsignedBigEndian(bd),
-            P        = BigIntToUnsignedBigEndian(bp),
-            Q        = BigIntToUnsignedBigEndian(bq),
-            DP       = BigIntToUnsignedBigEndian(bdp),
-            DQ       = BigIntToUnsignedBigEndian(bdq),
+            D = BigIntToUnsignedBigEndian(bd),
+            P = BigIntToUnsignedBigEndian(bp),
+            Q = BigIntToUnsignedBigEndian(bq),
+            DP = BigIntToUnsignedBigEndian(bdp),
+            DQ = BigIntToUnsignedBigEndian(bdq),
             InverseQ = BigIntToUnsignedBigEndian(biqmp),
         });
 
         return new SshKeyInfo
         {
-            KeyType       = SshKeyType.Rsa,
+            KeyType = SshKeyType.Rsa,
             PublicKeyBlob = pubKeyBlob,
-            RsaKey        = rsa,
-            Comment       = comment
+            RsaKey = rsa,
+            Comment = comment
         };
     }
 
@@ -428,11 +428,11 @@ public sealed class PksSSHAgent : IAsyncDisposable
 
     private sealed class SshKeyInfo
     {
-        public SshKeyType    KeyType           { get; init; }
-        public byte[]        PublicKeyBlob     { get; init; } = Array.Empty<byte>();
-        public byte[]?       Ed25519PrivateSeed { get; init; }
-        public RSA?          RsaKey            { get; init; }
-        public string        Comment           { get; init; } = "";
+        public SshKeyType KeyType { get; init; }
+        public byte[] PublicKeyBlob { get; init; } = Array.Empty<byte>();
+        public byte[]? Ed25519PrivateSeed { get; init; }
+        public RSA? RsaKey { get; init; }
+        public string Comment { get; init; } = "";
     }
 
     /// <summary>Reads SSH wire-format fields from a byte array.</summary>

@@ -53,12 +53,12 @@ public class VmScheduleCommand : Command<VmSettings>
         var vm = vms.First(v => v.VmName == vmName);
 
         // 3. What to configure (multi-select)
-        const string OptAutoStart    = "Auto-start: boot at a fixed time each day";
-        const string OptAutoStop     = "Auto-shutdown: stop at a fixed time each day";
+        const string OptAutoStart = "Auto-start: boot at a fixed time each day";
+        const string OptAutoStop = "Auto-shutdown: stop at a fixed time each day";
         const string OptIdleShutdown = "Idle shutdown: stop after N minutes of inactivity";
         const string OptDisableStart = "Disable auto-start";
-        const string OptDisableStop  = "Disable auto-shutdown";
-        const string OptDisableIdle  = "Disable idle shutdown";
+        const string OptDisableStop = "Disable auto-shutdown";
+        const string OptDisableIdle = "Disable idle shutdown";
 
         var actions = _console.Prompt(
             new MultiSelectionPrompt<string>()
@@ -74,12 +74,12 @@ public class VmScheduleCommand : Command<VmSettings>
         }
 
         // 4. Collect values for selected actions
-        string? autoStartTime    = null;
-        string? autoStopTime     = null;
-        int?    idleMinutes      = null;
-        bool    disableStart     = actions.Contains(OptDisableStart);
-        bool    disableStop      = actions.Contains(OptDisableStop);
-        bool    disableIdle      = actions.Contains(OptDisableIdle);
+        string? autoStartTime = null;
+        string? autoStopTime = null;
+        int? idleMinutes = null;
+        bool disableStart = actions.Contains(OptDisableStart);
+        bool disableStop = actions.Contains(OptDisableStop);
+        bool disableIdle = actions.Contains(OptDisableIdle);
 
         if (actions.Contains(OptAutoStart))
         {
@@ -113,12 +113,12 @@ public class VmScheduleCommand : Command<VmSettings>
 
         // 5. Show summary and confirm
         var summary = new System.Text.StringBuilder();
-        if (autoStartTime  != null) summary.AppendLine($"[cyan1]Auto-start:[/]    {autoStartTime} UTC daily");
-        if (autoStopTime   != null) summary.AppendLine($"[cyan1]Auto-shutdown:[/] {autoStopTime} UTC daily");
-        if (idleMinutes    != null) summary.AppendLine($"[cyan1]Idle shutdown:[/] {idleMinutes} minutes");
-        if (disableStart)           summary.AppendLine("[cyan1]Disable auto-start[/]");
-        if (disableStop)            summary.AppendLine("[cyan1]Disable auto-shutdown[/]");
-        if (disableIdle)            summary.AppendLine("[cyan1]Disable idle shutdown[/]");
+        if (autoStartTime != null) summary.AppendLine($"[cyan1]Auto-start:[/]    {autoStartTime} UTC daily");
+        if (autoStopTime != null) summary.AppendLine($"[cyan1]Auto-shutdown:[/] {autoStopTime} UTC daily");
+        if (idleMinutes != null) summary.AppendLine($"[cyan1]Idle shutdown:[/] {idleMinutes} minutes");
+        if (disableStart) summary.AppendLine("[cyan1]Disable auto-start[/]");
+        if (disableStop) summary.AppendLine("[cyan1]Disable auto-shutdown[/]");
+        if (disableIdle) summary.AppendLine("[cyan1]Disable idle shutdown[/]");
 
         _console.Write(new Panel(summary.ToString().TrimEnd())
             .Border(BoxBorder.Rounded)
@@ -192,10 +192,10 @@ public class VmScheduleCommand : Command<VmSettings>
                 }
 
                 // Persist changes to local metadata
-                if (autoStopTime  != null) vm.ScheduledShutdownUtc = autoStopTime;
-                if (disableStop)            vm.ScheduledShutdownUtc = null;
-                if (idleMinutes   != null) vm.IdleShutdownMinutes   = idleMinutes.Value;
-                if (disableIdle)            vm.IdleShutdownMinutes   = 0;
+                if (autoStopTime != null) vm.ScheduledShutdownUtc = autoStopTime;
+                if (disableStop) vm.ScheduledShutdownUtc = null;
+                if (idleMinutes != null) vm.IdleShutdownMinutes = idleMinutes.Value;
+                if (disableIdle) vm.IdleShutdownMinutes = 0;
                 await _vmMetadata.SaveAsync(vm);
             });
 
