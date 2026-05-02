@@ -35,6 +35,7 @@ using PKS.Commands.Google;
 using PKS.Commands.AppInsights;
 using PKS.Commands.Otel;
 using PKS.Commands.Image;
+using PKS.Commands.Promptwall;
 using PKS.Commands.Tts;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -860,6 +861,13 @@ app.Configure(config =>
         .WithExample(new[] { "image", "\"a dark editorial photograph of a match burning\"" })
         .WithExample(new[] { "image", "--prompt-file", "prompt.txt", "--output", "cover.jpg" })
         .WithExample(new[] { "image", "--input", "bg.jpg", "\"Add title 'My Book' in white serif at the top\"", "--output", "cover-final.jpg" });
+
+    // Add promptwall — render a recent Claude prompt as a social-media image
+    config.AddCommand<PromptwallCommand>("promptwall")
+        .WithDescription("Render a recent Claude prompt as a social-media image")
+        .WithExample(["promptwall"])
+        .WithExample(["promptwall", "--all-projects"])
+        .WithExample(["promptwall", "--include-reply", "--output", "./out"]);
 
     // Add claude analysis commands
     config.AddBranch<PKS.Commands.Claude.ClaudeSettings>("claude", claude =>
