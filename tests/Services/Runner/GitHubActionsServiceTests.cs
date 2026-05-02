@@ -405,6 +405,69 @@ public class GitHubActionsServiceTests
         result.Should().BeEmpty();
     }
 
+    // ── Token propagation after refresh ─────────────────────────────────
+
+    [Fact]
+    public async Task GetQueuedRunsAsync_WhenStoredTokenChanges_PropagatesLatestTokenToApiClient()
+    {
+        // Repro for the reactive-refresh tight-loop bug: when the daemon refreshes
+        // the GitHub token, the new token is written to storage and applied to the
+        // daemon's IGitHubApiClient instance. But GitHubActionsService receives a
+        // separate transient IGitHubApiClient (each singleton consumer of an
+        // AddHttpClient-registered typed client gets its own instance). If
+        // EnsureAuthenticatedAsync only seeds the token when !IsAuthenticated,
+        // the actions service keeps its now-revoked old token forever — every poll
+        // returns 401, triggers another refresh, and the loop never settles.
+        //
+        // The fix: always pull the latest token from storage so a refresh that
+        // mutates storage propagates to subsequent API calls.
+
+        var staleToken = new GitHubStoredToken
+        {
+            AccessToken = "ghp_stale_revoked",
+            IsValid = true,
+            Scopes = new[] { "repo" },
+            ExpiresAt = DateTime.UtcNow.AddHours(8)
+        };
+
+        var refreshedToken = new GitHubStoredToken
+        {
+            AccessToken = "ghp_refreshed_valid",
+            IsValid = true,
+            Scopes = new[] { "repo" },
+            ExpiresAt = DateTime.UtcNow.AddHours(8)
+        };
+
+        // The API client reports it is already authenticated (the stale token was
+        // applied earlier). IsAuthenticated stays true throughout.
+        _mockApiClient.Setup(c => c.IsAuthenticated).Returns(true);
+
+        // Storage starts with the stale token, then a refresh elsewhere swaps
+        // it for the freshly-issued one.
+        var sequence = new Queue<GitHubStoredToken>(new[] { staleToken, refreshedToken });
+        _mockAuthService
+            .Setup(a => a.GetStoredTokenAsync(null))
+            .ReturnsAsync(() => sequence.Count > 1 ? sequence.Dequeue() : sequence.Peek());
+
+        _mockApiClient
+            .Setup(c => c.GetAsync<WorkflowRunsResponse>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new WorkflowRunsResponse
+            {
+                TotalCount = 0,
+                WorkflowRuns = new List<QueuedWorkflowRun>()
+            });
+
+        // First poll: drains the stale token from storage.
+        await _sut.GetQueuedRunsAsync("owner", "repo");
+
+        // Second poll happens after a refresh has rotated the stored token.
+        await _sut.GetQueuedRunsAsync("owner", "repo");
+
+        // The actions service must have applied the refreshed token to its API
+        // client, otherwise it would keep using the revoked stale token forever.
+        _mockApiClient.Verify(c => c.SetAuthenticationToken("ghp_refreshed_valid"), Times.AtLeastOnce);
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────
 
     private static bool VerifyJitConfigRequestBody(object body, string expectedName, string[] expectedLabels)

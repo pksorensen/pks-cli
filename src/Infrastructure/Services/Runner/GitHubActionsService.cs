@@ -18,13 +18,18 @@ public class GitHubActionsService : IGitHubActionsService
 
     private async Task EnsureAuthenticatedAsync()
     {
-        if (!_apiClient.IsAuthenticated)
+        // Always pull the latest token from storage. The runner daemon shares
+        // storage but not its IGitHubApiClient instance with this service —
+        // each singleton consumer receives a separate transient client from
+        // AddHttpClient. After a refresh the daemon updates its own client and
+        // writes the new token to storage; without re-reading here, this
+        // service would keep submitting the revoked old token, GitHub would
+        // 401 it, the daemon would refresh again, and the cycle would never
+        // settle.
+        var storedToken = await _authService.GetStoredTokenAsync();
+        if (storedToken != null && !string.IsNullOrEmpty(storedToken.AccessToken))
         {
-            var storedToken = await _authService.GetStoredTokenAsync();
-            if (storedToken != null && !string.IsNullOrEmpty(storedToken.AccessToken))
-            {
-                _apiClient.SetAuthenticationToken(storedToken.AccessToken);
-            }
+            _apiClient.SetAuthenticationToken(storedToken.AccessToken);
         }
     }
 
