@@ -130,7 +130,7 @@ internal sealed class OtlpProxy : IAsyncDisposable
             (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS()))
         {
             File.SetUnixFileMode(socketPath,
-                UnixFileMode.UserRead  | UnixFileMode.UserWrite  | UnixFileMode.UserExecute  |
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
                 UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
                 UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
         }

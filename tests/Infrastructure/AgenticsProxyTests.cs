@@ -240,7 +240,7 @@ public class AgenticsProxyTests : IAsyncLifetime
     [Fact]
     public async Task Live_Proxy_ForwardsTtsRequest()
     {
-        var proxyUrl   = Environment.GetEnvironmentVariable("AGENTICS_PROXY_URL");
+        var proxyUrl = Environment.GetEnvironmentVariable("AGENTICS_PROXY_URL");
         var proxyToken = Environment.GetEnvironmentVariable("AGENTICS_PROXY_TOKEN");
         if (string.IsNullOrEmpty(proxyUrl) || string.IsNullOrEmpty(proxyToken))
             return; // skip when runner proxy is not available

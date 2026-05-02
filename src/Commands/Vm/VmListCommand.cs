@@ -123,13 +123,13 @@ public class VmListCommand : Command<VmListCommand.Settings>
             {
                 statusDisplay = s switch
                 {
-                    "running"      => "[green]running[/]",
-                    "stopped"      => "[yellow]stopped[/]",
-                    "deallocated"  => "[dim]deallocated[/]",
-                    "starting"     => "[cyan]starting[/]",
-                    "stopping"     => "[yellow]stopping[/]",
+                    "running" => "[green]running[/]",
+                    "stopped" => "[yellow]stopped[/]",
+                    "deallocated" => "[dim]deallocated[/]",
+                    "starting" => "[cyan]starting[/]",
+                    "stopping" => "[yellow]stopping[/]",
                     "deallocating" => "[dim]deallocating[/]",
-                    _              => $"[dim]{Markup.Escape(s ?? "?")}[/]"
+                    _ => $"[dim]{Markup.Escape(s ?? "?")}[/]"
                 };
             }
             else
