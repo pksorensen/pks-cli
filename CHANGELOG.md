@@ -49,6 +49,21 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.10.0](https://github.com/pksorensen/pks-cli/compare/v6.9.0...v6.10.0) (2026-05-02)
+
+
+### Features
+
+* **cli:** add `pks promptwall` command ([#106](https://github.com/pksorensen/pks-cli/issues/106)) ([2705a37](https://github.com/pksorensen/pks-cli/commit/2705a37b46db79affa353bfef00d307eb2616247))
+* Update DevcontainerSpawnCommand to include Azure services in remote tests ([2bb2946](https://github.com/pksorensen/pks-cli/commit/2bb2946188ee66b0cfede21a20a5d4ceb52dd3b7))
+
+
+### Bug Fixes
+
+* **cli:** use PR base branch for Coolify lookup on pull_request events ([5e2d45b](https://github.com/pksorensen/pks-cli/commit/5e2d45b76c685fbc9d280e3f1bb8f4b86035f673))
+* github oicd flow for task submit ([dfeb20a](https://github.com/pksorensen/pks-cli/commit/dfeb20a9ae219da6c4f231f8264a45bf35436910))
+* resolve merge conflict in DevcontainerSpawnRemoteTests ([4eefdfd](https://github.com/pksorensen/pks-cli/commit/4eefdfdccac0b49a189b9854c6ec1e70de94cf5f))
+
 ## [6.9.0](https://github.com/pksorensen/pks-cli/compare/v6.8.1...v6.9.0) (2026-05-01)
 
 
