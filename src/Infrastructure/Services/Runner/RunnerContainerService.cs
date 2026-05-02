@@ -107,8 +107,9 @@ public class RunnerContainerService : IRunnerContainerService
         Action<string>? onProgress = null,
         CancellationToken cancellationToken = default,
         string? credentialSocketPath = null,
-        string? environment = null)
-        => ExecuteJobAsync(registration, runId, branch, accessToken, encodedJitConfig, onProgress, cancellationToken, containerName: null, credentialSocketPath: credentialSocketPath, environment: environment);
+        string? environment = null,
+        string? lookupBranch = null)
+        => ExecuteJobAsync(registration, runId, branch, accessToken, encodedJitConfig, onProgress, cancellationToken, containerName: null, credentialSocketPath: credentialSocketPath, environment: environment, lookupBranch: lookupBranch);
 
     /// <summary>
     /// Execute a full job lifecycle with optional container name for reuse.
@@ -124,7 +125,8 @@ public class RunnerContainerService : IRunnerContainerService
         CancellationToken cancellationToken,
         string? containerName,
         string? credentialSocketPath = null,
-        string? environment = null)
+        string? environment = null,
+        string? lookupBranch = null)
     {
         var job = new RunnerJobState
         {
@@ -153,10 +155,11 @@ public class RunnerContainerService : IRunnerContainerService
             }
 
             string? pksToken = null;
+            var coolifyBranch = lookupBranch ?? branch;
             try
             {
-                onProgress?.Invoke($"Coolify lookup: {registration.Owner}/{registration.Repository}@{branch} (all environments)");
-                var allApps = await _coolifyLookup.FindAllAppsAsync(registration.Owner, registration.Repository, branch);
+                onProgress?.Invoke($"Coolify lookup: {registration.Owner}/{registration.Repository}@{coolifyBranch} (all environments)");
+                var allApps = await _coolifyLookup.FindAllAppsAsync(registration.Owner, registration.Repository, coolifyBranch);
                 if (allApps.Count > 0)
                 {
                     var defaultApp = allApps.FirstOrDefault(a =>
@@ -169,18 +172,18 @@ public class RunnerContainerService : IRunnerContainerService
                     var jobId = $"{runId}-{Guid.NewGuid():N}";
                     _coolifyTokenStore.RegisterAll(jobId, allApps);
                     pksToken = _jobTokenService.CreateToken(
-                        registration.Owner, registration.Repository, branch,
+                        registration.Owner, registration.Repository, coolifyBranch,
                         "", "", jobId);
 
                     onProgress?.Invoke($"Coolify proxy configured for {allApps.Count} app(s) across environments [scoped JWT]");
                     _logger.LogInformation("Prepared scoped PKS_TOKEN for {Count} app(s) matching {Owner}/{Repo}@{Branch} (jobId={JobId})",
-                        allApps.Count, registration.Owner, registration.Repository, branch, jobId);
+                        allApps.Count, registration.Owner, registration.Repository, coolifyBranch, jobId);
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Coolify lookup failed for {Owner}/{Repo}@{Branch} — skipping env injection",
-                    registration.Owner, registration.Repository, branch);
+                    registration.Owner, registration.Repository, coolifyBranch);
                 onProgress?.Invoke($"Warning: Coolify lookup failed: {ex.Message}");
             }
 
@@ -373,7 +376,8 @@ public class RunnerContainerService : IRunnerContainerService
         string encodedJitConfig,
         Action<string>? onProgress = null,
         CancellationToken cancellationToken = default,
-        string? credentialSocketPath = null)
+        string? credentialSocketPath = null,
+        string? lookupBranch = null)
     {
         var job = new RunnerJobState
         {
@@ -400,16 +404,17 @@ public class RunnerContainerService : IRunnerContainerService
 
             // Prepare per-job Coolify token (OIDC-like: each job gets its own scoped JWT)
             string? pksToken = null;
+            var coolifyBranch = lookupBranch ?? branch;
             try
             {
-                onProgress?.Invoke($"Coolify lookup: {registration.Owner}/{registration.Repository}@{branch} (all environments)");
-                var allApps = await _coolifyLookup.FindAllAppsAsync(registration.Owner, registration.Repository, branch);
+                onProgress?.Invoke($"Coolify lookup: {registration.Owner}/{registration.Repository}@{coolifyBranch} (all environments)");
+                var allApps = await _coolifyLookup.FindAllAppsAsync(registration.Owner, registration.Repository, coolifyBranch);
                 if (allApps.Count > 0)
                 {
                     var coolifyJobId = $"{runId}-{jobId}-{Guid.NewGuid():N}";
                     _coolifyTokenStore.RegisterAll(coolifyJobId, allApps);
                     pksToken = _jobTokenService.CreateToken(
-                        registration.Owner, registration.Repository, branch,
+                        registration.Owner, registration.Repository, coolifyBranch,
                         "", "", coolifyJobId);
 
                     onProgress?.Invoke($"Coolify proxy configured for {allApps.Count} app(s) across environments [scoped JWT]");
@@ -420,7 +425,7 @@ public class RunnerContainerService : IRunnerContainerService
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Coolify lookup failed for {Owner}/{Repo}@{Branch} in existing container",
-                    registration.Owner, registration.Repository, branch);
+                    registration.Owner, registration.Repository, coolifyBranch);
                 onProgress?.Invoke($"Warning: Coolify lookup failed: {ex.Message}");
             }
 

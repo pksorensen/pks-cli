@@ -91,6 +91,38 @@ public class QueuedWorkflowRun
     public string HtmlUrl { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; }
     public List<string> Labels { get; set; } = new();
+
+    /// <summary>
+    /// The trigger event for the workflow run (e.g. "push", "pull_request", "workflow_dispatch").
+    /// Maps to the GitHub API field <c>event</c>.
+    /// </summary>
+    public string Event { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Pull requests associated with this run when the trigger event is <c>pull_request</c>.
+    /// For PR-triggered runs, <c>HeadBranch</c> is the PR source ref; the deploy-target ref
+    /// must be read from <c>PullRequests[].Base.Ref</c> instead.
+    /// </summary>
+    public List<PullRequestRef> PullRequests { get; set; } = new();
+}
+
+/// <summary>
+/// A pull request reference attached to a workflow run.
+/// </summary>
+public class PullRequestRef
+{
+    public int Number { get; set; }
+    public PullRequestRefBranch Head { get; set; } = new();
+    public PullRequestRefBranch Base { get; set; } = new();
+}
+
+/// <summary>
+/// A branch endpoint of a pull request (head or base).
+/// </summary>
+public class PullRequestRefBranch
+{
+    public string Ref { get; set; } = string.Empty;
+    public string Sha { get; set; } = string.Empty;
 }
 
 /// <summary>
