@@ -271,6 +271,8 @@ services.AddSingleton<ICoolifyLookupService, CoolifyLookupService>();
 services.AddSingleton<ICoolifyApiService, CoolifyApiService>();
 services.AddSingleton<IRunnerConfigurationService, RunnerConfigurationService>();
 services.AddSingleton<IAgenticsRunnerConfigurationService, AgenticsRunnerConfigurationService>();
+services.AddSingleton<PKS.Infrastructure.Services.Agentics.IAgenticsAuthService, PKS.Infrastructure.Services.Agentics.AgenticsAuthService>();
+services.AddSingleton<PKS.Infrastructure.Services.Agentics.IAgenticsAuthConfigurationService, PKS.Infrastructure.Services.Agentics.AgenticsAuthConfigurationService>();
 services.AddSingleton<IFirecrackerRunnerConfigurationService, FirecrackerRunnerConfigurationService>();
 services.AddSingleton<IFirecrackerService, FirecrackerService>();
 services.AddSingleton<FirecrackerNetworkManager>();
@@ -432,6 +434,11 @@ app.Configure(config =>
     config.AddBranch<AgenticsSettings>("agentics", agentics =>
     {
         agentics.SetDescription("Manage Agentics runners and integration");
+
+        agentics.AddCommand<PKS.Commands.Agentics.AgenticsInitCommand>("init")
+            .WithDescription("Log in to agentics.dk via Keycloak device-code flow (one-time per machine)")
+            .WithExample(new[] { "agentics", "init" })
+            .WithExample(new[] { "agentics", "init", "--server", "agentics.dk" });
 
         agentics.AddBranch<AgenticsRunnerSettings>("runner", runner =>
         {

@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using PKS.Commands.Agentics;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Agentics;
 using PKS.Infrastructure.Services.Runner;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -20,6 +21,7 @@ namespace PKS.Commands.Agentics.Tasks;
 public class AgenticsTaskSubmitCommand(
     IAgenticsRunnerConfigurationService configService,
     IGitHubAuthenticationService githubAuth,
+    IAgenticsAuthService authService,
     IAnsiConsole console) : Command<AgenticsTaskSubmitCommand.Settings>
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -56,8 +58,12 @@ public class AgenticsTaskSubmitCommand(
         public string? Labels { get; set; }
 
         [CommandOption("--server <URL>")]
-        [Description("Override ALP server URL (default: from runner registration)")]
+        [Description("Override ALP server URL (default: from runner registration or agentics.dk)")]
         public string? Server { get; set; }
+
+        [CommandOption("--token <TOKEN>")]
+        [Description("Bearer token override (skips auth chain; useful for one-off scripts)")]
+        public string? Token { get; set; }
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -95,7 +101,8 @@ public class AgenticsTaskSubmitCommand(
                 console.MarkupLine($"[dim]Owner: {owner}  Project: {project}  Stage: {stageId}[/]");
             }
 
-            // 3. Load runner registration for this owner/project
+            // 3. Resolve server URL — caller flag wins, then existing runner
+            //    registration's server, then default.
             var registrations = await configService.LoadAsync();
             var registration = registrations.Registrations
                 .Where(r => string.Equals(r.Owner, owner, StringComparison.OrdinalIgnoreCase)
@@ -103,18 +110,30 @@ public class AgenticsTaskSubmitCommand(
                 .OrderByDescending(r => r.RegisteredAt)
                 .FirstOrDefault();
 
-            if (registration == null)
+            var serverUrl = ResolveServerUrl(settings.Server ?? registration?.Server);
+
+            // 4. Resolve a bearer token via the auth chain. The audience binds
+            //    the token to this specific assembly-line URL — see
+            //    AgenticsAuthService for the priority order.
+            var assemblyLineUrl = $"{serverUrl}/p/{owner}/{project}/assembly-lines/{stageId}";
+            var bearer = await authService.GetTokenAsync(assemblyLineUrl, settings.Token, owner, project);
+
+            if (string.IsNullOrEmpty(bearer))
             {
-                console.MarkupLine($"[red]No runner registered for {owner}/{project}.[/]");
-                console.MarkupLine($"[dim]Run: pks agentics runner register {owner}/{project}[/]");
+                console.MarkupLine($"[red]No credentials available for {owner}/{project}.[/]");
+                console.MarkupLine("[dim]Try one of:[/]");
+                console.MarkupLine("[dim]  - Run `pks agentics init` once on this machine to log in.[/]");
+                console.MarkupLine("[dim]  - In CI, ensure the workflow has `permissions: id-token: write` and the project trusts this repository.[/]");
+                console.MarkupLine($"[dim]  - Or `pks agentics runner register {owner}/{project}` (legacy).[/]");
                 return 1;
             }
 
-            var serverUrl = ResolveServerUrl(settings.Server ?? registration.Server);
-
             if (settings.Verbose)
             {
-                console.MarkupLine($"[dim]Using runner: {registration.Name}  Server: {serverUrl}[/]");
+                var src = !string.IsNullOrEmpty(settings.Token) ? "explicit"
+                    : Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true" ? "github-oidc"
+                    : registration != null ? "runner-token" : "stored-user";
+                console.MarkupLine($"[dim]Auth source: {src}  Server: {serverUrl}[/]");
             }
 
             // 4. Build description — enrich with GitHub Actions context if available
@@ -138,7 +157,7 @@ public class AgenticsTaskSubmitCommand(
                     {
                         using var http = new HttpClient();
                         http.DefaultRequestHeaders.Authorization =
-                            new AuthenticationHeaderValue("Bearer", registration.Token);
+                            new AuthenticationHeaderValue("Bearer", bearer);
 
                         var requestBody = new
                         {
