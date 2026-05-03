@@ -1,7 +1,7 @@
 namespace PKS.Infrastructure.Services.Claude;
 
 public record MarketplaceJson(
-    string Id,
+    string Name,
     string? Label,
     List<MarketplacePluginInfo> Plugins);
 

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace PKS.Infrastructure.Services.Claude;
 
@@ -70,13 +71,16 @@ public class ClaudeMarketplaceFetcher : IClaudeMarketplaceFetcher
             .Select(p => new MarketplacePluginInfo(p.Name ?? "", p.Version, p.Description))
             .ToList();
 
-        return new MarketplaceJson(dto.Id ?? "", dto.Label, plugins);
+        return new MarketplaceJson(dto.Name ?? "", dto.Label, plugins);
     }
 
     // Private DTOs for deserialization
     private class MarketplaceJsonDto
     {
-        public string? Id { get; set; }
+        // Anthropic's marketplace.json schema uses "name" (not "id") for the marketplace
+        // identifier. See https://code.claude.com/docs/en/plugin-marketplaces.
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
         public string? Label { get; set; }
         public List<MarketplacePluginDto>? Plugins { get; set; }
     }

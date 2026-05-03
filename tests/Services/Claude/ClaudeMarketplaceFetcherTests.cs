@@ -71,10 +71,11 @@ public class ClaudeMarketplaceFetcherTests : TestBase
     [Trait("Category", "Claude")]
     public async Task FetchAsync_UrlSource_ParsesMarketplaceJson()
     {
-        // Arrange
+        // Arrange — Anthropic's marketplace.json schema uses "name" (not "id") for the
+        // marketplace identifier. This test guards the field name we depend on.
         var marketplaceJson = """
             {
-                "id": "agentic-live",
+                "name": "agentic-live",
                 "label": "context& dev marketplace",
                 "plugins": [
                     { "name": "ctx-onboard", "version": "1.0.0", "description": "Onboarding plugin" }
@@ -95,11 +96,31 @@ public class ClaudeMarketplaceFetcherTests : TestBase
 
         // Assert
         result.Should().NotBeNull();
-        result.Id.Should().Be("agentic-live");
+        result.Name.Should().Be("agentic-live");
         result.Label.Should().Be("context& dev marketplace");
         result.Plugins.Should().HaveCount(1);
         result.Plugins[0].Name.Should().Be("ctx-onboard");
         result.Plugins[0].Version.Should().Be("1.0.0");
+    }
+
+    [Fact]
+    [Trait("Category", "Claude")]
+    public async Task FetchAsync_OnlyIdField_ReturnsEmptyName()
+    {
+        // Regression guard: a marketplace.json that only has "id" (and no "name") must
+        // NOT be silently accepted — Anthropic's schema requires "name". Prior bug:
+        // we read "id" and stored an empty marketplace key, breaking enabledPlugins.
+        var marketplaceJson = """
+            { "id": "agentic-live", "plugins": [] }
+            """;
+
+        var handler = new FakeHttpMessageHandler(marketplaceJson, HttpStatusCode.OK);
+        var fetcher = CreateFetcher(handler);
+        var source = new ClaudeMarketplaceSource { SourceType = "url", Url = "https://example.com/m.json" };
+
+        var result = await fetcher.FetchAsync(source);
+
+        result.Name.Should().BeEmpty();
     }
 }
 

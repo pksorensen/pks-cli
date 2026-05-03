@@ -71,9 +71,16 @@ public class ClaudeMarketplaceAddCommand : AsyncCommand<ClaudeMarketplaceAddComm
                     plugin.Enabled = selected.Contains(plugin.Name);
             }
 
+            if (string.IsNullOrWhiteSpace(marketplaceJson.Name))
+            {
+                _console.MarkupLine("[red]Error: fetched marketplace.json has no `name` field.[/]");
+                _console.MarkupLine("[dim]Anthropic's schema requires a top-level `name`. Without it the marketplace cannot be referenced from `enabledPlugins`. Refusing to write a stub entry — fix the marketplace source and re-run.[/]");
+                return 1;
+            }
+
             var marketplace = new ClaudeMarketplace
             {
-                Id = marketplaceJson.Id,
+                Id = marketplaceJson.Name,
                 Label = settings.Label ?? marketplaceJson.Label,
                 Source = source,
                 AddedAt = DateTime.UtcNow,
