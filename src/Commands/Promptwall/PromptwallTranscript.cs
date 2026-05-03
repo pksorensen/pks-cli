@@ -175,6 +175,20 @@ public static class PromptwallTranscript
         if (GetBool(root, "isSidechain")) return false;
         if (GetBool(root, "isMeta")) return false;
 
+        // Synthetic prompt: any non-null origin.kind means it was injected
+        // (e.g. task-notification from a Monitor / sub-agent), not user-typed.
+        if (root.TryGetProperty("origin", out var originProp) &&
+            originProp.ValueKind == JsonValueKind.Object &&
+            originProp.TryGetProperty("kind", out var kindProp) &&
+            kindProp.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrEmpty(kindProp.GetString()))
+            return false;
+
+        // Synthetic prompt: /compact continuation summary. Claude Code marks these
+        // with isCompactSummary=true; the parent record is type=system,
+        // subtype=compact_boundary.
+        if (GetBool(root, "isCompactSummary")) return false;
+
         if (!root.TryGetProperty("message", out var msg)) return false;
         if (!msg.TryGetProperty("content", out var content)) return false;
 

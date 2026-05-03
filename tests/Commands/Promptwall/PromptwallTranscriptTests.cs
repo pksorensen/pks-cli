@@ -76,6 +76,85 @@ public class PromptwallTranscriptTests
     }
 
     [Fact]
+    public void ParsePrompts_DropsTaskNotificationOriginInjections()
+    {
+        var taskNotificationLine = """
+            {"type":"user","uuid":"u1","timestamp":"2026-05-01T10:00:00Z","origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification>\n<task-id>abc</task-id>\n</task-notification>"}}
+            """;
+
+        var jsonl = string.Join("\n",
+            taskNotificationLine,
+            UserLine("u2", "2026-05-01T10:01:00Z", "Real prompt"));
+
+        var result = PromptwallTranscript.ParsePrompts(jsonl, file: "session.jsonl");
+
+        result.Should().ContainSingle();
+        result[0].Text.Should().Be("Real prompt");
+    }
+
+    [Fact]
+    public void ParsePrompts_DropsAnyNonNullOriginKind()
+    {
+        // Defensive variant: any non-null origin.kind means injected, not user-typed.
+        var futureKindLine = """
+            {"type":"user","uuid":"u1","timestamp":"2026-05-01T10:00:00Z","origin":{"kind":"some-future-kind"},"message":{"role":"user","content":"injected by some future feature"}}
+            """;
+
+        var jsonl = string.Join("\n",
+            futureKindLine,
+            UserLine("u2", "2026-05-01T10:01:00Z", "Real prompt"));
+
+        var result = PromptwallTranscript.ParsePrompts(jsonl, file: "session.jsonl");
+
+        result.Should().ContainSingle();
+        result[0].Text.Should().Be("Real prompt");
+    }
+
+    [Fact]
+    public void ParsePrompts_DropsCompactSummaryContinuation()
+    {
+        var compactLine = """
+            {"type":"user","uuid":"u1","timestamp":"2026-05-01T10:00:00Z","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":"This session is being continued from a previous conversation that ran out of context..."}}
+            """;
+
+        var jsonl = string.Join("\n",
+            compactLine,
+            UserLine("u2", "2026-05-01T10:01:00Z", "Real prompt"));
+
+        var result = PromptwallTranscript.ParsePrompts(jsonl, file: "session.jsonl");
+
+        result.Should().ContainSingle();
+        result[0].Text.Should().Be("Real prompt");
+    }
+
+    [Fact]
+    public void ParsePrompts_KeepsPromptWithMissingOriginField()
+    {
+        // Regression guard: a normal prompt with no origin / no isCompactSummary is kept.
+        var jsonl = UserLine("u1", "2026-05-01T10:00:00Z", "Real prompt without origin");
+
+        var result = PromptwallTranscript.ParsePrompts(jsonl, file: "session.jsonl");
+
+        result.Should().ContainSingle();
+        result[0].Text.Should().Be("Real prompt without origin");
+    }
+
+    [Fact]
+    public void ParsePrompts_KeepsPromptWithExplicitOriginNull()
+    {
+        // Regression guard: literal "origin": null (as Claude Code emits for human prompts)
+        // must not trigger the synthetic filter — only non-null origin.kind drops.
+        var explicitNullOrigin = """
+            {"type":"user","uuid":"u1","timestamp":"2026-05-01T10:00:00Z","origin":null,"message":{"role":"user","content":"Real prompt with explicit null origin"}}
+            """;
+
+        var result = PromptwallTranscript.ParsePrompts(explicitNullOrigin, file: "session.jsonl");
+
+        result.Should().ContainSingle();
+        result[0].Text.Should().Be("Real prompt with explicit null origin");
+    }
+
+    [Fact]
     public void ParsePrompts_FiltersCommandEchoes()
     {
         var jsonl = string.Join("\n",
