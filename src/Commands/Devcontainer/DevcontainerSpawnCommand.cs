@@ -1092,7 +1092,7 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         SshTarget target,
         string sshArgs,
         string scopeId,
-        Func<string, string, Task>? sshWriteOverride = null)
+        Func<string, string, Task<string>>? sshSetupOverride = null)
     {
         if (_claudeMarketplaceConfigService == null || _claudeManagedSettingsRenderer == null)
             return null;
@@ -1103,21 +1103,27 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
 
         var json = _claudeManagedSettingsRenderer.Render(config);
 
-        var remoteDir = $"~/.pks-cli/managed-settings/{scopeId}";
-        var remoteFile = $"{remoteDir}/managed-settings.json";
-
-        if (sshWriteOverride != null)
+        string absoluteRemoteDir;
+        if (sshSetupOverride != null)
         {
-            await sshWriteOverride(remoteFile, json);
+            absoluteRemoteDir = await sshSetupOverride(scopeId, json);
         }
         else
         {
-            // Create remote directory and write file via SSH
-            var escaped = json.Replace("'", "'\\''");
-            await RunSshCommandAsync(sshArgs, target, $"mkdir -p {remoteDir} && printf '%s' '{escaped}' > {remoteFile}");
+            // Single SSH round-trip: mkdir + write (base64-decoded to dodge quote escaping)
+            // + chmod (read-only at source side, since `devcontainer up --mount` doesn't accept
+            // `,readonly`) + echo absolute path so we can use $HOME in the bind source.
+            var b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(json));
+            var dirVar = $"$HOME/.pks-cli/managed-settings/{scopeId}";
+            var fileVar = $"{dirVar}/managed-settings.json";
+            var script = $"mkdir -p {dirVar} && echo {b64} | base64 -d > {fileVar} && chmod 0444 {fileVar} && chmod 0555 {dirVar} && echo {dirVar}";
+            var (success, output) = await RunSshCommandAsync(sshArgs, target, script);
+            if (!success || string.IsNullOrWhiteSpace(output))
+                return null;
+            absoluteRemoteDir = output.Trim().Split('\n').Last().Trim();
         }
 
-        return $" --mount type=bind,source=/home/{target.Username}/.pks-cli/managed-settings/{scopeId},target=/etc/claude-code,readonly";
+        return $" --mount type=bind,source={absoluteRemoteDir},target=/etc/claude-code";
     }
 
     protected static async Task<(bool Success, string Output)> RunSshCommandAsync(

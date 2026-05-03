@@ -70,6 +70,9 @@ public class DevcontainerSpawnCommandManagedSettingsMountTests : TestBase
         result.Should().Contain("type=bind");
         result.Should().Contain("/etc/claude-code");
         result.Should().Contain("scope-abc");
+        // devcontainer up's --mount parser only accepts type/source/target/external —
+        // ',readonly' is rejected. Read-only is enforced via chmod 0444 on the source file.
+        result.Should().NotContain("readonly");
     }
 
     [Fact]
@@ -130,5 +133,6 @@ internal class TestableDevcontainerSpawnCommand : PKS.Commands.Devcontainer.Devc
     /// </summary>
     public Task<string?> ExposedBuildClaudeManagedSettingsMountAsync(
         SshTarget target, string sshArgs, string scopeId)
-        => BuildClaudeManagedSettingsMountAsync(target, sshArgs, scopeId, sshWriteOverride: (_, _) => Task.CompletedTask);
+        => BuildClaudeManagedSettingsMountAsync(target, sshArgs, scopeId,
+            sshSetupOverride: (sid, _) => Task.FromResult($"/home/{target.Username}/.pks-cli/managed-settings/{sid}"));
 }
