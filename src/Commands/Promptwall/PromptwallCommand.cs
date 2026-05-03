@@ -110,21 +110,31 @@ public class PromptwallCommand : AsyncCommand<PromptwallCommand.Settings>
             return 1;
         }
 
-        // ── 2. parse prompts ─────────────────────────────────────────────────
-        var allCandidates = new List<PromptwallTranscript.PromptCandidate>();
+        // ── 2. parse prompts (lazily, mtime-sorted) ──────────────────────────
+        // Files are sorted newest-first so the early-exit in CollectFromFiles
+        // typically only touches the 1-2 most recent JSONL files. The 2× factor
+        // gives downstream timestamp-ordering enough material to absorb duplicates
+        // without falling short of the user-requested --count.
+        static DateTime SafeMtime(string f)
+        {
+            try { return File.GetLastWriteTimeUtc(f); }
+            catch { return DateTime.MinValue; }
+        }
+
+        var sortedFiles = jsonlFiles
+            .Select(f => (Path: f, Mtime: SafeMtime(f)))
+            .OrderByDescending(t => t.Mtime)
+            .Select(t => t.Path)
+            .ToList();
+
+        List<PromptwallTranscript.PromptCandidate> allCandidates = [];
         await _console.Status()
             .Spinner(Spinner.Known.Dots)
-            .StartAsync($"Scanning {jsonlFiles.Count} session files…", async _ =>
+            .StartAsync($"Scanning {sortedFiles.Count} session files…", _ =>
             {
-                foreach (var file in jsonlFiles)
-                {
-                    try
-                    {
-                        var content = await File.ReadAllTextAsync(file);
-                        allCandidates.AddRange(PromptwallTranscript.ParsePrompts(content, file));
-                    }
-                    catch { /* skip corrupt files */ }
-                }
+                allCandidates = PromptwallTranscript.CollectFromFiles(
+                    sortedFiles, targetCount: Math.Max(1, settings.Count) * 2);
+                return Task.CompletedTask;
             });
 
         if (allCandidates.Count == 0)

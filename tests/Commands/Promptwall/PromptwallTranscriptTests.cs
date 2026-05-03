@@ -568,6 +568,131 @@ public class PromptwallTranscriptTests
         projects.Should().BeEmpty();
     }
 
+    // ── CollectFromFiles ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void CollectFromFiles_StopsAfterReachingTargetCount()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "pw-collect-stop-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        try
+        {
+            // 5 files with 100 prompts each = 500 prompts total.
+            var files = new List<string>();
+            for (int f = 0; f < 5; f++)
+            {
+                var path = Path.Combine(dir, $"s{f}.jsonl");
+                var lines = new List<string>();
+                for (int i = 0; i < 100; i++)
+                {
+                    var ts = $"2026-05-01T{10 + f:D2}:{i / 60:D2}:{i % 60:D2}Z";
+                    lines.Add(UserLine($"u-{f}-{i}", ts, $"prompt {f}-{i}"));
+                }
+                File.WriteAllText(path, string.Join("\n", lines) + "\n");
+                files.Add(path);
+            }
+
+            var result = PromptwallTranscript.CollectFromFiles(files, targetCount: 10);
+
+            // Must have hit at least 10 candidates and stopped early (not parsed all 5 files).
+            result.Count.Should().BeGreaterThanOrEqualTo(10);
+            var distinctFiles = result.Select(c => c.File).Distinct().Count();
+            distinctFiles.Should().BeLessThan(5,
+                "early-exit must skip later files once the target count is reached");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CollectFromFiles_ReadsAllFilesWhenTargetNotReached()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "pw-collect-all-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        try
+        {
+            // 3 files with 5 prompts each = 15 prompts total.
+            var files = new List<string>();
+            for (int f = 0; f < 3; f++)
+            {
+                var path = Path.Combine(dir, $"s{f}.jsonl");
+                var lines = new List<string>();
+                for (int i = 0; i < 5; i++)
+                {
+                    var ts = $"2026-05-01T{10 + f:D2}:00:{i:D2}Z";
+                    lines.Add(UserLine($"u-{f}-{i}", ts, $"prompt {f}-{i}"));
+                }
+                File.WriteAllText(path, string.Join("\n", lines) + "\n");
+                files.Add(path);
+            }
+
+            var result = PromptwallTranscript.CollectFromFiles(files, targetCount: 100);
+
+            result.Should().HaveCount(15);
+            result.Select(c => c.File).Distinct().Should().HaveCount(3);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CollectFromFiles_SkipsCorruptFiles()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "pw-collect-corrupt-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var realPath = Path.Combine(dir, "real.jsonl");
+            File.WriteAllText(realPath,
+                UserLine("u1", "2026-05-01T10:00:00Z", "Real prompt") + "\n");
+
+            var missingPath = Path.Combine(dir, "does-not-exist.jsonl");
+
+            var result = PromptwallTranscript.CollectFromFiles(
+                [missingPath, realPath], targetCount: 100);
+
+            result.Should().ContainSingle();
+            result[0].Text.Should().Be("Real prompt");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CollectFromFiles_PreservesProvidedFileOrder()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "pw-collect-order-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var fileA = Path.Combine(dir, "a.jsonl");
+            var fileB = Path.Combine(dir, "b.jsonl");
+            var fileC = Path.Combine(dir, "c.jsonl");
+
+            // Each file holds a single prompt; timestamps deliberately do NOT match
+            // the iteration order, to prove CollectFromFiles doesn't reorder.
+            File.WriteAllText(fileA, UserLine("uA", "2026-05-03T10:00:00Z", "from-A") + "\n");
+            File.WriteAllText(fileB, UserLine("uB", "2026-05-01T10:00:00Z", "from-B") + "\n");
+            File.WriteAllText(fileC, UserLine("uC", "2026-05-02T10:00:00Z", "from-C") + "\n");
+
+            var result = PromptwallTranscript.CollectFromFiles(
+                [fileC, fileA, fileB], targetCount: 100);
+
+            result.Should().HaveCount(3);
+            result.Select(c => c.File).Should().Equal(fileC, fileA, fileB);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private static string UserLine(string uuid, string ts, string content)

@@ -164,6 +164,40 @@ public static class PromptwallTranscript
     }
 
     /// <summary>
+    /// Read JSONL files in the order given, parse each into prompt candidates,
+    /// and stop early once we have <paramref name="targetCount"/> candidates.
+    /// Caller is responsible for ordering files (typically by mtime descending).
+    /// Files that fail to read or parse are silently skipped.
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="targetCount"/> is a lower bound on what we collect, not the
+    /// exact count returned. Callers will typically order the result by timestamp
+    /// and take the top N — pass roughly 2× the desired final count to give the
+    /// post-filter ordering enough material to absorb duplicates.
+    /// </remarks>
+    public static List<PromptCandidate> CollectFromFiles(
+        IEnumerable<string> files,
+        int targetCount)
+    {
+        var collected = new List<PromptCandidate>();
+        foreach (var file in files)
+        {
+            try
+            {
+                var content = File.ReadAllText(file);
+                collected.AddRange(ParsePrompts(content, file));
+            }
+            catch
+            {
+                // skip corrupt / missing / unreadable files (mirrors the eager loop's behaviour)
+            }
+
+            if (collected.Count >= targetCount) break;
+        }
+        return collected;
+    }
+
+    /// <summary>
     /// Walk the JSONL forward from the user line whose <paramref name="promptUuid"/>
     /// matches, accumulate the assistant's text-block replies, and stop at either
     /// the next real user prompt or an assistant message with stop_reason=end_turn.
