@@ -28,7 +28,7 @@ public class PromptwallCommand : AsyncCommand<PromptwallCommand.Settings>
         public bool AllProjects { get; set; }
 
         [CommandOption("--pick-project")]
-        [Description("Show a project picker (default: auto-pick when current directory has sessions)")]
+        [Description("Always show project picker (default: shown automatically when multiple projects exist)")]
         public bool PickProject { get; set; }
 
         [CommandOption("--count")]
@@ -71,41 +71,38 @@ public class PromptwallCommand : AsyncCommand<PromptwallCommand.Settings>
         }
         else
         {
-            // Auto-resolve from cwd unless --pick-project forces the picker.
-            jsonlFiles = settings.PickProject
-                ? new List<string>()
-                : DiscoverSessionFiles(settings, out _);
+            // Show picker whenever >1 project exists; skip it only if there's exactly one.
+            var claudeRoot = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".claude", "projects");
+            var projects = PromptwallTranscript.DiscoverProjects(claudeRoot);
 
-            if (jsonlFiles.Count == 0)
+            if (projects.Count == 0)
             {
-                var claudeRoot = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                    ".claude", "projects");
-                var projects = PromptwallTranscript.DiscoverProjects(claudeRoot);
+                var fallbackScope = settings.ProjectPath ?? Directory.GetCurrentDirectory();
+                _console.MarkupLine($"[yellow]No Claude session files found for:[/] [dim]{Markup.Escape(fallbackScope)}[/]");
+                _console.MarkupLine("[dim]Run Claude Code in this project first, then re-run this command.[/]");
+                return 1;
+            }
 
-                if (projects.Count == 0)
-                {
-                    var fallbackScope = settings.ProjectPath ?? Directory.GetCurrentDirectory();
-                    _console.MarkupLine($"[yellow]No Claude session files found for:[/] [dim]{Markup.Escape(fallbackScope)}[/]");
-                    _console.MarkupLine("[dim]Run Claude Code in this project first, then re-run this command.[/]");
-                    return 1;
-                }
-
-                var picked = _console.Prompt(
+            PromptwallTranscript.ProjectInfo picked;
+            if (!settings.PickProject && projects.Count == 1)
+            {
+                picked = projects[0];
+            }
+            else
+            {
+                picked = _console.Prompt(
                     new SelectionPrompt<PromptwallTranscript.ProjectInfo>()
                         .Title("[bold cyan]Pick a project[/]")
                         .PageSize(Math.Min(20, Math.Max(5, projects.Count)))
                         .UseConverter(p =>
                             $"{Markup.Escape(p.Cwd)}  [dim]({p.SessionCount} sessions, {Humanize(p.LastActivity)})[/]")
                         .AddChoices(projects));
+            }
 
-                jsonlFiles = Directory.GetFiles(picked.Dir, "*.jsonl", SearchOption.TopDirectoryOnly).ToList();
-                scope = picked.Cwd;
-            }
-            else
-            {
-                scope = settings.ProjectPath ?? Directory.GetCurrentDirectory();
-            }
+            jsonlFiles = Directory.GetFiles(picked.Dir, "*.jsonl", SearchOption.TopDirectoryOnly).ToList();
+            scope = picked.Cwd;
         }
 
         if (jsonlFiles.Count == 0)
