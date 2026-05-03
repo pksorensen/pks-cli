@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "agentic-live": {
+      "source": {
+        "source": "url",
+        "url": "https://agentic.example.com/marketplace.json"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "ctx-onboard@agentic-live": true
+  }
+}
