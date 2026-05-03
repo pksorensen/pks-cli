@@ -124,6 +124,11 @@ services.AddSingleton<IHooksService, HooksService>();
 services.AddSingleton<IFirstTimeWarningService, FirstTimeWarningService>();
 services.AddSingleton<PKS.Infrastructure.Services.ISshTargetConfigurationService, PKS.Infrastructure.Services.SshTargetConfigurationService>();
 services.AddSingleton<PKS.Infrastructure.Services.ISshCommandRunner, PKS.Infrastructure.Services.SshCommandRunner>();
+
+// Claude marketplace services
+services.AddSingleton<PKS.Infrastructure.Services.Claude.IClaudeMarketplaceConfigurationService, PKS.Infrastructure.Services.Claude.ClaudeMarketplaceConfigurationService>();
+services.AddSingleton<PKS.Infrastructure.Services.Claude.IClaudeManagedSettingsRenderer, PKS.Infrastructure.Services.Claude.ClaudeManagedSettingsRenderer>();
+services.AddSingleton<PKS.Infrastructure.Services.Claude.IClaudeMarketplaceFetcher, PKS.Infrastructure.Services.Claude.ClaudeMarketplaceFetcher>();
 // Legacy MCP services removed in Phase 3 - now using SDK-based services only
 
 // New SDK-based MCP hosting services
@@ -881,6 +886,46 @@ app.Configure(config =>
             .WithExample(["claude", "stats"])
             .WithExample(["claude", "stats", "--days", "14"])
             .WithExample(["claude", "stats", "--all-projects"]);
+
+        claude.AddBranch("marketplace", marketplace =>
+        {
+            marketplace.SetDescription("Manage Claude Code plugin marketplaces");
+
+            marketplace.AddCommand<PKS.Commands.Claude.Marketplace.ClaudeMarketplaceAddCommand>("add")
+                .WithDescription("Add a Claude Code plugin marketplace")
+                .WithExample(["claude", "marketplace", "add", "https://example.com/marketplace.json"])
+                .WithExample(["claude", "marketplace", "add", "github:owner/repo", "--enable-all", "--non-interactive"]);
+
+            marketplace.AddCommand<PKS.Commands.Claude.Marketplace.ClaudeMarketplaceListCommand>("list")
+                .WithDescription("List registered marketplaces")
+                .WithExample(["claude", "marketplace", "list"]);
+
+            marketplace.AddCommand<PKS.Commands.Claude.Marketplace.ClaudeMarketplaceShowCommand>("show")
+                .WithDescription("Show marketplace details")
+                .WithExample(["claude", "marketplace", "show", "my-marketplace"]);
+
+            marketplace.AddCommand<PKS.Commands.Claude.Marketplace.ClaudeMarketplaceEnableCommand>("enable")
+                .WithDescription("Enable plugins in a marketplace")
+                .WithExample(["claude", "marketplace", "enable", "my-marketplace", "plugin-a"]);
+
+            marketplace.AddCommand<PKS.Commands.Claude.Marketplace.ClaudeMarketplaceDisableCommand>("disable")
+                .WithDescription("Disable plugins in a marketplace")
+                .WithExample(["claude", "marketplace", "disable", "my-marketplace", "plugin-a"]);
+
+            marketplace.AddCommand<PKS.Commands.Claude.Marketplace.ClaudeMarketplaceRemoveCommand>("remove")
+                .WithDescription("Remove a marketplace")
+                .WithExample(["claude", "marketplace", "remove", "my-marketplace"]);
+
+            marketplace.AddCommand<PKS.Commands.Claude.Marketplace.ClaudeMarketplaceRefreshCommand>("refresh")
+                .WithDescription("Refresh plugin metadata from marketplace source")
+                .WithExample(["claude", "marketplace", "refresh"])
+                .WithExample(["claude", "marketplace", "refresh", "my-marketplace"]);
+        });
+
+        claude.AddCommand<PKS.Commands.Claude.ManagedSettings.ClaudeManagedSettingsRenderCommand>("managed-settings")
+            .WithDescription("Render managed-settings.json from registered marketplaces")
+            .WithExample(["claude", "managed-settings"])
+            .WithExample(["claude", "managed-settings", "--output", "/etc/claude-code/managed-settings.json"]);
     });
 
     // Add git branch command (credential helpers)
