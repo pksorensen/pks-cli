@@ -734,6 +734,9 @@ app.Configure(config =>
         vm.AddCommand<PKS.Commands.Vm.VmStatusCommand>("status")
             .WithDescription("Show VM status with disk/memory/docker stats and an action menu")
             .WithExample(new[] { "vm", "status" });
+        vm.AddCommand<PKS.Commands.Vm.VmDestroyCommand>("destroy")
+            .WithDescription("Destroy a VM and all its associated Azure resources")
+            .WithExample(new[] { "vm", "destroy" });
     });
 
     // Add fileshare branch (provider auth management)
