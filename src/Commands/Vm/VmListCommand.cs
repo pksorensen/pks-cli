@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -12,6 +13,7 @@ public class VmListCommand : Command<VmListCommand.Settings>
     private readonly IAzureAuthService _azureAuth;
     private readonly IAzureVmService _vmService;
     private readonly ISshTargetConfigurationService _sshTargets;
+    private readonly ISshExecutor _sshExecutor;
     private readonly IAnsiConsole _console;
 
     public VmListCommand(
@@ -19,12 +21,14 @@ public class VmListCommand : Command<VmListCommand.Settings>
         IAzureAuthService azureAuth,
         IAzureVmService vmService,
         ISshTargetConfigurationService sshTargets,
+        ISshExecutor sshExecutor,
         IAnsiConsole console)
     {
         _vmMetadata = vmMetadata;
         _azureAuth = azureAuth;
         _vmService = vmService;
         _sshTargets = sshTargets;
+        _sshExecutor = sshExecutor;
         _console = console;
     }
 
@@ -35,7 +39,7 @@ public class VmListCommand : Command<VmListCommand.Settings>
         return ExecuteAsync().GetAwaiter().GetResult();
     }
 
-    private async Task<int> ExecuteAsync()
+    public async Task<int> ExecuteAsync()
     {
         var vms = await _vmMetadata.ListAsync();
 
@@ -61,13 +65,55 @@ public class VmListCommand : Command<VmListCommand.Settings>
                 .Spinner(Spinner.Known.Dots)
                 .StartAsync("Checking VM status in Azure...", async _ =>
                 {
-                    foreach (var vm in vms)
+                    var tasks = vms.Select(async vm =>
                     {
                         var status = await _vmService.GetVmStatusAsync(token, vm.SubscriptionId, vm.ResourceGroup, vm.VmName);
-                        statuses[vm.VmName] = status;
+                        return (vm.VmName, status);
+                    });
+                    foreach (var (name, status) in await Task.WhenAll(tasks))
+                    {
+                        statuses[name] = status;
                         if (status == null)
-                            missing.Add(vm.VmName);
+                            missing.Add(name);
                     }
+                });
+        }
+
+        // Fetch disk usage for running VMs in parallel
+        var diskPcts = new Dictionary<string, int?>();
+        var runningVms = vms.Where(v => statuses.TryGetValue(v.VmName, out var s) && s == "running"
+                                         && !string.IsNullOrEmpty(v.PublicIpAddress)).ToList();
+        if (runningVms.Count > 0)
+        {
+            await _console.Status()
+                .SpinnerStyle(Style.Parse("cyan"))
+                .Spinner(Spinner.Known.Dots)
+                .StartAsync("Fetching disk usage...", async _ =>
+                {
+                    var diskTasks = runningVms.Select(async vm =>
+                    {
+                        var target = new SshTarget
+                        {
+                            Host = vm.PublicIpAddress,
+                            Port = 22,
+                            Username = "azureuser",
+                            KeyPath = vm.SshKeyPath
+                        };
+                        try
+                        {
+                            var result = await _sshExecutor.RunAsync(
+                                target,
+                                "df --output=pcent / | tail -1 | tr -d ' %'",
+                                TimeSpan.FromSeconds(10));
+                            if (!result.TimedOut && result.ExitCode == 0
+                                && int.TryParse(result.Stdout.Trim(), out var pct))
+                                return (vm.VmName, (int?)pct);
+                        }
+                        catch { }
+                        return (vm.VmName, (int?)null);
+                    });
+                    foreach (var (name, pct) in await Task.WhenAll(diskTasks))
+                        diskPcts[name] = pct;
                 });
         }
 
@@ -97,6 +143,7 @@ public class VmListCommand : Command<VmListCommand.Settings>
             .Title("[bold cyan]PKS Virtual Machines[/]")
             .AddColumn("[bold]Name[/]")
             .AddColumn("[bold]Status[/]")
+            .AddColumn("[bold]Disk %[/]")
             .AddColumn("[bold]Public IP[/]")
             .AddColumn("[bold]Size[/]")
             .AddColumn("[bold]Location[/]")
@@ -137,9 +184,21 @@ public class VmListCommand : Command<VmListCommand.Settings>
                 statusDisplay = "[dim]?[/]";
             }
 
+            string diskDisplay;
+            if (diskPcts.TryGetValue(vm.VmName, out var pct) && pct.HasValue)
+            {
+                var color = pct.Value switch { > 90 => "red", > 70 => "yellow", _ => "green" };
+                diskDisplay = $"[{color}]{pct.Value}%[/]";
+            }
+            else
+            {
+                diskDisplay = "[dim]—[/]";
+            }
+
             table.AddRow(
                 $"[cyan]{Markup.Escape(vm.VmName)}[/]",
                 statusDisplay,
+                diskDisplay,
                 Markup.Escape(vm.PublicIpAddress),
                 Markup.Escape(vm.VmSize),
                 Markup.Escape(vm.Location),
@@ -155,6 +214,23 @@ public class VmListCommand : Command<VmListCommand.Settings>
         _console.MarkupLine($"[dim]{vms.Count} VM(s). SSH key dir: ~/.pks-cli/keys/[/]");
         _console.MarkupLine("[dim]Connect: pks ssh connect <name>[/]");
         _console.MarkupLine("[dim]Change shutdown: pks vm autoshutdown <name> --idle 30[/]");
+
+        // Drill-down: offer to inspect a specific VM
+        var inspectChoices = vms.Select(v => v.VmName).ToList();
+        inspectChoices.Add("No, quit");
+
+        _console.MarkupLine(string.Empty);
+        var inspect = _console.Prompt(
+            new TextPrompt<string>("[cyan]Inspect a VM?[/]")
+                .AddChoices(inspectChoices)
+                .DefaultValue("No, quit"));
+
+        if (inspect != "No, quit")
+        {
+            var selected = vms.First(v => v.VmName == inspect);
+            var statusCmd = new VmStatusCommand(_azureAuth, _vmService, _vmMetadata, _sshExecutor, _sshTargets, _console);
+            return await statusCmd.ShowVmStatusAsync(selected);
+        }
 
         return 0;
     }
