@@ -731,6 +731,9 @@ app.Configure(config =>
         vm.AddCommand<PKS.Commands.Vm.VmListCommand>("list")
             .WithDescription("List VMs provisioned with pks vm init")
             .WithExample(new[] { "vm", "list" });
+        vm.AddCommand<PKS.Commands.Vm.VmStatusCommand>("status")
+            .WithDescription("Show VM status with disk/memory/docker stats and an action menu")
+            .WithExample(new[] { "vm", "status" });
     });
 
     // Add fileshare branch (provider auth management)
