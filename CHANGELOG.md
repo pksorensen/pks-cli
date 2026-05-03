@@ -49,6 +49,14 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.10.1](https://github.com/pksorensen/pks-cli/compare/v6.10.0...v6.10.1) (2026-05-03)
+
+
+### Bug Fixes
+
+* **cli:** propagate refreshed runner token to GitHubActionsService ([3f4169a](https://github.com/pksorensen/pks-cli/commit/3f4169ac4c3924f440df432da9f99f5c9f8f9d14))
+* **promptwall:** drop synthetic Claude Code prompt injections ([f2a95b5](https://github.com/pksorensen/pks-cli/commit/f2a95b5903b122efda7a4dd2213264ff49a6f05b))
+
 ## [6.10.0](https://github.com/pksorensen/pks-cli/compare/v6.9.0...v6.10.0) (2026-05-02)
 
 
