@@ -40,6 +40,100 @@ public static class PromptwallTranscript
         string SourceText,   // the cleaned prompt or reply text
         string ImagePrompt); // the full instruction sent to the image model
 
+    public sealed record ProjectInfo(
+        string Dir,                   // absolute path to ~/.claude/projects/<slug>/
+        string Cwd,                   // real cwd extracted from JSONL, or decoded fallback
+        int SessionCount,             // count of *.jsonl in Dir
+        DateTime LastActivity);       // mtime of newest .jsonl (UTC)
+
+    /// <summary>
+    /// Inspect a single Claude project directory (~/.claude/projects/&lt;slug&gt;/).
+    /// Returns null when the directory is missing or contains no *.jsonl files.
+    /// Otherwise reads the newest session's first ~10 lines to extract a real
+    /// <c>cwd</c> field, falling back to the (lossy) slug-decode of the dir name.
+    /// </summary>
+    public static ProjectInfo? ProbeProject(string projectDir)
+    {
+        if (!Directory.Exists(projectDir)) return null;
+
+        var jsonlFiles = Directory.GetFiles(projectDir, "*.jsonl", SearchOption.TopDirectoryOnly);
+        if (jsonlFiles.Length == 0) return null;
+
+        string? newestFile = null;
+        DateTime newestMtime = DateTime.MinValue;
+        foreach (var f in jsonlFiles)
+        {
+            var m = File.GetLastWriteTimeUtc(f);
+            if (m > newestMtime)
+            {
+                newestMtime = m;
+                newestFile = f;
+            }
+        }
+
+        string? cwd = null;
+        if (newestFile is not null)
+        {
+            try
+            {
+                using var stream = new FileStream(newestFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(stream);
+                for (int i = 0; i < 10; i++)
+                {
+                    var line = reader.ReadLine();
+                    if (line is null) break;
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+
+                    JsonElement root;
+                    try { root = JsonSerializer.Deserialize<JsonElement>(line); }
+                    catch { continue; }
+
+                    if (root.ValueKind != JsonValueKind.Object) continue;
+                    if (!root.TryGetProperty("cwd", out var cwdProp)) continue;
+                    if (cwdProp.ValueKind != JsonValueKind.String) continue;
+
+                    var s = cwdProp.GetString();
+                    if (!string.IsNullOrEmpty(s))
+                    {
+                        cwd = s;
+                        break;
+                    }
+                }
+            }
+            catch { /* fall through to slug decode */ }
+        }
+
+        if (cwd is null)
+        {
+            // Lossy fallback: decode the dir slug (e.g. "-foo-bar" → "/foo/bar").
+            var slug = Path.GetFileName(projectDir.TrimEnd(Path.DirectorySeparatorChar, '/'));
+            if (slug.StartsWith('-')) slug = slug[1..];
+            cwd = "/" + slug.Replace('-', '/');
+        }
+
+        return new ProjectInfo(projectDir, cwd, jsonlFiles.Length, newestMtime);
+    }
+
+    /// <summary>
+    /// Enumerate Claude project directories under <paramref name="claudeRoot"/>
+    /// (~/.claude/projects/), probe each one, and return them sorted by most
+    /// recent activity. Empty list if the root doesn't exist.
+    /// </summary>
+    public static List<ProjectInfo> DiscoverProjects(string claudeRoot)
+    {
+        if (!Directory.Exists(claudeRoot)) return [];
+
+        var projects = new List<ProjectInfo>();
+        foreach (var dir in Directory.GetDirectories(claudeRoot))
+        {
+            var info = ProbeProject(dir);
+            if (info is not null) projects.Add(info);
+        }
+
+        projects.Sort((a, b) => b.LastActivity.CompareTo(a.LastActivity));
+        return projects;
+    }
+
     /// <summary>
     /// Parse a JSONL string and return the user prompts in reverse-chronological
     /// order, after applying the §2.2 filters and §2.3 cleaning rules.

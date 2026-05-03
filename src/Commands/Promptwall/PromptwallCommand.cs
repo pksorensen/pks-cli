@@ -27,6 +27,10 @@ public class PromptwallCommand : AsyncCommand<PromptwallCommand.Settings>
         [Description("Pick from prompts across every Claude project (default: current project only)")]
         public bool AllProjects { get; set; }
 
+        [CommandOption("--pick-project")]
+        [Description("Show a project picker (default: auto-pick when current directory has sessions)")]
+        public bool PickProject { get; set; }
+
         [CommandOption("--count")]
         [Description("How many recent prompts to show in the picker (default: 10)")]
         [DefaultValue(10)]
@@ -52,7 +56,53 @@ public class PromptwallCommand : AsyncCommand<PromptwallCommand.Settings>
     public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
     {
         // ── 1. discover transcripts ──────────────────────────────────────────
-        var jsonlFiles = DiscoverSessionFiles(settings, out var scope);
+        List<string> jsonlFiles;
+        string scope;
+
+        if (settings.AllProjects || settings.ProjectPath is not null)
+        {
+            // Existing explicit paths — picker not involved.
+            jsonlFiles = DiscoverSessionFiles(settings, out scope);
+        }
+        else
+        {
+            // Auto-resolve from cwd unless --pick-project forces the picker.
+            jsonlFiles = settings.PickProject
+                ? new List<string>()
+                : DiscoverSessionFiles(settings, out _);
+
+            if (jsonlFiles.Count == 0)
+            {
+                var claudeRoot = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".claude", "projects");
+                var projects = PromptwallTranscript.DiscoverProjects(claudeRoot);
+
+                if (projects.Count == 0)
+                {
+                    var fallbackScope = settings.ProjectPath ?? Directory.GetCurrentDirectory();
+                    _console.MarkupLine($"[yellow]No Claude session files found for:[/] [dim]{Markup.Escape(fallbackScope)}[/]");
+                    _console.MarkupLine("[dim]Run Claude Code in this project first, then re-run this command.[/]");
+                    return 1;
+                }
+
+                var picked = _console.Prompt(
+                    new SelectionPrompt<PromptwallTranscript.ProjectInfo>()
+                        .Title("[bold cyan]Pick a project[/]")
+                        .PageSize(Math.Min(20, Math.Max(5, projects.Count)))
+                        .UseConverter(p =>
+                            $"{Markup.Escape(p.Cwd)}  [dim]({p.SessionCount} sessions, {Humanize(p.LastActivity)})[/]")
+                        .AddChoices(projects));
+
+                jsonlFiles = Directory.GetFiles(picked.Dir, "*.jsonl", SearchOption.TopDirectoryOnly).ToList();
+                scope = picked.Cwd;
+            }
+            else
+            {
+                scope = settings.ProjectPath ?? Directory.GetCurrentDirectory();
+            }
+        }
+
         if (jsonlFiles.Count == 0)
         {
             _console.MarkupLine($"[yellow]No Claude session files found for:[/] [dim]{Markup.Escape(scope)}[/]");
@@ -245,5 +295,19 @@ public class PromptwallCommand : AsyncCommand<PromptwallCommand.Settings>
     {
         var collapsed = text.Replace("\r", "").Replace("\n", " ↵ ");
         return collapsed.Length <= max ? collapsed : collapsed[..(max - 1)] + "…";
+    }
+
+    private static string Humanize(DateTime utc)
+    {
+        var delta = DateTime.UtcNow - utc;
+        if (delta.TotalSeconds < 60) return "<1 min ago";
+        if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes} min ago";
+        if (delta.TotalHours < 24)
+        {
+            var h = (int)delta.TotalHours;
+            return h == 1 ? "1 hour ago" : $"{h} hours ago";
+        }
+        var d = (int)delta.TotalDays;
+        return d == 1 ? "1 day ago" : $"{d} days ago";
     }
 }

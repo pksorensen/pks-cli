@@ -408,6 +408,166 @@ public class PromptwallTranscriptTests
         images[0].ImagePrompt.Should().NotContain(huge);
     }
 
+    // ── ProbeProject / DiscoverProjects ─────────────────────────────────────
+
+    [Fact]
+    public void ProbeProject_ReturnsNullWhenDirectoryMissing()
+    {
+        var missing = Path.Combine(Path.GetTempPath(), "pw-probe-missing-" + Guid.NewGuid());
+        var info = PromptwallTranscript.ProbeProject(missing);
+        info.Should().BeNull();
+    }
+
+    [Fact]
+    public void ProbeProject_ReturnsNullWhenNoJsonlFiles()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "pw-probe-empty-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var info = PromptwallTranscript.ProbeProject(dir);
+            info.Should().BeNull();
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ProbeProject_ExtractsCwdFromFirstJsonlLine()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "pw-probe-cwd-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var line = """
+                {"type":"user","cwd":"/some/path","uuid":"u1","timestamp":"2026-05-01T10:00:00Z","message":{"role":"user","content":"hi"}}
+                """;
+            File.WriteAllText(Path.Combine(dir, "session.jsonl"), line + "\n");
+
+            var info = PromptwallTranscript.ProbeProject(dir);
+
+            info.Should().NotBeNull();
+            info!.Cwd.Should().Be("/some/path");
+            info.Dir.Should().Be(dir);
+            info.SessionCount.Should().Be(1);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ProbeProject_FallsBackToDecodedSlugWhenCwdMissing()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "pw-probe-fallback-" + Guid.NewGuid());
+        var dir = Path.Combine(root, "-foo-bar");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            // 10 lines with no cwd field anywhere.
+            var lines = new List<string>();
+            for (int i = 0; i < 10; i++)
+            {
+                lines.Add("{\"type\":\"user\",\"uuid\":\"u" + i + "\",\"timestamp\":\"2026-05-01T10:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}");
+            }
+            File.WriteAllText(Path.Combine(dir, "session.jsonl"), string.Join("\n", lines) + "\n");
+
+            var info = PromptwallTranscript.ProbeProject(dir);
+
+            info.Should().NotBeNull();
+            info!.Cwd.Should().Be("/foo/bar");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ProbeProject_CountsSessionsAndPicksLatestMtime()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "pw-probe-mtime-" + Guid.NewGuid());
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var f1 = Path.Combine(dir, "a.jsonl");
+            var f2 = Path.Combine(dir, "b.jsonl");
+            var f3 = Path.Combine(dir, "c.jsonl");
+
+            var oldLine = """{"type":"user","cwd":"/old","uuid":"u","timestamp":"2026-05-01T10:00:00Z","message":{"role":"user","content":"x"}}""";
+            var newLine = """{"type":"user","cwd":"/new","uuid":"u","timestamp":"2026-05-01T10:00:00Z","message":{"role":"user","content":"x"}}""";
+
+            File.WriteAllText(f1, oldLine + "\n");
+            File.WriteAllText(f2, oldLine + "\n");
+            File.WriteAllText(f3, newLine + "\n");
+
+            var oldMtime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var midMtime = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc);
+            var newMtime = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc);
+
+            File.SetLastWriteTimeUtc(f1, oldMtime);
+            File.SetLastWriteTimeUtc(f2, midMtime);
+            File.SetLastWriteTimeUtc(f3, newMtime);
+
+            var info = PromptwallTranscript.ProbeProject(dir);
+
+            info.Should().NotBeNull();
+            info!.SessionCount.Should().Be(3);
+            info.LastActivity.Should().Be(newMtime);
+            info.Cwd.Should().Be("/new");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void DiscoverProjects_OrdersByLastActivityDescending()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "pw-discover-order-" + Guid.NewGuid());
+        Directory.CreateDirectory(root);
+        try
+        {
+            var dirA = Path.Combine(root, "-a");
+            var dirB = Path.Combine(root, "-b");
+            Directory.CreateDirectory(dirA);
+            Directory.CreateDirectory(dirB);
+
+            var lineA = """{"type":"user","cwd":"/a","uuid":"u","timestamp":"2026-05-01T10:00:00Z","message":{"role":"user","content":"x"}}""";
+            var lineB = """{"type":"user","cwd":"/b","uuid":"u","timestamp":"2026-05-01T10:00:00Z","message":{"role":"user","content":"x"}}""";
+
+            var fileA = Path.Combine(dirA, "s.jsonl");
+            var fileB = Path.Combine(dirB, "s.jsonl");
+            File.WriteAllText(fileA, lineA + "\n");
+            File.WriteAllText(fileB, lineB + "\n");
+
+            File.SetLastWriteTimeUtc(fileA, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+            File.SetLastWriteTimeUtc(fileB, new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc));
+
+            var projects = PromptwallTranscript.DiscoverProjects(root);
+
+            projects.Should().HaveCount(2);
+            projects[0].Cwd.Should().Be("/b");
+            projects[1].Cwd.Should().Be("/a");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void DiscoverProjects_ReturnsEmptyWhenClaudeRootMissing()
+    {
+        var missing = Path.Combine(Path.GetTempPath(), "pw-discover-missing-" + Guid.NewGuid());
+        var projects = PromptwallTranscript.DiscoverProjects(missing);
+        projects.Should().BeEmpty();
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private static string UserLine(string uuid, string ts, string content)
