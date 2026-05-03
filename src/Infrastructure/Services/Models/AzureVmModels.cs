@@ -15,6 +15,7 @@ public class AzureVmCreateOptions
     public bool InstallDocker { get; set; } = true;
     public int IdleShutdownMinutes { get; set; } = 60;
     public string? ScheduledShutdownUtc { get; set; }
+    public int OsDiskSizeGb { get; set; } = 128;
 }
 
 public class AzureVmRecord
@@ -29,6 +30,7 @@ public class AzureVmRecord
     public string VmSize { get; set; } = string.Empty;
     public int IdleShutdownMinutes { get; set; } = 60;
     public string? ScheduledShutdownUtc { get; set; }
+    public int OsDiskSizeGb { get; set; } = 128;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 

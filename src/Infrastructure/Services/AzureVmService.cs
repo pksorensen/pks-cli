@@ -32,6 +32,10 @@ public interface IAzureVmService
         string vmName, string location, string vmId, string timeUtc, CancellationToken ct = default);
     Task DisableScheduledStartAsync(string accessToken, string subscriptionId, string resourceGroup,
         string vmName, CancellationToken ct = default);
+    Task<string?> GetOsDiskNameAsync(string accessToken, string subscriptionId, string resourceGroup, string vmName, CancellationToken ct = default);
+    Task DeleteVmAsync(string accessToken, string subscriptionId, string resourceGroup, string vmName, CancellationToken ct = default);
+    Task DeleteResourceAsync(string accessToken, string fullyQualifiedUrl, CancellationToken ct = default);
+    Task DestroyVmAsync(string accessToken, string subscriptionId, string resourceGroup, string vmName, Action<string>? onProgress = null, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -41,13 +45,15 @@ public class AzureVmService : IAzureVmService
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<AzureVmService> _logger;
+    private readonly TimeSpan _pollInterval;
     private const string ApiVersion = "2023-09-01";
     private const string NetworkApiVersion = "2023-09-01";
 
-    public AzureVmService(HttpClient httpClient, ILogger<AzureVmService> logger)
+    public AzureVmService(HttpClient httpClient, ILogger<AzureVmService> logger, TimeSpan? pollInterval = null)
     {
         _httpClient = httpClient;
         _logger = logger;
+        _pollInterval = pollInterval ?? TimeSpan.FromSeconds(5);
     }
 
     public async Task<List<AzureResourceGroup>> ListResourceGroupsAsync(string accessToken, string subscriptionId, CancellationToken ct = default)
@@ -163,7 +169,7 @@ public class AzureVmService : IAzureVmService
             var deadline = DateTime.UtcNow.AddMinutes(5);
             while (DateTime.UtcNow < deadline)
             {
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
+                await Task.Delay(_pollInterval, ct);
                 var req = new HttpRequestMessage(HttpMethod.Get, resourceUrl);
                 req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
                 var resp = await _httpClient.SendAsync(req, ct);
@@ -337,7 +343,8 @@ public class AzureVmService : IAzureVmService
                     osDisk = new
                     {
                         createOption = "FromImage",
-                        managedDisk = new { storageAccountType = "Premium_LRS" }
+                        managedDisk = new { storageAccountType = "Premium_LRS" },
+                        diskSizeGB = options.OsDiskSizeGb
                     }
                 },
                 osProfile = new
@@ -379,7 +386,7 @@ public class AzureVmService : IAzureVmService
 
         while (DateTime.UtcNow < deadline && provisioningState != "Succeeded" && provisioningState != "Failed")
         {
-            await Task.Delay(TimeSpan.FromSeconds(15), ct);
+            await Task.Delay(_pollInterval, ct);
 
             var pollReq = new HttpRequestMessage(HttpMethod.Get, vmUrl);
             pollReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -743,5 +750,136 @@ public class AzureVmService : IAzureVmService
         }
 
         return false;
+    }
+
+    public async Task<string?> GetOsDiskNameAsync(string accessToken, string subscriptionId, string resourceGroup, string vmName, CancellationToken ct = default)
+    {
+        var url = $"https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{resourceGroup}/providers/Microsoft.Compute/virtualMachines/{vmName}?api-version={ApiVersion}";
+        var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        var resp = await _httpClient.SendAsync(req, ct);
+        if (!resp.IsSuccessStatusCode) return null;
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        using var doc = JsonDocument.Parse(body);
+        if (doc.RootElement.TryGetProperty("properties", out var props) &&
+            props.TryGetProperty("storageProfile", out var storage) &&
+            storage.TryGetProperty("osDisk", out var osDisk) &&
+            osDisk.TryGetProperty("name", out var nameProp))
+            return nameProp.GetString();
+        return null;
+    }
+
+    public async Task DeleteVmAsync(string accessToken, string subscriptionId, string resourceGroup, string vmName, CancellationToken ct = default)
+    {
+        var url = $"https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{resourceGroup}/providers/Microsoft.Compute/virtualMachines/{vmName}?api-version={ApiVersion}";
+        await DeleteAndPollAsync(accessToken, url, "VM", ct);
+    }
+
+    public async Task DeleteResourceAsync(string accessToken, string fullyQualifiedUrl, CancellationToken ct = default)
+    {
+        await DeleteAndPollAsync(accessToken, fullyQualifiedUrl, "resource", ct);
+    }
+
+    private async Task DeleteAndPollAsync(string accessToken, string url, string label, CancellationToken ct)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Delete, url);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        var resp = await _httpClient.SendAsync(req, ct);
+
+        if (resp.StatusCode == System.Net.HttpStatusCode.NoContent ||
+            resp.StatusCode == System.Net.HttpStatusCode.NotFound)
+            return;
+
+        if (!resp.IsSuccessStatusCode && resp.StatusCode != System.Net.HttpStatusCode.Accepted)
+        {
+            var errBody = await resp.Content.ReadAsStringAsync(ct);
+            throw new HttpRequestException($"ARM {(int)resp.StatusCode} deleting {label}: {errBody}");
+        }
+
+        var asyncOpUrl = resp.Headers.TryGetValues("Azure-AsyncOperation", out var asyncOp)
+            ? asyncOp.FirstOrDefault()
+            : resp.Headers.TryGetValues("Location", out var loc) ? loc.FirstOrDefault() : null;
+
+        if (asyncOpUrl == null) return;
+
+        var deadline = DateTime.UtcNow.AddMinutes(15);
+        while (DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(_pollInterval, ct);
+            var pollReq = new HttpRequestMessage(HttpMethod.Get, asyncOpUrl);
+            pollReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            var pollResp = await _httpClient.SendAsync(pollReq, ct);
+            var pollBody = await pollResp.Content.ReadAsStringAsync(ct);
+
+            if (!pollResp.IsSuccessStatusCode) continue;
+
+            string? status = null;
+            try
+            {
+                using var doc = JsonDocument.Parse(pollBody);
+                if (doc.RootElement.TryGetProperty("status", out var s))
+                    status = s.GetString();
+            }
+            catch { }
+
+            if (string.Equals(status, "Succeeded", StringComparison.OrdinalIgnoreCase)) return;
+            if (string.Equals(status, "Failed", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"Delete of {label} failed: {pollBody}");
+        }
+        throw new TimeoutException($"Timed out waiting for {label} delete to complete.");
+    }
+
+    public async Task DestroyVmAsync(string accessToken, string subscriptionId, string resourceGroup, string vmName, Action<string>? onProgress = null, CancellationToken ct = default)
+    {
+        string sub = subscriptionId, rg = resourceGroup;
+
+        onProgress?.Invoke("Checking VM power state...");
+        var powerState = await GetVmStatusAsync(accessToken, sub, rg, vmName, ct);
+        if (powerState == "running")
+        {
+            onProgress?.Invoke("Deallocating VM...");
+            await DeallocateVmAsync(accessToken, sub, rg, vmName, ct);
+            var deallocDeadline = DateTime.UtcNow.AddMinutes(10);
+            while (DateTime.UtcNow < deallocDeadline)
+            {
+                await Task.Delay(_pollInterval, ct);
+                var s = await GetVmStatusAsync(accessToken, sub, rg, vmName, ct);
+                if (s == "deallocated" || s == null) break;
+            }
+        }
+
+        onProgress?.Invoke("Getting OS disk name...");
+        var osDiskName = await GetOsDiskNameAsync(accessToken, sub, rg, vmName, ct);
+
+        onProgress?.Invoke("Deleting VM...");
+        await DeleteVmAsync(accessToken, sub, rg, vmName, ct);
+
+        onProgress?.Invoke("Deleting NIC...");
+        var nicUrl = $"https://management.azure.com/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Network/networkInterfaces/{vmName}-nic?api-version={NetworkApiVersion}";
+        await DeleteResourceAsync(accessToken, nicUrl, ct);
+
+        onProgress?.Invoke("Deleting public IP...");
+        var ipUrl = $"https://management.azure.com/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Network/publicIPAddresses/{vmName}-ip?api-version={NetworkApiVersion}";
+        await DeleteResourceAsync(accessToken, ipUrl, ct);
+
+        if (!string.IsNullOrEmpty(osDiskName))
+        {
+            onProgress?.Invoke("Deleting OS disk...");
+            var diskUrl = $"https://management.azure.com/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Compute/disks/{osDiskName}?api-version={ApiVersion}";
+            await DeleteResourceAsync(accessToken, diskUrl, ct);
+        }
+
+        onProgress?.Invoke("Deleting NSG...");
+        try
+        {
+            var nsgUrl = $"https://management.azure.com/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Network/networkSecurityGroups/{vmName}-nsg?api-version={NetworkApiVersion}";
+            await DeleteResourceAsync(accessToken, nsgUrl, ct);
+        }
+        catch (Exception ex)
+        {
+            onProgress?.Invoke($"Warning: Could not delete NSG (may still be in use): {ex.Message}");
+        }
+
+        onProgress?.Invoke($"VM '{vmName}' destroyed successfully.");
     }
 }

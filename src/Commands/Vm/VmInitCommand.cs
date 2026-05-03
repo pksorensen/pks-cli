@@ -151,6 +151,37 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
 
         var vmSize = sizeMap[sizeDisplay];
 
+        // 6b. Select OS disk size
+        const string CustomDiskOption = "Custom — type a number";
+        var diskSizeMap = new Dictionary<string, int>
+        {
+            ["128 GB — recommended for devcontainer builds with playwright/chromium"] = 128,
+            ["64 GB — light development, single project"] = 64,
+            ["256 GB — heavy: multiple devcontainers, large datasets"] = 256,
+            ["512 GB"] = 512,
+            [CustomDiskOption] = 0
+        };
+
+        var diskSizeDisplay = _console.Prompt(
+            new SelectionPrompt<string>()
+                .Title("[cyan]OS disk size:[/]")
+                .AddChoices(diskSizeMap.Keys)
+                .HighlightStyle(Style.Parse("cyan")));
+
+        int osDiskSizeGb;
+        if (diskSizeDisplay == CustomDiskOption)
+        {
+            osDiskSizeGb = _console.Prompt(
+                new TextPrompt<int>("[cyan]Disk size in GB:[/]")
+                    .Validate(g => g >= 30 && g <= 4096
+                        ? ValidationResult.Success()
+                        : ValidationResult.Error("[red]Disk size must be between 30 and 4096 GB.[/]")));
+        }
+        else
+        {
+            osDiskSizeGb = diskSizeMap[diskSizeDisplay];
+        }
+
         // 7. Generate SSH key
         var keyDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -183,6 +214,7 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
             [cyan1]Resource Group:[/] {Markup.Escape(selectedRg.Name)}
             [cyan1]Location:[/] {Markup.Escape(location)}
             [cyan1]VM Size:[/] {Markup.Escape(vmSize)}
+            [cyan1]OS Disk:[/] {osDiskSizeGb} GB
             [cyan1]SSH Key:[/] {Markup.Escape(keyPath)}
             [cyan1]Idle Shutdown:[/] {idleDisplay}
             [cyan1]Scheduled Shutdown:[/] {scheduledDisplay}
@@ -219,7 +251,8 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
                             SshPublicKey = pubKey.Trim(),
                             InstallDocker = true,
                             IdleShutdownMinutes = settings.IdleShutdown ?? 60,
-                            ScheduledShutdownUtc = settings.ScheduledShutdown
+                            ScheduledShutdownUtc = settings.ScheduledShutdown,
+                            OsDiskSizeGb = osDiskSizeGb
                         }, msg => ctx.Status(msg));
                     }
                     catch (Exception ex) { createError = ex; }
@@ -354,6 +387,7 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
             VmSize = vmSize,
             IdleShutdownMinutes = settings.IdleShutdown ?? 60,
             ScheduledShutdownUtc = settings.ScheduledShutdown,
+            OsDiskSizeGb = osDiskSizeGb,
             CreatedAt = DateTime.UtcNow
         });
 
