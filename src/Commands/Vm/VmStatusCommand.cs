@@ -152,12 +152,10 @@ public class VmStatusCommand : Command<VmStatusCommand.Settings>
         actions.Add("Destroy VM (delete all resources)");
         actions.Add("Quit");
 
-        _console.MarkupLine("[cyan]Available actions:[/]");
-        foreach (var a in actions)
-            _console.MarkupLine($"  • {Markup.Escape(a)}");
-
         var action = _console.Prompt(
-            new TextPrompt<string>("[cyan]Action:[/]")
+            new SelectionPrompt<string>()
+                .Title("[cyan]Action:[/]")
+                .HighlightStyle(Style.Parse("cyan"))
                 .AddChoices(actions));
 
         return await HandleActionAsync(action, record, token);
