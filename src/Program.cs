@@ -869,10 +869,12 @@ app.Configure(config =>
         .WithExample(["promptwall", "--all-projects"])
         .WithExample(["promptwall", "--include-reply", "--output", "./out"]);
 
-    // Add claude analysis commands
+    // Add claude commands — spawn devcontainer + analysis
     config.AddBranch<PKS.Commands.Claude.ClaudeSettings>("claude", claude =>
     {
-        claude.SetDescription("Analyse Claude Code usage for this project");
+        claude.SetDescription("Spawn claude in a devcontainer, or analyse Claude Code usage");
+
+        claude.SetDefaultCommand<PKS.Commands.Claude.ClaudeSpawnCommand>();
 
         claude.AddCommand<PKS.Commands.Claude.ClaudeStatsCommand>("stats")
             .WithDescription("Show response-time performance stats from local session files")
