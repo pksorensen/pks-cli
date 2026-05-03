@@ -233,6 +233,7 @@ services.AddHttpClient<PKS.Infrastructure.Services.IAzureAuthService, PKS.Infras
 // Azure VM provisioning
 services.AddHttpClient<PKS.Infrastructure.Services.IAzureVmService, PKS.Infrastructure.Services.AzureVmService>();
 services.AddSingleton<PKS.Infrastructure.Services.IAzureVmMetadataService, PKS.Infrastructure.Services.AzureVmMetadataService>();
+services.AddSingleton<PKS.Infrastructure.Services.ISshExecutor, PKS.Infrastructure.Services.SshExecutor>();
 
 // Configure Azure File Share provider
 services.AddSingleton<PKS.Infrastructure.Services.Models.AzureFileShareAuthConfig>();
