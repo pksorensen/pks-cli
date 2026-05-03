@@ -887,6 +887,12 @@ app.Configure(config =>
             .WithExample(["claude", "stats", "--days", "14"])
             .WithExample(["claude", "stats", "--all-projects"]);
 
+        claude.AddCommand<PKS.Commands.Claude.ClaudeUsageCommand>("usage")
+            .WithDescription("Show daily API cost from local Claude Code session files (all projects by default)")
+            .WithExample(["claude", "usage"])
+            .WithExample(["claude", "usage", "my-project"])
+            .WithExample(["claude", "usage", "--days", "14"]);
+
         claude.AddBranch("marketplace", marketplace =>
         {
             marketplace.SetDescription("Manage Claude Code plugin marketplaces");
