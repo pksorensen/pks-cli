@@ -870,7 +870,7 @@ app.Configure(config =>
         .WithExample(["promptwall", "--include-reply", "--output", "./out"]);
 
     // Add claude commands — spawn devcontainer + analysis
-    config.AddBranch<PKS.Commands.Claude.ClaudeSettings>("claude", claude =>
+    config.AddBranch<Spectre.Console.Cli.CommandSettings>("claude", claude =>
     {
         claude.SetDescription("Spawn claude in a devcontainer, or analyse Claude Code usage");
 
