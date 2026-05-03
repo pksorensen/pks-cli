@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Claude;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -34,6 +35,8 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
     private readonly IAzureVmMetadataService _vmMetadata;
     private readonly IAzureAuthService _azureAuth;
     private readonly IAzureVmService _vmService;
+    private readonly IClaudeMarketplaceConfigurationService? _claudeMarketplaceConfigService;
+    private readonly IClaudeManagedSettingsRenderer? _claudeManagedSettingsRenderer;
 
     public DevcontainerSpawnCommand(
         IDevcontainerSpawnerService spawnerService,
@@ -51,6 +54,28 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         _vmMetadata = vmMetadata ?? throw new ArgumentNullException(nameof(vmMetadata));
         _azureAuth = azureAuth ?? throw new ArgumentNullException(nameof(azureAuth));
         _vmService = vmService ?? throw new ArgumentNullException(nameof(vmService));
+    }
+
+    public DevcontainerSpawnCommand(
+        IDevcontainerSpawnerService spawnerService,
+        ISshTargetConfigurationService sshTargetService,
+        INuGetTemplateDiscoveryService nugetTemplateService,
+        IAzureVmMetadataService vmMetadata,
+        IAzureAuthService azureAuth,
+        IAzureVmService vmService,
+        IClaudeMarketplaceConfigurationService claudeMarketplaceConfigService,
+        IClaudeManagedSettingsRenderer claudeManagedSettingsRenderer,
+        IAnsiConsole console)
+        : base(console)
+    {
+        _spawnerService = spawnerService ?? throw new ArgumentNullException(nameof(spawnerService));
+        _sshTargetService = sshTargetService ?? throw new ArgumentNullException(nameof(sshTargetService));
+        _nugetTemplateService = nugetTemplateService ?? throw new ArgumentNullException(nameof(nugetTemplateService));
+        _vmMetadata = vmMetadata ?? throw new ArgumentNullException(nameof(vmMetadata));
+        _azureAuth = azureAuth ?? throw new ArgumentNullException(nameof(azureAuth));
+        _vmService = vmService ?? throw new ArgumentNullException(nameof(vmService));
+        _claudeMarketplaceConfigService = claudeMarketplaceConfigService;
+        _claudeManagedSettingsRenderer = claudeManagedSettingsRenderer;
     }
 
     public class Settings : DevcontainerSettings
@@ -841,7 +866,8 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         Console.MarkupLine($"[dim]Tail: tail -f \"{Markup.Escape(logFile)}\"[/]");
 
         DevcontainerRemoteResult? result = null;
-        var cmd = $"cd ~/pks-workspaces/{projectName} && devcontainer up --workspace-folder . 2>&1";
+        var managedSettingsMountArg = await BuildClaudeManagedSettingsMountAsync(target, sshArgs, volumeName);
+        var cmd = $"cd ~/pks-workspaces/{projectName} && devcontainer up --workspace-folder .{managedSettingsMountArg ?? ""} 2>&1";
 
         await using var logWriter = new StreamWriter(logFile, append: false) { AutoFlush = true };
 
@@ -1056,6 +1082,42 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
                 DisplayWarning($"Discovery failed: {ex.Message}");
         }
         return result;
+    }
+
+    /// <summary>
+    /// Builds the Claude managed-settings bind mount argument for devcontainer up.
+    /// Returns null if there are no marketplaces configured.
+    /// </summary>
+    protected virtual async Task<string?> BuildClaudeManagedSettingsMountAsync(
+        SshTarget target,
+        string sshArgs,
+        string scopeId,
+        Func<string, string, Task>? sshWriteOverride = null)
+    {
+        if (_claudeMarketplaceConfigService == null || _claudeManagedSettingsRenderer == null)
+            return null;
+
+        var config = await _claudeMarketplaceConfigService.LoadAsync();
+        if (config.Marketplaces.Count == 0)
+            return null;
+
+        var json = _claudeManagedSettingsRenderer.Render(config);
+
+        var remoteDir = $"~/.pks-cli/managed-settings/{scopeId}";
+        var remoteFile = $"{remoteDir}/managed-settings.json";
+
+        if (sshWriteOverride != null)
+        {
+            await sshWriteOverride(remoteFile, json);
+        }
+        else
+        {
+            // Create remote directory and write file via SSH
+            var escaped = json.Replace("'", "'\\''");
+            await RunSshCommandAsync(sshArgs, target, $"mkdir -p {remoteDir} && printf '%s' '{escaped}' > {remoteFile}");
+        }
+
+        return $" --mount type=bind,source=/home/{target.Username}/.pks-cli/managed-settings/{scopeId},target=/etc/claude-code,readonly";
     }
 
     protected static async Task<(bool Success, string Output)> RunSshCommandAsync(

@@ -1,5 +1,6 @@
 using PKS.Commands.Devcontainer;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Claude;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -23,8 +24,11 @@ public class ClaudeSpawnCommand : DevcontainerSpawnCommand
         IAzureVmMetadataService vmMetadata,
         IAzureAuthService azureAuth,
         IAzureVmService vmService,
+        IClaudeMarketplaceConfigurationService claudeMarketplaceConfigService,
+        IClaudeManagedSettingsRenderer claudeManagedSettingsRenderer,
         IAnsiConsole console)
-        : base(spawnerService, sshTargetService, nugetTemplateService, vmMetadata, azureAuth, vmService, console)
+        : base(spawnerService, sshTargetService, nugetTemplateService, vmMetadata, azureAuth, vmService,
+               claudeMarketplaceConfigService, claudeManagedSettingsRenderer, console)
     {
         _vmMetadata = vmMetadata;
         _azureAuth = azureAuth;
