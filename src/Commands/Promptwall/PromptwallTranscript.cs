@@ -16,6 +16,10 @@ public static class PromptwallTranscript
     public const int IndividualCapChars = 1200;
     public const int IndividualHighWaterChars = 400;
 
+    // Pagination (Phase C) — long prompts/replies become a series of cards.
+    public const int PageSizeChars = 800;
+    public const int DefaultMaxPages = 4;
+
     private static readonly Regex SystemReminderTrailing =
         new(@"\s*<system-reminder>[\s\S]*?</system-reminder>\s*$", RegexOptions.Compiled);
 
@@ -36,9 +40,11 @@ public static class PromptwallTranscript
         string Text);
 
     public sealed record ImagePromptSpec(
-        string Label,        // "PROMPT" or "REPLY"
-        string SourceText,   // the cleaned prompt or reply text
-        string ImagePrompt); // the full instruction sent to the image model
+        string Label,                // "PROMPT" or "REPLY"
+        string SourceText,           // the cleaned prompt or reply text
+        string ImagePrompt,          // the full instruction sent to the image model
+        int PageIndex = 1,           // 1-based page index when paginated
+        int PageCount = 1);          // total pages this card belongs to
 
     public sealed record ProjectInfo(
         string Dir,                   // absolute path to ~/.claude/projects/<slug>/
@@ -253,13 +259,57 @@ public static class PromptwallTranscript
     /// <summary>
     /// Build the image-generation prompt(s) for the picked text. Returns one
     /// spec when the prompt-only / combined-short case applies, otherwise two
-    /// specs (prompt card + reply card) per design §5.3.
+    /// specs (prompt card + reply card) per design §5.3. When the prompt or
+    /// reply exceeds <see cref="PageSizeChars"/>, each side is paginated into
+    /// up to <paramref name="maxPages"/> cards, labelled with PageIndex/PageCount.
     /// </summary>
     public static List<ImagePromptSpec> BuildImagePrompts(
         string promptText,
         string? replyText,
-        int combinedThreshold = 600)
+        int combinedThreshold = 600,
+        int maxPages = DefaultMaxPages)
     {
+        // Pagination kicks in when either side exceeds PageSizeChars. Each page
+        // becomes its own card; combined-short logic only applies when neither
+        // side paginates.
+        bool promptPaginates = promptText.Length > PageSizeChars;
+        bool replyPaginates = replyText is not null && replyText.Length > PageSizeChars;
+
+        if (promptPaginates || replyPaginates)
+        {
+            var specs = new List<ImagePromptSpec>();
+
+            var promptPages = Paginate(promptText, PageSizeChars, maxPages);
+            for (int i = 0; i < promptPages.Count; i++)
+            {
+                var pageIdx = i + 1;
+                var pageCount = promptPages.Count;
+                var page = promptPages[i];
+                specs.Add(new ImagePromptSpec(
+                    "PROMPT", page,
+                    RenderTemplate("PROMPT", "cyanToViolet", page, pageIdx, pageCount),
+                    pageIdx, pageCount));
+            }
+
+            if (replyText is not null)
+            {
+                var replyPages = Paginate(replyText, PageSizeChars, maxPages);
+                for (int i = 0; i < replyPages.Count; i++)
+                {
+                    var pageIdx = i + 1;
+                    var pageCount = replyPages.Count;
+                    var page = replyPages[i];
+                    specs.Add(new ImagePromptSpec(
+                        "REPLY", page,
+                        RenderTemplate("REPLY", "violetToCyan", page, pageIdx, pageCount),
+                        pageIdx, pageCount));
+                }
+            }
+
+            return specs;
+        }
+
+        // Existing short-content path (unchanged).
         var prompt = TruncateAtWordBoundary(promptText, IndividualCapChars);
 
         if (string.IsNullOrEmpty(replyText))
@@ -283,6 +333,87 @@ public static class PromptwallTranscript
         // Single image with both prompt and reply rendered.
         var combined = $"PROMPT:\n{prompt}\n\nREPLY:\n{reply}";
         return [new ImagePromptSpec("PROMPT", combined, RenderTemplate("PROMPT", "cyanToViolet", combined))];
+    }
+
+    /// <summary>
+    /// Split <paramref name="text"/> into pages of approximately
+    /// <paramref name="pageSize"/> characters. Break points are preferred at
+    /// paragraph (\n\n), sentence (". ") or word boundaries, and must lie past
+    /// the half-way point of the window — otherwise the page is hard-cut at
+    /// <paramref name="pageSize"/>. Returns at most <paramref name="maxPages"/>
+    /// pages; if more content remains after the cap, the last page ends with
+    /// "…". A single-page result returns the input trimmed to its content.
+    /// </summary>
+    private static List<string> Paginate(string text, int pageSize, int maxPages)
+    {
+        if (text.Length <= pageSize) return [text];
+
+        var pages = new List<string>();
+        int cursor = 0;
+        while (cursor < text.Length && pages.Count < maxPages)
+        {
+            int windowEnd = Math.Min(cursor + pageSize, text.Length);
+            int breakPoint;
+
+            if (windowEnd >= text.Length)
+            {
+                breakPoint = windowEnd;
+            }
+            else
+            {
+                int halfway = cursor + pageSize / 2;
+
+                // Prefer paragraph break.
+                int para = text.LastIndexOf("\n\n", windowEnd, windowEnd - cursor, StringComparison.Ordinal);
+                if (para > halfway)
+                {
+                    breakPoint = para;
+                }
+                else
+                {
+                    // Then sentence break.
+                    int sentence = text.LastIndexOf(". ", windowEnd, windowEnd - cursor, StringComparison.Ordinal);
+                    if (sentence > halfway)
+                    {
+                        // Break after the period, before the space.
+                        breakPoint = sentence + 1;
+                    }
+                    else
+                    {
+                        // Then any whitespace.
+                        int ws = -1;
+                        for (int i = windowEnd - 1; i > cursor; i--)
+                        {
+                            char c = text[i];
+                            if (c == ' ' || c == '\n' || c == '\t')
+                            {
+                                ws = i;
+                                break;
+                            }
+                        }
+                        breakPoint = ws > halfway ? ws : windowEnd;
+                    }
+                }
+            }
+
+            var slice = text[cursor..breakPoint].Trim();
+            if (!string.IsNullOrEmpty(slice))
+                pages.Add(slice);
+
+            cursor = breakPoint;
+            // Skip leading whitespace before next iteration.
+            while (cursor < text.Length && (text[cursor] == ' ' || text[cursor] == '\n' || text[cursor] == '\t'))
+                cursor++;
+        }
+
+        if (cursor < text.Length && pages.Count > 0)
+        {
+            // More content was dropped — append ellipsis to the last page.
+            var last = pages[^1];
+            if (!last.EndsWith("…")) pages[^1] = last + "…";
+        }
+
+        return pages;
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
@@ -412,7 +543,7 @@ public static class PromptwallTranscript
         return slice.TrimEnd() + "…";
     }
 
-    private static string RenderTemplate(string label, string gradient, string text)
+    private static string RenderTemplate(string label, string gradient, string text, int pageIndex = 1, int pageCount = 1)
     {
         // Per design doc §5.2 — a single fixed PKS visual identity.
         // Gradient direction is the only knob (cyanToViolet for prompt,
@@ -420,6 +551,8 @@ public static class PromptwallTranscript
         var (from, to) = gradient == "violetToCyan"
             ? ("#7C3AED", "#06B6D4")
             : ("#06B6D4", "#7C3AED");
+
+        var labelWithPage = pageCount <= 1 ? label : $"{label} {pageIndex}/{pageCount}";
 
         return $"""
             A clean, modern social-media card on a soft diagonal gradient background
@@ -430,7 +563,7 @@ public static class PromptwallTranscript
             drop shadow at 30% opacity. Wrap lines naturally; preserve indentation
             and code-style punctuation. Generous 12% padding on all sides.
 
-            Above the text, a small uppercase label "{label}" in 60% opacity white,
+            Above the text, a small uppercase label "{labelWithPage}" in 60% opacity white,
             letter-spaced. Below the text, a thin 1px white divider at 30% opacity.
             In the bottom-right corner, a small wordmark "pks promptwall" in 40%
             opacity white.

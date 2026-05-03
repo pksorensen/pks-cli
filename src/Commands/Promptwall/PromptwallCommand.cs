@@ -51,6 +51,11 @@ public class PromptwallCommand : AsyncCommand<PromptwallCommand.Settings>
         [CommandOption("--aspect-ratio")]
         [Description("Aspect ratio: 1:1, 3:4, 4:3, 9:16, 16:9 (default: 1:1)")]
         public string AspectRatio { get; set; } = "1:1";
+
+        [CommandOption("--max-pages")]
+        [Description("Max pages when paginating long prompts (default: 4)")]
+        [DefaultValue(4)]
+        public int MaxPages { get; set; } = 4;
     }
 
     public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
@@ -195,7 +200,8 @@ public class PromptwallCommand : AsyncCommand<PromptwallCommand.Settings>
         // ── 5. build image-generation specs ──────────────────────────────────
         var specs = PromptwallTranscript.BuildImagePrompts(
             promptText: promptText,
-            replyText: includeReply ? reply : null);
+            replyText: includeReply ? reply : null,
+            maxPages: settings.MaxPages);
 
         // ── 6. confirmation panel ────────────────────────────────────────────
         var preview = TruncatePreview(promptText, 200);
@@ -232,7 +238,13 @@ public class PromptwallCommand : AsyncCommand<PromptwallCommand.Settings>
         for (int i = 0; i < specs.Count; i++)
         {
             var spec = specs[i];
-            var suffix = specs.Count == 1 ? "" : $"-{spec.Label.ToLowerInvariant()}";
+            string suffix;
+            if (specs.Count == 1 && spec.PageCount == 1)
+                suffix = "";
+            else if (spec.PageCount == 1)
+                suffix = $"-{spec.Label.ToLowerInvariant()}";
+            else
+                suffix = $"-{spec.Label.ToLowerInvariant()}-{spec.PageIndex}of{spec.PageCount}";
             var fileName = $"promptwall-{stamp}{suffix}.jpg";
             var fullPath = Path.GetFullPath(Path.Combine(outputDir, fileName));
 

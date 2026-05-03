@@ -1,3 +1,4 @@
+using System.Text;
 using FluentAssertions;
 using PKS.Commands.Promptwall;
 using Xunit;
@@ -395,6 +396,9 @@ public class PromptwallTranscriptTests
     [Fact]
     public void BuildImagePrompts_TruncatesOversizedText()
     {
+        // Phase C: a 1500-char prompt with no break-points hard-cuts into 2 pages
+        // of <= PageSizeChars each. The original prompt is split, never rendered
+        // verbatim into a single card.
         var huge = new string('x', 1500);
 
         var images = PromptwallTranscript.BuildImagePrompts(
@@ -402,10 +406,150 @@ public class PromptwallTranscriptTests
             replyText: null,
             combinedThreshold: 600);
 
-        images.Should().ContainSingle();
-        // hard cap 1200 chars + ellipsis
-        images[0].ImagePrompt.Should().Contain("…");
+        images.Should().HaveCountGreaterThan(1);
         images[0].ImagePrompt.Should().NotContain(huge);
+        images.Should().OnlyContain(i => i.SourceText.Length <= PromptwallTranscript.PageSizeChars + 1);
+    }
+
+    // ── BuildImagePrompts pagination (Phase C) ──────────────────────────────
+
+    [Fact]
+    public void BuildImagePrompts_DoesNotPaginateShortPrompt()
+    {
+        var images = PromptwallTranscript.BuildImagePrompts(
+            promptText: "short prompt",
+            replyText: null);
+
+        images.Should().ContainSingle();
+        images[0].PageCount.Should().Be(1);
+        images[0].PageIndex.Should().Be(1);
+        images[0].SourceText.Should().NotEndWith("…");
+        images[0].ImagePrompt.Should().NotContain("1/1");
+    }
+
+    [Fact]
+    public void BuildImagePrompts_PaginatesLongPromptIntoNPages()
+    {
+        // 2400 chars of unbreakable word-stream, default page size 800 → ~3 pages.
+        // Use repeated "wordX " so the paginator can find word-boundary breaks.
+        var sb = new StringBuilder();
+        for (int i = 0; i < 400; i++) sb.Append("word ");
+        var longPrompt = sb.ToString().TrimEnd();
+        longPrompt.Length.Should().BeGreaterThan(2 * PromptwallTranscript.PageSizeChars);
+
+        var images = PromptwallTranscript.BuildImagePrompts(
+            promptText: longPrompt,
+            replyText: null);
+
+        images.Should().HaveCount(3);
+        images.Select(i => i.Label).Should().AllBe("PROMPT");
+        images.Select(i => i.PageIndex).Should().Equal(1, 2, 3);
+        images.Should().OnlyContain(i => i.PageCount == 3);
+    }
+
+    [Fact]
+    public void BuildImagePrompts_RespectsMaxPagesAndAppendsEllipsis()
+    {
+        // 5000 chars worth of word stream, capped to 2 pages.
+        var sb = new StringBuilder();
+        for (int i = 0; i < 1000; i++) sb.Append("word ");
+        var huge = sb.ToString().TrimEnd();
+
+        var images = PromptwallTranscript.BuildImagePrompts(
+            promptText: huge,
+            replyText: null,
+            maxPages: 2);
+
+        images.Should().HaveCount(2);
+        images[^1].SourceText.Should().EndWith("…");
+        images[^1].PageIndex.Should().Be(2);
+        images[^1].PageCount.Should().Be(2);
+    }
+
+    [Fact]
+    public void BuildImagePrompts_BreaksAtParagraphBoundary()
+    {
+        // Build a prompt where there is a paragraph break (\n\n) at position ~600
+        // (well past the half-way point of the 800-char window) and continued
+        // content so total length forces pagination.
+        var firstChunk = new string('a', 590);
+        var secondChunk = new string('b', 800);
+        var promptText = firstChunk + "\n\n" + secondChunk;
+
+        var images = PromptwallTranscript.BuildImagePrompts(
+            promptText: promptText,
+            replyText: null);
+
+        images.Should().HaveCountGreaterThan(1);
+        // Page 1 should be the "first chunk" — i.e. exactly the 590 'a's,
+        // no 'b' characters bleeding in.
+        images[0].SourceText.Should().NotContain("b");
+        images[0].SourceText.Should().StartWith("a");
+    }
+
+    [Fact]
+    public void BuildImagePrompts_PaginatesPromptAndReplyIndependently()
+    {
+        // Long prompt — expect 3 pages.
+        var promptSb = new StringBuilder();
+        for (int i = 0; i < 400; i++) promptSb.Append("word ");
+        var longPrompt = promptSb.ToString().TrimEnd();
+
+        // Long reply — expect 2 pages (~1500 chars).
+        var replySb = new StringBuilder();
+        for (int i = 0; i < 250; i++) replySb.Append("reply ");
+        var longReply = replySb.ToString().TrimEnd();
+
+        var images = PromptwallTranscript.BuildImagePrompts(
+            promptText: longPrompt,
+            replyText: longReply);
+
+        var prompts = images.Where(i => i.Label == "PROMPT").ToList();
+        var replies = images.Where(i => i.Label == "REPLY").ToList();
+
+        prompts.Should().HaveCount(3);
+        replies.Should().HaveCount(2);
+        // Prompt pages first, then reply pages.
+        images.Take(3).Select(i => i.Label).Should().AllBe("PROMPT");
+        images.Skip(3).Select(i => i.Label).Should().AllBe("REPLY");
+    }
+
+    [Fact]
+    public void RenderTemplate_IncludesPageIndicatorWhenMultiPage()
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < 400; i++) sb.Append("word ");
+        var longPrompt = sb.ToString().TrimEnd();
+
+        var images = PromptwallTranscript.BuildImagePrompts(
+            promptText: longPrompt,
+            replyText: null);
+
+        images.Should().HaveCount(3);
+        images[0].ImagePrompt.Should().Contain("PROMPT 1/3");
+        images[1].ImagePrompt.Should().Contain("PROMPT 2/3");
+        images[2].ImagePrompt.Should().Contain("PROMPT 3/3");
+    }
+
+    [Fact]
+    public void BuildImagePrompts_ShortPromptWithLongReply_PaginatesReplyOnly()
+    {
+        // Short prompt + 2000-char reply → 1 PROMPT spec + multiple REPLY specs.
+        var replySb = new StringBuilder();
+        for (int i = 0; i < 350; i++) replySb.Append("reply ");
+        var longReply = replySb.ToString().TrimEnd();
+
+        var images = PromptwallTranscript.BuildImagePrompts(
+            promptText: "short prompt",
+            replyText: longReply);
+
+        var prompts = images.Where(i => i.Label == "PROMPT").ToList();
+        var replies = images.Where(i => i.Label == "REPLY").ToList();
+
+        prompts.Should().ContainSingle();
+        prompts[0].PageCount.Should().Be(1);
+        replies.Should().HaveCount(3);
+        replies.Select(r => r.PageIndex).Should().Equal(1, 2, 3);
     }
 
     // ── ProbeProject / DiscoverProjects ─────────────────────────────────────
