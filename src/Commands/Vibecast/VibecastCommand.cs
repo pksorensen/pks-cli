@@ -66,6 +66,9 @@ public class VibecastCommand : DevcontainerSpawnCommand
             target, interactiveSshArgs, containerId);
 
         var vibecastInvocation = embeddedVibecastPath ?? "npx -y vibecast";
+        var extraArgs = GetExtraVibecastArgs(settings);
+        if (!string.IsNullOrEmpty(extraArgs))
+            vibecastInvocation += " " + extraArgs;
         // -e LANG/-e LC_ALL: minimal devcontainers default to POSIX locale; without UTF-8
         // some lib in vibecast's dep tree reads $LANG at init() and changes rendering, causing
         // glyphs like ↑↓⏎●◀▶ in reverse-video to render as "__". Setting them here is the only
@@ -250,6 +253,11 @@ public class VibecastCommand : DevcontainerSpawnCommand
         else
             DisplaySuccess($"VM '{vmRecord.VmName}' deallocate command accepted (Azure may take ~30s to fully stop billing).");
     }
+
+    /// <summary>
+    /// Override in subclasses to append extra flags to the vibecast invocation.
+    /// </summary>
+    protected virtual string GetExtraVibecastArgs(Settings settings) => "";
 
     /// <summary>
     /// If pks-cli was built with -p:EmbedVibecast=true, pipe the embedded linux-amd64

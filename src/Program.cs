@@ -70,6 +70,11 @@ var isFoundryProxy = commandArgs.Length > 2 &&
                      commandArgs[1].Equals("foundry", StringComparison.OrdinalIgnoreCase) &&
                      commandArgs[2].Equals("proxy", StringComparison.OrdinalIgnoreCase);
 
+// Skip banner for ado git-proxy (background daemon — clean stdout)
+var isAdoGitProxy = commandArgs.Length > 2 &&
+                    commandArgs[1].Equals("ado", StringComparison.OrdinalIgnoreCase) &&
+                    commandArgs[2].Equals("git-proxy", StringComparison.OrdinalIgnoreCase);
+
 // Skip banner for hooks commands with --json flag OR when it's a hook event command
 var hasJsonFlag = commandArgs.Any(a => a.Equals("--json", StringComparison.OrdinalIgnoreCase) ||
                                       a.Equals("-j", StringComparison.OrdinalIgnoreCase));
@@ -87,7 +92,7 @@ if (commandArgs.Any(a => a.Equals("--debug", StringComparison.OrdinalIgnoreCase)
     Environment.SetEnvironmentVariable("PKS_DEBUG", "1");
 
 // Display welcome banner with fancy ASCII art (unless we should skip it)
-if (!isMcpStdio && !isGitAskPass && !isFoundryProxy && !noLogo && !(isHooksCommand && (hasJsonFlag || isHookEventCommand)))
+if (!isMcpStdio && !isGitAskPass && !isFoundryProxy && !isAdoGitProxy && !noLogo && !(isHooksCommand && (hasJsonFlag || isHookEventCommand)))
 {
     DisplayWelcomeBanner();
 
@@ -596,9 +601,14 @@ app.Configure(config =>
             .WithExample(new[] { "ssh", "connect", "pks-vm-2e93" });
     });
 
-    config.AddCommand<PKS.Commands.Vibecast.VibecastCommand>("vibecast")
-        .WithDescription("SSH into a registered target and run npx -y vibecast")
-        .WithExample(new[] { "vibecast", "pks-vm-2e93" });
+    config.AddBranch("vibecast", vibecast =>
+    {
+        vibecast.SetDescription("SSH into a registered target and run npx -y vibecast");
+        vibecast.SetDefaultCommand<PKS.Commands.Vibecast.VibecastCommand>();
+        vibecast.AddCommand<PKS.Commands.Vibecast.VibecastGameCommand>("game")
+            .WithDescription("Join a vibegame tournament match — code your bot and battle")
+            .WithExample(new[] { "vibecast", "game", "abc123" });
+    });
 
     // Add registry branch command
     config.AddBranch<RegistrySettings>("registry", registry =>
@@ -629,6 +639,10 @@ app.Configure(config =>
         ado.AddCommand<AdoStatusCommand>("status")
             .WithDescription("Show Azure DevOps authentication status")
             .WithExample(new[] { "ado", "status" });
+
+        ado.AddCommand<AdoGitProxyCommand>("git-proxy")
+            .WithDescription("Start the ADO git HTTP proxy (token-injecting, port 7878)")
+            .WithExample(new[] { "ado", "git-proxy", "--allow", "Org/Project/Repo" });
     });
 
     // Add Jira branch command
