@@ -1,7 +1,7 @@
 using FluentAssertions;
 using Moq;
 using PKS.CLI.Tests.Infrastructure;
-using PKS.Commands.Claude.Marketplace;
+using PKS.Commands.Marketplace;
 using PKS.Infrastructure.Services.Claude;
 using Spectre.Console.Cli;
 using Xunit;
@@ -42,12 +42,12 @@ public class ClaudeMarketplaceAddCommandTests : TestBase
             .Callback<ClaudeMarketplace>(m => savedMarketplace = m)
             .ReturnsAsync((ClaudeMarketplace m) => m);
 
-        var command = new ClaudeMarketplaceAddCommand(
+        var command = new MarketplaceAddCommand(
             _configServiceMock.Object,
             _fetcherMock.Object,
             TestConsole);
 
-        var settings = new ClaudeMarketplaceAddCommand.Settings
+        var settings = new MarketplaceAddCommand.Settings
         {
             Source = "https://example.com/marketplace.json",
             NonInteractive = true,
@@ -84,12 +84,12 @@ public class ClaudeMarketplaceAddCommandTests : TestBase
             .Callback(() => callCount++)
             .ReturnsAsync((ClaudeMarketplace m) => m);
 
-        var command = new ClaudeMarketplaceAddCommand(
+        var command = new MarketplaceAddCommand(
             _configServiceMock.Object,
             _fetcherMock.Object,
             TestConsole);
 
-        var settings = new ClaudeMarketplaceAddCommand.Settings
+        var settings = new MarketplaceAddCommand.Settings
         {
             Source = "https://example.com/marketplace.json",
             NonInteractive = true,

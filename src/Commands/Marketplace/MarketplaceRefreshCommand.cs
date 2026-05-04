@@ -3,10 +3,10 @@ using Spectre.Console;
 using Spectre.Console.Cli;
 using System.ComponentModel;
 
-namespace PKS.Commands.Claude.Marketplace;
+namespace PKS.Commands.Marketplace;
 
 [Description("Refresh plugin metadata from a Claude Code marketplace source")]
-public class ClaudeMarketplaceRefreshCommand : AsyncCommand<ClaudeMarketplaceRefreshCommand.Settings>
+public class MarketplaceRefreshCommand : AsyncCommand<MarketplaceRefreshCommand.Settings>
 {
     private readonly IClaudeMarketplaceConfigurationService _configService;
     private readonly IClaudeMarketplaceFetcher _fetcher;
@@ -19,7 +19,7 @@ public class ClaudeMarketplaceRefreshCommand : AsyncCommand<ClaudeMarketplaceRef
         public string? Id { get; set; }
     }
 
-    public ClaudeMarketplaceRefreshCommand(
+    public MarketplaceRefreshCommand(
         IClaudeMarketplaceConfigurationService configService,
         IClaudeMarketplaceFetcher fetcher,
         IAnsiConsole console)

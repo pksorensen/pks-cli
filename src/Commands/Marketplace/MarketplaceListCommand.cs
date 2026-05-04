@@ -3,17 +3,17 @@ using Spectre.Console;
 using Spectre.Console.Cli;
 using System.ComponentModel;
 
-namespace PKS.Commands.Claude.Marketplace;
+namespace PKS.Commands.Marketplace;
 
 [Description("List registered Claude Code plugin marketplaces")]
-public class ClaudeMarketplaceListCommand : AsyncCommand<ClaudeMarketplaceListCommand.Settings>
+public class MarketplaceListCommand : AsyncCommand<MarketplaceListCommand.Settings>
 {
     private readonly IClaudeMarketplaceConfigurationService _configService;
     private readonly IAnsiConsole _console;
 
     public class Settings : CommandSettings { }
 
-    public ClaudeMarketplaceListCommand(
+    public MarketplaceListCommand(
         IClaudeMarketplaceConfigurationService configService,
         IAnsiConsole console)
     {

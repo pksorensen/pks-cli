@@ -3,10 +3,10 @@ using Spectre.Console;
 using Spectre.Console.Cli;
 using System.ComponentModel;
 
-namespace PKS.Commands.Claude.Marketplace;
+namespace PKS.Commands.Marketplace;
 
-[Description("Enable plugins in a Claude Code marketplace")]
-public class ClaudeMarketplaceEnableCommand : AsyncCommand<ClaudeMarketplaceEnableCommand.Settings>
+[Description("Disable plugins in a Claude Code marketplace")]
+public class MarketplaceDisableCommand : AsyncCommand<MarketplaceDisableCommand.Settings>
 {
     private readonly IClaudeMarketplaceConfigurationService _configService;
     private readonly IAnsiConsole _console;
@@ -18,11 +18,11 @@ public class ClaudeMarketplaceEnableCommand : AsyncCommand<ClaudeMarketplaceEnab
         public string MarketplaceId { get; set; } = "";
 
         [CommandArgument(1, "[PLUGIN_NAMES]")]
-        [Description("Plugin names to enable (omit to enable all)")]
+        [Description("Plugin names to disable (omit to disable all)")]
         public string[]? PluginNames { get; set; }
     }
 
-    public ClaudeMarketplaceEnableCommand(
+    public MarketplaceDisableCommand(
         IClaudeMarketplaceConfigurationService configService,
         IAnsiConsole console)
     {
@@ -43,11 +43,11 @@ public class ClaudeMarketplaceEnableCommand : AsyncCommand<ClaudeMarketplaceEnab
         foreach (var plugin in marketplace.Plugins)
         {
             if (pluginNames == null || pluginNames.Contains(plugin.Name))
-                plugin.Enabled = true;
+                plugin.Enabled = false;
         }
 
         await _configService.AddOrUpdateMarketplaceAsync(marketplace);
-        _console.MarkupLine("[green]Plugins enabled.[/]");
+        _console.MarkupLine("[green]Plugins disabled.[/]");
         return 0;
     }
 }

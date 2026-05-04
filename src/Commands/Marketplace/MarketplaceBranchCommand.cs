@@ -1,10 +1,10 @@
 using Spectre.Console.Cli;
 using System.ComponentModel;
 
-namespace PKS.Commands.Claude.Marketplace;
+namespace PKS.Commands.Marketplace;
 
-[Description("Manage Claude Code plugin marketplaces")]
-public class ClaudeMarketplaceBranchCommand : Command<ClaudeMarketplaceBranchCommand.Settings>
+[Description("Manage plugin marketplaces")]
+public class MarketplaceBranchCommand : Command<MarketplaceBranchCommand.Settings>
 {
     public class Settings : CommandSettings { }
 

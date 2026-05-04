@@ -3,10 +3,10 @@ using Spectre.Console;
 using Spectre.Console.Cli;
 using System.ComponentModel;
 
-namespace PKS.Commands.Claude.Marketplace;
+namespace PKS.Commands.Marketplace;
 
 [Description("Show details of a Claude Code plugin marketplace")]
-public class ClaudeMarketplaceShowCommand : AsyncCommand<ClaudeMarketplaceShowCommand.Settings>
+public class MarketplaceShowCommand : AsyncCommand<MarketplaceShowCommand.Settings>
 {
     private readonly IClaudeMarketplaceConfigurationService _configService;
     private readonly IAnsiConsole _console;
@@ -18,7 +18,7 @@ public class ClaudeMarketplaceShowCommand : AsyncCommand<ClaudeMarketplaceShowCo
         public string Id { get; set; } = "";
     }
 
-    public ClaudeMarketplaceShowCommand(
+    public MarketplaceShowCommand(
         IClaudeMarketplaceConfigurationService configService,
         IAnsiConsole console)
     {

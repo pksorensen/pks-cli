@@ -77,6 +77,9 @@ public class ClaudeUsageCommand : AsyncCommand<ClaudeUsageSettings>
         AnsiConsole.Write(new Rule("[bold cyan]Claude Code — Cost Analysis[/]").RuleStyle("cyan dim"));
         AnsiConsole.WriteLine();
 
+        RenderHourlyCostChart(entries);
+        AnsiConsole.WriteLine();
+
         RenderCostChart(byDay, cutoff, settings.RecentDays);
         AnsiConsole.WriteLine();
 
@@ -209,7 +212,7 @@ public class ClaudeUsageCommand : AsyncCommand<ClaudeUsageSettings>
 
             if (!root.TryGetProperty("timestamp", out var tsProp)) continue;
             if (!DateTime.TryParse(tsProp.GetString(), out var ts)) continue;
-            var date = ts.ToUniversalTime().Date;
+            var tsUtc = ts.ToUniversalTime();
 
             double cost = 0;
             if (root.TryGetProperty("costUSD", out var costProp) &&
@@ -242,7 +245,7 @@ public class ClaudeUsageCommand : AsyncCommand<ClaudeUsageSettings>
             }
 
             if (cost > 0)
-                entries.Add(new CostEntry(date, cost, model));
+                entries.Add(new CostEntry(tsUtc, cost, model));
         }
 
         return entries;
@@ -251,8 +254,143 @@ public class ClaudeUsageCommand : AsyncCommand<ClaudeUsageSettings>
     private static int GetInt(JsonElement el, string key) =>
         el.TryGetProperty(key, out var v) ? v.GetInt32() : 0;
 
+    // ── Hourly chart ──────────────────────────────────────────────────────────
+
+    private static void RenderHourlyCostChart(List<CostEntry> entries)
+    {
+        AnsiConsole.Write(new Rule("[bold]Cost per hour — last 24 hours  (USD)[/]").RuleStyle("dim"));
+
+        var now = DateTime.UtcNow;
+        var since = now.AddHours(-24);
+
+        var hourlyData = Enumerable.Range(0, 24)
+            .Select(h =>
+            {
+                var start = since.AddHours(h);
+                var end = start.AddHours(1);
+                var cost = entries
+                    .Where(e => e.Timestamp >= start && e.Timestamp < end)
+                    .Sum(e => e.Cost);
+                return new HourlyCost(start, cost);
+            })
+            .ToList();
+
+        double maxCost = hourlyData.Max(h => h.Cost);
+        if (maxCost <= 0)
+        {
+            AnsiConsole.MarkupLine("[dim]  No activity in the last 24 hours.[/]");
+            return;
+        }
+
+        int winW = TerminalWidth();
+        int yAxisW = 8;
+        int chartW = winW - yAxisW - 1;
+        int chartH = 10;
+
+        int colW = Math.Max(1, chartW / 24);
+        int gapW = colW >= 3 ? 1 : 0;
+        if (gapW > 0)
+            colW = Math.Max(1, (chartW - 23) / 24);
+        int totalBarW = 24 * colW + 23 * gapW;
+
+        double[] niceIncrements = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0];
+        double yIncrement = niceIncrements.FirstOrDefault(inc => maxCost / inc >= 3, 0.01);
+        double yMax = Math.Ceiling(maxCost / yIncrement) * yIncrement;
+        double range = Math.Max(yIncrement, yMax);
+        double rowH = range / chartH;
+
+        int yLabelEvery = Math.Max(1, chartH / 4);
+
+        var currentHourStart = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0, DateTimeKind.Utc);
+
+        var output = new System.Text.StringBuilder();
+
+        for (int row = 0; row < chartH; row++)
+        {
+            double rowTop = yMax - row * rowH;
+            double rowBot = rowTop - rowH;
+
+            bool showLabel = row % yLabelEvery == 0 || row == chartH - 1;
+            string costLabel = rowTop >= 1 ? $"${rowTop:F1}" : $"${rowTop:F3}";
+            string yLbl = showLabel ? $"{costLabel,6} " : "       ";
+            char axChar = row == chartH - 1 ? '┼' : '│';
+
+            output.Append(Dim).Append(yLbl).Append(axChar).Append(R);
+
+            for (int i = 0; i < 24; i++)
+            {
+                var h = hourlyData[i];
+                bool isCurrent = h.HourStart == currentHourStart;
+                string col = isCurrent ? Re : Cy;
+
+                string blockChar;
+                if (h.Cost >= rowTop)
+                    blockChar = "█";
+                else if (h.Cost > rowBot)
+                {
+                    double frac = (h.Cost - rowBot) / rowH;
+                    int idx = (int)Math.Round(frac * 8);
+                    blockChar = HourlyBlocks[Math.Clamp(idx, 1, 8)];
+                }
+                else
+                    blockChar = " ";
+
+                output.Append(col);
+                for (int w = 0; w < colW; w++) output.Append(blockChar);
+                output.Append(R);
+
+                if (gapW > 0 && i < 23) output.Append(' ');
+            }
+
+            output.AppendLine();
+        }
+
+        output.Append(Dim)
+              .Append(new string(' ', yAxisW))
+              .Append('└')
+              .Append(new string('─', totalBarW))
+              .AppendLine(R);
+
+        // X-axis hour labels — place every 4 hours
+        int stride = colW + gapW;
+        int lineLen = yAxisW + totalBarW + 2;
+        var xLine = new char[lineLen];
+        Array.Fill(xLine, ' ');
+
+        for (int i = 0; i < 24; i += 4)
+        {
+            string lbl = hourlyData[i].HourStart.ToString("HH:mm");
+            int center = yAxisW + i * stride + colW / 2;
+            int xPos = Math.Clamp(center - lbl.Length / 2, 0, lineLen - lbl.Length);
+            for (int c = 0; c < lbl.Length && xPos + c < lineLen; c++)
+                xLine[xPos + c] = lbl[c];
+        }
+        // Always write last hour
+        {
+            string lbl = hourlyData[23].HourStart.ToString("HH:mm");
+            int center = yAxisW + 23 * stride + colW / 2;
+            int xPos = Math.Clamp(center - lbl.Length / 2, 0, lineLen - lbl.Length);
+            // clear around it
+            int from = Math.Max(0, xPos - 1);
+            int to = Math.Min(lineLen, xPos + lbl.Length + 1);
+            for (int c = from; c < to; c++) xLine[c] = ' ';
+            for (int c = 0; c < lbl.Length && xPos + c < lineLen; c++)
+                xLine[xPos + c] = lbl[c];
+        }
+
+        output.Append(Dim).Append(new string(xLine)).AppendLine(R);
+
+        double total24h = hourlyData.Sum(h => h.Cost);
+        output.Append(new string(' ', yAxisW + 2));
+        output.AppendLine(
+            $"{Cy}█{R} prior hours  {Re}█{R} current hour  24h total: ${total24h:F4}");
+
+        Console.Write(output.ToString());
+    }
+
     // ── Bar chart ─────────────────────────────────────────────────────────────
 
+    private static readonly string[] HourlyBlocks = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
     private static readonly string[] Blocks = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
     private const string R   = "\x1b[0m";
@@ -477,7 +615,12 @@ public class ClaudeUsageCommand : AsyncCommand<ClaudeUsageSettings>
         double CacheCreatePerToken,
         double CacheReadPerToken);
 
-    private record CostEntry(DateTime Date, double Cost, string Model);
+    private record CostEntry(DateTime Timestamp, double Cost, string Model)
+    {
+        public DateTime Date => Timestamp.Date;
+    }
 
     private record DailyCost(DateTime Date, double Cost);
+
+    private record HourlyCost(DateTime HourStart, double Cost);
 }

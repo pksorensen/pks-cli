@@ -881,6 +881,41 @@ app.Configure(config =>
         .WithExample(["promptwall", "--all-projects"])
         .WithExample(["promptwall", "--include-reply", "--output", "./out"]);
 
+    // Add marketplace branch command
+    config.AddBranch("marketplace", marketplace =>
+    {
+        marketplace.SetDescription("Manage plugin marketplaces");
+
+        marketplace.AddCommand<PKS.Commands.Marketplace.MarketplaceAddCommand>("add")
+            .WithDescription("Add a plugin marketplace and apply its policy")
+            .WithExample(["marketplace", "add", "https://marketplace.agentics.dk/ctx/ctx-core"])
+            .WithExample(["marketplace", "add", "github:owner/repo", "--enable-all", "--non-interactive"]);
+
+        marketplace.AddCommand<PKS.Commands.Marketplace.MarketplaceListCommand>("list")
+            .WithDescription("List registered marketplaces")
+            .WithExample(["marketplace", "list"]);
+
+        marketplace.AddCommand<PKS.Commands.Marketplace.MarketplaceShowCommand>("show")
+            .WithDescription("Show marketplace details")
+            .WithExample(["marketplace", "show", "my-marketplace"]);
+
+        marketplace.AddCommand<PKS.Commands.Marketplace.MarketplaceEnableCommand>("enable")
+            .WithDescription("Enable plugins in a marketplace")
+            .WithExample(["marketplace", "enable", "my-marketplace", "plugin-a"]);
+
+        marketplace.AddCommand<PKS.Commands.Marketplace.MarketplaceDisableCommand>("disable")
+            .WithDescription("Disable plugins in a marketplace")
+            .WithExample(["marketplace", "disable", "my-marketplace", "plugin-a"]);
+
+        marketplace.AddCommand<PKS.Commands.Marketplace.MarketplaceRemoveCommand>("remove")
+            .WithDescription("Remove a marketplace")
+            .WithExample(["marketplace", "remove", "my-marketplace"]);
+
+        marketplace.AddCommand<PKS.Commands.Marketplace.MarketplaceRefreshCommand>("refresh")
+            .WithDescription("Refresh marketplace plugin list")
+            .WithExample(["marketplace", "refresh", "my-marketplace"]);
+    });
+
     // Add claude commands — spawn devcontainer + analysis
     config.AddBranch<Spectre.Console.Cli.CommandSettings>("claude", claude =>
     {
@@ -899,41 +934,6 @@ app.Configure(config =>
             .WithExample(["claude", "usage"])
             .WithExample(["claude", "usage", "my-project"])
             .WithExample(["claude", "usage", "--days", "14"]);
-
-        claude.AddBranch("marketplace", marketplace =>
-        {
-            marketplace.SetDescription("Manage Claude Code plugin marketplaces");
-
-            marketplace.AddCommand<PKS.Commands.Claude.Marketplace.ClaudeMarketplaceAddCommand>("add")
-                .WithDescription("Add a Claude Code plugin marketplace")
-                .WithExample(["claude", "marketplace", "add", "https://example.com/marketplace.json"])
-                .WithExample(["claude", "marketplace", "add", "github:owner/repo", "--enable-all", "--non-interactive"]);
-
-            marketplace.AddCommand<PKS.Commands.Claude.Marketplace.ClaudeMarketplaceListCommand>("list")
-                .WithDescription("List registered marketplaces")
-                .WithExample(["claude", "marketplace", "list"]);
-
-            marketplace.AddCommand<PKS.Commands.Claude.Marketplace.ClaudeMarketplaceShowCommand>("show")
-                .WithDescription("Show marketplace details")
-                .WithExample(["claude", "marketplace", "show", "my-marketplace"]);
-
-            marketplace.AddCommand<PKS.Commands.Claude.Marketplace.ClaudeMarketplaceEnableCommand>("enable")
-                .WithDescription("Enable plugins in a marketplace")
-                .WithExample(["claude", "marketplace", "enable", "my-marketplace", "plugin-a"]);
-
-            marketplace.AddCommand<PKS.Commands.Claude.Marketplace.ClaudeMarketplaceDisableCommand>("disable")
-                .WithDescription("Disable plugins in a marketplace")
-                .WithExample(["claude", "marketplace", "disable", "my-marketplace", "plugin-a"]);
-
-            marketplace.AddCommand<PKS.Commands.Claude.Marketplace.ClaudeMarketplaceRemoveCommand>("remove")
-                .WithDescription("Remove a marketplace")
-                .WithExample(["claude", "marketplace", "remove", "my-marketplace"]);
-
-            marketplace.AddCommand<PKS.Commands.Claude.Marketplace.ClaudeMarketplaceRefreshCommand>("refresh")
-                .WithDescription("Refresh plugin metadata from marketplace source")
-                .WithExample(["claude", "marketplace", "refresh"])
-                .WithExample(["claude", "marketplace", "refresh", "my-marketplace"]);
-        });
 
         claude.AddCommand<PKS.Commands.Claude.ManagedSettings.ClaudeManagedSettingsRenderCommand>("managed-settings")
             .WithDescription("Render managed-settings.json from registered marketplaces")

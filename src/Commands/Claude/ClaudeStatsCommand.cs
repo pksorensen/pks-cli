@@ -42,14 +42,7 @@ public class ClaudeStatsCommand : AsyncCommand<ClaudeStatsSettings>
         IEnumerable<string> sessionDirs;
         string scope;
 
-        if (settings.AllProjects)
-        {
-            sessionDirs = Directory.Exists(claudeRoot)
-                ? [claudeRoot]
-                : [];
-            scope = "all projects";
-        }
-        else
+        if (settings.ProjectPath != null && !settings.AllProjects)
         {
             // Convert the project path to the encoded folder name Claude uses:
             // e.g.  /workspaces/my-repo  →  -workspaces-my-repo
@@ -60,9 +53,14 @@ public class ClaudeStatsCommand : AsyncCommand<ClaudeStatsSettings>
             sessionDirs = Directory.Exists(dir) ? [dir] : [];
             scope = projectPath;
         }
+        else
+        {
+            sessionDirs = Directory.Exists(claudeRoot) ? [claudeRoot] : [];
+            scope = "all projects";
+        }
 
         var jsonlFiles = sessionDirs
-            .SelectMany(d => Directory.GetFiles(d, "*.jsonl", SearchOption.TopDirectoryOnly))
+            .SelectMany(d => Directory.GetFiles(d, "*.jsonl", SearchOption.AllDirectories))
             .ToList();
 
         if (jsonlFiles.Count == 0)
