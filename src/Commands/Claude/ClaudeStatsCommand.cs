@@ -72,6 +72,7 @@ public class ClaudeStatsCommand : AsyncCommand<ClaudeStatsSettings>
 
         // ── Parse ────────────────────────────────────────────────────────────
         List<RequestDataPoint> points = [];
+        List<SessionMeta> sessions = [];
 
         await AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots)
@@ -79,7 +80,12 @@ public class ClaudeStatsCommand : AsyncCommand<ClaudeStatsSettings>
             {
                 foreach (var file in jsonlFiles)
                 {
-                    try { points.AddRange(await ParseSessionAsync(file)); }
+                    try
+                    {
+                        points.AddRange(await ParseSessionAsync(file));
+                        var meta = await ParseSessionMetaAsync(file);
+                        if (meta != null) sessions.Add(meta);
+                    }
                     catch { /* skip corrupt files */ }
                 }
             });
@@ -114,6 +120,8 @@ public class ClaudeStatsCommand : AsyncCommand<ClaudeStatsSettings>
 
         // ── Render ───────────────────────────────────────────────────────────
         AnsiConsole.WriteLine();
+        RenderUsageOverview(sessions, points);
+
         AnsiConsole.Write(new Rule("[bold cyan]Claude Code — Response Time Analysis[/]").RuleStyle("cyan dim"));
         AnsiConsole.WriteLine();
 
@@ -133,6 +141,40 @@ public class ClaudeStatsCommand : AsyncCommand<ClaudeStatsSettings>
     }
 
     // ── Parsers ───────────────────────────────────────────────────────────────
+
+    private static async Task<SessionMeta?> ParseSessionMetaAsync(string path)
+    {
+        DateTime? firstTs = null;
+        DateTime? lastTs = null;
+        long totalInput = 0, totalOutput = 0;
+
+        foreach (var line in await File.ReadAllLinesAsync(path))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            JsonElement root;
+            try { root = JsonSerializer.Deserialize<JsonElement>(line); }
+            catch { continue; }
+
+            if (!root.TryGetProperty("timestamp", out var tsProp)) continue;
+            if (!DateTime.TryParse(tsProp.GetString(), out var ts)) continue;
+
+            if (firstTs == null || ts < firstTs) firstTs = ts;
+            if (lastTs == null || ts > lastTs) lastTs = ts;
+
+            if (root.TryGetProperty("type", out var typeProp) && typeProp.GetString() == "assistant")
+            {
+                var usage = ExtractUsage(root);
+                if (usage != null)
+                {
+                    totalInput += usage.InputTokens + usage.CacheRead + usage.CacheCreate;
+                    totalOutput += usage.OutputTokens;
+                }
+            }
+        }
+
+        if (firstTs == null || lastTs == null || totalOutput == 0) return null;
+        return new SessionMeta(firstTs.Value, lastTs.Value - firstTs.Value, totalInput, totalOutput);
+    }
 
     private static async Task<List<RequestDataPoint>> ParseSessionAsync(string path)
     {
@@ -229,6 +271,196 @@ public class ClaudeStatsCommand : AsyncCommand<ClaudeStatsSettings>
         el.TryGetProperty(key, out var v) ? v.GetInt32() : 0;
 
     // ── Renderers ─────────────────────────────────────────────────────────────
+
+    private static void RenderUsageOverview(List<SessionMeta> sessions, List<RequestDataPoint> points)
+    {
+        AnsiConsole.Write(new Rule("[bold cyan]Claude Code — Usage Overview[/]").RuleStyle("cyan dim"));
+        AnsiConsole.WriteLine();
+
+        if (sessions.Count == 0) return;
+
+        var totalTokens = sessions.Sum(s => s.TotalInputTokens + s.TotalOutputTokens);
+        var favoriteModel = points
+            .GroupBy(p => p.Model)
+            .OrderByDescending(g => g.Count())
+            .FirstOrDefault()?.Key ?? "unknown";
+
+        var longestSession = sessions.OrderByDescending(s => s.Duration).First();
+
+        var activeDates = sessions.Select(s => s.Start.Date).Distinct().OrderBy(d => d).ToList();
+        var totalDays = activeDates.Count > 0
+            ? (int)(activeDates[^1] - activeDates[0]).TotalDays + 1
+            : 0;
+
+        var mostActiveDate = sessions
+            .GroupBy(s => s.Start.Date)
+            .OrderByDescending(g => g.Count())
+            .FirstOrDefault()?.Key;
+
+        var (currentStreak, longestStreak) = CalculateStreaks(activeDates);
+
+        RenderHeatmap(sessions);
+        AnsiConsole.WriteLine();
+
+        var grid = new Grid().AddColumn().AddColumn();
+        grid.AddRow(
+            $"  [dim]Favorite model:[/] [bold]{Markup.Escape(FormatModelName(favoriteModel))}[/]",
+            $"  [dim]Total tokens:[/] [bold]{FormatTokens(totalTokens)}[/]");
+        grid.AddRow(
+            $"  [dim]Sessions:[/] [bold]{sessions.Count:N0}[/]",
+            $"  [dim]Longest session:[/] [bold]{FormatDuration(longestSession.Duration)}[/]");
+        grid.AddRow(
+            $"  [dim]Active days:[/] [bold]{activeDates.Count}/{totalDays}[/]",
+            $"  [dim]Longest streak:[/] [bold]{longestStreak} days[/]");
+        grid.AddRow(
+            $"  [dim]Most active day:[/] [bold]{(mostActiveDate.HasValue ? mostActiveDate.Value.ToString("MMM d") : "-")}[/]",
+            $"  [dim]Current streak:[/] [bold]{currentStreak} days[/]");
+        AnsiConsole.Write(grid);
+
+        var comparison = GetTokenComparison(totalTokens);
+        if (comparison != null)
+        {
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine($"  [dim]You've used[/] [bold]~{Markup.Escape(comparison)}[/]");
+        }
+
+        AnsiConsole.WriteLine();
+    }
+
+    private static void RenderHeatmap(List<SessionMeta> sessions)
+    {
+        var dailyCounts = sessions
+            .GroupBy(s => s.Start.Date)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var today = DateTime.Today;
+        var thisWeekSunday = today.AddDays(-(int)today.DayOfWeek);
+        var startSunday = thisWeekSunday.AddDays(-52 * 7);
+
+        var weeks = new List<DateTime>();
+        for (var d = startSunday; d <= thisWeekSunday; d = d.AddDays(7))
+            weeks.Add(d);
+
+        var nonZero = dailyCounts.Values.Where(v => v > 0).OrderBy(v => v).ToList();
+        int q1 = nonZero.Count >= 4 ? nonZero[nonZero.Count / 4] : 1;
+        int q2 = nonZero.Count >= 2 ? nonZero[nonZero.Count / 2] : 2;
+        int q3 = nonZero.Count >= 4 ? nonZero[nonZero.Count * 3 / 4] : 3;
+
+        char GetCell(DateTime date)
+        {
+            if (date > today) return ' ';
+            if (!dailyCounts.TryGetValue(date, out var c) || c == 0) return '·';
+            return c > q3 ? '█' : c > q2 ? '▓' : c > q1 ? '▒' : '░';
+        }
+
+        const int Prefix = 6; // "  Mon " or "      "
+        var sb = new System.Text.StringBuilder();
+
+        // Month label row
+        var monthRow = new char[Prefix + weeks.Count];
+        Array.Fill(monthRow, ' ');
+        string? prevMonth = null;
+        for (int w = 0; w < weeks.Count; w++)
+        {
+            // Check if this week contains the first day of a new month
+            for (int d = 0; d < 7; d++)
+            {
+                var day = weeks[w].AddDays(d);
+                var mon = day.ToString("MMM");
+                if (mon != prevMonth && day <= today)
+                {
+                    prevMonth = mon;
+                    for (int c = 0; c < 3 && Prefix + w + c < monthRow.Length; c++)
+                        monthRow[Prefix + w + c] = mon[c];
+                    break;
+                }
+            }
+        }
+        sb.AppendLine(new string(monthRow).TrimEnd());
+
+        string[] rowLabels = ["     ", "  Mon", "     ", "  Wed", "     ", "  Fri", "     "];
+        for (int dow = 0; dow < 7; dow++)
+        {
+            sb.Append(rowLabels[dow]).Append(' ');
+            foreach (var weekStart in weeks)
+                sb.Append(GetCell(weekStart.AddDays(dow)));
+            sb.AppendLine();
+        }
+
+        sb.AppendLine();
+        sb.Append("  Less · ░ ▒ ▓ █ More");
+
+        Console.WriteLine(sb.ToString());
+    }
+
+    private static (int current, int longest) CalculateStreaks(List<DateTime> activeDates)
+    {
+        if (activeDates.Count == 0) return (0, 0);
+
+        int longest = 1, current = 1;
+        for (int i = 1; i < activeDates.Count; i++)
+        {
+            if ((activeDates[i] - activeDates[i - 1]).Days == 1)
+            {
+                current++;
+                if (current > longest) longest = current;
+            }
+            else
+            {
+                current = 1;
+            }
+        }
+
+        var daysAgo = (DateTime.Today - activeDates[^1]).Days;
+        if (daysAgo > 1) current = 0;
+
+        return (current, longest);
+    }
+
+    private static string FormatTokens(long tokens) => tokens switch
+    {
+        >= 1_000_000_000 => $"{tokens / 1_000_000_000.0:F1}b",
+        >= 1_000_000 => $"{tokens / 1_000_000.0:F1}m",
+        >= 1_000 => $"{tokens / 1_000.0:F1}k",
+        _ => tokens.ToString()
+    };
+
+    private static string FormatDuration(TimeSpan d) =>
+        d.TotalDays >= 1 ? $"{(int)d.TotalDays}d {d.Hours}h {d.Minutes}m"
+        : d.TotalHours >= 1 ? $"{(int)d.TotalHours}h {d.Minutes}m"
+        : $"{(int)d.TotalMinutes}m";
+
+    private static string FormatModelName(string model)
+    {
+        if (model.StartsWith("claude-", StringComparison.OrdinalIgnoreCase))
+            model = model["claude-".Length..];
+        var parts = model.Split('-');
+        if (parts.Length >= 3 &&
+            int.TryParse(parts[1], out int major) &&
+            int.TryParse(parts[2], out int minor))
+        {
+            var family = char.ToUpper(parts[0][0]) + parts[0][1..];
+            return $"{family} {major}.{minor}";
+        }
+        return model;
+    }
+
+    private static string? GetTokenComparison(long tokens)
+    {
+        var books = new (string Name, long Tokens)[]
+        {
+            ("The Great Gatsby", 73_000),
+            ("Harry Potter and the Sorcerer's Stone", 100_000),
+            ("Lord of the Rings", 500_000),
+            ("Les Misérables", 900_000),
+            ("War and Peace", 1_200_000),
+        };
+
+        var candidates = books.Where(b => tokens >= b.Tokens * 2).ToList();
+        if (candidates.Count == 0) return null;
+        var best = candidates.OrderByDescending(b => tokens / b.Tokens).First();
+        return $"{tokens / best.Tokens}x more tokens than {best.Name}";
+    }
 
     private static void RenderSummaryCards(
         List<RequestDataPoint> points,
@@ -539,4 +771,6 @@ public class ClaudeStatsCommand : AsyncCommand<ClaudeStatsSettings>
     private record RequestEntry(string ParentUuid, DateTime LastTs, UsageData? Usage, string? Model);
 
     private record DailyStat(DateTime Date, double Median, int Count);
+
+    private record SessionMeta(DateTime Start, TimeSpan Duration, long TotalInputTokens, long TotalOutputTokens);
 }
