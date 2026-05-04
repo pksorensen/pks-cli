@@ -26,6 +26,7 @@ public class ClaudeMarketplacePluginSnapshot
     public string? Version { get; set; }
     public string? Description { get; set; }
     public bool Enabled { get; set; }
+    public bool Required { get; set; }
 }
 
 public class ClaudeMarketplace

@@ -1,4 +1,5 @@
 using PKS.Commands.Devcontainer;
+using PKS.Commands.Vm;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Claude;
 using PKS.Infrastructure.Services.Models;
@@ -16,6 +17,8 @@ public class ClaudeSpawnCommand : DevcontainerSpawnCommand
     private readonly IAzureVmMetadataService _vmMetadata;
     private readonly IAzureAuthService _azureAuth;
     private readonly IAzureVmService _vmService;
+    private readonly IAzureFoundryAuthService _foundryAuthService;
+    private readonly AzureFoundryAuthConfig _foundryConfig;
 
     public ClaudeSpawnCommand(
         IDevcontainerSpawnerService spawnerService,
@@ -24,15 +27,20 @@ public class ClaudeSpawnCommand : DevcontainerSpawnCommand
         IAzureVmMetadataService vmMetadata,
         IAzureAuthService azureAuth,
         IAzureVmService vmService,
+        VmInitCommand vmInitCommand,
         IClaudeMarketplaceConfigurationService claudeMarketplaceConfigService,
         IClaudeManagedSettingsRenderer claudeManagedSettingsRenderer,
+        IAzureFoundryAuthService foundryAuthService,
+        AzureFoundryAuthConfig foundryConfig,
         IAnsiConsole console)
         : base(spawnerService, sshTargetService, nugetTemplateService, vmMetadata, azureAuth, vmService,
-               claudeMarketplaceConfigService, claudeManagedSettingsRenderer, console)
+               vmInitCommand, claudeMarketplaceConfigService, claudeManagedSettingsRenderer, console)
     {
         _vmMetadata = vmMetadata;
         _azureAuth = azureAuth;
         _vmService = vmService;
+        _foundryAuthService = foundryAuthService;
+        _foundryConfig = foundryConfig;
     }
 
     protected override async Task OnAfterRemoteSpawnAsync(
@@ -60,7 +68,129 @@ public class ClaudeSpawnCommand : DevcontainerSpawnCommand
         if (!string.IsNullOrEmpty(target.KeyPath))
             interactiveSshArgs += $" -i \"{target.KeyPath}\"";
 
-        var remoteCmd = $"docker exec -it -w {remoteWorkspaceFolder} {containerId} claude";
+        string remoteCmd;
+        if (await _foundryAuthService.IsAuthenticatedAsync())
+        {
+            const string UseFoundry = "Use Foundry models (Azure AI)";
+            const string UseDirect = "Use Anthropic direct";
+            var launchMode = Console.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("[cyan]Azure AI Foundry is configured. Launch mode:[/]")
+                    .AddChoices(UseFoundry, UseDirect));
+
+            if (launchMode == UseFoundry)
+            {
+                var creds = await _foundryAuthService.GetStoredCredentialsAsync();
+                var enabledModels = creds!.EnabledModels.Count > 0 ? creds.EnabledModels : new List<string> { creds.DefaultModel };
+
+                var msiPort = 40342;
+                var msiSecret = Guid.NewGuid().ToString("N");
+
+                // Kill anything holding the MSI port (by port — covers any script name or stale process).
+                await RunSshCommandAsync(sshArgs, target,
+                    $"fuser -k {msiPort}/tcp 2>/dev/null || true; sleep 0.5",
+                    timeoutSeconds: 5);
+
+                // Copy minimal foundry credentials (TenantId + RefreshToken) to the VM.
+                var credsPayload = JsonSerializer.Serialize(new { creds!.TenantId, creds.RefreshToken });
+                var credsB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(credsPayload));
+                await RunSshCommandAsync(sshArgs, target,
+                    $"mkdir -p ~/.pks-cli && echo {credsB64} | base64 -d > ~/.pks-cli/foundry-credentials.json && chmod 600 ~/.pks-cli/foundry-credentials.json",
+                    timeoutSeconds: 10);
+
+                // Deploy a real MSI token server: validates X-IDENTITY-HEADER, rejects non-cognitiveservices
+                // resources, exchanges the stored refresh token for a live access token, and returns
+                // the standard Azure MSI JSON response that DefaultAzureCredential expects.
+                var pythonScript = $@"#!/usr/bin/env python3
+import http.server, json, urllib.request, urllib.parse, os, datetime
+CREDS = os.path.expanduser('~/.pks-cli/foundry-credentials.json')
+ALLOWED = 'https://cognitiveservices.azure.com'
+CLIENT_ID = '04b07795-8ddb-461a-bbee-02f9e1bf7b46'
+PORT = {msiPort}
+SECRET = '{msiSecret}'
+LOG = '/tmp/pks-msi-server.log'
+def log(msg):
+    with open(LOG, 'a') as f:
+        f.write(datetime.datetime.utcnow().isoformat() + ' ' + msg + '\n')
+def get_token(tenant_id, refresh_tok):
+    data = urllib.parse.urlencode({{'grant_type': 'refresh_token', 'client_id': CLIENT_ID,
+        'refresh_token': refresh_tok, 'scope': 'https://cognitiveservices.azure.com/.default'}}).encode()
+    req = urllib.request.Request('https://login.microsoftonline.com/' + tenant_id + '/oauth2/v2.0/token',
+        data=data, method='POST')
+    req.add_header('Content-Type', 'application/x-www-form-urlencoded')
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read())
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.headers.get('X-IDENTITY-HEADER', '') != SECRET:
+            log('REJECT bad header')
+            self.send_response(401); self.end_headers(); return
+        params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        resource = params.get('resource', [None])[0]
+        if resource != ALLOWED:
+            log('REJECT resource=' + repr(resource))
+            self.send_response(403); self.end_headers()
+            self.wfile.write(b'{{""error"":""resource_not_allowed""}}'); return
+        try:
+            with open(CREDS) as f: c = json.load(f)
+            tok = get_token(c['TenantId'], c['RefreshToken'])
+            if 'refresh_token' in tok:
+                c['RefreshToken'] = tok['refresh_token']
+                with open(CREDS, 'w') as f: json.dump(c, f)
+            body = json.dumps({{'access_token': tok['access_token'],
+                'expires_in': str(tok.get('expires_in', 3600)),
+                'resource': ALLOWED, 'token_type': 'Bearer'}}).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers(); self.wfile.write(body)
+            log('TOKEN issued ok')
+        except Exception as e:
+            log('ERROR ' + str(e))
+            self.send_response(500); self.end_headers()
+            self.wfile.write(json.dumps({{'error': str(e)}}).encode())
+    def log_message(self, *a): pass
+with open('/tmp/pks-msi-server.pid', 'w') as f: f.write(str(os.getpid()))
+log('MSI token server starting port=' + str(PORT))
+http.server.HTTPServer(('0.0.0.0', PORT), H).serve_forever()
+";
+                var scriptB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(pythonScript));
+                var deployScript = $"echo {scriptB64} | base64 -d > /tmp/pks-msi-server.py && nohup python3 /tmp/pks-msi-server.py >/tmp/pks-msi-server-out.log 2>&1 &";
+                await RunSshCommandAsync(sshArgs, target, deployScript, timeoutSeconds: 10);
+                await Task.Delay(800); // give python a moment to bind
+                Console.MarkupLine($"[dim]MSI token server started on VM port {msiPort}. Check /tmp/pks-msi-server.log after the session to verify token issuance.[/]");
+
+                // Build CLAUDE_CODE_USE_FOUNDRY env vars — model names map to role-specific vars
+                var envVars = new System.Text.StringBuilder();
+                envVars.Append($"-e CLAUDE_CODE_USE_FOUNDRY=1 ");
+                envVars.Append($"-e ANTHROPIC_FOUNDRY_RESOURCE={creds.SelectedResourceName} ");
+                envVars.Append($"-e IDENTITY_ENDPOINT=http://172.17.0.1:{msiPort} ");
+                envVars.Append($"-e IDENTITY_HEADER={msiSecret} ");
+
+                if (!string.IsNullOrEmpty(creds.ApiKey))
+                    envVars.Append($"-e ANTHROPIC_FOUNDRY_API_KEY={creds.ApiKey} ");
+
+                // Map deployment names to model-role env vars by looking for sonnet/opus/haiku in the name
+                foreach (var model in enabledModels)
+                {
+                    var lower = model.ToLowerInvariant();
+                    if (lower.Contains("sonnet")) envVars.Append($"-e ANTHROPIC_DEFAULT_SONNET_MODEL={model} ");
+                    else if (lower.Contains("opus")) envVars.Append($"-e ANTHROPIC_DEFAULT_OPUS_MODEL={model} ");
+                    else if (lower.Contains("haiku")) envVars.Append($"-e ANTHROPIC_DEFAULT_HAIKU_MODEL={model} ");
+                    else envVars.Append($"-e ANTHROPIC_DEFAULT_SONNET_MODEL={model} ");
+                }
+
+                remoteCmd = $"docker exec -it {envVars}-w {remoteWorkspaceFolder} {containerId} claude --dangerously-skip-permissions";
+            }
+            else
+            {
+                remoteCmd = $"docker exec -it -w {remoteWorkspaceFolder} {containerId} claude --dangerously-skip-permissions";
+            }
+        }
+        else
+        {
+            remoteCmd = $"docker exec -it -w {remoteWorkspaceFolder} {containerId} claude --dangerously-skip-permissions";
+        }
 
         var psi = new ProcessStartInfo("ssh")
         {
