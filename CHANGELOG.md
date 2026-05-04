@@ -49,6 +49,42 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.11.0](https://github.com/pksorensen/pks-cli/compare/v6.10.1...v6.11.0) (2026-05-04)
+
+
+### Features
+
+* **claude:** Foundry launch mode with real MSI token server for devcontainer auth ([2f48190](https://github.com/pksorensen/pks-cli/commit/2f48190c7ef27dc8de3ee935b12cb921d40c854e))
+* **cli:** add Claude marketplace POCOs, interfaces, and services ([ce8e198](https://github.com/pksorensen/pks-cli/commit/ce8e198b2577dcb2a6ebdc8355896ae85f039a90))
+* **cli:** add ClaudeSpawnCommand — plain claude in devcontainer without vibecast ([35ec30c](https://github.com/pksorensen/pks-cli/commit/35ec30ce2a1aa2bc61e33a5464c654dd6a4ae77e))
+* **cli:** add ClaudeUsageCommand — cost-per-day chart from JSONL sessions ([6bcb756](https://github.com/pksorensen/pks-cli/commit/6bcb75664389efd00dc292264aa940aeb1dfa5ab))
+* **cli:** add pks claude marketplace commands ([7b272f6](https://github.com/pksorensen/pks-cli/commit/7b272f654b690ccdfb64988edbfc0c7f1058547b))
+* **cli:** add pks vm destroy with cascade ARM REST delete ([c0cb583](https://github.com/pksorensen/pks-cli/commit/c0cb583b21832252faf8251c69868bd04209781c))
+* **cli:** add pks vm status with interactive picker and action menu ([9fa74c1](https://github.com/pksorensen/pks-cli/commit/9fa74c143b3a42754945a709df99c30b565080e6))
+* **cli:** extract SshExecutor for one-shot remote command execution ([661c133](https://github.com/pksorensen/pks-cli/commit/661c1330925af690c8774f485439ce297758ae44))
+* **cli:** move marketplace commands to top-level namespace and expand usage stats ([88fc2b9](https://github.com/pksorensen/pks-cli/commit/88fc2b9df71add70bd90b7e1ad0590e338cdfe12))
+* **cli:** persist OS disk size on VM record + interactive prompt in vm init ([55e76a5](https://github.com/pksorensen/pks-cli/commit/55e76a5aeed9a7fb4e8b8e8dbb629365f9c1c645))
+* **cli:** register Claude marketplace services and commands in DI ([a039baa](https://github.com/pksorensen/pks-cli/commit/a039baa832484c20a9c5461550e1886cd254174a))
+* **cli:** register ClaudeUsageCommand in claude branch ([5e5c3e5](https://github.com/pksorensen/pks-cli/commit/5e5c3e599f7424165b5a2cbeb5ed36c6f64d3ae0))
+* **cli:** show disk usage column and inspect drill-down in vm list ([7c57fcb](https://github.com/pksorensen/pks-cli/commit/7c57fcb55c9eec1ad7dd930e5d45443eac8d67cc))
+* **cli:** wire ClaudeSpawnCommand as default pks claude command ([8a5f5a4](https://github.com/pksorensen/pks-cli/commit/8a5f5a4547d4a44661f96ace1da636fd8d14f48f))
+* **cli:** wire managed-settings mount into devcontainer spawn pipeline ([4dbc536](https://github.com/pksorensen/pks-cli/commit/4dbc536beb4039d635d968e380b243cc1d4ee319))
+* **devcontainer:** spawn new VM option, azure init chaining, and marketplace injection ([f5ff454](https://github.com/pksorensen/pks-cli/commit/f5ff45453e27597bf1dc305321d02271f0027afc))
+* **foundry:** multi-select Claude deployments and store optional API key ([8807e3a](https://github.com/pksorensen/pks-cli/commit/8807e3accd38e67d27e311b22e404aa5348fde8c))
+* **promptwall:** add project picker and --pick-project flag ([1b5e2b7](https://github.com/pksorensen/pks-cli/commit/1b5e2b7404b008883ba3f3c2dc0e7f0a362bca9d))
+* **promptwall:** paginate long prompts into a series of images ([45a4c02](https://github.com/pksorensen/pks-cli/commit/45a4c02f93014aff9f45b9429a2b59268aa68daa))
+* **promptwall:** stream sessions by mtime to skip unparsed work ([7a52450](https://github.com/pksorensen/pks-cli/commit/7a5245068fa10d183f4ec5779980209b9fb5bbd5))
+* **vm:** live SKU availability with pricing, disk size prompt, VNet/SSH cleanup on destroy ([eba68c9](https://github.com/pksorensen/pks-cli/commit/eba68c90298d6e54997fb20afd45d9a9e08719b0))
+
+
+### Bug Fixes
+
+* **cli:** drop unsupported ',readonly' from managed-settings devcontainer mount ([e2a2916](https://github.com/pksorensen/pks-cli/commit/e2a29160f09b226dbcdbf436896e7a3e6aaa3d07))
+* **cli:** read marketplace.json `name` field (not `id`) and reject empty names ([15c271f](https://github.com/pksorensen/pks-cli/commit/15c271f1269f1bf5ccca035b42262c2c9c27b190))
+* **cli:** use CommandSettings branch type so ClaudeSpawnCommand can be default ([4303a7b](https://github.com/pksorensen/pks-cli/commit/4303a7bcd2e0eb581d4083106d14d941b56419ea))
+* **cli:** vm status action menu uses arrow-key SelectionPrompt ([da3ced2](https://github.com/pksorensen/pks-cli/commit/da3ced2a9127c832e529ae68c278039ffe6d699a))
+* **promptwall:** show project picker by default when multiple projects exist ([5dd2579](https://github.com/pksorensen/pks-cli/commit/5dd25796bea3c8d655b2841479e8fb2f74981a86))
+
 ## [6.10.1](https://github.com/pksorensen/pks-cli/compare/v6.10.0...v6.10.1) (2026-05-03)
 
 
