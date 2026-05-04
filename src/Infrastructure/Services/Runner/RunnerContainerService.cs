@@ -154,8 +154,15 @@ public class RunnerContainerService : IRunnerContainerService
                 remoteEnv["GIT_ASKPASS"] = "/tmp/git-askpass.sh";
             }
 
-            string? pksToken = null;
+            // Always issue a scoped PKS_TOKEN for the job — registry access and git credentials
+            // work for any repo, not just those with a Coolify deployment.
+            var jobId = $"{runId}-{Guid.NewGuid():N}";
             var coolifyBranch = lookupBranch ?? branch;
+            remoteEnv["PKS_TOKEN_URL"] = "/var/run/pks-creds/creds.sock";
+            var pksToken = _jobTokenService.CreateToken(
+                registration.Owner, registration.Repository, coolifyBranch,
+                "", "", jobId);
+
             try
             {
                 onProgress?.Invoke($"Coolify lookup: {registration.Owner}/{registration.Repository}@{coolifyBranch} (all environments)");
@@ -165,24 +172,24 @@ public class RunnerContainerService : IRunnerContainerService
                     var defaultApp = allApps.FirstOrDefault(a =>
                         string.Equals(a.EnvironmentName, "production", StringComparison.OrdinalIgnoreCase))
                         ?? allApps[0];
-                    remoteEnv["PKS_TOKEN_URL"] = "/var/run/pks-creds/creds.sock";
                     remoteEnv["COOLIFY_APP_FQDN"] = defaultApp.Fqdn;
                     remoteEnv["COOLIFY_ENVIRONMENT"] = defaultApp.EnvironmentName;
 
-                    var jobId = $"{runId}-{Guid.NewGuid():N}";
                     _coolifyTokenStore.RegisterAll(jobId, allApps);
-                    pksToken = _jobTokenService.CreateToken(
-                        registration.Owner, registration.Repository, coolifyBranch,
-                        "", "", jobId);
 
                     onProgress?.Invoke($"Coolify proxy configured for {allApps.Count} app(s) across environments [scoped JWT]");
                     _logger.LogInformation("Prepared scoped PKS_TOKEN for {Count} app(s) matching {Owner}/{Repo}@{Branch} (jobId={JobId})",
                         allApps.Count, registration.Owner, registration.Repository, coolifyBranch, jobId);
                 }
+                else
+                {
+                    _logger.LogInformation("No Coolify apps for {Owner}/{Repo}@{Branch} — PKS_TOKEN issued for registry/git access only (jobId={JobId})",
+                        registration.Owner, registration.Repository, coolifyBranch, jobId);
+                }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Coolify lookup failed for {Owner}/{Repo}@{Branch} — skipping env injection",
+                _logger.LogWarning(ex, "Coolify lookup failed for {Owner}/{Repo}@{Branch} — PKS_TOKEN still valid for registry/git access",
                     registration.Owner, registration.Repository, coolifyBranch);
                 onProgress?.Invoke($"Warning: Coolify lookup failed: {ex.Message}");
             }
@@ -402,29 +409,34 @@ public class RunnerContainerService : IRunnerContainerService
                 await WriteAskpassScriptAsync(containerId, onProgress, cancellationToken);
             }
 
-            // Prepare per-job Coolify token (OIDC-like: each job gets its own scoped JWT)
-            string? pksToken = null;
+            // Always issue a scoped PKS_TOKEN — registry/git access works for any repo.
             var coolifyBranch = lookupBranch ?? branch;
+            var coolifyJobId = $"{runId}-{jobId}-{Guid.NewGuid():N}";
+            var pksToken = _jobTokenService.CreateToken(
+                registration.Owner, registration.Repository, coolifyBranch,
+                "", "", coolifyJobId);
+
             try
             {
                 onProgress?.Invoke($"Coolify lookup: {registration.Owner}/{registration.Repository}@{coolifyBranch} (all environments)");
                 var allApps = await _coolifyLookup.FindAllAppsAsync(registration.Owner, registration.Repository, coolifyBranch);
                 if (allApps.Count > 0)
                 {
-                    var coolifyJobId = $"{runId}-{jobId}-{Guid.NewGuid():N}";
                     _coolifyTokenStore.RegisterAll(coolifyJobId, allApps);
-                    pksToken = _jobTokenService.CreateToken(
-                        registration.Owner, registration.Repository, coolifyBranch,
-                        "", "", coolifyJobId);
 
                     onProgress?.Invoke($"Coolify proxy configured for {allApps.Count} app(s) across environments [scoped JWT]");
                     _logger.LogInformation("Prepared scoped PKS_TOKEN for {Count} app(s) in existing container (jobId={JobId})",
                         allApps.Count, coolifyJobId);
                 }
+                else
+                {
+                    _logger.LogInformation("No Coolify apps for {Owner}/{Repo}@{Branch} — PKS_TOKEN issued for registry/git access only (jobId={JobId})",
+                        registration.Owner, registration.Repository, coolifyBranch, coolifyJobId);
+                }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Coolify lookup failed for {Owner}/{Repo}@{Branch} in existing container",
+                _logger.LogWarning(ex, "Coolify lookup failed for {Owner}/{Repo}@{Branch} in existing container — PKS_TOKEN still valid",
                     registration.Owner, registration.Repository, coolifyBranch);
                 onProgress?.Invoke($"Warning: Coolify lookup failed: {ex.Message}");
             }
