@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using PKS.Commands.Azure;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
@@ -18,18 +19,21 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
     private readonly ISshTargetConfigurationService _sshService;
     private readonly IAzureVmMetadataService _vmMetadata;
     private readonly IAnsiConsole _console;
+    private readonly AzureInitCommand _azureInit;
 
     public VmInitCommand(
         IAzureAuthService azureAuth,
         IAzureVmService vmService,
         ISshTargetConfigurationService sshService,
         IAzureVmMetadataService vmMetadata,
+        AzureInitCommand azureInit,
         IAnsiConsole console)
     {
         _azureAuth = azureAuth;
         _vmService = vmService;
         _sshService = sshService;
         _vmMetadata = vmMetadata;
+        _azureInit = azureInit;
         _console = console;
     }
 
@@ -46,16 +50,21 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
 
     public override int Execute(CommandContext context, Settings settings)
     {
-        return ExecuteAsync(settings).GetAwaiter().GetResult();
+        return ExecuteAsync(context, settings).GetAwaiter().GetResult();
     }
 
-    private async Task<int> ExecuteAsync(Settings settings)
+    private async Task<int> ExecuteAsync(CommandContext context, Settings settings)
     {
-        // 1. Check Azure authentication
+        // 1. Check Azure authentication — chain into azure init if not yet done
         if (!await _azureAuth.IsAuthenticatedAsync())
         {
-            _console.MarkupLine("[red]No VM provider authenticated. Run 'pks azure init' first.[/]");
-            return 1;
+            _console.MarkupLine("[cyan]Azure not yet authenticated. Starting Azure sign-in...[/]");
+            var initResult = _azureInit.Execute(context, new AzureInitCommand.Settings());
+            if (initResult != 0 || !await _azureAuth.IsAuthenticatedAsync())
+            {
+                _console.MarkupLine("[red]Azure authentication required to provision a VM.[/]");
+                return 1;
+            }
         }
 
         // 2. Get stored credentials
@@ -134,22 +143,76 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
             location = selectedRg.Location;
         }
 
-        // 6. Select VM size
-        var sizeMap = new Dictionary<string, string>
+        // 6. Select VM size — fetch sizes + prices in parallel, then filter by RAM/CPU
+        List<PKS.Infrastructure.Services.Models.AzureVmSizeInfo> availableSizes = new();
+        await _console.Status()
+            .SpinnerStyle(Style.Parse("cyan"))
+            .Spinner(Spinner.Known.Dots)
+            .StartAsync($"Loading available VM sizes and prices in {location}...", async _ =>
+            {
+                var sizesTask = _vmService.ListVmSizesAsync(token, creds.SubscriptionId, location);
+                var pricesTask = _vmService.FetchVmPricesAsync(location);
+                await Task.WhenAll(sizesTask, pricesTask);
+
+                availableSizes = sizesTask.Result;
+                var prices = pricesTask.Result;
+                foreach (var s in availableSizes)
+                    if (prices.TryGetValue(s.Name, out var p))
+                        s.PricePerHour = p;
+            });
+
+        string vmSize;
+        if (availableSizes.Count == 0)
         {
-            ["Standard_B1s (1 vCPU, 1 GB RAM)"] = "Standard_B1s",
-            ["Standard_B2s (2 vCPU, 4 GB RAM)"] = "Standard_B2s",
-            ["Standard_B4ms (4 vCPU, 16 GB RAM)"] = "Standard_B4ms",
-            ["Standard_D2s_v3 (2 vCPU, 8 GB RAM)"] = "Standard_D2s_v3"
-        };
+            _console.MarkupLine("[yellow]Could not load VM sizes from Azure. Enter a size manually:[/]");
+            vmSize = _console.Prompt(new TextPrompt<string>("[cyan]VM size:[/]").DefaultValue("Standard_B2s"));
+        }
+        else
+        {
+            // Step-down filters: RAM → CPU → show matching SKUs
+            const string AnyOption = "Any";
+            var ramOptions = new[] { AnyOption }
+                .Concat(availableSizes.Select(s => s.MemoryInMB / 1024).Distinct().OrderBy(x => x).Select(g => $"{g} GB"))
+                .ToList();
+            var ramChoice = _console.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("[cyan]How much RAM?[/]")
+                    .HighlightStyle(Style.Parse("cyan"))
+                    .AddChoices(ramOptions));
 
-        var sizeDisplay = _console.Prompt(
-            new SelectionPrompt<string>()
-                .Title("[cyan]Select VM size:[/]")
-                .AddChoices(sizeMap.Keys)
-                .HighlightStyle(Style.Parse("cyan")));
+            var afterRam = ramChoice == AnyOption
+                ? availableSizes
+                : availableSizes.Where(s => s.MemoryInMB / 1024 == int.Parse(ramChoice.Replace(" GB", ""))).ToList();
 
-        var vmSize = sizeMap[sizeDisplay];
+            var cpuOptions = new[] { AnyOption }
+                .Concat(afterRam.Select(s => s.NumberOfCores).Distinct().OrderBy(x => x).Select(c => $"{c}"))
+                .ToList();
+            var cpuChoice = _console.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("[cyan]How many vCPUs?[/]")
+                    .HighlightStyle(Style.Parse("cyan"))
+                    .AddChoices(cpuOptions));
+
+            var filtered = cpuChoice == AnyOption
+                ? afterRam
+                : afterRam.Where(s => s.NumberOfCores == int.Parse(cpuChoice)).ToList();
+
+            if (filtered.Count == 0)
+            {
+                _console.MarkupLine("[yellow]No matching sizes found — showing all available.[/]");
+                filtered = availableSizes;
+            }
+
+            var selectedSizeInfo = _console.Prompt(
+                new SelectionPrompt<PKS.Infrastructure.Services.Models.AzureVmSizeInfo>()
+                    .Title($"[cyan]Select VM size ({filtered.Count} matching):[/]")
+                    .PageSize(12)
+                    .UseConverter(s => s.DisplayLabel)
+                    .HighlightStyle(Style.Parse("cyan"))
+                    .AddChoices(filtered));
+
+            vmSize = selectedSizeInfo.Name;
+        }
 
         // 6b. Select OS disk size
         const string CustomDiskOption = "Custom — type a number";
@@ -282,12 +345,14 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
 
             if (retryChoice.StartsWith("Try a different VM size"))
             {
-                var newSizeDisplay = _console.Prompt(
-                    new SelectionPrompt<string>()
+                var retrySize = _console.Prompt(
+                    new SelectionPrompt<PKS.Infrastructure.Services.Models.AzureVmSizeInfo>()
                         .Title("[cyan]Select VM size:[/]")
-                        .AddChoices(sizeMap.Keys)
-                        .HighlightStyle(Style.Parse("cyan")));
-                vmSize = sizeMap[newSizeDisplay];
+                        .PageSize(12)
+                        .UseConverter(s => s.DisplayLabel)
+                        .HighlightStyle(Style.Parse("cyan"))
+                        .AddChoices(availableSizes.Count > 0 ? availableSizes : new() { new() { Name = vmSize } }));
+                vmSize = retrySize.Name;
                 _console.MarkupLine($"[dim]Retrying with size: {Markup.Escape(vmSize)}...[/]");
             }
             else if (retryChoice.StartsWith("Try a different location"))

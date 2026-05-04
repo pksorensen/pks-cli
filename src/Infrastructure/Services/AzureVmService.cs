@@ -14,6 +14,8 @@ namespace PKS.Infrastructure.Services;
 public interface IAzureVmService
 {
     Task<List<AzureResourceGroup>> ListResourceGroupsAsync(string accessToken, string subscriptionId, CancellationToken ct = default);
+    Task<List<AzureVmSizeInfo>> ListVmSizesAsync(string accessToken, string subscriptionId, string location, CancellationToken ct = default);
+    Task<Dictionary<string, decimal>> FetchVmPricesAsync(string location, CancellationToken ct = default);
     Task<AzureResourceGroup> EnsureResourceGroupAsync(string accessToken, string subscriptionId, string name, string location, CancellationToken ct = default);
     Task<AzureVmInfo> CreateVmAsync(AzureVmCreateOptions options, Action<string>? onProgress = null, CancellationToken ct = default);
     Task<string?> GetVmPublicIpAsync(string accessToken, string subscriptionId, string resourceGroup, string vmName, CancellationToken ct = default);
@@ -48,6 +50,7 @@ public class AzureVmService : IAzureVmService
     private readonly TimeSpan _pollInterval;
     private const string ApiVersion = "2023-09-01";
     private const string NetworkApiVersion = "2023-09-01";
+    private const string DiskApiVersion = "2024-03-02";
 
     public AzureVmService(HttpClient httpClient, ILogger<AzureVmService> logger, TimeSpan? pollInterval = null)
     {
@@ -752,6 +755,111 @@ public class AzureVmService : IAzureVmService
         return false;
     }
 
+    public async Task<List<AzureVmSizeInfo>> ListVmSizesAsync(string accessToken, string subscriptionId, string location, CancellationToken ct = default)
+    {
+        // Use the Resource SKUs API so we can filter to only SKUs with no restrictions
+        // (the /vmSizes endpoint returns all theoretically supported sizes, not actually deployable ones)
+        var url = $"https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.Compute/skus?api-version=2021-07-01&$filter=location eq '{location}'";
+        var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        var resp = await _httpClient.SendAsync(req, ct);
+        if (!resp.IsSuccessStatusCode) return new List<AzureVmSizeInfo>();
+
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        using var doc = JsonDocument.Parse(body);
+        if (!doc.RootElement.TryGetProperty("value", out var value)) return new List<AzureVmSizeInfo>();
+
+        var sizes = new List<AzureVmSizeInfo>();
+        foreach (var sku in value.EnumerateArray())
+        {
+            if (!sku.TryGetProperty("resourceType", out var rt) ||
+                rt.GetString() != "virtualMachines") continue;
+
+            if (!sku.TryGetProperty("name", out var nameProp)) continue;
+            var name = nameProp.GetString() ?? "";
+
+            // Skip SKUs with any location restriction
+            if (sku.TryGetProperty("restrictions", out var restrictions) &&
+                restrictions.GetArrayLength() > 0) continue;
+
+            // Extract capabilities: vCPUs, MemoryGB, PremiumIO
+            int cores = 0;
+            int memMb = 0;
+            bool premiumIo = false;
+            if (sku.TryGetProperty("capabilities", out var caps))
+            {
+                foreach (var cap in caps.EnumerateArray())
+                {
+                    if (!cap.TryGetProperty("name", out var capName) ||
+                        !cap.TryGetProperty("value", out var capValue)) continue;
+                    var capStr = capName.GetString();
+                    if (capStr == "vCPUs" && int.TryParse(capValue.GetString(), out var c)) cores = c;
+                    if (capStr == "MemoryGB" && double.TryParse(capValue.GetString(),
+                            System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture, out var mem))
+                        memMb = (int)(mem * 1024);
+                    if (capStr == "PremiumIO") premiumIo = capValue.GetString() == "True";
+                }
+            }
+
+            if (cores == 0) continue; // skip non-compute SKUs
+            if (!premiumIo) continue;  // we use Premium_LRS; skip SKUs that don't support it
+
+            sizes.Add(new AzureVmSizeInfo { Name = name, NumberOfCores = cores, MemoryInMB = memMb });
+        }
+
+        return sizes
+            .OrderBy(s => s.NumberOfCores)
+            .ThenBy(s => s.MemoryInMB)
+            .ToList();
+    }
+
+    public async Task<Dictionary<string, decimal>> FetchVmPricesAsync(string location, CancellationToken ct = default)
+    {
+        var prices = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var filter = Uri.EscapeDataString(
+                $"serviceName eq 'Virtual Machines' and armRegionName eq '{location}' and priceType eq 'Consumption'");
+            string? url = $"https://prices.azure.com/api/retail/prices?api-version=2023-01-01-preview&$filter={filter}";
+            var pages = 0;
+
+            while (url != null && pages < 5)
+            {
+                var resp = await _httpClient.GetStringAsync(url, ct);
+                using var doc = JsonDocument.Parse(resp);
+
+                if (doc.RootElement.TryGetProperty("Items", out var items))
+                {
+                    foreach (var item in items.EnumerateArray())
+                    {
+                        var armSku = item.TryGetProperty("armSkuName", out var s) ? s.GetString() : null;
+                        var productName = item.TryGetProperty("productName", out var p) ? p.GetString() : null;
+                        var skuName = item.TryGetProperty("skuName", out var sk) ? sk.GetString() : null;
+                        var price = item.TryGetProperty("retailPrice", out var pr) ? pr.GetDecimal() : 0m;
+
+                        if (string.IsNullOrEmpty(armSku) || price <= 0) continue;
+                        if (productName?.Contains("Windows", StringComparison.OrdinalIgnoreCase) == true) continue;
+                        if (skuName?.Contains("Spot", StringComparison.OrdinalIgnoreCase) == true) continue;
+                        if (skuName?.Contains("Low Priority", StringComparison.OrdinalIgnoreCase) == true) continue;
+
+                        if (!prices.ContainsKey(armSku) || prices[armSku] > price)
+                            prices[armSku] = price;
+                    }
+                }
+
+                url = doc.RootElement.TryGetProperty("NextPageLink", out var next)
+                      && next.ValueKind == JsonValueKind.String
+                    ? next.GetString()
+                    : null;
+                pages++;
+            }
+        }
+        catch { /* pricing is best-effort; caller shows sizes without price */ }
+
+        return prices;
+    }
+
     public async Task<string?> GetOsDiskNameAsync(string accessToken, string subscriptionId, string resourceGroup, string vmName, CancellationToken ct = default)
     {
         var url = $"https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{resourceGroup}/providers/Microsoft.Compute/virtualMachines/{vmName}?api-version={ApiVersion}";
@@ -865,7 +973,7 @@ public class AzureVmService : IAzureVmService
         if (!string.IsNullOrEmpty(osDiskName))
         {
             onProgress?.Invoke("Deleting OS disk...");
-            var diskUrl = $"https://management.azure.com/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Compute/disks/{osDiskName}?api-version={ApiVersion}";
+            var diskUrl = $"https://management.azure.com/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Compute/disks/{osDiskName}?api-version={DiskApiVersion}";
             await DeleteResourceAsync(accessToken, diskUrl, ct);
         }
 
@@ -878,6 +986,17 @@ public class AzureVmService : IAzureVmService
         catch (Exception ex)
         {
             onProgress?.Invoke($"Warning: Could not delete NSG (may still be in use): {ex.Message}");
+        }
+
+        onProgress?.Invoke("Deleting VNet...");
+        try
+        {
+            var vnetUrl = $"https://management.azure.com/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Network/virtualNetworks/{vmName}-vnet?api-version={NetworkApiVersion}";
+            await DeleteResourceAsync(accessToken, vnetUrl, ct);
+        }
+        catch (Exception ex)
+        {
+            onProgress?.Invoke($"Warning: Could not delete VNet: {ex.Message}");
         }
 
         onProgress?.Invoke($"VM '{vmName}' destroyed successfully.");

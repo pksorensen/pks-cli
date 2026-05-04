@@ -221,9 +221,10 @@ public class VmListCommand : Command<VmListCommand.Settings>
 
         _console.MarkupLine(string.Empty);
         var inspect = _console.Prompt(
-            new TextPrompt<string>("[cyan]Inspect a VM?[/]")
-                .AddChoices(inspectChoices)
-                .DefaultValue("No, quit"));
+            new SelectionPrompt<string>()
+                .Title("[cyan]Inspect a VM?[/]")
+                .HighlightStyle(Style.Parse("cyan"))
+                .AddChoices(inspectChoices));
 
         if (inspect != "No, quit")
         {

@@ -60,7 +60,7 @@ public class VmInitCommandTests
         var console = new TestConsole();
 
         var metadataMock = new Mock<IAzureVmMetadataService>();
-        var command = new VmInitCommand(authMock.Object, vmServiceMock.Object, sshServiceMock.Object, metadataMock.Object, console);
+        var command = new VmInitCommand(authMock.Object, vmServiceMock.Object, sshServiceMock.Object, metadataMock.Object, Mock.Of<PKS.Commands.Azure.AzureInitCommand>(), console);
         var settings = new VmInitCommand.Settings();
 
         // Act
@@ -96,7 +96,7 @@ public class VmInitCommandTests
             .ThrowsAsync(new InvalidOperationException("CreateVm called"));
 
         var metadataMock = new Mock<IAzureVmMetadataService>();
-        var command = new VmInitCommand(authMock.Object, vmServiceMock.Object, sshServiceMock.Object, metadataMock.Object, console);
+        var command = new VmInitCommand(authMock.Object, vmServiceMock.Object, sshServiceMock.Object, metadataMock.Object, Mock.Of<PKS.Commands.Azure.AzureInitCommand>(), console);
         var settings = new VmInitCommand.Settings();
 
         // Act — expecting an exception or non-zero return since we're stopping the flow

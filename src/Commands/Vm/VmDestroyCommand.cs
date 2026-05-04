@@ -100,8 +100,14 @@ public class VmDestroyCommand : Command<VmDestroyCommand.Settings>
             return 1;
         }
 
-        // Remove SSH target
-        try { await _sshTargets.RemoveTargetAsync(record.VmName); } catch { }
+        // Remove SSH target — find by label/host (Id is a GUID, not the VM name)
+        try
+        {
+            var sshTarget = await _sshTargets.FindTargetAsync(record.VmName);
+            if (sshTarget != null)
+                await _sshTargets.RemoveTargetAsync(sshTarget.Id);
+        }
+        catch { }
 
         // Remove from metadata store
         await _vmMetadata.RemoveAsync(record.VmName);

@@ -63,3 +63,21 @@ public class AzureResourceGroupListResponse
 {
     [JsonPropertyName("value")] public List<AzureResourceGroup> Value { get; set; } = new();
 }
+
+public class AzureVmSizeInfo
+{
+    [JsonPropertyName("name")] public string Name { get; set; } = "";
+    [JsonPropertyName("numberOfCores")] public int NumberOfCores { get; set; }
+    [JsonPropertyName("memoryInMB")] public int MemoryInMB { get; set; }
+    public decimal? PricePerHour { get; set; }
+
+    public string DisplayLabel =>
+        PricePerHour.HasValue
+            ? $"{Name} ({NumberOfCores} vCPU, {MemoryInMB / 1024.0:0.#} GB RAM) — ${PricePerHour.Value:0.000}/hr"
+            : $"{Name} ({NumberOfCores} vCPU, {MemoryInMB / 1024.0:0.#} GB RAM)";
+}
+
+public class AzureVmSizeListResponse
+{
+    [JsonPropertyName("value")] public List<AzureVmSizeInfo> Value { get; set; } = new();
+}
