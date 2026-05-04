@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using PKS.Commands.Vm;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Claude;
 using PKS.Infrastructure.Services.Models;
@@ -37,6 +38,7 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
     private readonly IAzureVmService _vmService;
     private readonly IClaudeMarketplaceConfigurationService? _claudeMarketplaceConfigService;
     private readonly IClaudeManagedSettingsRenderer? _claudeManagedSettingsRenderer;
+    private readonly VmInitCommand? _vmInitCommand;
 
     public DevcontainerSpawnCommand(
         IDevcontainerSpawnerService spawnerService,
@@ -45,6 +47,7 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         IAzureVmMetadataService vmMetadata,
         IAzureAuthService azureAuth,
         IAzureVmService vmService,
+        VmInitCommand vmInitCommand,
         IAnsiConsole console)
         : base(console)
     {
@@ -54,6 +57,7 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         _vmMetadata = vmMetadata ?? throw new ArgumentNullException(nameof(vmMetadata));
         _azureAuth = azureAuth ?? throw new ArgumentNullException(nameof(azureAuth));
         _vmService = vmService ?? throw new ArgumentNullException(nameof(vmService));
+        _vmInitCommand = vmInitCommand;
     }
 
     public DevcontainerSpawnCommand(
@@ -63,6 +67,7 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         IAzureVmMetadataService vmMetadata,
         IAzureAuthService azureAuth,
         IAzureVmService vmService,
+        VmInitCommand vmInitCommand,
         IClaudeMarketplaceConfigurationService claudeMarketplaceConfigService,
         IClaudeManagedSettingsRenderer claudeManagedSettingsRenderer,
         IAnsiConsole console)
@@ -74,6 +79,7 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         _vmMetadata = vmMetadata ?? throw new ArgumentNullException(nameof(vmMetadata));
         _azureAuth = azureAuth ?? throw new ArgumentNullException(nameof(azureAuth));
         _vmService = vmService ?? throw new ArgumentNullException(nameof(vmService));
+        _vmInitCommand = vmInitCommand;
         _claudeMarketplaceConfigService = claudeMarketplaceConfigService;
         _claudeManagedSettingsRenderer = claudeManagedSettingsRenderer;
     }
@@ -156,16 +162,37 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
             else
             {
                 var targets = await _sshTargetService.ListTargetsAsync();
-                if (targets.Count > 0)
                 {
-                    var localOption = "Local (this machine)";
-                    var choices = new[] { localOption }.Concat(
-                        targets.Select(t => t.Label ?? t.Host)).ToList();
+                    const string LocalOption = "Local (this machine)";
+                    const string NewVmOption = "Spawn new VM...";
+                    var choices = new[] { LocalOption }
+                        .Concat(targets.Select(t => t.Label ?? t.Host))
+                        .Append(NewVmOption)
+                        .ToList();
                     var choice = Console.Prompt(
                         new SelectionPrompt<string>()
                             .Title("[cyan]Where would you like to spawn the devcontainer?[/]")
                             .AddChoices(choices));
-                    if (choice != localOption)
+
+                    if (choice == NewVmOption)
+                    {
+                        if (_vmInitCommand == null)
+                        {
+                            DisplayError("VM provisioning not available in this context.");
+                            return 1;
+                        }
+                        _vmInitCommand.Execute(context, new VmInitCommand.Settings());
+
+                        // Re-read targets and pick the newest one (last registered)
+                        var updated = await _sshTargetService.ListTargetsAsync();
+                        var newTarget = updated.OrderByDescending(t => t.RegisteredAt)
+                                               .FirstOrDefault(t => !targets.Any(o => o.Id == t.Id));
+                        if (newTarget != null)
+                            remoteTarget = newTarget;
+                        else
+                            return 0; // vm init was cancelled or failed — exit cleanly
+                    }
+                    else if (choice != LocalOption)
                     {
                         remoteTarget = targets.First(t => (t.Label ?? t.Host) == choice);
                     }
@@ -654,6 +681,11 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
                 var pickedVolumeName = picked.VolumeName ?? string.Empty;
 
                 DisplaySuccess($"Attaching to existing container: {picked.Name} ({picked.Id[..Math.Min(12, picked.Id.Length)]})");
+
+                // Inject managed settings into the running container (bind mount only applies at creation
+                // time via devcontainer up; for reattach we write directly via docker exec).
+                await InjectManagedSettingsIntoContainerAsync(sshArgs, target, picked.Id);
+
                 await OnAfterRemoteSpawnAsync(
                     target, sshArgs, projectName, picked.Id, insideFolder, pickedVolumeName, settings);
                 return 0;
@@ -892,6 +924,11 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
             return 1;
         }
 
+        // Inject managed settings into the container (bind mount via devcontainer up --mount is
+        // unreliable when reusing an existing volume/container; docker exec is the reliable path).
+        if (!string.IsNullOrEmpty(result.ContainerId))
+            await InjectManagedSettingsIntoContainerAsync(sshArgs, target, result.ContainerId);
+
         await OnAfterRemoteSpawnAsync(
             target, sshArgs, projectName,
             result.ContainerId, result.RemoteWorkspaceFolder ?? remoteContainerWorkspace,
@@ -1082,6 +1119,30 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
                 DisplayWarning($"Discovery failed: {ex.Message}");
         }
         return result;
+    }
+
+    /// <summary>
+    /// Injects the current managed-settings.json directly into a running container via docker exec.
+    /// Used when reattaching to an existing container (bind mount only applies at devcontainer up time).
+    /// </summary>
+    private async Task InjectManagedSettingsIntoContainerAsync(string sshArgs, SshTarget target, string containerId)
+    {
+        if (_claudeMarketplaceConfigService == null || _claudeManagedSettingsRenderer == null)
+            return;
+
+        var config = await _claudeMarketplaceConfigService.LoadAsync();
+        if (config.Marketplaces.Count == 0)
+            return;
+
+        var json = _claudeManagedSettingsRenderer.Render(config);
+        var b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(json));
+        // --user root: /etc/ requires root; docker exec default user may be non-root in some images.
+        var cmd = $"docker exec --user root {containerId} sh -c 'mkdir -p /etc/claude-code && echo {b64} | base64 -d > /etc/claude-code/managed-settings.json'";
+        var result = await RunSshCommandAsync(sshArgs, target, cmd, timeoutSeconds: 15);
+        if (result.Success)
+            Console.MarkupLine("[dim]Marketplace settings injected into container.[/]");
+        else
+            Console.MarkupLine($"[yellow]Warning: could not inject marketplace settings into container: {Markup.Escape(result.Output.Trim())}[/]");
     }
 
     /// <summary>

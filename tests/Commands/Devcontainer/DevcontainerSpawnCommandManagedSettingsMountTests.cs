@@ -121,6 +121,7 @@ internal class TestableDevcontainerSpawnCommand : PKS.Commands.Devcontainer.Devc
             new Mock<PKS.Infrastructure.Services.IAzureVmMetadataService>().Object,
             new Mock<PKS.Infrastructure.Services.IAzureAuthService>().Object,
             new Mock<PKS.Infrastructure.Services.IAzureVmService>().Object,
+            new Mock<PKS.Commands.Vm.VmInitCommand>().Object,
             configService,
             renderer,
             console)

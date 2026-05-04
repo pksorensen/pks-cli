@@ -1,4 +1,5 @@
 using PKS.Commands.Devcontainer;
+using PKS.Commands.Vm;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
@@ -24,8 +25,9 @@ public class VibecastCommand : DevcontainerSpawnCommand
         IAzureVmMetadataService vmMetadata,
         IAzureAuthService azureAuth,
         IAzureVmService vmService,
+        VmInitCommand vmInitCommand,
         IAnsiConsole console)
-        : base(spawnerService, sshTargetService, nugetTemplateService, vmMetadata, azureAuth, vmService, console)
+        : base(spawnerService, sshTargetService, nugetTemplateService, vmMetadata, azureAuth, vmService, vmInitCommand, console)
     {
         _vmMetadata = vmMetadata;
         _azureAuth = azureAuth;

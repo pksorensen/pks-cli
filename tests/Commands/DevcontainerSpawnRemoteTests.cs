@@ -2,6 +2,7 @@ using Xunit;
 using Moq;
 using FluentAssertions;
 using PKS.Commands.Devcontainer;
+using PKS.Commands.Vm;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
@@ -77,7 +78,7 @@ public class DevcontainerSpawnRemoteTests
         // Select "Local (this machine)" to avoid full remote flow
         console.Input.PushKey(ConsoleKey.Enter); // first choice = Local
 
-        var command = new DevcontainerSpawnCommand(spawnerMock.Object, sshMock.Object, CreateNuGetTemplateMock().Object, Mock.Of<IAzureVmMetadataService>(), Mock.Of<IAzureAuthService>(), Mock.Of<IAzureVmService>(), console);
+        var command = new DevcontainerSpawnCommand(spawnerMock.Object, sshMock.Object, CreateNuGetTemplateMock().Object, Mock.Of<IAzureVmMetadataService>(), Mock.Of<IAzureAuthService>(), Mock.Of<IAzureVmService>(), Mock.Of<VmInitCommand>(), console);
 
         var tmpDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tmpDir);
@@ -126,7 +127,7 @@ public class DevcontainerSpawnRemoteTests
 
         var console = new TestConsole();
 
-        var command = new DevcontainerSpawnCommand(spawnerMock.Object, sshMock.Object, CreateNuGetTemplateMock().Object, Mock.Of<IAzureVmMetadataService>(), Mock.Of<IAzureAuthService>(), Mock.Of<IAzureVmService>(), console);
+        var command = new DevcontainerSpawnCommand(spawnerMock.Object, sshMock.Object, CreateNuGetTemplateMock().Object, Mock.Of<IAzureVmMetadataService>(), Mock.Of<IAzureAuthService>(), Mock.Of<IAzureVmService>(), Mock.Of<VmInitCommand>(), console);
 
         var tmpDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tmpDir);
@@ -173,7 +174,7 @@ public class DevcontainerSpawnRemoteTests
 
         var console = new TestConsole();
 
-        var command = new DevcontainerSpawnCommand(spawnerMock.Object, sshMock.Object, CreateNuGetTemplateMock().Object, Mock.Of<IAzureVmMetadataService>(), Mock.Of<IAzureAuthService>(), Mock.Of<IAzureVmService>(), console);
+        var command = new DevcontainerSpawnCommand(spawnerMock.Object, sshMock.Object, CreateNuGetTemplateMock().Object, Mock.Of<IAzureVmMetadataService>(), Mock.Of<IAzureAuthService>(), Mock.Of<IAzureVmService>(), Mock.Of<VmInitCommand>(), console);
 
         var tmpDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tmpDir);
