@@ -3237,7 +3237,7 @@ DEVCONTAINER_EOF";
             Cmd = new[]
             {
                 "-c",
-                $"GIT_TERMINAL_PROMPT=0 git clone --depth=1 --branch {branch} {gitUrl} /workspace/{projectName}"
+                $"GIT_TERMINAL_PROMPT=0 git clone --depth=1 --branch {branch} {gitUrl} /workspace/{projectName} && git -C /workspace/{projectName} rev-parse HEAD"
             },
             HostConfig = new HostConfig
             {
@@ -3284,8 +3284,23 @@ DEVCONTAINER_EOF";
                     (string.IsNullOrEmpty(logText) ? string.Empty : $"\n{logText}"));
             }
 
-            onProgress?.Invoke($"Repository cloned into volume ({projectName})");
-            _logger.LogInformation("git clone into volume complete: {VolumeName}/{ProjectName}", volumeName, projectName);
+            // Capture the SHA printed by rev-parse HEAD
+            string commitSha = string.Empty;
+            try
+            {
+                var logStream = await _dockerClient.Containers.GetContainerLogsAsync(
+                    containerId, tty: false,
+                    new Docker.DotNet.Models.ContainerLogsParameters { ShowStdout = true, ShowStderr = false });
+                var sb = new StringBuilder();
+                await ReadOutputToEndAsync(logStream, sb, new StringBuilder(), CancellationToken.None);
+                var sha = sb.ToString().Trim().Split('\n').LastOrDefault(l => l.Trim().Length == 40)?.Trim();
+                if (!string.IsNullOrEmpty(sha)) commitSha = sha[..7];
+            }
+            catch { /* best-effort */ }
+
+            var shaLabel = string.IsNullOrEmpty(commitSha) ? string.Empty : $" @ {commitSha}";
+            onProgress?.Invoke($"Repository cloned into volume ({projectName}{shaLabel})");
+            _logger.LogInformation("git clone into volume complete: {VolumeName}/{ProjectName}{Sha}", volumeName, projectName, shaLabel);
         }
         finally
         {
