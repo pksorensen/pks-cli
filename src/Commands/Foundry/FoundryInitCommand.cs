@@ -188,27 +188,61 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
             return 1;
         }
 
-        FoundryDeployment selectedDeployment;
-        if (deployments.Count == 1)
+        // Filter to Anthropic/Claude deployments; fall back to all if none match
+        var filteredDeployments = deployments.Where(d =>
+            d.Properties.Model.Format.Contains("anthropic", StringComparison.OrdinalIgnoreCase) ||
+            d.Properties.Model.Name.Contains("claude", StringComparison.OrdinalIgnoreCase)).ToList();
+        var deploymentPool = filteredDeployments.Count > 0 ? filteredDeployments : deployments;
+
+        List<string> selectedDeploymentNames;
+        if (deploymentPool.Count == 1)
         {
-            selectedDeployment = deployments[0];
-            _console.MarkupLine($"[dim]Using deployment: [bold]{Markup.Escape(selectedDeployment.Name)}[/] (model: {Markup.Escape(selectedDeployment.Properties.Model.Name)})[/]");
+            selectedDeploymentNames = new List<string> { deploymentPool[0].Name };
+            _console.MarkupLine($"[dim]Using deployment: [bold]{Markup.Escape(deploymentPool[0].Name)}[/] (model: {Markup.Escape(deploymentPool[0].Properties.Model.Name)})[/]");
         }
         else
         {
-            var deploymentDisplay = _console.Prompt(
-                new SelectionPrompt<string>()
-                    .Title("[cyan]Select a default model deployment:[/]")
-                    .AddChoices(deployments.Select(d => $"{d.Name} (model: {d.Properties.Model.Name})")));
+            var choiceMap = deploymentPool.ToDictionary(
+                d => $"{d.Name} (model: {d.Properties.Model.Name})",
+                d => d.Name);
 
-            var deploymentName = deploymentDisplay.Split(' ')[0];
-            selectedDeployment = deployments.First(d => d.Name == deploymentName);
+            var selectedDisplayNames = _console.Prompt(
+                new MultiSelectionPrompt<string>()
+                    .Title("[cyan]Select model deployments to enable (at least 1):[/]")
+                    .Required()
+                    .AddChoices(choiceMap.Keys));
+
+            selectedDeploymentNames = selectedDisplayNames.Select(n => choiceMap[n]).ToList();
         }
+
+        string defaultDeploymentName;
+        if (selectedDeploymentNames.Count == 1)
+        {
+            defaultDeploymentName = selectedDeploymentNames[0];
+        }
+        else
+        {
+            defaultDeploymentName = _console.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("[cyan]Select the default model deployment:[/]")
+                    .AddChoices(selectedDeploymentNames));
+        }
+
+        var selectedDeployment = deployments.First(d => d.Name == defaultDeploymentName);
 
         // Derive the AI Foundry inference endpoint from the resource name.
         // The ARM API returns the older cognitiveservices.azure.com endpoint,
         // but the Anthropic-compatible API lives at services.ai.azure.com.
         var foundryEndpoint = $"https://{selectedResource.Name}.services.ai.azure.com";
+
+        // Optional API key — enables launching claude without az CLI (DefaultAzureCredential fallback)
+        _console.WriteLine();
+        _console.MarkupLine("[dim]An Azure resource API key allows launching claude without 'az login' in the devcontainer.[/]");
+        _console.MarkupLine("[dim]Find it in the Azure AI Foundry portal under your resource → Keys and Endpoint.[/]");
+        var apiKeyInput = _console.Prompt(
+            new TextPrompt<string>("[cyan]Azure resource API key[/] [dim](optional — press Enter to skip):[/]")
+                .AllowEmpty());
+        var apiKey = string.IsNullOrWhiteSpace(apiKeyInput) ? null : apiKeyInput.Trim();
 
         // Store complete credentials
         await _authService.StoreCredentialsAsync(new FoundryStoredCredentials
@@ -221,6 +255,8 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
             SelectedResourceName = selectedResource.Name,
             SelectedResourceGroup = resourceGroup,
             DefaultModel = selectedDeployment.Name,
+            EnabledModels = selectedDeploymentNames,
+            ApiKey = apiKey,
             CreatedAt = DateTime.UtcNow,
             LastRefreshedAt = DateTime.UtcNow,
         });
@@ -239,12 +275,16 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
         table.AddRow("Resource", Markup.Escape(selectedResource.Name));
         table.AddRow("Endpoint", Markup.Escape(foundryEndpoint));
         table.AddRow("Default Model", Markup.Escape(selectedDeployment.Name));
+        table.AddRow("Enabled Models", Markup.Escape(string.Join(", ", selectedDeploymentNames)));
         table.AddRow("Resource Group", Markup.Escape(resourceGroup));
+        table.AddRow("API Key", apiKey != null ? "[green]stored[/]" : "[dim]not set — using DefaultAzureCredential[/]");
 
         _console.Write(table);
 
         _console.WriteLine();
         _console.MarkupLine("[dim]Tip: Use [bold]pks foundry token[/] to get an access token for API calls.[/]");
+        if (apiKey == null)
+            _console.MarkupLine("[dim]Note: Without an API key, claude in the devcontainer needs 'az login' or AZURE_CLIENT_ID/SECRET env vars.[/]");
 
         return 0;
     }

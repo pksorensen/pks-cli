@@ -100,6 +100,9 @@ public class FoundryStoredCredentials
     public string SelectedResourceName { get; set; } = string.Empty;
     public string SelectedResourceGroup { get; set; } = string.Empty;
     public string DefaultModel { get; set; } = string.Empty;
+    public List<string> EnabledModels { get; set; } = new();
+    /// <summary>Azure resource API key from the Foundry portal (optional — enables no-az-CLI auth)</summary>
+    public string? ApiKey { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime LastRefreshedAt { get; set; }
 }
