@@ -39,4 +39,5 @@ public class VibecastGameCommand : VibecastCommand
         var gameId = (settings as Settings)?.GameId ?? "";
         return $"--attr game-id {gameId} --plugin vibegame";
     }
+
 }

@@ -73,7 +73,18 @@ public class VibecastCommand : DevcontainerSpawnCommand
         // some lib in vibecast's dep tree reads $LANG at init() and changes rendering, causing
         // glyphs like ↑↓⏎●◀▶ in reverse-video to render as "__". Setting them here is the only
         // reliable fix because Go's init order can't be controlled from inside the binary.
-        var remoteCmd = $"docker exec -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8 -it -w {remoteWorkspaceFolder} {containerId} {vibecastInvocation}";
+        var envVars = (settings.EnvironmentVariables ?? []).ToList();
+        if (!string.IsNullOrEmpty(settings.AgenticServer))
+        {
+            // AGENTIC_SERVER is just the host (no scheme) — strip https:// or http:// if passed
+            var serverHost = settings.AgenticServer
+                .Replace("https://", "", StringComparison.OrdinalIgnoreCase)
+                .Replace("http://", "", StringComparison.OrdinalIgnoreCase)
+                .TrimEnd('/');
+            envVars.Add($"AGENTIC_SERVER={serverHost}");
+        }
+        var extraEnvArgs = string.Join("", envVars.Select(e => $" -e {e}"));
+        var remoteCmd = $"docker exec -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8{extraEnvArgs} -it -w {remoteWorkspaceFolder} {containerId} {vibecastInvocation}";
 
         var psi = new ProcessStartInfo("ssh")
         {
