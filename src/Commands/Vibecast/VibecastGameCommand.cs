@@ -15,6 +15,10 @@ public class VibecastGameCommand : VibecastCommand
         [CommandArgument(0, "<gameId>")]
         [Description("Game room ID from the /vibe/[gameId] lobby")]
         public string GameId { get; set; } = "";
+
+        // Shadow the parent's positional ProjectPath — vibecast game uses CWD, not a path arg.
+        // Without this, Spectre binds the gameId positional to ProjectPath instead of GameId.
+        public new string? ProjectPath { get; set; }
     }
 
     public VibecastGameCommand(

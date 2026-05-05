@@ -619,6 +619,10 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
     {
         var projectPath = settings.ProjectPath ?? Directory.GetCurrentDirectory();
         projectPath = Path.GetFullPath(projectPath);
+        // Spectre.Console can bind a subcommand's positional arg (e.g. gameId) to the inherited
+        // ProjectPath when both sit at index 0. Fall back to CWD if the resolved path doesn't exist.
+        if (!Directory.Exists(projectPath))
+            projectPath = Directory.GetCurrentDirectory();
         var projectName = Path.GetFileName(projectPath);
 
         DisplayInfo($"Spawning on remote: {target.Label ?? target.Host} ({target.Username}@{target.Host})");
@@ -777,7 +781,7 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         await WithSpinnerAsync("Copying files...", async () =>
         {
             var scpResult = await RunScpAsync(target, projectPath, $"~/pks-workspaces/{projectName}");
-            if (!scpResult) throw new Exception("Failed to copy files to remote host");
+            if (!scpResult.Success) throw new Exception($"Failed to copy files to remote host: {scpResult.Error}");
         });
 
         // If a NuGet template was selected, extract it and upload .devcontainer to remote
@@ -806,15 +810,15 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
                             if (devcontainerDir != null)
                             {
                                 var scpResult = await RunScpAsync(target, devcontainerDir, $"~/pks-workspaces/{projectName}/.devcontainer");
-                                if (!scpResult)
-                                    DisplayWarning("Could not upload .devcontainer from template; using any existing .devcontainer.");
+                                if (!scpResult.Success)
+                                    DisplayWarning($"Could not upload .devcontainer from template: {scpResult.Error}");
                             }
                             else
                             {
                                 // No .devcontainer sub-folder — copy the whole extracted content
                                 var scpResult = await RunScpAsync(target, tempDir, $"~/pks-workspaces/{projectName}/.devcontainer");
-                                if (!scpResult)
-                                    DisplayWarning("Could not upload template content; using any existing .devcontainer.");
+                                if (!scpResult.Success)
+                                    DisplayWarning($"Could not upload template content: {scpResult.Error}");
                             }
                         }
                         else
@@ -1223,28 +1227,33 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         }
     }
 
-    private static async Task<bool> RunScpAsync(SshTarget target, string localPath, string remotePath)
+    private static async Task<(bool Success, string Error)> RunScpAsync(SshTarget target, string localPath, string remotePath)
     {
         try
         {
             var keyArg = !string.IsNullOrEmpty(target.KeyPath) ? $"-i \"{target.KeyPath}\" " : string.Empty;
+            // Normalize to forward slashes for scp (required on Windows)
+            var normalizedPath = localPath.Replace('\\', '/');
+            // Append /. to copy directory contents (not the directory itself)
+            var sourcePath = normalizedPath.TrimEnd('/') + "/.";
             var psi = new ProcessStartInfo("scp")
             {
-                Arguments = $"-r {keyArg}-P {target.Port} -o StrictHostKeyChecking=no \"{localPath}/.\" {target.Username}@{target.Host}:{remotePath}",
+                Arguments = $"-r {keyArg}-P {target.Port} -o StrictHostKeyChecking=no \"{sourcePath}\" {target.Username}@{target.Host}:{remotePath}",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             };
 
             using var process = Process.Start(psi);
-            if (process == null) return false;
+            if (process == null) return (false, "Failed to start scp process");
 
+            var stderr = await process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync();
-            return process.ExitCode == 0;
+            return (process.ExitCode == 0, stderr);
         }
-        catch
+        catch (Exception ex)
         {
-            return false;
+            return (false, ex.Message);
         }
     }
 
