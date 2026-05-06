@@ -104,6 +104,23 @@ public class AdoAuthResult
 }
 
 /// <summary>
+/// A registered ADO git repo that the user has authorized for proxy access.
+/// </summary>
+public class AdoGitRepo
+{
+    public string Url { get; set; } = string.Empty;
+    public string Org { get; set; } = string.Empty;
+    public string Project { get; set; } = string.Empty;
+    public string Repo { get; set; } = string.Empty;
+    public DateTime AddedAt { get; set; }
+
+    /// <summary>Returns "org/project/repo" key used for allowlist matching.</summary>
+    public string AllowKey => $"{Org}/{Project}/{Repo}";
+
+    public override string ToString() => $"{Org} / {Project} / {Repo}";
+}
+
+/// <summary>
 /// Persisted Azure DevOps credentials
 /// </summary>
 public class AdoStoredCredentials

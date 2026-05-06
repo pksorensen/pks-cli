@@ -1,4 +1,6 @@
 using System.ComponentModel;
+using System.Text.Json;
+using PKS.Infrastructure;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
@@ -10,21 +12,35 @@ namespace PKS.Commands.Ado;
 /// Interactive Azure DevOps authentication via OAuth2 authorization code + PKCE.
 /// Opens browser for user consent, exchanges code for tokens, and stores
 /// credentials for use with git credential helper.
+///
+/// With an optional git URL argument, registers a repo in the proxy allowlist:
+///   pks ado init https://Delegate@dev.azure.com/Delegate/MyProject/_git/my-repo
 /// </summary>
-[Description("Authenticate with Azure DevOps")]
+[Description("Authenticate with Azure DevOps (or register a repo for git proxy)")]
 public class AdoInitCommand : Command<AdoInitCommand.Settings>
 {
+    private const string GitReposKey = "ado.git.repos";
+
     private readonly IAzureDevOpsAuthService _authService;
+    private readonly IConfigurationService _configService;
     private readonly IAnsiConsole _console;
 
-    public AdoInitCommand(IAzureDevOpsAuthService authService, IAnsiConsole console)
+    public AdoInitCommand(
+        IAzureDevOpsAuthService authService,
+        IConfigurationService configService,
+        IAnsiConsole console)
     {
         _authService = authService;
+        _configService = configService;
         _console = console;
     }
 
     public class Settings : AdoSettings
     {
+        [CommandArgument(0, "[git-url]")]
+        [Description("ADO git URL to register in the proxy allowlist (e.g. https://Delegate@dev.azure.com/Org/Project/_git/Repo)")]
+        public string? GitUrl { get; set; }
+
         [CommandOption("-f|--force")]
         [Description("Force re-authentication even if already authenticated")]
         public bool Force { get; set; }
@@ -40,6 +56,25 @@ public class AdoInitCommand : Command<AdoInitCommand.Settings>
     }
 
     private async Task<int> ExecuteAsync(Settings settings)
+    {
+        // If a git URL was provided, register it in the allowlist (auth first if needed)
+        if (!string.IsNullOrWhiteSpace(settings.GitUrl))
+        {
+            if (!await _authService.IsAuthenticatedAsync())
+            {
+                _console.MarkupLine("[dim]Not yet authenticated — running auth flow first...[/]");
+                _console.WriteLine();
+                var authResult = await RunAuthFlowAsync(settings);
+                if (authResult != 0) return authResult;
+            }
+
+            return await RegisterGitRepoAsync(settings.GitUrl);
+        }
+
+        return await RunAuthFlowAsync(settings);
+    }
+
+    private async Task<int> RunAuthFlowAsync(Settings settings)
     {
         if (!settings.Force && await _authService.IsAuthenticatedAsync())
         {
@@ -116,10 +151,86 @@ public class AdoInitCommand : Command<AdoInitCommand.Settings>
         _console.Write(table);
 
         _console.WriteLine();
-        _console.MarkupLine("[dim]Tip: Set GIT_ASKPASS to use these credentials with Git:[/]");
-        _console.MarkupLine("[dim]  export GIT_ASKPASS=\"pks git askpass\"[/]");
+        _console.MarkupLine("[dim]Tip: register repos for the git proxy:[/]");
+        _console.MarkupLine("[dim]  pks ado init https://dev.azure.com/Org/Project/_git/Repo[/]");
 
         return 0;
+    }
+
+    private async Task<int> RegisterGitRepoAsync(string rawUrl)
+    {
+        if (!TryParseAdoGitUrl(rawUrl, out var org, out var project, out var repo, out var cleanUrl))
+        {
+            _console.MarkupLine($"[red]Cannot parse ADO git URL: {Markup.Escape(rawUrl)}[/]");
+            _console.MarkupLine("[dim]Expected: https://dev.azure.com/Org/Project/_git/Repo[/]");
+            return 1;
+        }
+
+        // Load existing list
+        var existing = new List<AdoGitRepo>();
+        var raw = await _configService.GetAsync(GitReposKey);
+        if (!string.IsNullOrWhiteSpace(raw))
+        {
+            try { existing = JsonSerializer.Deserialize<List<AdoGitRepo>>(raw) ?? []; }
+            catch { existing = []; }
+        }
+
+        // Deduplicate by org/project/repo (case-insensitive)
+        var key = $"{org}/{project}/{repo}".ToLowerInvariant();
+        if (existing.Any(r => r.AllowKey.ToLowerInvariant() == key))
+        {
+            _console.MarkupLine($"[yellow]Already registered:[/] {Markup.Escape(org)} / {Markup.Escape(project)} / {Markup.Escape(repo)}");
+            return 0;
+        }
+
+        existing.Add(new AdoGitRepo
+        {
+            Url = cleanUrl,
+            Org = org,
+            Project = project,
+            Repo = repo,
+            AddedAt = DateTime.UtcNow,
+        });
+
+        await _configService.SetAsync(GitReposKey, JsonSerializer.Serialize(existing), global: true);
+
+        _console.MarkupLine($"[green]Registered:[/] {Markup.Escape(org)} / {Markup.Escape(project)} / {Markup.Escape(repo)}");
+        _console.MarkupLine("[dim]This repo will appear in the selection list when you run [bold]pks claude[/].[/]");
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Parses https://[user@]dev.azure.com/Org/Project/_git/Repo into components.
+    /// Returns a clean URL without the user prefix.
+    /// </summary>
+    private static bool TryParseAdoGitUrl(
+        string rawUrl,
+        out string org, out string project, out string repo, out string cleanUrl)
+    {
+        org = project = repo = cleanUrl = string.Empty;
+        try
+        {
+            var uri = new Uri(rawUrl);
+            // Strip user info (e.g. "Delegate@")
+            cleanUrl = $"https://dev.azure.com{uri.AbsolutePath}";
+
+            // Path: /Org/Project/_git/Repo[/...]
+            var parts = uri.AbsolutePath.Trim('/').Split('/');
+            var gitIdx = Array.FindIndex(parts, p =>
+                string.Equals(p, "_git", StringComparison.OrdinalIgnoreCase));
+            if (gitIdx < 2 || gitIdx + 1 >= parts.Length) return false;
+
+            org = Uri.UnescapeDataString(parts[0]);
+            project = Uri.UnescapeDataString(string.Join("/", parts[1..gitIdx]));
+            repo = Uri.UnescapeDataString(parts[gitIdx + 1]);
+
+            return !string.IsNullOrEmpty(org) && !string.IsNullOrEmpty(project) && !string.IsNullOrEmpty(repo);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private (string tenantId, string? loginHint) ResolveTenant(string? tenantIdOverride)

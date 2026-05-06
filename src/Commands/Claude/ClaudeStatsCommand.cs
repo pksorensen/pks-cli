@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text.Json;
+using PKS.Attributes;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -21,15 +22,20 @@ public class ClaudeStatsSettings : ClaudeSettings
     public bool AllProjects { get; set; }
 }
 
-/// <summary>
-/// Analyses Claude Code session JSONL files and prints a response-time
-/// performance report directly in the terminal using Spectre.Console.
-///
-/// Usage:  pks claude stats
-///         pks claude stats --days 14
-///         pks claude stats --project /path/to/other-project
-///         pks claude stats --all-projects
-/// </summary>
+[ToolRegistryExport(
+    "pks/claude/stats",
+    Title = "pks claude stats",
+    Description = "Activity heatmap, session streaks, token totals, and response-time analysis for Claude Code sessions.",
+    Tags = ["claude", "stats", "performance", "usage", "heatmap"],
+    Status = "stable",
+    Icon = "bar-chart-2",
+    Usage = "pks claude stats [options]",
+    Examples = [
+        "pks claude stats",
+        "pks claude stats --all-projects",
+        "pks claude stats --days 14"
+    ]
+)]
 public class ClaudeStatsCommand : AsyncCommand<ClaudeStatsSettings>
 {
     public override async Task<int> ExecuteAsync(CommandContext context, ClaudeStatsSettings settings)

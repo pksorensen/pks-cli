@@ -103,6 +103,8 @@ public class FoundryStoredCredentials
     public List<string> EnabledModels { get; set; } = new();
     /// <summary>Azure resource API key from the Foundry portal (optional — enables no-az-CLI auth)</summary>
     public string? ApiKey { get; set; }
+    /// <summary>Deployment name used by heypoul for voice command classification (optional fast model).</summary>
+    public string? VoiceClassifierModel { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime LastRefreshedAt { get; set; }
 }

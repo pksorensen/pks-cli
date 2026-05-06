@@ -37,6 +37,7 @@ using PKS.Commands.Otel;
 using PKS.Commands.Image;
 using PKS.Commands.Promptwall;
 using PKS.Commands.Tts;
+using PKS.Commands.Voice;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.Text;
@@ -129,6 +130,7 @@ services.AddSingleton<IHooksService, HooksService>();
 services.AddSingleton<IFirstTimeWarningService, FirstTimeWarningService>();
 services.AddSingleton<PKS.Infrastructure.Services.ISshTargetConfigurationService, PKS.Infrastructure.Services.SshTargetConfigurationService>();
 services.AddSingleton<PKS.Infrastructure.Services.ISshCommandRunner, PKS.Infrastructure.Services.SshCommandRunner>();
+services.AddSingleton<PKS.Infrastructure.Services.IRsyncTargetConfigurationService, PKS.Infrastructure.Services.RsyncTargetConfigurationService>();
 
 // Claude marketplace services
 services.AddSingleton<PKS.Infrastructure.Services.Claude.IClaudeMarketplaceConfigurationService, PKS.Infrastructure.Services.Claude.ClaudeMarketplaceConfigurationService>();
@@ -580,6 +582,32 @@ app.Configure(config =>
     });
 
     // Add SSH remote target management
+    config.AddBranch<PKS.Commands.Rsync.RsyncSettings>("rsync", rsync =>
+    {
+        rsync.SetDescription("Manage rsync backup targets (NAS, remote hosts)");
+
+        rsync.AddCommand<PKS.Commands.Rsync.RsyncInitCommand>("init")
+            .WithDescription("Register a new rsync backup target")
+            .WithExample(["rsync", "init"]);
+
+        rsync.AddCommand<PKS.Commands.Rsync.RsyncListCommand>("list")
+            .WithDescription("List registered rsync targets")
+            .WithExample(["rsync", "list"]);
+
+        rsync.AddCommand<PKS.Commands.Rsync.RsyncRemoveCommand>("remove")
+            .WithDescription("Remove a registered rsync target")
+            .WithExample(["rsync", "remove"]);
+    });
+
+    config.AddBranch<PKS.Commands.Tools.ToolsSettings>("tools", tools =>
+    {
+        tools.SetDescription("Tool registry management");
+
+        tools.AddCommand<PKS.Commands.Tools.ToolsPublishCommand>("publish")
+            .WithDescription("Generate and write tools-registry Markdown for commands tagged with [ToolRegistryExport]")
+            .WithExample(["tools", "publish"]);
+    });
+
     config.AddBranch<PKS.Commands.Ssh.SshSettings>("ssh", ssh =>
     {
         ssh.SetDescription("Manage SSH remote targets for devcontainer deployment");
@@ -873,6 +901,23 @@ app.Configure(config =>
             .WithExample(new[] { "email", "export", "-o", "./my-emails", "--max", "100" });
     });
 
+    // Add voice push-to-talk command (heypoul + Azure Speech)
+    config.AddBranch<VoiceSettings>("voice", voice =>
+    {
+        voice.SetDescription("Push-to-talk voice dictation powered by Azure AI Foundry Speech");
+        voice.AddCommand<VoiceStartCommand>("start")
+            .WithDescription("Start heypoul voice assistant (hold key to record, release to transcribe)")
+            .WithExample(new[] { "voice", "start" })
+            .WithExample(new[] { "voice", "start", "--key", "100", "--language", "da-DK" });
+        voice.AddCommand<VoiceStopCommand>("off")
+            .WithDescription("Stop the running heypoul voice assistant")
+            .WithExample(new[] { "voice", "off" });
+        voice.AddCommand<VoiceShowCommand>("show")
+            .WithDescription("Browse past voice dictations and re-inject selected text")
+            .WithExample(new[] { "voice", "show" })
+            .WithExample(new[] { "voice", "show", "-n", "50" });
+    });
+
     // Add TTS command (Azure AI Foundry)
     config.AddCommand<TtsCommand>("tts")
         .WithDescription("Generate speech audio from text using Azure AI Foundry TTS")
@@ -953,6 +998,10 @@ app.Configure(config =>
             .WithDescription("Render managed-settings.json from registered marketplaces")
             .WithExample(["claude", "managed-settings"])
             .WithExample(["claude", "managed-settings", "--output", "/etc/claude-code/managed-settings.json"]);
+
+        claude.AddCommand<PKS.Commands.Claude.ClaudeBackupCommand>("backup")
+            .WithDescription("Backup ~/.claude/ (sessions, projects, settings) to registered rsync targets")
+            .WithExample(["claude", "backup"]);
     });
 
     // Add git branch command (credential helpers)

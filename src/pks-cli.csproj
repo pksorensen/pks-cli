@@ -132,4 +132,65 @@
     <Message Importance="high" Condition="Exists('$(EmbedVibecastPluginPath)\.mcp.json')" Text="Embedding claude-plugin from: $(EmbedVibecastPluginPath)"/>
   </Target>
 
+  <!-- Local testing: embed a linux-x64 pks binary so pks claude can deploy it to the VM
+       without requiring a released version on the VM.
+
+       Two ways to use:
+         dotnet build -p:EmbedPksLinux=true
+           Looks for binary at Infrastructure\Resources\pks-linux-x64 (drop it there manually).
+
+         dotnet build -p:EmbedPksLinuxPath=/abs/path/to/pks
+           Embeds from the given path directly. Implies EmbedPksLinux=true.
+
+       When no binary is embedded, pks claude falls back to:
+         dotnet tool install -g pks-cli   (pulls from NuGet on the VM)
+  -->
+  <PropertyGroup Condition="'$(EmbedPksLinuxPath)' != ''">
+    <EmbedPksLinux>true</EmbedPksLinux>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(EmbedPksLinux)' == 'true' And '$(EmbedPksLinuxPath)' == ''">
+    <EmbedPksLinuxPath>$(MSBuildThisFileDirectory)Infrastructure\Resources\pks-linux-x64</EmbedPksLinuxPath>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(EmbedPksLinux)' == 'true'">
+    <EmbeddedResource Condition="Exists('$(EmbedPksLinuxPath)')" Include="$(EmbedPksLinuxPath)" LogicalName="pks-linux-x64"/>
+  </ItemGroup>
+
+  <Target Name="VerifyEmbedPksLinuxBinary" BeforeTargets="CoreCompile" Condition="'$(EmbedPksLinux)' == 'true'">
+    <Error Condition="!Exists('$(EmbedPksLinuxPath)')" Text="EmbedPksLinux=true but pks linux binary not found at: $(EmbedPksLinuxPath). Set -p:EmbedPksLinuxPath=&lt;abs-path&gt; or publish linux-x64 and copy it there."/>
+    <Message Importance="high" Text="Embedding pks linux binary: $(EmbedPksLinuxPath)"/>
+  </Target>
+
+  <!-- heypoul: embed the Windows push-to-talk voice assistant binary.
+       build-local.sh cross-compiles heypoul.exe and drops it at:
+         Infrastructure/Resources/heypoul-win-amd64.exe
+
+       Two ways to use:
+         dotnet build -p:EmbedHeypoul=true
+           Looks for the binary at the default Resources path.
+
+         dotnet build -p:EmbedHeypouldPath=/abs/path/to/heypoul.exe
+           Embeds from the given path directly. Implies EmbedHeypoul=true.
+
+       When no binary is embedded, pks voice falls back to prompting the user
+       to download heypoul manually.
+  -->
+  <PropertyGroup Condition="'$(EmbedHeypouldPath)' != ''">
+    <EmbedHeypoul>true</EmbedHeypoul>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(EmbedHeypoul)' == 'true' And '$(EmbedHeypouldPath)' == ''">
+    <EmbedHeypouldPath>$(MSBuildThisFileDirectory)Infrastructure\Resources\heypoul-win-amd64.exe</EmbedHeypouldPath>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(EmbedHeypoul)' == 'true'">
+    <EmbeddedResource Condition="Exists('$(EmbedHeypouldPath)')" Include="$(EmbedHeypouldPath)" LogicalName="heypoul-win-amd64"/>
+  </ItemGroup>
+
+  <Target Name="VerifyEmbedHeypouldBinary" BeforeTargets="CoreCompile" Condition="'$(EmbedHeypoul)' == 'true'">
+    <Error Condition="!Exists('$(EmbedHeypouldPath)')" Text="EmbedHeypoul=true but heypoul.exe not found at: $(EmbedHeypouldPath). Run build-local.sh or set -p:EmbedHeypouldPath=&lt;abs-path&gt;."/>
+    <Message Importance="high" Text="Embedding heypoul Windows binary: $(EmbedHeypouldPath)"/>
+  </Target>
+
 </Project>

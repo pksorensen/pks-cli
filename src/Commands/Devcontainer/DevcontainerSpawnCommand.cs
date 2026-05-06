@@ -38,6 +38,7 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
     private readonly IAzureVmService _vmService;
     private readonly IClaudeMarketplaceConfigurationService? _claudeMarketplaceConfigService;
     private readonly IClaudeManagedSettingsRenderer? _claudeManagedSettingsRenderer;
+    private readonly IAzureFoundryAuthService? _foundryAuthService;
     private readonly VmInitCommand? _vmInitCommand;
 
     public DevcontainerSpawnCommand(
@@ -82,6 +83,32 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         _vmInitCommand = vmInitCommand;
         _claudeMarketplaceConfigService = claudeMarketplaceConfigService;
         _claudeManagedSettingsRenderer = claudeManagedSettingsRenderer;
+    }
+
+    public DevcontainerSpawnCommand(
+        IDevcontainerSpawnerService spawnerService,
+        ISshTargetConfigurationService sshTargetService,
+        INuGetTemplateDiscoveryService nugetTemplateService,
+        IAzureVmMetadataService vmMetadata,
+        IAzureAuthService azureAuth,
+        IAzureVmService vmService,
+        VmInitCommand vmInitCommand,
+        IClaudeMarketplaceConfigurationService? claudeMarketplaceConfigService,
+        IClaudeManagedSettingsRenderer? claudeManagedSettingsRenderer,
+        IAzureFoundryAuthService? foundryAuthService,
+        IAnsiConsole console)
+        : base(console)
+    {
+        _spawnerService = spawnerService ?? throw new ArgumentNullException(nameof(spawnerService));
+        _sshTargetService = sshTargetService ?? throw new ArgumentNullException(nameof(sshTargetService));
+        _nugetTemplateService = nugetTemplateService ?? throw new ArgumentNullException(nameof(nugetTemplateService));
+        _vmMetadata = vmMetadata ?? throw new ArgumentNullException(nameof(vmMetadata));
+        _azureAuth = azureAuth ?? throw new ArgumentNullException(nameof(azureAuth));
+        _vmService = vmService ?? throw new ArgumentNullException(nameof(vmService));
+        _vmInitCommand = vmInitCommand;
+        _claudeMarketplaceConfigService = claudeMarketplaceConfigService;
+        _claudeManagedSettingsRenderer = claudeManagedSettingsRenderer;
+        _foundryAuthService = foundryAuthService;
     }
 
     public class Settings : DevcontainerSettings
@@ -133,6 +160,14 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         [CommandOption("--ssh-target <TARGET>")]
         [Description("SSH target label or host to spawn on remotely")]
         public string? SshTarget { get; set; }
+
+        [CommandOption("--env <ENV>")]
+        [Description("Extra environment variables (KEY=VALUE) forwarded into the container")]
+        public string[]? EnvironmentVariables { get; set; }
+
+        [CommandOption("--server <URL>")]
+        [Description("Agentic server URL forwarded as AGENTIC_SERVER into the container (e.g. https://my-tunnel.devtunnels.ms)")]
+        public string? AgenticServer { get; set; }
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -224,7 +259,7 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
             }
 
             // 3. Extract project name from path
-            var projectName = Path.GetFileName(projectPath);
+            var projectName = AdjustProjectName(Path.GetFileName(projectPath), settings);
 
             DisplayInfo($"Project: {projectName}");
             DisplayInfo($"Path: {projectPath}");
@@ -623,7 +658,7 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         // ProjectPath when both sit at index 0. Fall back to CWD if the resolved path doesn't exist.
         if (!Directory.Exists(projectPath))
             projectPath = Directory.GetCurrentDirectory();
-        var projectName = Path.GetFileName(projectPath);
+        var projectName = AdjustProjectName(Path.GetFileName(projectPath), settings);
 
         DisplayInfo($"Spawning on remote: {target.Label ?? target.Host} ({target.Username}@{target.Host})");
 
@@ -954,6 +989,12 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         return 0;
     }
 
+    /// <summary>
+    /// Override in subclasses to produce a unique project name per invocation.
+    /// The default returns the path basename unchanged.
+    /// </summary>
+    protected virtual string AdjustProjectName(string projectName, Settings settings) => projectName;
+
     protected virtual async Task OnAfterRemoteSpawnAsync(
         SshTarget target, string sshArgs, string projectName, string? containerId,
         string remoteWorkspaceFolder, string volumeName, Settings settings)
@@ -963,9 +1004,68 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
 
         if (openVsCode)
         {
+            var (detectedHostPath, detectedVolumeName) = await DetectDevContainerMountAsync(
+                sshArgs, target, containerId, projectName);
             await LaunchVsCodeRemoteAsync(target, sshArgs, remoteWorkspaceFolder, Console,
-                volumeName: volumeName, projectFolder: projectName);
+                hostPath: detectedHostPath, volumeName: detectedVolumeName, projectFolder: projectName);
         }
+    }
+
+    /// <summary>
+    /// Inspects a running devcontainer to determine how its workspace was mounted so
+    /// VS Code can open it via the correct URI form (hostPath vs volumeName).
+    /// Returns (hostPath, null) for bind-mount containers or (null, volumeName) for
+    /// volume-backed containers. Falls back to hostPath derived from the project name.
+    /// </summary>
+    protected async Task<(string? hostPath, string? volumeName)> DetectDevContainerMountAsync(
+        string sshArgs, SshTarget target, string? containerId, string projectName)
+    {
+        if (!string.IsNullOrEmpty(containerId))
+        {
+            // Dump labels and mounts as JSON — avoids quoting issues with label keys that
+            // contain dots when passing Go template string arguments through SSH.
+            var inspectResult = await RunSshCommandAsync(sshArgs, target,
+                $"docker inspect --format '{{{{json .}}}}' {containerId} 2>/dev/null",
+                timeoutSeconds: 10);
+
+            if (inspectResult.Success && !string.IsNullOrWhiteSpace(inspectResult.Output))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(inspectResult.Output.Trim());
+                    var root = doc.RootElement;
+
+                    // devcontainer.local_folder label is set by VS Code on all devcontainers
+                    if (root.TryGetProperty("Config", out var config) &&
+                        config.TryGetProperty("Labels", out var labels) &&
+                        labels.TryGetProperty("devcontainer.local_folder", out var localFolderEl))
+                    {
+                        var localFolder = localFolderEl.GetString();
+                        if (!string.IsNullOrEmpty(localFolder))
+                            return (localFolder, null);
+                    }
+
+                    // No local_folder label — look for a named volume at /workspaces
+                    if (root.TryGetProperty("Mounts", out var mounts))
+                    {
+                        foreach (var mount in mounts.EnumerateArray())
+                        {
+                            if (mount.TryGetProperty("Type", out var t) && t.GetString() == "volume" &&
+                                mount.TryGetProperty("Destination", out var dest) &&
+                                mount.TryGetProperty("Name", out var name) &&
+                                dest.GetString()?.StartsWith("/workspaces") == true)
+                            {
+                                return (null, name.GetString());
+                            }
+                        }
+                    }
+                }
+                catch { /* fall through to default */ }
+            }
+        }
+
+        // Fallback: derive host path from convention used by pks devcontainer spawn
+        return ($"/home/{target.Username}/pks-workspaces/{projectName}", null);
     }
 
     private async Task<bool> EnsureVmRunningAsync(SshTarget target)
@@ -1419,20 +1519,14 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         }
         else
         {
-            // Last-resort: open from a host path. On a remote Docker host VS Code will attempt
-            // to lstat this path locally and fail on Windows — prefer volumeName instead.
-            var configObj = new Dictionary<string, object>
-            {
-                ["$mid"] = 1,
-                ["path"] = $"{hostPath}/.devcontainer/devcontainer.json",
-                ["scheme"] = "file",
-                ["authority"] = ""
-            };
+            // hostPath + localDocker:false — VS Code resolves the devcontainer.json relative to
+            // hostPath ON the SSH remote host. Do NOT include configFile here: the configFile
+            // authority:""  means "local machine", which causes VS Code on Windows to try to
+            // lstat the path locally rather than over the SSH remote connection.
             dcJson = JsonSerializer.Serialize(new Dictionary<string, object>
             {
                 ["hostPath"] = hostPath ?? string.Empty,
-                ["localDocker"] = false,
-                ["configFile"] = configObj
+                ["localDocker"] = false
             });
         }
 
@@ -1445,7 +1539,7 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         return (uri, remoteAuthority);
     }
 
-    private static async Task LaunchVsCodeRemoteAsync(
+    protected static async Task LaunchVsCodeRemoteAsync(
         SshTarget target, string sshArgs, string remoteWorkspaceFolder, IAnsiConsole console,
         string? volumeName = null, string? projectFolder = null,
         string? containerId = null, string? hostPath = null)
@@ -1476,7 +1570,9 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
                 var vscodeDir = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".pks-cli", "vscode");
                 Directory.CreateDirectory(vscodeDir);
-                var workspaceFile = Path.Combine(vscodeDir, "pks-devcontainer.code-workspace");
+                var safeHost = Regex.Replace(target.Host, @"[^a-zA-Z0-9._-]", "-");
+                var safeFolder = Regex.Replace(Path.GetFileName(remoteWorkspaceFolder.TrimEnd('/')), @"[^a-zA-Z0-9._-]", "-");
+                var workspaceFile = Path.Combine(vscodeDir, $"{safeHost}-{safeFolder}.code-workspace");
 
                 var workspaceJson = JsonSerializer.Serialize(new
                 {
@@ -1511,5 +1607,140 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         Process.Start(psi);
     }
 
+    /// <summary>
+    /// If Azure AI Foundry credentials are configured, prompts the user to choose between
+    /// Foundry models and Anthropic direct, deploys the MSI token server on the remote VM,
+    /// and returns a string of "-e VAR=VAL" docker exec flags. Returns empty string otherwise.
+    /// </summary>
+    protected async Task<string> BuildFoundryEnvArgsAsync(string sshArgs, SshTarget target)
+    {
+        if (_foundryAuthService == null) return "";
+        if (!await _foundryAuthService.IsAuthenticatedAsync()) return "";
 
+        const string UseFoundry = "Use Foundry models (Azure AI)";
+        const string UseDirect = "Use Anthropic direct";
+        var launchMode = Console.Prompt(
+            new SelectionPrompt<string>()
+                .Title("[cyan]Azure AI Foundry is configured. Launch mode:[/]")
+                .AddChoices(UseFoundry, UseDirect));
+
+        if (launchMode != UseFoundry) return "";
+
+        var creds = await _foundryAuthService.GetStoredCredentialsAsync();
+        var enabledModels = creds!.EnabledModels.Count > 0 ? creds.EnabledModels : new List<string> { creds.DefaultModel };
+
+        const int msiPort = 40342;
+        const string credsFile = "~/.pks-cli/foundry-credentials.json";
+        const string scriptFile = "/tmp/pks-msi-server.py";
+        const string secretFile = "~/.pks-cli/msi-server-secret";
+        const string logFile = "/tmp/pks-msi-server.log";
+
+        // The MSI token server is a shared VM-level service — one instance serves all containers.
+        // Check if it is already running; if yes, just read the existing secret and reuse the server.
+        var checkResult = await RunSshCommandAsync(sshArgs, target,
+            $"ss -tlnp 2>/dev/null | grep -q :{msiPort} && cat {secretFile} 2>/dev/null || echo ''",
+            timeoutSeconds: 5);
+        var existingSecret = checkResult.Success ? checkResult.Output.Trim() : "";
+
+        string msiSecret;
+        if (!string.IsNullOrEmpty(existingSecret))
+        {
+            msiSecret = existingSecret;
+            Console.MarkupLine($"[dim]Reusing existing MSI token server on VM port {msiPort}.[/]");
+        }
+        else
+        {
+            // Server not running — (re)deploy it. Always refresh credentials so the stored token
+            // is up-to-date even if a previous server was killed externally.
+            msiSecret = Guid.NewGuid().ToString("N");
+
+            var credsPayload = JsonSerializer.Serialize(new { creds!.TenantId, creds.RefreshToken });
+            var credsB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(credsPayload));
+            await RunSshCommandAsync(sshArgs, target,
+                $"mkdir -p ~/.pks-cli && echo {credsB64} | base64 -d > {credsFile} && chmod 600 {credsFile} && echo {msiSecret} > {secretFile} && chmod 600 {secretFile}",
+                timeoutSeconds: 10);
+
+            var pythonScript = $@"#!/usr/bin/env python3
+import http.server, json, urllib.request, urllib.parse, os, datetime, time
+CREDS = os.path.expanduser('{credsFile}')
+ALLOWED = 'https://cognitiveservices.azure.com'
+CLIENT_ID = '04b07795-8ddb-461a-bbee-02f9e1bf7b46'
+PORT = {msiPort}
+SECRET = open(os.path.expanduser('{secretFile}')).read().strip()
+LOG = '{logFile}'
+def log(msg):
+    with open(LOG, 'a') as f:
+        f.write(datetime.datetime.utcnow().isoformat() + ' ' + msg + '\n')
+def get_token(tenant_id, refresh_tok):
+    data = urllib.parse.urlencode({{'grant_type': 'refresh_token', 'client_id': CLIENT_ID,
+        'refresh_token': refresh_tok, 'scope': 'https://cognitiveservices.azure.com/.default'}}).encode()
+    req = urllib.request.Request('https://login.microsoftonline.com/' + tenant_id + '/oauth2/v2.0/token',
+        data=data, method='POST')
+    req.add_header('Content-Type', 'application/x-www-form-urlencoded')
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read())
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.headers.get('X-IDENTITY-HEADER', '') != SECRET:
+            log('REJECT bad header')
+            self.send_response(401); self.end_headers(); return
+        params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        resource = params.get('resource', [None])[0]
+        if resource != ALLOWED:
+            log('REJECT resource=' + repr(resource))
+            self.send_response(403); self.end_headers()
+            self.wfile.write(b'{{""error"":""resource_not_allowed""}}'); return
+        try:
+            with open(CREDS) as f: c = json.load(f)
+            tok = get_token(c['TenantId'], c['RefreshToken'])
+            if 'refresh_token' in tok:
+                c['RefreshToken'] = tok['refresh_token']
+                with open(CREDS, 'w') as f: json.dump(c, f)
+            expires_in = tok.get('expires_in', 3600)
+            body = json.dumps({{'access_token': tok['access_token'],
+                'expires_in': str(expires_in),
+                'expires_on': str(int(time.time()) + int(expires_in)),
+                'resource': ALLOWED, 'token_type': 'Bearer'}}).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers(); self.wfile.write(body)
+            log('TOKEN issued ok')
+        except Exception as e:
+            log('ERROR ' + str(e))
+            self.send_response(500); self.end_headers()
+            self.wfile.write(json.dumps({{'error': str(e)}}).encode())
+    def log_message(self, *a): pass
+with open('/tmp/pks-msi-server.pid', 'w') as f: f.write(str(os.getpid()))
+log('MSI token server starting port=' + str(PORT))
+http.server.HTTPServer(('0.0.0.0', PORT), H).serve_forever()
+";
+            var scriptB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(pythonScript));
+            await RunSshCommandAsync(sshArgs, target,
+                $"echo {scriptB64} | base64 -d > {scriptFile} && nohup python3 {scriptFile} >{logFile}.out 2>&1 &",
+                timeoutSeconds: 10);
+            await Task.Delay(800);
+            Console.MarkupLine($"[dim]MSI token server started on VM port {msiPort}. Log: {logFile}[/]");
+        }
+
+        var envVars = new StringBuilder();
+        envVars.Append($"-e CLAUDE_CODE_USE_FOUNDRY=1 ");
+        envVars.Append($"-e ANTHROPIC_FOUNDRY_RESOURCE={creds.SelectedResourceName} ");
+        envVars.Append($"-e IDENTITY_ENDPOINT=http://172.17.0.1:{msiPort} ");
+        envVars.Append($"-e IDENTITY_HEADER={msiSecret} ");
+
+        if (!string.IsNullOrEmpty(creds.ApiKey))
+            envVars.Append($"-e ANTHROPIC_FOUNDRY_API_KEY={creds.ApiKey} ");
+
+        foreach (var model in enabledModels)
+        {
+            var lower = model.ToLowerInvariant();
+            if (lower.Contains("sonnet")) envVars.Append($"-e ANTHROPIC_DEFAULT_SONNET_MODEL={model} ");
+            else if (lower.Contains("opus")) envVars.Append($"-e ANTHROPIC_DEFAULT_OPUS_MODEL={model} ");
+            else if (lower.Contains("haiku")) envVars.Append($"-e ANTHROPIC_DEFAULT_HAIKU_MODEL={model} ");
+            else envVars.Append($"-e ANTHROPIC_DEFAULT_SONNET_MODEL={model} ");
+        }
+
+        return envVars.ToString().TrimEnd();
+    }
 }

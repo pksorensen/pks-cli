@@ -26,8 +26,9 @@ public class VibecastCommand : DevcontainerSpawnCommand
         IAzureAuthService azureAuth,
         IAzureVmService vmService,
         VmInitCommand vmInitCommand,
+        IAzureFoundryAuthService foundryAuthService,
         IAnsiConsole console)
-        : base(spawnerService, sshTargetService, nugetTemplateService, vmMetadata, azureAuth, vmService, vmInitCommand, console)
+        : base(spawnerService, sshTargetService, nugetTemplateService, vmMetadata, azureAuth, vmService, vmInitCommand, null, null, foundryAuthService, console)
     {
         _vmMetadata = vmMetadata;
         _azureAuth = azureAuth;
@@ -83,8 +84,33 @@ public class VibecastCommand : DevcontainerSpawnCommand
                 .TrimEnd('/');
             envVars.Add($"AGENTIC_SERVER={serverHost}");
         }
+        envVars.AddRange(GetAdditionalEnvVars(settings));
         var extraEnvArgs = string.Join("", envVars.Select(e => $" -e {e}"));
-        var remoteCmd = $"docker exec -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8{extraEnvArgs} -it -w {remoteWorkspaceFolder} {containerId} {vibecastInvocation}";
+        var foundryEnvArgs = await BuildFoundryEnvArgsAsync(sshArgs, target);
+        if (!string.IsNullOrEmpty(foundryEnvArgs))
+            extraEnvArgs += " " + foundryEnvArgs;
+
+        // Parse foundry env vars (KEY=VAL pairs) so we can seed tmux's global environment.
+        // Without this, vibecast's tmux session inherits from the existing tmux server (if any),
+        // which was started before the Foundry env vars were set — claude inside tmux won't see them.
+        var tmuxEnvSetup = "";
+        if (!string.IsNullOrEmpty(foundryEnvArgs))
+        {
+            var tmuxCmds = System.Text.RegularExpressions.Regex.Matches(foundryEnvArgs, @"-e\s+(\S+?)=(\S+)")
+                .Select(m => $"tmux set-environment -g {m.Groups[1].Value} {m.Groups[2].Value} 2>/dev/null || true")
+                .ToList();
+            if (tmuxCmds.Count > 0)
+                tmuxEnvSetup = string.Join("; ", tmuxCmds) + "; ";
+        }
+
+        // Wrap in sh -c so we can seed tmux global env before handing off to vibecast.
+        var preScript = GetPreVibecastSetupScript(settings);
+        var fullSetup = tmuxEnvSetup + preScript;
+        var innerCmd = string.IsNullOrEmpty(fullSetup)
+            ? vibecastInvocation
+            : $"sh -c '{fullSetup}{vibecastInvocation}'";
+
+        var remoteCmd = $"docker exec -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8{extraEnvArgs} -it -w {remoteWorkspaceFolder} {containerId} {innerCmd}";
 
         var psi = new ProcessStartInfo("ssh")
         {
@@ -269,6 +295,17 @@ public class VibecastCommand : DevcontainerSpawnCommand
     /// Override in subclasses to append extra flags to the vibecast invocation.
     /// </summary>
     protected virtual string GetExtraVibecastArgs(Settings settings) => "";
+
+    /// <summary>
+    /// Override in subclasses to inject additional environment variables into the docker exec command.
+    /// </summary>
+    protected virtual IEnumerable<string> GetAdditionalEnvVars(Settings settings) => [];
+
+    /// <summary>
+    /// Override in subclasses to inject shell commands that run inside the container before vibecast starts.
+    /// The returned string is prepended to the vibecast invocation inside a sh -c wrapper.
+    /// </summary>
+    protected virtual string GetPreVibecastSetupScript(Settings settings) => "";
 
     /// <summary>
     /// If pks-cli was built with -p:EmbedVibecast=true, pipe the embedded linux-amd64

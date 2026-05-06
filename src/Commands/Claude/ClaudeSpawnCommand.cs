@@ -1,5 +1,6 @@
 using PKS.Commands.Devcontainer;
 using PKS.Commands.Vm;
+using PKS.Infrastructure;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Claude;
 using PKS.Infrastructure.Services.Models;
@@ -7,7 +8,10 @@ using Spectre.Console;
 using Spectre.Console.Cli;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Reflection;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace PKS.Commands.Claude;
 
@@ -17,8 +21,9 @@ public class ClaudeSpawnCommand : DevcontainerSpawnCommand
     private readonly IAzureVmMetadataService _vmMetadata;
     private readonly IAzureAuthService _azureAuth;
     private readonly IAzureVmService _vmService;
-    private readonly IAzureFoundryAuthService _foundryAuthService;
     private readonly AzureFoundryAuthConfig _foundryConfig;
+    private readonly IAzureDevOpsAuthService _adoAuthService;
+    private readonly IConfigurationService _configService;
 
     public ClaudeSpawnCommand(
         IDevcontainerSpawnerService spawnerService,
@@ -32,15 +37,18 @@ public class ClaudeSpawnCommand : DevcontainerSpawnCommand
         IClaudeManagedSettingsRenderer claudeManagedSettingsRenderer,
         IAzureFoundryAuthService foundryAuthService,
         AzureFoundryAuthConfig foundryConfig,
+        IAzureDevOpsAuthService adoAuthService,
+        IConfigurationService configService,
         IAnsiConsole console)
         : base(spawnerService, sshTargetService, nugetTemplateService, vmMetadata, azureAuth, vmService,
-               vmInitCommand, claudeMarketplaceConfigService, claudeManagedSettingsRenderer, console)
+               vmInitCommand, claudeMarketplaceConfigService, claudeManagedSettingsRenderer, foundryAuthService, console)
     {
         _vmMetadata = vmMetadata;
         _azureAuth = azureAuth;
         _vmService = vmService;
-        _foundryAuthService = foundryAuthService;
         _foundryConfig = foundryConfig;
+        _adoAuthService = adoAuthService;
+        _configService = configService;
     }
 
     protected override async Task OnAfterRemoteSpawnAsync(
@@ -68,129 +76,18 @@ public class ClaudeSpawnCommand : DevcontainerSpawnCommand
         if (!string.IsNullOrEmpty(target.KeyPath))
             interactiveSshArgs += $" -i \"{target.KeyPath}\"";
 
+        var foundryEnvArgs = await BuildFoundryEnvArgsAsync(sshArgs, target);
         string remoteCmd;
-        if (await _foundryAuthService.IsAuthenticatedAsync())
+        if (!string.IsNullOrEmpty(foundryEnvArgs))
         {
-            const string UseFoundry = "Use Foundry models (Azure AI)";
-            const string UseDirect = "Use Anthropic direct";
-            var launchMode = Console.Prompt(
-                new SelectionPrompt<string>()
-                    .Title("[cyan]Azure AI Foundry is configured. Launch mode:[/]")
-                    .AddChoices(UseFoundry, UseDirect));
-
-            if (launchMode == UseFoundry)
-            {
-                var creds = await _foundryAuthService.GetStoredCredentialsAsync();
-                var enabledModels = creds!.EnabledModels.Count > 0 ? creds.EnabledModels : new List<string> { creds.DefaultModel };
-
-                var msiPort = 40342;
-                var msiSecret = Guid.NewGuid().ToString("N");
-
-                // Kill anything holding the MSI port (by port — covers any script name or stale process).
-                await RunSshCommandAsync(sshArgs, target,
-                    $"fuser -k {msiPort}/tcp 2>/dev/null || true; sleep 0.5",
-                    timeoutSeconds: 5);
-
-                // Copy minimal foundry credentials (TenantId + RefreshToken) to the VM.
-                var credsPayload = JsonSerializer.Serialize(new { creds!.TenantId, creds.RefreshToken });
-                var credsB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(credsPayload));
-                await RunSshCommandAsync(sshArgs, target,
-                    $"mkdir -p ~/.pks-cli && echo {credsB64} | base64 -d > ~/.pks-cli/foundry-credentials.json && chmod 600 ~/.pks-cli/foundry-credentials.json",
-                    timeoutSeconds: 10);
-
-                // Deploy a real MSI token server: validates X-IDENTITY-HEADER, rejects non-cognitiveservices
-                // resources, exchanges the stored refresh token for a live access token, and returns
-                // the standard Azure MSI JSON response that DefaultAzureCredential expects.
-                var pythonScript = $@"#!/usr/bin/env python3
-import http.server, json, urllib.request, urllib.parse, os, datetime
-CREDS = os.path.expanduser('~/.pks-cli/foundry-credentials.json')
-ALLOWED = 'https://cognitiveservices.azure.com'
-CLIENT_ID = '04b07795-8ddb-461a-bbee-02f9e1bf7b46'
-PORT = {msiPort}
-SECRET = '{msiSecret}'
-LOG = '/tmp/pks-msi-server.log'
-def log(msg):
-    with open(LOG, 'a') as f:
-        f.write(datetime.datetime.utcnow().isoformat() + ' ' + msg + '\n')
-def get_token(tenant_id, refresh_tok):
-    data = urllib.parse.urlencode({{'grant_type': 'refresh_token', 'client_id': CLIENT_ID,
-        'refresh_token': refresh_tok, 'scope': 'https://cognitiveservices.azure.com/.default'}}).encode()
-    req = urllib.request.Request('https://login.microsoftonline.com/' + tenant_id + '/oauth2/v2.0/token',
-        data=data, method='POST')
-    req.add_header('Content-Type', 'application/x-www-form-urlencoded')
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read())
-class H(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.headers.get('X-IDENTITY-HEADER', '') != SECRET:
-            log('REJECT bad header')
-            self.send_response(401); self.end_headers(); return
-        params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-        resource = params.get('resource', [None])[0]
-        if resource != ALLOWED:
-            log('REJECT resource=' + repr(resource))
-            self.send_response(403); self.end_headers()
-            self.wfile.write(b'{{""error"":""resource_not_allowed""}}'); return
-        try:
-            with open(CREDS) as f: c = json.load(f)
-            tok = get_token(c['TenantId'], c['RefreshToken'])
-            if 'refresh_token' in tok:
-                c['RefreshToken'] = tok['refresh_token']
-                with open(CREDS, 'w') as f: json.dump(c, f)
-            body = json.dumps({{'access_token': tok['access_token'],
-                'expires_in': str(tok.get('expires_in', 3600)),
-                'resource': ALLOWED, 'token_type': 'Bearer'}}).encode()
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Content-Length', str(len(body)))
-            self.end_headers(); self.wfile.write(body)
-            log('TOKEN issued ok')
-        except Exception as e:
-            log('ERROR ' + str(e))
-            self.send_response(500); self.end_headers()
-            self.wfile.write(json.dumps({{'error': str(e)}}).encode())
-    def log_message(self, *a): pass
-with open('/tmp/pks-msi-server.pid', 'w') as f: f.write(str(os.getpid()))
-log('MSI token server starting port=' + str(PORT))
-http.server.HTTPServer(('0.0.0.0', PORT), H).serve_forever()
-";
-                var scriptB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(pythonScript));
-                var deployScript = $"echo {scriptB64} | base64 -d > /tmp/pks-msi-server.py && nohup python3 /tmp/pks-msi-server.py >/tmp/pks-msi-server-out.log 2>&1 &";
-                await RunSshCommandAsync(sshArgs, target, deployScript, timeoutSeconds: 10);
-                await Task.Delay(800); // give python a moment to bind
-                Console.MarkupLine($"[dim]MSI token server started on VM port {msiPort}. Check /tmp/pks-msi-server.log after the session to verify token issuance.[/]");
-
-                // Build CLAUDE_CODE_USE_FOUNDRY env vars — model names map to role-specific vars
-                var envVars = new System.Text.StringBuilder();
-                envVars.Append($"-e CLAUDE_CODE_USE_FOUNDRY=1 ");
-                envVars.Append($"-e ANTHROPIC_FOUNDRY_RESOURCE={creds.SelectedResourceName} ");
-                envVars.Append($"-e IDENTITY_ENDPOINT=http://172.17.0.1:{msiPort} ");
-                envVars.Append($"-e IDENTITY_HEADER={msiSecret} ");
-
-                if (!string.IsNullOrEmpty(creds.ApiKey))
-                    envVars.Append($"-e ANTHROPIC_FOUNDRY_API_KEY={creds.ApiKey} ");
-
-                // Map deployment names to model-role env vars by looking for sonnet/opus/haiku in the name
-                foreach (var model in enabledModels)
-                {
-                    var lower = model.ToLowerInvariant();
-                    if (lower.Contains("sonnet")) envVars.Append($"-e ANTHROPIC_DEFAULT_SONNET_MODEL={model} ");
-                    else if (lower.Contains("opus")) envVars.Append($"-e ANTHROPIC_DEFAULT_OPUS_MODEL={model} ");
-                    else if (lower.Contains("haiku")) envVars.Append($"-e ANTHROPIC_DEFAULT_HAIKU_MODEL={model} ");
-                    else envVars.Append($"-e ANTHROPIC_DEFAULT_SONNET_MODEL={model} ");
-                }
-
-                remoteCmd = $"docker exec -it {envVars}-w {remoteWorkspaceFolder} {containerId} claude --dangerously-skip-permissions";
-            }
-            else
-            {
-                remoteCmd = $"docker exec -it -w {remoteWorkspaceFolder} {containerId} claude --dangerously-skip-permissions";
-            }
+            await PersistFoundryEnvToContainerAsync(sshArgs, target, containerId, foundryEnvArgs);
+            remoteCmd = $"docker exec -it {foundryEnvArgs} -w {remoteWorkspaceFolder} {containerId} claude --dangerously-skip-permissions";
         }
         else
-        {
             remoteCmd = $"docker exec -it -w {remoteWorkspaceFolder} {containerId} claude --dangerously-skip-permissions";
-        }
+
+        // ADO git proxy — deploy if repos are registered and user selects at least one
+        await TryDeployAdoGitProxyAsync(sshArgs, target, containerId, remoteWorkspaceFolder);
 
         var psi = new ProcessStartInfo("ssh")
         {
@@ -210,15 +107,191 @@ http.server.HTTPServer(('0.0.0.0', PORT), H).serve_forever()
         // Post-quit lifecycle prompt — only on clean exit (don't badger the user after a crash)
         if (proc.ExitCode == 0)
         {
-            await PromptPostQuitActionAsync(target, interactiveSshArgs, containerId, projectName);
+            await PromptPostQuitActionAsync(
+                target, interactiveSshArgs, containerId, projectName,
+                remoteWorkspaceFolder, volumeName);
         }
     }
 
+    private async Task TryDeployAdoGitProxyAsync(string sshArgs, SshTarget target, string containerId, string workspaceFolder)
+    {
+        if (!await _adoAuthService.IsAuthenticatedAsync()) return;
+
+        var raw = await _configService.GetAsync("ado.git.repos");
+        if (string.IsNullOrWhiteSpace(raw)) return;
+
+        List<AdoGitRepo> repos;
+        try { repos = JsonSerializer.Deserialize<List<AdoGitRepo>>(raw) ?? []; }
+        catch { return; }
+
+        if (repos.Count == 0) return;
+
+        // Let user pick which repos this container session gets access to
+        var selected = Console.Prompt(
+            new MultiSelectionPrompt<AdoGitRepo>()
+                .Title("[cyan]Select ADO repos to enable in this container:[/]")
+                .NotRequired()
+                .UseConverter(r => $"{r.Org} / {r.Project} / {r.Repo}")
+                .AddChoices(repos));
+
+        if (selected.Count == 0) return;
+
+        var adoCreds = await _adoAuthService.GetStoredCredentialsAsync();
+        if (adoCreds == null) return;
+
+        // Copy minimal creds (TenantId + RefreshToken) to the VM
+        var payload = JsonSerializer.Serialize(new { adoCreds.TenantId, adoCreds.RefreshToken });
+        var b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(payload));
+        await RunSshCommandAsync(sshArgs, target,
+            $"mkdir -p ~/.pks-cli && echo {b64} | base64 -d > ~/.pks-cli/ado-credentials.json && chmod 600 ~/.pks-cli/ado-credentials.json",
+            timeoutSeconds: 10);
+
+        // Ensure pks is available on the VM (embedded binary or dotnet tool install)
+        var pksPath = await EnsurePksOnVmAsync(sshArgs, target);
+
+        // Kill any stale proxy on 7878 and start fresh with the per-container allowlist
+        var allowArgs = string.Join(" ", selected.Select(r => $"--allow '{r.AllowKey}'"));
+        await RunSshCommandAsync(sshArgs, target,
+            $"fuser -k 7878/tcp 2>/dev/null || true; sleep 0.3; nohup {pksPath} ado git-proxy {allowArgs} >/tmp/pks-ado-proxy.log 2>&1 &",
+            timeoutSeconds: 10);
+        await Task.Delay(500);
+
+        // Configure git URL rewrites inside the container.
+        // Cover both forms ADO clone URLs appear in:
+        //   https://dev.azure.com/...          (API/script form)
+        //   https://OrgName@dev.azure.com/...  (browser copy-paste form)
+        await RunSshCommandAsync(sshArgs, target,
+            $"docker exec {containerId} git config --global url.'http://172.17.0.1:7878/'.insteadOf 'https://dev.azure.com/'",
+            timeoutSeconds: 10);
+
+        var orgs = selected.Select(r => r.Org).Distinct(StringComparer.OrdinalIgnoreCase);
+        foreach (var org in orgs)
+        {
+            await RunSshCommandAsync(sshArgs, target,
+                $"docker exec {containerId} git config --global url.'http://172.17.0.1:7878/'.insteadOf 'https://{org}@dev.azure.com/'",
+                timeoutSeconds: 10);
+        }
+
+        // Inject a CLAUDE.md hint so Claude knows to omit the username prefix when composing ADO URLs
+        var orgList = string.Join(", ", orgs.Select(o => $"`{o}`"));
+        var claudeMdNote = $"""
+
+
+## Azure DevOps Git Access
+
+A local proxy handles ADO authentication — no credentials needed inside this container.
+
+When cloning or referencing ADO repos, **always omit the username prefix**:
+
+- Correct:   `git clone https://dev.azure.com/Org/Project/_git/Repo`
+- Incorrect: `git clone https://OrgName@dev.azure.com/Org/Project/_git/Repo`
+
+Orgs available in this session: {orgList}
+""";
+        var noteB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(claudeMdNote));
+        await RunSshCommandAsync(sshArgs, target,
+            $"docker exec {containerId} bash -c 'echo {noteB64} | base64 -d >> {workspaceFolder}/CLAUDE.md 2>/dev/null || true'",
+            timeoutSeconds: 10);
+
+        Console.MarkupLine($"[dim]ADO git proxy started ({selected.Count} repo(s) enabled). Logs: /tmp/pks-ado-proxy.log[/]");
+    }
+
+    /// <summary>
+    /// Ensures the pks binary is available on the VM and returns the path to invoke it.
+    /// Priority:
+    ///   1. Embedded linux-x64 binary (present when built with -p:EmbedPksLinux=true) →
+    ///      piped via SSH stdin to ~/.pks-cli/pks, chmod +x
+    ///   2. Already installed on the VM (which pks succeeds) → use as-is
+    ///   3. Fallback: dotnet tool install -g pks-cli on the VM
+    /// </summary>
+    private async Task<string> EnsurePksOnVmAsync(string sshArgs, SshTarget target)
+    {
+        const string embeddedDest = "~/.pks-cli/pks";
+
+        // 1. Try embedded binary
+        var asm = Assembly.GetExecutingAssembly();
+        using var stream = asm.GetManifestResourceStream("pks-linux-x64");
+        if (stream != null)
+        {
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            Console.MarkupLine($"[dim]Injecting embedded pks ({ms.Length / 1024} KB) to VM...[/]");
+
+            var injectCmd = $"mkdir -p ~/.pks-cli && cat > {embeddedDest} && chmod +x {embeddedDest}";
+            var psi = new ProcessStartInfo("ssh")
+            {
+                Arguments = $"-o StrictHostKeyChecking=no -p {target.Port}" +
+                            (!string.IsNullOrEmpty(target.KeyPath) ? $" -i \"{target.KeyPath}\"" : "") +
+                            $" {target.Username}@{target.Host} \"{injectCmd}\"",
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+
+            try
+            {
+                using var proc = Process.Start(psi);
+                if (proc != null)
+                {
+                    ms.Position = 0;
+                    await ms.CopyToAsync(proc.StandardInput.BaseStream);
+                    proc.StandardInput.Close();
+                    await proc.WaitForExitAsync();
+                    if (proc.ExitCode == 0)
+                        return embeddedDest;
+                }
+            }
+            catch { /* fall through to next option */ }
+        }
+
+        // 2. Already installed on the VM?
+        var check = await RunSshCommandAsync(sshArgs, target,
+            "which pks 2>/dev/null || echo NOT_FOUND", timeoutSeconds: 5);
+        if (check.Success && !check.Output.Trim().EndsWith("NOT_FOUND"))
+            return "pks";
+
+        // 3. Install from NuGet
+        Console.MarkupLine("[dim]Installing pks-cli on VM via dotnet tool install...[/]");
+        await RunSshCommandAsync(sshArgs, target,
+            "dotnet tool install -g pks-cli 2>/dev/null || dotnet tool update -g pks-cli",
+            timeoutSeconds: 120);
+
+        return "pks";
+    }
+
+    private async Task PersistFoundryEnvToContainerAsync(
+        string sshArgs, SshTarget target, string containerId, string envArgs)
+    {
+        // Parse "-e VAR=val" pairs from the docker exec env args string
+        var exports = new StringBuilder();
+        foreach (Match m in Regex.Matches(envArgs, @"-e\s+([A-Z_]+)=(\S+)"))
+            exports.AppendLine($"export {m.Groups[1].Value}='{m.Groups[2].Value}'");
+
+        if (exports.Length == 0) return;
+
+        // Write to /home/node/.pks-foundry and source it from .zshrc/.bashrc
+        var content = $"# PKS Foundry — written by pks at spawn time\n{exports}";
+        var b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(content));
+        await RunSshCommandAsync(sshArgs, target,
+            $"docker exec {containerId} bash -c 'echo {b64} | base64 -d > /home/node/.pks-foundry'",
+            timeoutSeconds: 10);
+
+        // Append source line once to .zshrc and .bashrc
+        var sourceCmd = "grep -qxF '. /home/node/.pks-foundry' /home/node/.zshrc 2>/dev/null || echo '. /home/node/.pks-foundry' >> /home/node/.zshrc; " +
+                        "grep -qxF '. /home/node/.pks-foundry' /home/node/.bashrc 2>/dev/null || echo '. /home/node/.pks-foundry' >> /home/node/.bashrc";
+        await RunSshCommandAsync(sshArgs, target,
+            $"docker exec {containerId} bash -c '{sourceCmd}'",
+            timeoutSeconds: 10);
+    }
+
     private async Task PromptPostQuitActionAsync(
-        SshTarget target, string sshArgs, string containerId, string projectName)
+        SshTarget target, string sshArgs, string containerId, string projectName,
+        string remoteWorkspaceFolder, string volumeName)
     {
         Console.WriteLine();
 
+        const string VsCodeOpt = "Open in VS Code (attach to running container)";
         const string KeepOpt = "Keep it running (default — fast reattach)";
         const string StopOpt = "Stop the container (free CPU/RAM, keep state)";
         const string RemoveOpt = "Remove the container (full cleanup — runs destroy flow)";
@@ -226,11 +299,21 @@ http.server.HTTPServer(('0.0.0.0', PORT), H).serve_forever()
         var action = Console.Prompt(
             new SelectionPrompt<string>()
                 .Title($"[cyan]claude session ended. What should we do with[/] [yellow]{Markup.Escape(containerId[..Math.Min(12, containerId.Length)])}[/][cyan]?[/]")
-                .AddChoices(KeepOpt, StopOpt, RemoveOpt));
+                .AddChoices(VsCodeOpt, KeepOpt, StopOpt, RemoveOpt));
 
         bool containerGone = false;
 
-        if (action == KeepOpt)
+        if (action == VsCodeOpt)
+        {
+            var (detectedHostPath, detectedVolumeName) = await DetectDevContainerMountAsync(
+                sshArgs, target, containerId, projectName);
+            await LaunchVsCodeRemoteAsync(
+                target, sshArgs, remoteWorkspaceFolder, Console,
+                hostPath: detectedHostPath, volumeName: detectedVolumeName, projectFolder: projectName);
+            DisplayInfo("Container left running. Reattach with: pks claude");
+            return;
+        }
+        else if (action == KeepOpt)
         {
             DisplayInfo("Container left running. Reattach with: pks claude");
             return;
