@@ -431,3 +431,6 @@ pks-cli
 data.agentics/
 _work/
 data
+# Large embedded binaries - do not commit
+src/Infrastructure/Resources/pks-linux-x64
+src/Infrastructure/Resources/heypoul-win-amd64.exe
