@@ -23,7 +23,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="PKS.CLI.Tests"/>
+    <InternalsVisibleTo Include="PKS.CLI.Tests" />
   </ItemGroup>
 
   <!-- Self-Contained Build Configuration (for npm distribution) -->
@@ -38,29 +38,30 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Markdig" Version="0.38.0"/>
-    <PackageReference Include="ReverseMarkdown" Version="4.6.0"/>
-    <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.15.1"/>
-    <PackageReference Include="Spectre.Console" Version="0.47.0"/>
-    <PackageReference Include="Spectre.Console.Cli" Version="0.47.0"/>
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0"/>
-    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0"/>
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.0"/>
-    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.0"/>
-    <PackageReference Include="NuGet.Protocol" Version="6.14.3"/>
-    <PackageReference Include="NuGet.Configuration" Version="6.14.3"/>
-    <PackageReference Include="NuGet.Common" Version="6.14.3"/>
+    <PackageReference Include="Markdig" Version="0.38.0" />
+    <PackageReference Include="ReverseMarkdown" Version="4.6.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.15.1" />
+    <PackageReference Include="SharpZipLib" Version="1.4.2" />
+    <PackageReference Include="Spectre.Console" Version="0.47.0" />
+    <PackageReference Include="Spectre.Console.Cli" Version="0.47.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.0" />
+    <PackageReference Include="NuGet.Protocol" Version="6.14.3" />
+    <PackageReference Include="NuGet.Configuration" Version="6.14.3" />
+    <PackageReference Include="NuGet.Common" Version="6.14.3" />
     <!-- Model Context Protocol SDK -->
-    <PackageReference Include="ModelContextProtocol" Version="0.3.0-preview.3"/>
-    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="0.3.0-preview.3"/>
+    <PackageReference Include="ModelContextProtocol" Version="0.3.0-preview.3" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="0.3.0-preview.3" />
     <!-- Azure File Share sync -->
-    <PackageReference Include="Azure.Storage.Files.Shares" Version="12.21.0"/>
-    <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.0"/>
+    <PackageReference Include="Azure.Storage.Files.Shares" Version="12.21.0" />
+    <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.0" />
     <!-- Docker integration -->
-    <PackageReference Include="Docker.DotNet" Version="3.125.15"/>
+    <PackageReference Include="Docker.DotNet" Version="3.125.15" />
     <!-- OpenTelemetry: ActivitySource + OTLP export to Aspire -->
-    <PackageReference Include="OpenTelemetry" Version="1.15.3"/>
-    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3"/>
+    <PackageReference Include="OpenTelemetry" Version="1.15.3" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
   </ItemGroup>
 
   <!-- Template inclusion for normal builds (NuGet global tool) -->
@@ -80,7 +81,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Infrastructure\Resources\bootstrap.Dockerfile"/>
+    <EmbeddedResource Include="Infrastructure\Resources\bootstrap.Dockerfile" />
   </ItemGroup>
 
   <!-- Firecracker scripts: copy alongside binary so docker cp gets everything -->
@@ -120,16 +121,16 @@
   </PropertyGroup>
 
   <ItemGroup Condition="'$(EmbedVibecast)' == 'true'">
-    <EmbeddedResource Condition="Exists('$(EmbedVibecastPath)')" Include="$(EmbedVibecastPath)" LogicalName="vibecast-linux-amd64"/>
-    <EmbeddedResource Condition="Exists('$(EmbedVibecastPluginPath)\.mcp.json')" Include="$(EmbedVibecastPluginPath)\.mcp.json" LogicalName="claude-plugin/.mcp.json"/>
-    <EmbeddedResource Condition="Exists('$(EmbedVibecastPluginPath)\.claude-plugin\plugin.json')" Include="$(EmbedVibecastPluginPath)\.claude-plugin\plugin.json" LogicalName="claude-plugin/.claude-plugin/plugin.json"/>
-    <EmbeddedResource Condition="Exists('$(EmbedVibecastPluginPath)\hooks\hooks.json')" Include="$(EmbedVibecastPluginPath)\hooks\hooks.json" LogicalName="claude-plugin/hooks/hooks.json"/>
+    <EmbeddedResource Condition="Exists('$(EmbedVibecastPath)')" Include="$(EmbedVibecastPath)" LogicalName="vibecast-linux-amd64" />
+    <EmbeddedResource Condition="Exists('$(EmbedVibecastPluginPath)\.mcp.json')" Include="$(EmbedVibecastPluginPath)\.mcp.json" LogicalName="claude-plugin/.mcp.json" />
+    <EmbeddedResource Condition="Exists('$(EmbedVibecastPluginPath)\.claude-plugin\plugin.json')" Include="$(EmbedVibecastPluginPath)\.claude-plugin\plugin.json" LogicalName="claude-plugin/.claude-plugin/plugin.json" />
+    <EmbeddedResource Condition="Exists('$(EmbedVibecastPluginPath)\hooks\hooks.json')" Include="$(EmbedVibecastPluginPath)\hooks\hooks.json" LogicalName="claude-plugin/hooks/hooks.json" />
   </ItemGroup>
 
   <Target Name="VerifyEmbedVibecastBinary" BeforeTargets="CoreCompile" Condition="'$(EmbedVibecast)' == 'true'">
-    <Error Condition="!Exists('$(EmbedVibecastPath)')" Text="EmbedVibecast=true but vibecast binary not found at: $(EmbedVibecastPath). Set -p:EmbedVibecastPath=&lt;abs-path&gt; or build vibecast and copy it there."/>
-    <Message Importance="high" Text="Embedding vibecast: $(EmbedVibecastPath)"/>
-    <Message Importance="high" Condition="Exists('$(EmbedVibecastPluginPath)\.mcp.json')" Text="Embedding claude-plugin from: $(EmbedVibecastPluginPath)"/>
+    <Error Condition="!Exists('$(EmbedVibecastPath)')" Text="EmbedVibecast=true but vibecast binary not found at: $(EmbedVibecastPath). Set -p:EmbedVibecastPath=&lt;abs-path&gt; or build vibecast and copy it there." />
+    <Message Importance="high" Text="Embedding vibecast: $(EmbedVibecastPath)" />
+    <Message Importance="high" Condition="Exists('$(EmbedVibecastPluginPath)\.mcp.json')" Text="Embedding claude-plugin from: $(EmbedVibecastPluginPath)" />
   </Target>
 
   <!-- Local testing: embed a linux-x64 pks binary so pks claude can deploy it to the VM
@@ -154,12 +155,12 @@
   </PropertyGroup>
 
   <ItemGroup Condition="'$(EmbedPksLinux)' == 'true'">
-    <EmbeddedResource Condition="Exists('$(EmbedPksLinuxPath)')" Include="$(EmbedPksLinuxPath)" LogicalName="pks-linux-x64"/>
+    <EmbeddedResource Condition="Exists('$(EmbedPksLinuxPath)')" Include="$(EmbedPksLinuxPath)" LogicalName="pks-linux-x64" />
   </ItemGroup>
 
   <Target Name="VerifyEmbedPksLinuxBinary" BeforeTargets="CoreCompile" Condition="'$(EmbedPksLinux)' == 'true'">
-    <Error Condition="!Exists('$(EmbedPksLinuxPath)')" Text="EmbedPksLinux=true but pks linux binary not found at: $(EmbedPksLinuxPath). Set -p:EmbedPksLinuxPath=&lt;abs-path&gt; or publish linux-x64 and copy it there."/>
-    <Message Importance="high" Text="Embedding pks linux binary: $(EmbedPksLinuxPath)"/>
+    <Error Condition="!Exists('$(EmbedPksLinuxPath)')" Text="EmbedPksLinux=true but pks linux binary not found at: $(EmbedPksLinuxPath). Set -p:EmbedPksLinuxPath=&lt;abs-path&gt; or publish linux-x64 and copy it there." />
+    <Message Importance="high" Text="Embedding pks linux binary: $(EmbedPksLinuxPath)" />
   </Target>
 
   <!-- heypoul: embed the Windows push-to-talk voice assistant binary.
@@ -184,13 +185,23 @@
     <EmbedHeypouldPath>$(MSBuildThisFileDirectory)Infrastructure\Resources\heypoul-win-amd64.exe</EmbedHeypouldPath>
   </PropertyGroup>
 
+  <!-- sherpa-onnx native DLLs for local Parakeet inference. build-local.sh copies
+       these out of the sherpa-onnx-go-windows Go-module cache into Resources/.
+       If absent (e.g. dev build without sherpa libs), the cloud engine still works. -->
+  <PropertyGroup Condition="'$(EmbedHeypoul)' == 'true'">
+    <EmbedSherpaCApiPath>$(MSBuildThisFileDirectory)Infrastructure\Resources\sherpa-onnx-c-api.dll</EmbedSherpaCApiPath>
+    <EmbedOnnxRuntimePath>$(MSBuildThisFileDirectory)Infrastructure\Resources\onnxruntime.dll</EmbedOnnxRuntimePath>
+  </PropertyGroup>
+
   <ItemGroup Condition="'$(EmbedHeypoul)' == 'true'">
-    <EmbeddedResource Condition="Exists('$(EmbedHeypouldPath)')" Include="$(EmbedHeypouldPath)" LogicalName="heypoul-win-amd64"/>
+    <EmbeddedResource Condition="Exists('$(EmbedHeypouldPath)')" Include="$(EmbedHeypouldPath)" LogicalName="heypoul-win-amd64" />
+    <EmbeddedResource Condition="Exists('$(EmbedSherpaCApiPath)')" Include="$(EmbedSherpaCApiPath)" LogicalName="sherpa-onnx-c-api.dll" />
+    <EmbeddedResource Condition="Exists('$(EmbedOnnxRuntimePath)')" Include="$(EmbedOnnxRuntimePath)" LogicalName="onnxruntime.dll" />
   </ItemGroup>
 
   <Target Name="VerifyEmbedHeypouldBinary" BeforeTargets="CoreCompile" Condition="'$(EmbedHeypoul)' == 'true'">
-    <Error Condition="!Exists('$(EmbedHeypouldPath)')" Text="EmbedHeypoul=true but heypoul.exe not found at: $(EmbedHeypouldPath). Run build-local.sh or set -p:EmbedHeypouldPath=&lt;abs-path&gt;."/>
-    <Message Importance="high" Text="Embedding heypoul Windows binary: $(EmbedHeypouldPath)"/>
+    <Error Condition="!Exists('$(EmbedHeypouldPath)')" Text="EmbedHeypoul=true but heypoul.exe not found at: $(EmbedHeypouldPath). Run build-local.sh or set -p:EmbedHeypouldPath=&lt;abs-path&gt;." />
+    <Message Importance="high" Text="Embedding heypoul Windows binary: $(EmbedHeypouldPath)" />
   </Target>
 
 </Project>

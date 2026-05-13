@@ -99,6 +99,10 @@ public class FoundryStoredCredentials
     public string SelectedResourceEndpoint { get; set; } = string.Empty;
     public string SelectedResourceName { get; set; } = string.Empty;
     public string SelectedResourceGroup { get; set; } = string.Empty;
+    /// <summary>Azure region of the resource (e.g. eastus, swedencentral) — used for the Speech REST API endpoint.</summary>
+    public string SelectedResourceLocation { get; set; } = string.Empty;
+    /// <summary>Resource kind from ARM (e.g. AIServices, OpenAI, SpeechServices) — Speech requires AIServices or SpeechServices.</summary>
+    public string SelectedResourceKind { get; set; } = string.Empty;
     public string DefaultModel { get; set; } = string.Empty;
     public List<string> EnabledModels { get; set; } = new();
     /// <summary>Azure resource API key from the Foundry portal (optional — enables no-az-CLI auth)</summary>

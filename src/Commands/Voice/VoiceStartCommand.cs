@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
@@ -16,12 +17,14 @@ public class VoiceStartCommand : AsyncCommand<VoiceStartCommand.Settings>
     private readonly IAzureFoundryAuthService _authService;
     private readonly AzureFoundryAuthConfig _config;
     private readonly IAnsiConsole _console;
+    private readonly IModelRegistryService _models;
 
-    public VoiceStartCommand(IAzureFoundryAuthService authService, AzureFoundryAuthConfig config, IAnsiConsole console)
+    public VoiceStartCommand(IAzureFoundryAuthService authService, AzureFoundryAuthConfig config, IAnsiConsole console, IModelRegistryService models)
     {
         _authService = authService;
         _config = config;
         _console = console;
+        _models = models;
     }
 
     public class Settings : VoiceSettings
@@ -31,12 +34,12 @@ public class VoiceStartCommand : AsyncCommand<VoiceStartCommand.Settings>
         public uint? KeyCode { get; set; }
 
         [CommandOption("--language|-l")]
-        [Description("Speech recognition language (default: da-DK)")]
-        public string Language { get; set; } = "da-DK";
+        [Description("Speech recognition language (default: from heypoul config.json, then da-DK)")]
+        public string? Language { get; set; }
 
         [CommandOption("--inject")]
         [Description("Injection mode: text (default) or command (presses Enter after injection)")]
-        public string InjectMode { get; set; } = "text";
+        public string? InjectMode { get; set; }
 
         [CommandOption("--heypoul")]
         [Description("Path to heypoul binary (default: auto-detect or extract embedded)")]
@@ -70,8 +73,96 @@ public class VoiceStartCommand : AsyncCommand<VoiceStartCommand.Settings>
             return 1;
         }
 
-        // Platform-aware defaults: Windows right-alt = VK 0xA5 (165), Linux = 100
-        var keyCode = settings.KeyCode ?? (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? 165u : 100u);
+        // Load persisted heypoul config — used as defaults below if CLI flags aren't set.
+        // The settings UI (heypoul --settings or `pks voice settings`) writes this file,
+        // so once a user has picked a device/language/key it sticks across runs.
+        var heypoulCfg = LoadHeypoulConfig();
+
+        // Resolve transcription engine(s).
+        //   - Inline (debug) mode: MultiSelectionPrompt so the user can pick 1+ engines for
+        //     A/B comparison. Each PTT release runs every selected engine in parallel and
+        //     prints labeled transcripts. No injection in multi-engine mode.
+        //   - Daemon mode: single SelectionPrompt, saved to config.json so subsequent runs skip
+        //     the prompt.
+        var sttModels = await _models.ByCapabilityAsync("voice-stt");
+        const string cloudLabel = "cloud (Azure Speech)";
+        var choices = new List<string> { cloudLabel };
+        choices.AddRange(sttModels.Select(m => m.Name));
+
+        List<string> selectedEngines;
+        if (settings.Inline && choices.Count > 1)
+        {
+            selectedEngines = _console.Prompt(
+                new MultiSelectionPrompt<string>()
+                    .Title("[cyan]Pick engine(s) for inline comparison (space to toggle, enter to confirm):[/]")
+                    .PageSize(10)
+                    .NotRequired()
+                    .InstructionsText("[grey](Press [blue]<space>[/] to toggle, [green]<enter>[/] to accept)[/]")
+                    .AddChoices(choices));
+            if (selectedEngines.Count == 0)
+            {
+                _console.MarkupLine("[yellow]No engines selected — defaulting to cloud.[/]");
+                selectedEngines = new List<string> { cloudLabel };
+            }
+            // Don't persist multi-select inline picks — they're a transient comparison choice.
+        }
+        else
+        {
+            string single;
+            if (!string.IsNullOrEmpty(heypoulCfg.Engine))
+            {
+                single = heypoulCfg.Engine;
+            }
+            else if (sttModels.Count == 0)
+            {
+                single = "cloud";
+            }
+            else
+            {
+                var picked = _console.Prompt(
+                    new SelectionPrompt<string>()
+                        .Title("[cyan]Pick a transcription engine:[/]")
+                        .PageSize(10)
+                        .AddChoices(choices));
+                single = picked == cloudLabel ? "cloud" : picked;
+                heypoulCfg.Engine = single;
+                SaveHeypoulConfig(heypoulCfg);
+            }
+            selectedEngines = new List<string> { single == "cloud" ? cloudLabel : single };
+        }
+
+        // Normalise labels back to engine ids and resolve a model dir per non-cloud engine.
+        var engineIds = selectedEngines.Select(s => s == cloudLabel ? "cloud" : s).ToList();
+        var engineModelDirs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var id in engineIds.Where(e => e != "cloud"))
+        {
+            var model = sttModels.FirstOrDefault(m => string.Equals(m.Name, id, StringComparison.OrdinalIgnoreCase));
+            if (model == null)
+            {
+                _console.MarkupLine($"[red]Engine [bold]{Markup.Escape(id)}[/] is selected but the model is no longer installed.[/]");
+                _console.MarkupLine("[dim]Run [bold]pks model " + Markup.Escape(id) + " init[/] to install it, or [bold]pks voice settings[/] to switch back to cloud.[/]");
+                return 1;
+            }
+            engineModelDirs[id] = model.InstallPath;
+        }
+
+        // For the single-engine path we still set the legacy env vars below.
+        var engine = engineIds[0];
+        var engineModelDir = engineModelDirs.TryGetValue(engine, out var dir) ? dir : null;
+
+        // Platform-aware defaults: Windows right-alt = VK 0xA5 (165), Linux = 100.
+        // Precedence: --key flag > config.json > platform default.
+        var keyCode = settings.KeyCode
+            ?? (heypoulCfg.KeyCode != 0 ? (uint)heypoulCfg.KeyCode : (uint?)null)
+            ?? (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? 165u : 100u);
+
+        var language = settings.Language
+            ?? (!string.IsNullOrEmpty(heypoulCfg.Language) ? heypoulCfg.Language : null)
+            ?? "da-DK";
+
+        var injectMode = settings.InjectMode
+            ?? (!string.IsNullOrEmpty(heypoulCfg.InjectMode) ? heypoulCfg.InjectMode : null)
+            ?? "text";
 
         var heypoulBin = await ResolveHeypoulPathAsync(settings.HeypoulPath);
         if (heypoulBin == null)
@@ -84,15 +175,45 @@ public class VoiceStartCommand : AsyncCommand<VoiceStartCommand.Settings>
             return 1;
         }
 
+        // Pick a microphone. Skip the prompt if the user already saved a choice via the
+        // settings window (config.json.deviceName) — re-prompting every voice start is
+        // friction. They can change it from the tray icon or `pks voice settings`.
+        string deviceName;
+        if (!string.IsNullOrEmpty(heypoulCfg.DeviceName))
+        {
+            deviceName = heypoulCfg.DeviceName;
+            _console.MarkupLine($"[dim]Using saved microphone:[/] [bold]{Markup.Escape(deviceName)}[/]");
+            _console.MarkupLine("[dim]Change via tray → Settings… or [bold]pks voice settings[/].[/]");
+        }
+        else
+        {
+            deviceName = await PromptMicrophoneAsync(heypoulBin);
+            if (!string.IsNullOrEmpty(deviceName))
+            {
+                heypoulCfg.DeviceName = deviceName;
+                SaveHeypoulConfig(heypoulCfg);
+            }
+        }
+
         var commands = await PromptCommandMapAsync();
         var commandsJson = JsonSerializer.Serialize(commands);
 
-        var endpoint = $"https://{creds.SelectedResourceName}.cognitiveservices.azure.com";
+        // Foundry LLM Speech REST API: https://<region>.api.cognitive.microsoft.com/speechtotext/transcriptions:transcribe?api-version=2025-10-15
+        // This is the new MAI-Transcribe-1 / enhancedMode API that supports Danish.
+        // Auth: Ocp-Apim-Subscription-Key (the resource subscription key from ARM listKeys).
+        if (string.IsNullOrEmpty(creds.SelectedResourceLocation))
+        {
+            _console.MarkupLine("[red]Resource region not stored. Run [bold]pks foundry select[/] to refresh.[/]");
+            return 1;
+        }
+        var region = creds.SelectedResourceLocation.ToLowerInvariant().Replace(" ", "");
+        var endpoint = $"https://{region}.api.cognitive.microsoft.com";
 
         _console.WriteLine();
         _console.MarkupLine("[cyan]Starting heypoul[/]");
         _console.MarkupLine($"[dim]  endpoint: {Markup.Escape(endpoint)}[/]");
-        _console.MarkupLine($"[dim]  language: {settings.Language}  key: {keyCode}[/]");
+        var engineLabel = engineIds.Count > 1 ? string.Join(" + ", engineIds) : engine;
+        _console.MarkupLine($"[dim]  language: {language}  key: {keyCode}  engine: {Markup.Escape(engineLabel)}[/]");
         _console.MarkupLine($"[dim]  commands: {commands.Count} mapped[/]");
         _console.MarkupLine($"[dim]  binary:   {Markup.Escape(heypoulBin)}[/]");
         _console.WriteLine();
@@ -113,13 +234,30 @@ public class VoiceStartCommand : AsyncCommand<VoiceStartCommand.Settings>
         foreach (var arg in args) psi.ArgumentList.Add(arg);
 
         psi.Environment["HEYPOUL_ENDPOINT"] = endpoint;
+        if (!string.IsNullOrEmpty(deviceName))
+            psi.Environment["HEYPOUL_DEVICE_NAME"] = deviceName;
         psi.Environment["HEYPOUL_TOKEN"] = token;
         // Pass subscription key — the Speech REST API prefers Ocp-Apim-Subscription-Key over Azure AD Bearer tokens
         if (!string.IsNullOrEmpty(creds.ApiKey))
             psi.Environment["HEYPOUL_API_KEY"] = creds.ApiKey;
-        psi.Environment["HEYPOUL_LANGUAGE"] = settings.Language;
+        psi.Environment["HEYPOUL_LANGUAGE"] = language;
         psi.Environment["HEYPOUL_KEY"] = keyCode.ToString();
-        psi.Environment["HEYPOUL_INJECT"] = settings.InjectMode;
+        psi.Environment["HEYPOUL_INJECT"] = injectMode;
+        psi.Environment["HEYPOUL_ENGINE"] = engine;
+        if (!string.IsNullOrEmpty(engineModelDir))
+            psi.Environment["HEYPOUL_MODEL_DIR"] = engineModelDir;
+
+        if (engineIds.Count > 1)
+        {
+            // Inline comparison: CSV list of engines + per-engine model-dir keys.
+            // heypoul splits HEYPOUL_ENGINES on ',' and looks up HEYPOUL_MODEL_DIR_<id>
+            // (e.g. HEYPOUL_MODEL_DIR_parakeet-v3) for each non-cloud engine.
+            psi.Environment["HEYPOUL_ENGINES"] = string.Join(",", engineIds);
+            foreach (var (id, modelDir) in engineModelDirs)
+            {
+                psi.Environment["HEYPOUL_MODEL_DIR_" + id] = modelDir;
+            }
+        }
         psi.Environment["HEYPOUL_COMMANDS"] = commandsJson;
         // Use stored classifier model (set via pks foundry select)
         if (!string.IsNullOrEmpty(creds.VoiceClassifierModel))
@@ -139,10 +277,149 @@ public class VoiceStartCommand : AsyncCommand<VoiceStartCommand.Settings>
             return proc.ExitCode;
         }
 
-        // Daemon mode: heypoul writes its own PID file to /tmp/heypoul.pid.
+        // Daemon mode: heypoul writes its own PID file to %TEMP%\heypoul.pid.
         // We just report the PID and return — pks voice off kills it later.
         _console.MarkupLine($"[dim]heypoul running (pid {proc.Id}) — [bold]pks voice off[/] to stop[/]");
+
+        // Print log/pid/state paths so the user can `tail -f` the log to see transcripts as they arrive.
+        var tempDir = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var logPath = Path.Combine(tempDir, "heypoul.log");
+        var pidPath = Path.Combine(tempDir, "heypoul.pid");
+        var statePath = Path.Combine(tempDir, $"heypoul-{proc.Id}.state");
+        _console.WriteLine();
+        _console.MarkupLine($"[dim]log:   {Markup.Escape(logPath)}[/]");
+        _console.MarkupLine($"[dim]pid:   {Markup.Escape(pidPath)}[/]");
+        _console.MarkupLine($"[dim]state: {Markup.Escape(statePath)}[/]");
+        _console.WriteLine();
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            _console.MarkupLine($"[dim]Watch transcripts:  [bold]Get-Content -Wait \"{Markup.Escape(logPath)}\"[/][/]");
+        }
+        else
+        {
+            _console.MarkupLine($"[dim]Watch transcripts:  [bold]tail -f \"{Markup.Escape(logPath)}\"[/][/]");
+        }
         return 0;
+    }
+
+    private sealed class MicInfo
+    {
+        public string Name { get; set; } = "";
+        public bool IsDefault { get; set; }
+    }
+
+    /// <summary>
+    /// Calls `heypoul --list-mics` to enumerate input devices and lets the user pick one.
+    /// Returns the chosen device name (passed to heypoul via HEYPOUL_DEVICE_NAME), or
+    /// empty string if the user picks the system default.
+    /// </summary>
+    private async Task<string> PromptMicrophoneAsync(string heypoulBin)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo(heypoulBin)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            psi.ArgumentList.Add("--list-mics");
+
+            using var p = Process.Start(psi);
+            if (p == null) return "";
+            var json = await p.StandardOutput.ReadToEndAsync();
+            await p.WaitForExitAsync();
+            if (p.ExitCode != 0 || string.IsNullOrWhiteSpace(json)) return "";
+
+            var mics = JsonSerializer.Deserialize<List<MicInfo>>(json,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (mics == null || mics.Count == 0) return "";
+
+            if (mics.Count == 1)
+            {
+                _console.MarkupLine($"[dim]Using only available microphone: [bold]{Markup.Escape(mics[0].Name)}[/][/]");
+                return ""; // single device — let heypoul pick the system default
+            }
+
+            // Choice strings go through Spectre's markup parser, so square brackets in
+            // them are treated as tags. Use a parenthesised marker instead of "[default]"
+            // — otherwise SelectionPrompt throws "malformed markup tag" at runtime.
+            const string defaultLabel = "(system default)";
+            const string defaultSuffix = "  (default)";
+            var choices = new List<string> { defaultLabel };
+            choices.AddRange(mics.Select(m => m.IsDefault ? $"{m.Name}{defaultSuffix}" : m.Name));
+
+            var picked = _console.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("[cyan]Pick a microphone:[/]")
+                    .PageSize(10)
+                    .AddChoices(choices));
+
+            if (picked == defaultLabel) return "";
+            var idx = picked.IndexOf(defaultSuffix);
+            return idx >= 0 ? picked[..idx] : picked;
+        }
+        catch (Exception ex)
+        {
+            // Surface the failure instead of silently skipping the prompt — otherwise
+            // the user has no idea why the device picker dropped out and starts the
+            // daemon with whatever the OS default mic is.
+            _console.MarkupLine($"[yellow]Warning: could not enumerate microphones: {Markup.Escape(ex.Message)}[/]");
+            _console.MarkupLine("[dim]Falling back to system default. Try [bold]pks voice settings[/] to pick a device manually.[/]");
+            return "";
+        }
+    }
+
+    internal sealed class HeypoulConfig
+    {
+        [JsonPropertyName("deviceName")] public string? DeviceName { get; set; }
+        [JsonPropertyName("keyCode")] public ushort KeyCode { get; set; }
+        [JsonPropertyName("language")] public string? Language { get; set; }
+        [JsonPropertyName("injectMode")] public string? InjectMode { get; set; }
+        [JsonPropertyName("engine")] public string? Engine { get; set; }
+    }
+
+    // Path layout matches the Go side (config.go): on Windows that's
+    // %APPDATA%\heypoul\config.json. On Linux the .NET SpecialFolder.ApplicationData
+    // maps to ~/.config which matches Go's os.UserConfigDir() — so both processes
+    // read/write the same file.
+    private static string GetHeypoulConfigPath()
+    {
+        var baseDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        return Path.Combine(baseDir, "heypoul", "config.json");
+    }
+
+    internal static HeypoulConfig LoadHeypoulConfig()
+    {
+        try
+        {
+            var path = GetHeypoulConfigPath();
+            if (!File.Exists(path)) return new HeypoulConfig();
+            var json = File.ReadAllText(path);
+            return JsonSerializer.Deserialize<HeypoulConfig>(json) ?? new HeypoulConfig();
+        }
+        catch
+        {
+            return new HeypoulConfig();
+        }
+    }
+
+    internal static void SaveHeypoulConfig(HeypoulConfig c)
+    {
+        try
+        {
+            var path = GetHeypoulConfigPath();
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var json = JsonSerializer.Serialize(c, new JsonSerializerOptions { WriteIndented = true });
+            var tmp = path + ".tmp";
+            File.WriteAllText(tmp, json);
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch
+        {
+            // Best-effort persistence — not having the device cached just means
+            // the user gets prompted again next time, which is annoying but not fatal.
+        }
     }
 
     private async Task<Dictionary<string, string>> PromptCommandMapAsync()
@@ -224,12 +501,28 @@ public class VoiceStartCommand : AsyncCommand<VoiceStartCommand.Settings>
                 using var ms = new MemoryStream();
                 await stream.CopyToAsync(ms);
 
-                // Only overwrite if newer/different size
-                if (!File.Exists(dest) || new FileInfo(dest).Length != ms.Length)
+                // Always overwrite — size-based caching missed code-only changes (same .exe size,
+                // different bytes), so users got stuck running stale heypoul.exe binaries.
+                ms.Position = 0;
+                try
                 {
-                    ms.Position = 0;
                     await using var f = File.Create(dest);
                     await ms.CopyToAsync(f);
+                }
+                catch (IOException)
+                {
+                    // File is in use (a previous heypoul process is still running).
+                    // Fall through and use whatever is on disk.
+                }
+
+                // sherpa-onnx DLLs need to sit alongside heypoul.exe — they're load-time
+                // dependencies of the executable, so the OS loader looks for them in the
+                // exe's directory at process start. If the resources aren't embedded
+                // (built without parakeet support), this silently no-ops and the cloud
+                // engine still works.
+                foreach (var dllName in new[] { "sherpa-onnx-c-api.dll", "onnxruntime.dll" })
+                {
+                    await ExtractResourceIfPresent(dllName, Path.Combine(Path.GetTempPath(), dllName));
                 }
 
                 return dest;
@@ -237,5 +530,20 @@ public class VoiceStartCommand : AsyncCommand<VoiceStartCommand.Settings>
         }
 
         return null;
+    }
+
+    private static async Task ExtractResourceIfPresent(string resourceName, string destPath)
+    {
+        using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName);
+        if (stream == null) return;
+        try
+        {
+            await using var f = File.Create(destPath);
+            await stream.CopyToAsync(f);
+        }
+        catch (IOException)
+        {
+            // DLL already in use by a running heypoul.exe — reuse whatever is on disk.
+        }
     }
 }

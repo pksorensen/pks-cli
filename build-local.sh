@@ -96,12 +96,35 @@ if [ -z "$HEYPOUL_DIR" ]; then
     EMBED_HEYPOUL=false
 else
     ensure_mingw
+    # Ensure sherpa-onnx-go-windows libs are downloaded into the Go module cache.
+    # heypoul links against them via CGO for the local Parakeet engine.
+    (cd "$HEYPOUL_DIR" && go mod download github.com/k2-fsa/sherpa-onnx-go-windows)
+    SHERPA_LIB_DIR="$(go env GOMODCACHE)/github.com/k2-fsa/sherpa-onnx-go-windows@v1.13.1/lib/x86_64-pc-windows-gnu"
+    if [ ! -f "$SHERPA_LIB_DIR/sherpa-onnx-c-api.dll" ]; then
+        echo "  warning: sherpa-onnx libs not found at $SHERPA_LIB_DIR — local engine will be disabled"
+    fi
+
+    # -H windowsgui = GUI subsystem (no console window ever appears, even when spawned).
+    # Required for the Gio-based overlay subprocess and to keep the daemon hidden.
+    # Stdio still works when pks-cli redirects pipes — Windows allows GUI apps to use redirected stdio.
     GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
         CC=x86_64-w64-mingw32-gcc \
         CXX=x86_64-w64-mingw32-g++ \
-        go build -C "$HEYPOUL_DIR" -o "$RESOURCE_DIR/heypoul-win-amd64.exe" . \
+        go build -C "$HEYPOUL_DIR" -ldflags "-H windowsgui" -o "$RESOURCE_DIR/heypoul-win-amd64.exe" . \
         2>&1 | grep -v "warning:\|note:\|miniaudio\|ma_atomic" || true
     echo "      -> $RESOURCE_DIR/heypoul-win-amd64.exe"
+
+    # Copy sherpa-onnx native DLLs alongside heypoul.exe so pks-cli embeds them
+    # and pks voice start can extract them to %TEMP% next to heypoul.exe.
+    # (Windows loads these at heypoul.exe process start — they must sit in the
+    # same directory as the .exe, can't be extracted later.)
+    for dll in sherpa-onnx-c-api.dll onnxruntime.dll; do
+        if [ -f "$SHERPA_LIB_DIR/$dll" ]; then
+            cp "$SHERPA_LIB_DIR/$dll" "$RESOURCE_DIR/$dll"
+            echo "      -> $RESOURCE_DIR/$dll  ($(du -h "$RESOURCE_DIR/$dll" | cut -f1))"
+        fi
+    done
+
     EMBED_HEYPOUL=true
 fi
 

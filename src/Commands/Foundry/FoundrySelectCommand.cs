@@ -97,53 +97,58 @@ public class FoundrySelectCommand : Command<FoundrySettings>
         var resourceGroup = ParseResourceGroup(selectedResource.Id);
 
         // ── Deployments — multi-select which to enable ────────────────────
+        // Note: zero deployments is OK for Speech-only resources. Voice transcription does not
+        // need an OpenAI deployment — only the optional voice classifier does.
         var deployments = await _authService.ListDeploymentsAsync(
             managementToken, selectedSubscription.SubscriptionId, resourceGroup, selectedResource.Name);
+
+        List<string> enabledNames = new();
+        string defaultName = string.Empty;
+
         if (deployments.Count == 0)
         {
-            _console.MarkupLine("[red]No model deployments found for this resource.[/]");
-            return 1;
-        }
-
-        // Build display map: "claude-sonnet-4-6 (model: claude-sonnet-4-6)" → deployment name
-        var choiceMap = deployments.ToDictionary(
-            d => $"{d.Name} (model: {d.Properties.Model.Name})",
-            d => d.Name);
-
-        List<string> enabledNames;
-        if (deployments.Count == 1)
-        {
-            enabledNames = [deployments[0].Name];
-            _console.MarkupLine($"[dim]Using deployment: [bold]{Markup.Escape(deployments[0].Name)}[/][/]");
+            _console.MarkupLine("[yellow]No model deployments on this resource.[/] [dim](OK for Speech-only — voice transcription does not need a deployment.)[/]");
         }
         else
         {
-            var prompt = new MultiSelectionPrompt<string>()
-                .Title("[cyan]Tick the model deployments you want to enable (space to toggle, enter to confirm):[/]")
-                .Required()
-                .AddChoices(choiceMap.Keys);
+            // Build display map: "claude-sonnet-4-6 (model: claude-sonnet-4-6)" → deployment name
+            var choiceMap = deployments.ToDictionary(
+                d => $"{d.Name} (model: {d.Properties.Model.Name})",
+                d => d.Name);
 
-            // Pre-tick whatever was previously enabled
-            foreach (var key in choiceMap.Keys)
-                if (credentials.EnabledModels.Contains(choiceMap[key]))
-                    prompt.Select(key);
+            if (deployments.Count == 1)
+            {
+                enabledNames = [deployments[0].Name];
+                _console.MarkupLine($"[dim]Using deployment: [bold]{Markup.Escape(deployments[0].Name)}[/][/]");
+            }
+            else
+            {
+                var prompt = new MultiSelectionPrompt<string>()
+                    .Title("[cyan]Tick the model deployments you want to enable (space to toggle, enter to confirm):[/]")
+                    .Required()
+                    .AddChoices(choiceMap.Keys);
 
-            var selected = _console.Prompt(prompt);
-            enabledNames = selected.Select(n => choiceMap[n]).ToList();
-        }
+                // Pre-tick whatever was previously enabled
+                foreach (var key in choiceMap.Keys)
+                    if (credentials.EnabledModels.Contains(choiceMap[key]))
+                        prompt.Select(key);
 
-        // ── Default model (from enabled list) ────────────────────────────
-        string defaultName;
-        if (enabledNames.Count == 1)
-        {
-            defaultName = enabledNames[0];
-        }
-        else
-        {
-            defaultName = _console.Prompt(
-                new SelectionPrompt<string>()
-                    .Title("[cyan]Select the default model deployment:[/]")
-                    .AddChoices(enabledNames));
+                var selected = _console.Prompt(prompt);
+                enabledNames = selected.Select(n => choiceMap[n]).ToList();
+            }
+
+            // ── Default model (from enabled list) ────────────────────────────
+            if (enabledNames.Count == 1)
+            {
+                defaultName = enabledNames[0];
+            }
+            else if (enabledNames.Count > 1)
+            {
+                defaultName = _console.Prompt(
+                    new SelectionPrompt<string>()
+                        .Title("[cyan]Select the default model deployment:[/]")
+                        .AddChoices(enabledNames));
+            }
         }
 
         // ── Voice classifier model (optional) ────────────────────────────
@@ -196,6 +201,8 @@ public class FoundrySelectCommand : Command<FoundrySettings>
         credentials.SelectedResourceEndpoint = foundryEndpoint;
         credentials.SelectedResourceName = selectedResource.Name;
         credentials.SelectedResourceGroup = resourceGroup;
+        credentials.SelectedResourceLocation = selectedResource.Location;
+        credentials.SelectedResourceKind = selectedResource.Kind;
         credentials.DefaultModel = defaultName;
         credentials.EnabledModels = enabledNames;
         credentials.VoiceClassifierModel = classifierModel;
@@ -219,9 +226,23 @@ public class FoundrySelectCommand : Command<FoundrySettings>
         table.AddRow("Default model", Markup.Escape(defaultName));
         table.AddRow("Voice classifier", Markup.Escape(classifierModel ?? "(simple matching)"));
         table.AddRow("Resource group", Markup.Escape(resourceGroup));
+        table.AddRow("Location", Markup.Escape(selectedResource.Location));
+        table.AddRow("Kind", Markup.Escape(selectedResource.Kind));
         table.AddRow("Subscription key", apiKey != null ? apiKey[..Math.Min(8, apiKey.Length)] + "…" : "(not set)");
 
         _console.Write(table);
+
+        // Warn if Speech REST API likely won't work for this resource.
+        // SpeechServices and AIServices include Speech; OpenAI-only resources do not.
+        if (!string.IsNullOrEmpty(selectedResource.Kind) &&
+            !selectedResource.Kind.Contains("AIServices", StringComparison.OrdinalIgnoreCase) &&
+            !selectedResource.Kind.Contains("Speech", StringComparison.OrdinalIgnoreCase) &&
+            !selectedResource.Kind.Contains("CognitiveServices", StringComparison.OrdinalIgnoreCase))
+        {
+            _console.WriteLine();
+            _console.MarkupLine($"[yellow]Note: resource kind is [bold]{Markup.Escape(selectedResource.Kind)}[/]. The Azure Speech REST API only works on resources of kind [bold]AIServices[/], [bold]CognitiveServices[/], or [bold]SpeechServices[/]. [bold]pks voice[/] may return 404.[/]");
+            _console.MarkupLine("[dim]Tip: create a multi-service Cognitive Services resource (kind=AIServices) in the same region.[/]");
+        }
         return 0;
     }
 

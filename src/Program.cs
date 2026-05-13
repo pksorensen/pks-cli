@@ -132,6 +132,10 @@ services.AddSingleton<PKS.Infrastructure.Services.ISshTargetConfigurationService
 services.AddSingleton<PKS.Infrastructure.Services.ISshCommandRunner, PKS.Infrastructure.Services.SshCommandRunner>();
 services.AddSingleton<PKS.Infrastructure.Services.IRsyncTargetConfigurationService, PKS.Infrastructure.Services.RsyncTargetConfigurationService>();
 
+// Model registry (local AI models — Parakeet, etc.)
+services.AddSingleton<PKS.Infrastructure.Services.IModelRegistryService, PKS.Infrastructure.Services.ModelRegistryService>();
+services.AddHttpClient<PKS.Infrastructure.Services.IModelDownloadService, PKS.Infrastructure.Services.ModelDownloadService>();
+
 // Claude marketplace services
 services.AddSingleton<PKS.Infrastructure.Services.Claude.IClaudeMarketplaceConfigurationService, PKS.Infrastructure.Services.Claude.ClaudeMarketplaceConfigurationService>();
 services.AddSingleton<PKS.Infrastructure.Services.Claude.IClaudeManagedSettingsRenderer, PKS.Infrastructure.Services.Claude.ClaudeManagedSettingsRenderer>();
@@ -239,6 +243,9 @@ services.AddHttpClient<PKS.Infrastructure.Services.IAzureAuthService, PKS.Infras
 
 // Azure VM provisioning
 services.AddHttpClient<PKS.Infrastructure.Services.IAzureVmService, PKS.Infrastructure.Services.AzureVmService>();
+
+// Azure billing + Cost Management (used by `pks azure usage` and `pks foundry usage`)
+services.AddHttpClient<PKS.Infrastructure.Services.IAzureBillingService, PKS.Infrastructure.Services.AzureBillingService>();
 services.AddSingleton<PKS.Infrastructure.Services.IAzureVmMetadataService, PKS.Infrastructure.Services.AzureVmMetadataService>();
 services.AddSingleton<PKS.Infrastructure.Services.ISshExecutor, PKS.Infrastructure.Services.SshExecutor>();
 
@@ -747,6 +754,10 @@ app.Configure(config =>
             .WithExample(new[] { "foundry", "proxy" })
             .WithExample(new[] { "foundry", "proxy", "--port", "8080" })
             .WithExample(new[] { "foundry", "proxy", "--token", "my-secret" });
+
+        foundry.AddCommand<FoundryUsageCommand>("usage")
+            .WithDescription("Show cost breakdown for the selected Foundry resource")
+            .WithExample(new[] { "foundry", "usage" });
     });
 
     // Add Azure branch command
@@ -756,6 +767,9 @@ app.Configure(config =>
         azure.AddCommand<PKS.Commands.Azure.AzureInitCommand>("init")
             .WithDescription("Authenticate with Azure and select a subscription")
             .WithExample(new[] { "azure", "init" });
+        azure.AddCommand<PKS.Commands.Azure.AzureUsageCommand>("usage")
+            .WithDescription("Show Azure cost and sponsorship credit balance for a subscription")
+            .WithExample(new[] { "azure", "usage" });
     });
 
     // Add vm branch command
@@ -916,6 +930,43 @@ app.Configure(config =>
             .WithDescription("Browse past voice dictations and re-inject selected text")
             .WithExample(new[] { "voice", "show" })
             .WithExample(new[] { "voice", "show", "-n", "50" });
+        voice.AddCommand<VoiceSettingsCommand>("settings")
+            .WithDescription("Open the heypoul settings window (microphone, language, push-to-talk key)")
+            .WithExample(new[] { "voice", "settings" });
+    });
+
+    // Local AI models — pks model <name> <verb>
+    config.AddBranch<PKS.Commands.Model.ModelSettings>("model", model =>
+    {
+        model.SetDescription("Manage local AI models (download, status, removal)");
+        model.AddCommand<PKS.Commands.Model.ModelListCommand>("list")
+            .WithDescription("List known and installed AI models")
+            .WithExample(new[] { "model", "list" });
+
+        foreach (var entry in PKS.Infrastructure.Models.ModelCatalog.Known)
+        {
+            var name = entry.Name;
+            model.AddBranch<PKS.Commands.Model.ModelSettings>(name, m =>
+            {
+                m.SetDescription(entry.DisplayName);
+                m.AddCommand<PKS.Commands.Model.ModelInitCommand>("init")
+                    .WithDescription("Download and install this model")
+                    .WithData(name)
+                    .WithExample(new[] { "model", name, "init" });
+                m.AddCommand<PKS.Commands.Model.ModelStatusCommand>("status")
+                    .WithDescription("Show install status of this model")
+                    .WithData(name)
+                    .WithExample(new[] { "model", name, "status" });
+                m.AddCommand<PKS.Commands.Model.ModelUpdateCommand>("update")
+                    .WithDescription("Re-install if a newer catalog version exists")
+                    .WithData(name)
+                    .WithExample(new[] { "model", name, "update" });
+                m.AddCommand<PKS.Commands.Model.ModelRemoveCommand>("remove")
+                    .WithDescription("Uninstall this model and free disk space")
+                    .WithData(name)
+                    .WithExample(new[] { "model", name, "remove" });
+            });
+        }
     });
 
     // Add TTS command (Azure AI Foundry)
