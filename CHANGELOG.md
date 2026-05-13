@@ -49,6 +49,23 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.12.0](https://github.com/pksorensen/pks-cli/compare/v6.11.0...v6.12.0) (2026-05-06)
+
+
+### Features
+
+* Add rsync backup command for Claude ([e03fb61](https://github.com/pksorensen/pks-cli/commit/e03fb61e1a634cd116f7c450ce443db24b9ed09b))
+* **claude:** add session metadata parsing and usage overview rendering ([bd57969](https://github.com/pksorensen/pks-cli/commit/bd579696e77be43deec7fd61f7e51e50e2ad5f9e))
+* **spawner:** log cloned commit SHA in progress message ([100fe0d](https://github.com/pksorensen/pks-cli/commit/100fe0ddae54a59fcf0bca462b16a60c0a1e8cc4))
+* **vibecast:** pass AGENTIC_SERVER via docker exec env, update build-local.sh ([183df1e](https://github.com/pksorensen/pks-cli/commit/183df1e6464dbf8238cea4572c318e70307ce984))
+* **vibegame:** add VibecastGameCommand and convert vibecast to branch ([e2bd3af](https://github.com/pksorensen/pks-cli/commit/e2bd3af0b0721233b34f6901ad25fa5cd773d2cc))
+
+
+### Bug Fixes
+
+* always issue PKS_TOKEN regardless of Coolify registration ([297bdee](https://github.com/pksorensen/pks-cli/commit/297bdee48f574c4724ddf50086998681e97c18d5))
+* **devcontainer:** surface scp errors and fall back to CWD on bad project path ([6eb8484](https://github.com/pksorensen/pks-cli/commit/6eb84842a9119cd9cbc9e186eb4380f6e3e6f03f))
+
 ## [6.11.0](https://github.com/pksorensen/pks-cli/compare/v6.10.1...v6.11.0) (2026-05-04)
 
 
