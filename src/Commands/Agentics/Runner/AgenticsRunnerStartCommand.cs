@@ -3,7 +3,9 @@ using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.FileSystemGlobbing;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.AgenticsProxy;
 using PKS.Infrastructure.Services.Models;
@@ -343,6 +345,12 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                                 jobsProcessed++;
                                 _console.MarkupLine($"[green]Git push job completed.[/]");
                             }
+                            else if (job.AgentDef?.JobType == "git_distribute" && job.AgentDef?.DistributePayload != null)
+                            {
+                                await ExecuteGitDistributeJobAsync(registration, job, settings, cts.Token);
+                                jobsProcessed++;
+                                _console.MarkupLine($"[green]Git distribute job completed.[/]");
+                            }
                             else if (settings.InProcess)
                             {
                                 await ExecuteInProcessAsync(registration, job, settings, cts.Token);
@@ -582,6 +590,11 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         if (hasGitCredentials)
             caps.Add("git:push");
 
+        // Source distribution: requires git credentials (clone source + push target).
+        // pks-cli handles the target-side credentials internally (e.g. ADO PAT setup).
+        if (hasGitCredentials)
+            caps.Add("git-distribute");
+
         return caps;
     }
 
@@ -685,6 +698,24 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             ct: ct);
         _console.MarkupLine($"[dim]OtlpProxy listening on host port {otlpProxy.Port} (socket: {otlpProxy.SocketPath})[/]");
 
+        // Per-job git proxy for marketplace plugin clones. The container's
+        // `git config insteadOf` lines route private marketplace URLs through
+        // this port; the daemon injects the right Bearer per upstream so the
+        // marketplace token never enters the container.
+        await using var gitProxy = new PKS.Infrastructure.Services.GitProxy.GitProxyDaemon();
+        var hasMarketplaceTokens = job.AgentDef?.MarketplaceTokens?.Count > 0;
+        if (hasMarketplaceTokens)
+        {
+            await gitProxy.StartAsync(ct: ct);
+            foreach (var mp in job.AgentDef!.MarketplaceTokens!)
+            {
+                if (string.IsNullOrEmpty(mp.Authority) || string.IsNullOrEmpty(mp.Bearer)) continue;
+                var upstream = !string.IsNullOrEmpty(mp.UpstreamPrefix) ? mp.UpstreamPrefix! : $"https://{mp.Authority}/";
+                gitProxy.Register(upstream, new PKS.Infrastructure.Services.GitProxy.StaticBearerTokenSource(mp.Bearer));
+            }
+            _console.MarkupLine($"[dim]GitProxy listening on port {gitProxy.Port} ({job.AgentDef!.MarketplaceTokens!.Count} marketplace authority/ies)[/]");
+        }
+
         using var client = _httpClientFactory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", registration.Token);
@@ -781,10 +812,28 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             _console.MarkupLine($"[dim]  Linux:   tail -f \"{logPath}\"[/]");
             spawnOptions.BuildLogPath = logPath;
 
+            // Background tailer streams the build log to the server so the UI can render it
+            // live inside the "Picked up by …" timeline card.
+            using var tailCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var tailTask = TailBuildLogAsync(client, baseUrl, runId, job.Id, logPath, tailCts.Token);
+
+            // Map spawner progress messages to coarse stages and POST one heartbeat per
+            // transition (de-duped) so the UI can show "cloning repo → pulling image → …".
+            string? lastStage = null;
             var spawnResult = await _spawnerService.SpawnLocalAsync(spawnOptions, msg =>
             {
                 _console.MarkupLine($"[dim]{msg.EscapeMarkup()}[/]");
+                var stage = MapProgressMessageToStage(msg);
+                if (stage != null && stage != lastStage)
+                {
+                    lastStage = stage;
+                    _ = PostJobProgressAsync(client, baseUrl, runId, job.Id, stage, msg, ct);
+                }
             });
+
+            // Stop tailing — the spawn is done so the build log won't grow further.
+            tailCts.Cancel();
+            try { await tailTask; } catch { /* tail flushes on cancel */ }
 
             if (!spawnResult.Success || spawnResult.ContainerId == null)
             {
@@ -799,6 +848,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
             containerId = spawnResult.ContainerId;
             _console.MarkupLine($"[green]Container ready:[/] {containerId[..12]} (labelled for reuse)");
+            await PostJobProgressAsync(client, baseUrl, runId, job.Id, "provisioning_done", "container ready", ct);
         }
 
         // 4. PATCH to in_progress now that the container is running
@@ -809,32 +859,78 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         // recreating the container. No Docker volume → no "volume in use" cleanup races.
         if (hasPlugins || hasAgents)
         {
+            // sh -c only (ExecInContainerAsync wraps with /bin/sh -c). $HOME
+            // expands inside the inner shell which is fine. POSIX shell glob
+            // /.* would match . and .. which mkdir refuses, hence the redirect.
             await _spawnerService.ExecInContainerAsync(containerId,
-                "bash -c 'rm -rf $HOME/.alp/plugins/* $HOME/.alp/plugins/.* 2>/dev/null; mkdir -p $HOME/.alp/plugins'",
+                "rm -rf $HOME/.alp/plugins/* $HOME/.alp/plugins/.* 2>/dev/null; mkdir -p $HOME/.alp/plugins",
                 timeoutSeconds: 30);
 
             if (hasPlugins)
             {
+                // Route every registered marketplace authority through the
+                // host-side git proxy. We use the Docker bridge gateway IP
+                // (172.17.0.1) rather than host.docker.internal because the
+                // latter only resolves on Docker Desktop, not on plain Linux
+                // Docker — and the agentics runner runs on Linux Docker. Same
+                // pattern as the ADO proxy (ClaudeSpawnCommand.cs:164).
+                const string hostGatewayIp = "172.17.0.1";
+                if (hasMarketplaceTokens)
+                {
+                    foreach (var mp in job.AgentDef!.MarketplaceTokens!)
+                    {
+                        if (string.IsNullOrEmpty(mp.Authority)) continue;
+                        var rewriteTo = $"http://{hostGatewayIp}:{gitProxy.Port}/";
+                        var rewriteFrom = $"https://{mp.Authority}/";
+                        // sh -c only — outer wraps it. Single quotes inside double
+                        // quotes survive the trip through /bin/sh -c "...".
+                        await _spawnerService.ExecInContainerAsync(containerId,
+                            $"git config --global url.'{rewriteTo}'.insteadOf '{rewriteFrom}'",
+                            timeoutSeconds: 10);
+                        _console.MarkupLine($"  [dim]git rewrite: {rewriteFrom} → {rewriteTo}[/]");
+                    }
+                }
+
+                // Plugin clone failures cascade into hard-to-diagnose downstream
+                // problems (agents that depend on the plugin look for files
+                // that aren't there, Claude wanders trying to sign in to fix
+                // them, etc). Fail the job immediately so the operator sees the
+                // root cause in the timeline instead of a 60-minute timeout.
+                var cloneFailures = new List<string>();
                 foreach (var plugin in job.AgentDef!.Plugins!)
                 {
                     var pluginUrl = plugin.SourceUrl;
                     var pluginName = plugin.Name;
                     if (string.IsNullOrEmpty(pluginUrl) || string.IsNullOrEmpty(pluginName))
                     {
-                        _console.MarkupLine($"[yellow]Skipping plugin with missing url or name[/]");
+                        cloneFailures.Add($"{pluginName ?? "(unnamed)"}: missing url or name");
                         continue;
                     }
                     var dest = $"$HOME/.alp/plugins/{pluginName}";
+                    // sh -c only — outer ExecInContainerAsync handles the shell wrap.
                     var cloneRes = await _spawnerService.ExecInContainerAsync(containerId,
-                        $"bash -c 'git clone --depth 1 \"{pluginUrl}\" \"{dest}\" 2>&1'",
+                        $"git clone --depth 1 \"{pluginUrl}\" \"{dest}\" 2>&1",
                         timeoutSeconds: 60);
                     if (cloneRes.ExitCode != 0)
                     {
-                        _console.MarkupLine($"[red]Failed to clone plugin {pluginName}: {cloneRes.Output.Trim().EscapeMarkup()}[/]");
+                        var detail = cloneRes.Output.Trim();
+                        _console.MarkupLine($"[red]Failed to clone plugin {pluginName}: {detail.EscapeMarkup()}[/]");
+                        cloneFailures.Add($"{pluginName}: {detail}");
                         continue;
                     }
                     pluginContainerPaths.Add(dest);
                     _console.MarkupLine($"  [green]✓[/] cloned {pluginName} → {dest}");
+                }
+
+                if (cloneFailures.Count > 0)
+                {
+                    var summary = $"Plugin clone failed for {cloneFailures.Count} plugin(s): " +
+                                  string.Join("; ", cloneFailures.Select(f => f.Length > 200 ? f[..200] + "…" : f));
+                    _console.MarkupLine($"[red]{summary.EscapeMarkup()}[/]");
+                    _console.MarkupLine("[red]Aborting job — agents may depend on these plugins and would otherwise fail silently.[/]");
+                    await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "failure", ct);
+                    await ReportJobResultAsync(registration, "failed", summary, ct);
+                    return;
                 }
             }
 
@@ -842,20 +938,27 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             {
                 // Mirror the existing layout: a synthetic plugin dir with .claude-plugin/plugin.json
                 // and agents/{agentId}.md. Vibecast picks it up as just another plugin.
-                var agentDir = $"$HOME/.alp/plugins/agents-{job.Id}";
+                // Resolve $HOME upfront so the rest of the calls use absolute paths
+                // (CopyFileToContainerAsync sends a TAR archive over the Docker socket and
+                // doesn't go through a shell, so no env-var expansion happens there).
+                var homeResult = await _spawnerService.ExecInContainerAsync(containerId,
+                    "printf %s \"$HOME\"", timeoutSeconds: 10);
+                if (!homeResult.Success || string.IsNullOrWhiteSpace(homeResult.Output))
+                    throw new InvalidOperationException($"Failed to resolve $HOME in container {containerId}: exit={homeResult.ExitCode}");
+                var homeDir = homeResult.Output.Trim();
+                var agentDir = $"{homeDir}/.alp/plugins/agents-{job.Id}";
                 var pluginJson = $$"""{"name":"task-agents","version":"1.0.0","description":"Agents for job {{job.Id}}"}""";
-                var pluginJsonB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(pluginJson));
-                await _spawnerService.ExecInContainerAsync(containerId,
-                    $"bash -c 'mkdir -p {agentDir}/.claude-plugin {agentDir}/agents && " +
-                    $"printf \"%s\" \"{pluginJsonB64}\" | base64 -d > {agentDir}/.claude-plugin/plugin.json'",
-                    timeoutSeconds: 10);
+                await _spawnerService.CopyFileToContainerAsync(containerId,
+                    $"{agentDir}/.claude-plugin/plugin.json",
+                    System.Text.Encoding.UTF8.GetBytes(pluginJson),
+                    ct: ct);
                 foreach (var agent in job.AgentDef!.Agents!)
                 {
                     if (string.IsNullOrEmpty(agent.Id) || string.IsNullOrEmpty(agent.Content)) continue;
-                    var b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(agent.Content));
-                    await _spawnerService.ExecInContainerAsync(containerId,
-                        $"bash -c 'printf \"%s\" \"{b64}\" | base64 -d > {agentDir}/agents/{agent.Id}.md'",
-                        timeoutSeconds: 10);
+                    await _spawnerService.CopyFileToContainerAsync(containerId,
+                        $"{agentDir}/agents/{agent.Id}.md",
+                        System.Text.Encoding.UTF8.GetBytes(agent.Content),
+                        ct: ct);
                 }
                 pluginContainerPaths.Add(agentDir);
                 _console.MarkupLine($"  [green]✓[/] wrote {job.AgentDef.Agents!.Count} agent file(s) → {agentDir}");
@@ -873,23 +976,59 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             : serverUri.Host;
         var agenticServerForContainer = $"{hostForContainer}:{serverUri.Port}";
 
-        // 6. Write prompt file into the container (base64 to avoid quoting issues)
-        var vibecastHome = $"/tmp/vibecast-job-{job.Id}";
+        // 6. Set up vibecast working directory in the container.
+        // We cannot use /tmp here: the dind devcontainer feature mounts /tmp as
+        // tmpfs so the inner Docker daemon has scratch space, and the host
+        // daemon's archive endpoint (PUT /containers/{id}/archive) cannot see
+        // into tmpfs mounts — it only reads/writes the overlay layer. That
+        // makes `docker exec` see files we put in /tmp but the subsequent
+        // ExtractArchiveToContainer (used by CopyFileToContainerAsync) returns
+        // 404 "Could not find the file …". Stick to $HOME, which is on the
+        // overlay and visible to both APIs.
+        // ExecInContainerAsync wraps with `/bin/sh -c "..."` internally, so
+        // shell variables expand inside the inner shell. We resolve $HOME up
+        // front so we can pass an absolute path to the archive endpoint (which
+        // does not go through a shell).
+        var resolvedHome = await _spawnerService.ExecInContainerAsync(containerId,
+            "printf %s \"$HOME\"", timeoutSeconds: 10);
+        if (!resolvedHome.Success || string.IsNullOrWhiteSpace(resolvedHome.Output))
+        {
+            var msg = $"Failed to resolve $HOME in container {containerId[..Math.Min(12, containerId.Length)]} (exit={resolvedHome.ExitCode}): " +
+                      $"{(resolvedHome.Error ?? resolvedHome.Output ?? "").Trim()}. " +
+                      "Container may be stopped/exited. Try removing the warm container and retrying.";
+            _console.MarkupLine($"[red]{msg.EscapeMarkup()}[/]");
+            await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "failure", ct);
+            await ReportJobResultAsync(registration, "failed", msg, ct);
+            return;
+        }
+        var homeDirAbs = resolvedHome.Output.Trim();
+        var vibecastHome = $"{homeDirAbs}/.vibecast-jobs/{job.Id}";
         var promptFile = $"{vibecastHome}/initial-prompt.txt";
         var jobPrompt = job.AgentDef?.Prompt ?? "";
-        await _spawnerService.ExecInContainerAsync(containerId,
-            $"bash -c 'mkdir -p {vibecastHome}'",
+        var mkdirRes = await _spawnerService.ExecInContainerAsync(containerId,
+            $"mkdir -p {vibecastHome} && test -d {vibecastHome} && echo OK",
             timeoutSeconds: 30);
-
-        // Local helper to write arbitrary file content into the container without shell quoting issues.
-        // Uses base64 transport — caller's content can contain any bytes, including newlines, quotes, $, ()
-        // — none of it is interpreted by bash.
-        async Task WriteContainerFileAsync(string path, string content, int timeoutSeconds = 30)
+        if (!mkdirRes.Success || mkdirRes.ExitCode != 0 || !mkdirRes.Output.Contains("OK"))
         {
-            var b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(content));
-            await _spawnerService.ExecInContainerAsync(containerId,
-                $"bash -c 'mkdir -p \"$(dirname {path})\" && printf \"%s\" \"{b64}\" | base64 -d > {path}'",
-                timeoutSeconds: timeoutSeconds);
+            var detail = (mkdirRes.Error ?? mkdirRes.Output ?? "").Trim();
+            var msg = $"mkdir -p {vibecastHome} failed in container {containerId[..Math.Min(12, containerId.Length)]} (exit={mkdirRes.ExitCode}): {detail}. " +
+                      "Container may be stopped/exited, or $HOME may not be writable. Try removing the warm container and retrying.";
+            _console.MarkupLine($"[red]{msg.EscapeMarkup()}[/]");
+            await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "failure", ct);
+            await ReportJobResultAsync(registration, "failed", msg, ct);
+
+            return;
+        }
+
+        // Local helper to write arbitrary file content into the container.
+        // Uses the Docker `extract archive` endpoint (TAR over the daemon socket) via
+        // CopyFileToContainerAsync — no argv size limit, no shell quoting concerns.
+        // The previous base64-in-bash-argv transport silently truncated above kernel ARG_MAX
+        // (~2 MB) and produced empty prompt files that vibecast then cat'd into Claude.
+        async Task WriteContainerFileAsync(string path, string content, int timeoutSeconds = 30, int mode = 420 /* 0o644 */)
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes(content);
+            await _spawnerService.CopyFileToContainerAsync(containerId, path, bytes, mode: mode, ct);
         }
 
         if (!string.IsNullOrEmpty(jobPrompt))
@@ -1167,10 +1306,10 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         scriptLines.AppendLine("[ -f .claude/.gitignore ] || printf '%s\\n' '# Runner-injected — never commit' 'settings.local.json' > .claude/.gitignore");
         scriptLines.AppendLine("exec ${VIBECAST_BIN:-npx --yes vibecast}");
 
-        var scriptB64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(scriptLines.ToString().Replace("\r\n", "\n")));
-        await _spawnerService.ExecInContainerAsync(containerId,
-            $"bash -c 'printf \"%s\" \"{scriptB64}\" | base64 -d > {launchScript} && chmod +x {launchScript}'",
-            timeoutSeconds: 30);
+        // Launch script — mode 0o755 (493 decimal) so it's executable.
+        var scriptBytes = System.Text.Encoding.UTF8.GetBytes(scriptLines.ToString().Replace("\r\n", "\n"));
+        await _spawnerService.CopyFileToContainerAsync(containerId, launchScript, scriptBytes,
+            mode: 493 /* 0o755 */, ct: ct);
 
         // Agents are delivered via --plugin-dir (VIBECAST_EXTRA_PLUGINS) — see WriteAgentPluginDirInVolumeAsync above.
 
@@ -1822,6 +1961,146 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         _console.MarkupLine("[green]Task assets synced to .agentics/assets/[/]");
     }
 
+    /// <summary>
+    /// Map a free-form spawner progress message to a coarse provisioning stage so the
+    /// server timeline can render a small, stable set of labels. Returns null if the
+    /// message doesn't correspond to a tracked stage.
+    /// </summary>
+    private static string? MapProgressMessageToStage(string message)
+    {
+        if (string.IsNullOrEmpty(message)) return null;
+        var m = message.ToLowerInvariant();
+        if (m.Contains("checking docker") || m.Contains("checking devcontainer cli") || m.Contains("computing configuration hash")) return "provisioning_check";
+        if (m.Contains("docker volume") || m.Contains("creating docker volume")) return "provisioning_volume";
+        if (m.Contains("clon") || m.Contains("repository cloned")) return "provisioning_clone";
+        if (m.Contains("bootstrap image")) return "provisioning_image";
+        if (m.Contains("bootstrap container") || m.Contains("creating new container") || m.Contains("starting existing container")) return "provisioning_container";
+        if (m.Contains("devcontainer up") || m.Contains("running devcontainer")) return "provisioning_devcontainer";
+        if (m.Contains("resolving devcontainer template") || m.Contains("applying stage devcontainer") || m.Contains("stage devcontainer files written")) return "provisioning_template";
+        return null;
+    }
+
+    private async Task PostJobProgressAsync(
+        HttpClient client,
+        string baseUrl,
+        string runId,
+        string jobId,
+        string stage,
+        string? message,
+        CancellationToken ct)
+    {
+        try
+        {
+            var msg = new HttpRequestMessage(
+                HttpMethod.Post,
+                $"{baseUrl}/runs/{runId}/jobs/{jobId}/progress");
+            msg.Content = JsonContent.Create(new { stage, message });
+            var resp = await client.SendAsync(msg, ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                var body = await resp.Content.ReadAsStringAsync(ct);
+                _console.MarkupLine($"[yellow]POST job progress warning: {(int)resp.StatusCode} {body.EscapeMarkup()}[/]");
+            }
+        }
+        catch (OperationCanceledException) { /* shutdown */ }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[yellow]POST job progress error: {ex.Message.EscapeMarkup()}[/]");
+        }
+    }
+
+    private async Task PostJobLogChunkAsync(
+        HttpClient client,
+        string baseUrl,
+        string runId,
+        string jobId,
+        string chunk,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(chunk)) return;
+        try
+        {
+            var msg = new HttpRequestMessage(
+                HttpMethod.Post,
+                $"{baseUrl}/runs/{runId}/jobs/{jobId}/logs");
+            msg.Content = new StringContent(chunk, Encoding.UTF8, "text/plain");
+            var resp = await client.SendAsync(msg, ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                var body = await resp.Content.ReadAsStringAsync(ct);
+                _console.MarkupLine($"[yellow]POST job logs warning: {(int)resp.StatusCode} {body.EscapeMarkup()}[/]");
+            }
+        }
+        catch (OperationCanceledException) { /* shutdown */ }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[yellow]POST job logs error: {ex.Message.EscapeMarkup()}[/]");
+        }
+    }
+
+    /// <summary>
+    /// Fire-and-forget loop that tails a build log file and POSTs new bytes to the server
+    /// every <paramref name="pollIntervalMs"/>. Stops when <paramref name="ct"/> is cancelled,
+    /// after a final flush.
+    /// </summary>
+    private async Task TailBuildLogAsync(
+        HttpClient client,
+        string baseUrl,
+        string runId,
+        string jobId,
+        string logPath,
+        CancellationToken ct,
+        int pollIntervalMs = 2000)
+    {
+        long offset = 0;
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                offset = await FlushBuildLogAsync(client, baseUrl, runId, jobId, logPath, offset, ct);
+                try { await Task.Delay(pollIntervalMs, ct); } catch (OperationCanceledException) { break; }
+            }
+        }
+        finally
+        {
+            try { await FlushBuildLogAsync(client, baseUrl, runId, jobId, logPath, offset, CancellationToken.None); } catch { /* best-effort final flush */ }
+        }
+    }
+
+    private async Task<long> FlushBuildLogAsync(
+        HttpClient client,
+        string baseUrl,
+        string runId,
+        string jobId,
+        string logPath,
+        long offset,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (!File.Exists(logPath)) return offset;
+            var info = new FileInfo(logPath);
+            if (info.Length <= offset) return offset;
+            using var fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            fs.Seek(offset, SeekOrigin.Begin);
+            var length = (int)Math.Min(info.Length - offset, 64 * 1024);
+            var buffer = new byte[length];
+            var read = await fs.ReadAsync(buffer.AsMemory(0, length), ct);
+            if (read > 0)
+            {
+                var chunk = Encoding.UTF8.GetString(buffer, 0, read);
+                await PostJobLogChunkAsync(client, baseUrl, runId, jobId, chunk, ct);
+                return offset + read;
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[yellow]Build-log tail error: {ex.Message.EscapeMarkup()}[/]");
+        }
+        return offset;
+    }
+
     private async Task PatchJobStatusAsync(
         HttpClient client,
         string baseUrl,
@@ -1979,6 +2258,217 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         finally
         {
             try { Directory.Delete(jobDir, recursive: true); } catch { /* best-effort cleanup */ }
+        }
+    }
+
+    /// <summary>
+    /// Execute a git_distribute job: clone source, apply the effective allowlist
+    /// (AdminDistallowPatterns ∪ honored .agentics/.distallow), replace target tree,
+    /// commit (with {sourceCommit} substituted), and push.
+    /// </summary>
+    private async Task ExecuteGitDistributeJobAsync(AgenticsRunnerRegistration registration, RunnerJob job, Settings settings, CancellationToken ct)
+    {
+        using var client = _httpClientFactory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", registration.Token);
+
+        var baseUrl = $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}";
+        var payload = job.AgentDef!.DistributePayload!;
+        var verbose = settings.Verbose;
+
+        // 1. Claim the job
+        string runId;
+        _console.MarkupLine($"[cyan]Distribute: claiming job {job.Id}...[/]");
+        try
+        {
+            var claimResponse = await client.PostAsJsonAsync(
+                $"{baseUrl}/runners/generate-jitconfig",
+                new { jobId = job.Id, name = "git-distribute-runner" },
+                ct);
+            claimResponse.EnsureSuccessStatusCode();
+            var claimData = JsonSerializer.Deserialize<JsonElement>(
+                await claimResponse.Content.ReadAsStringAsync(ct), JsonOptions);
+            runId = claimData.GetProperty("runId").GetString()!;
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[red]Distribute: failed to claim job: {ex.Message.EscapeMarkup()}[/]");
+            return;
+        }
+
+        // 2. Mark in_progress
+        await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "in_progress", null, ct);
+
+        // 3. Set up temp work directories. We use three:
+        //   - sourceDir: shallow clone of the source repo
+        //   - filteredDir: staging area for files that survived the allowlist
+        //   - targetDir: clone (or init) of the target repo where we replace contents
+        var workRoot = Path.Combine(Path.GetTempPath(), $"agentics-git-distribute-{job.Id}");
+        var sourceDir = Path.Combine(workRoot, "source");
+        var filteredDir = Path.Combine(workRoot, "filtered");
+        var targetDir = Path.Combine(workRoot, "target");
+        Directory.CreateDirectory(sourceDir);
+        Directory.CreateDirectory(filteredDir);
+        Directory.CreateDirectory(targetDir);
+
+        try
+        {
+            // 4. Prepare git credentials (used for both source clone and target push).
+            //    pks-cli's PrepareGitCredentialsAsync covers the github.com case via the
+            //    GitHub App flow. Target-side auth for non-github hosts (e.g. ADO) is
+            //    expected to be set up out-of-band by `pks-cli init`.
+            var gitEnv = await PrepareGitCredentialsAsync(ct);
+
+            await RunGitArgsAsync(["config", "--global", "user.name", "Agentics Runner"], null, verbose, ct);
+            await RunGitArgsAsync(["config", "--global", "user.email", "runner@agentics.dk"], null, verbose, ct);
+
+            // 5. Shallow-clone the source repo at the requested branch.
+            _console.MarkupLine($"[cyan]Distribute: cloning source {payload.SourceRepo.EscapeMarkup()} ({payload.SourceBranch.EscapeMarkup()})...[/]");
+            var sourceCloneExit = await RunGitArgsAsync(
+                ["clone", "--depth", "1", "--branch", payload.SourceBranch, payload.SourceRepo, sourceDir],
+                null, verbose, ct, gitEnv);
+            if (sourceCloneExit != 0)
+                throw new Exception($"git clone source failed (exit {sourceCloneExit})");
+
+            // 6. Capture source HEAD SHA for the commit message token.
+            var sourceCommit = (await RunGitOutputAsync(["rev-parse", "HEAD"], sourceDir, ct)).Trim();
+            _console.MarkupLine($"[dim]  source HEAD: {sourceCommit.EscapeMarkup()}[/]");
+
+            // 7. Read .agentics/.distallow from source (if honored & present).
+            var distallowFromFile = new List<string>();
+            if (payload.HonorDistallow)
+            {
+                var distallowPath = Path.Combine(sourceDir, ".agentics", ".distallow");
+                if (File.Exists(distallowPath))
+                {
+                    foreach (var raw in await File.ReadAllLinesAsync(distallowPath, ct))
+                    {
+                        var line = raw.Trim();
+                        if (line.Length == 0 || line.StartsWith('#')) continue;
+                        distallowFromFile.Add(line);
+                    }
+                    _console.MarkupLine($"[dim]  loaded {distallowFromFile.Count} pattern(s) from .agentics/.distallow[/]");
+                }
+            }
+
+            // 8. Build effective allowlist = admin patterns ∪ file patterns.
+            var effectivePatterns = new List<string>();
+            effectivePatterns.AddRange(payload.AdminDistallowPatterns);
+            effectivePatterns.AddRange(distallowFromFile);
+            if (effectivePatterns.Count == 0)
+            {
+                throw new Exception("Effective allowlist is empty — refusing to distribute. " +
+                    "Add patterns in the admin UI or include a `.agentics/.distallow` in the source repo.");
+            }
+
+            var matcher = new Matcher();
+            matcher.AddIncludePatterns(effectivePatterns);
+
+            // 9. Walk the source tree (excluding .git/), copy allowed files into filteredDir.
+            var matchResult = matcher.Execute(new Microsoft.Extensions.FileSystemGlobbing.Abstractions.DirectoryInfoWrapper(new DirectoryInfo(sourceDir)));
+            if (!matchResult.HasMatches)
+            {
+                throw new Exception("No files matched the effective allowlist; nothing to distribute.");
+            }
+            var copiedCount = 0;
+            foreach (var hit in matchResult.Files)
+            {
+                // hit.Path is POSIX-style relative to sourceDir.
+                var rel = hit.Path.Replace('\\', '/');
+                if (rel.StartsWith(".git/") || rel == ".git") continue;
+
+                var srcFile = Path.Combine(sourceDir, rel.Replace('/', Path.DirectorySeparatorChar));
+                var dstFile = Path.Combine(filteredDir, rel.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(dstFile)!);
+                File.Copy(srcFile, dstFile, overwrite: true);
+                copiedCount++;
+                if (verbose) _console.MarkupLine($"[dim]  + {rel.EscapeMarkup()}[/]");
+            }
+            _console.MarkupLine($"[cyan]Distribute: {copiedCount} file(s) survived the allowlist[/]");
+
+            // 10. Clone-or-init the target repo. Mirrors the pattern from ExecuteGitPushJobAsync.
+            _console.MarkupLine($"[cyan]Distribute: preparing target {payload.TargetRepo.EscapeMarkup()}...[/]");
+            // Remove the empty placeholder so `git clone` can populate it.
+            Directory.Delete(targetDir, recursive: true);
+            var targetCloneExit = await RunGitArgsAsync(["clone", payload.TargetRepo, targetDir], null, verbose, ct, gitEnv);
+            if (targetCloneExit == 0)
+            {
+                var checkoutExit = await RunGitArgsAsync(["checkout", payload.TargetBranch], targetDir, verbose, ct);
+                if (checkoutExit != 0)
+                    await RunGitArgsAsync(["checkout", "-b", payload.TargetBranch], targetDir, verbose, ct);
+            }
+            else
+            {
+                _console.MarkupLine("[yellow]Distribute: target clone failed, initialising empty repo...[/]");
+                Directory.CreateDirectory(targetDir);
+                await RunGitArgsAsync(["init"], targetDir, verbose, ct);
+                await RunGitArgsAsync(["remote", "add", "origin", payload.TargetRepo], targetDir, verbose, ct);
+                await RunGitArgsAsync(["checkout", "-b", payload.TargetBranch], targetDir, verbose, ct);
+            }
+
+            // 11. Replace target tree: delete everything except .git, then copy filtered files in.
+            foreach (var entry in Directory.EnumerateFileSystemEntries(targetDir))
+            {
+                var name = Path.GetFileName(entry);
+                if (name == ".git") continue;
+                if (Directory.Exists(entry)) Directory.Delete(entry, recursive: true);
+                else File.Delete(entry);
+            }
+            CopyDirectory(filteredDir, targetDir);
+
+            // 12. Stage and check for diff.
+            var addExit = await RunGitArgsAsync(["add", "-A"], targetDir, verbose, ct);
+            if (addExit != 0) throw new Exception("git add -A failed in target");
+
+            var statusResult = await RunGitOutputAsync(["status", "--porcelain"], targetDir, ct);
+            if (string.IsNullOrWhiteSpace(statusResult))
+            {
+                _console.MarkupLine("[yellow]Distribute: target is already up to date — nothing to push.[/]");
+                await PatchJobStatusWithLogsAsync(client, baseUrl, runId, job.Id, "completed", "success",
+                    $"no-op: target already at source {sourceCommit}", ct);
+                return;
+            }
+
+            // 13. Resolve commit message tokens.
+            var resolvedMessage = payload.CommitMessage.Replace("{sourceCommit}", sourceCommit);
+
+            var commitExit = await RunGitArgsAsync(["commit", "-m", resolvedMessage], targetDir, verbose, ct, gitEnv);
+            if (commitExit != 0) throw new Exception("git commit failed in target");
+
+            // 14. Push (no --force in v1).
+            _console.MarkupLine($"[cyan]Distribute: pushing to {payload.TargetBranch.EscapeMarkup()}...[/]");
+            var pushExit = await RunGitArgsAsync(
+                ["push", "--set-upstream", "origin", payload.TargetBranch],
+                targetDir, verbose, ct, gitEnv);
+            if (pushExit != 0) throw new Exception($"git push failed (exit {pushExit})");
+
+            var targetCommit = (await RunGitOutputAsync(["rev-parse", "HEAD"], targetDir, ct)).Trim();
+            _console.MarkupLine($"[green]Distribute: pushed {targetCommit.EscapeMarkup()} to {payload.TargetRepo.EscapeMarkup()}[/]");
+
+            await PatchJobStatusWithLogsAsync(client, baseUrl, runId, job.Id, "completed", "success",
+                $"source={sourceCommit} target={targetCommit} files={copiedCount}", ct);
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[red]Distribute: failed: {ex.Message.EscapeMarkup()}[/]");
+            await PatchJobStatusWithLogsAsync(client, baseUrl, runId, job.Id, "completed", "failure", ex.Message, ct);
+        }
+        finally
+        {
+            try { Directory.Delete(workRoot, recursive: true); } catch { /* best-effort cleanup */ }
+        }
+    }
+
+    private static void CopyDirectory(string src, string dst)
+    {
+        Directory.CreateDirectory(dst);
+        foreach (var dir in Directory.EnumerateDirectories(src, "*", SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(dir.Replace(src, dst));
+        }
+        foreach (var file in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
+        {
+            File.Copy(file, file.Replace(src, dst), overwrite: true);
         }
     }
 
@@ -2424,6 +2914,13 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
                 ? " CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1"
                 : "";
 
+            // Operator: disable Claude Sonnet's 1M context window unless explicitly opted in
+            // server-side. Server always emits Enable1mContext; a missing OperatorConfig means
+            // an old server build, so default to disabling 1M (safer/cheaper).
+            var disable1mContextEnv = job.AgentDef?.OperatorConfig?.Enable1mContext == true
+                ? ""
+                : " CLAUDE_CODE_DISABLE_1M_CONTEXT=1";
+
             // SubagentStart hook: inject additionalContext into every spawned subagent
             var subagentSuffixEnv = "";
             if (!string.IsNullOrWhiteSpace(job.AgentDef?.SubagentPromptAppendix))
@@ -2493,7 +2990,7 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             // The log is captured on timeout and included in the job PATCH logs field.
             var vibecastLogRedirect = $" > \"{vibecastLogFile}\" 2>&1";
 
-            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv}{autoApproveEnv}{disableBackgroundTasksEnv}{subagentSuffixEnv}{broadcastIdEnv}{allowedDirsEnv}{claudeConfigDirEnv}{otelEnv}{agenticsProxyEnv} {vibecastBin}{vibecastLogRedirect}");
+            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv}{autoApproveEnv}{disableBackgroundTasksEnv}{disable1mContextEnv}{subagentSuffixEnv}{broadcastIdEnv}{allowedDirsEnv}{claudeConfigDirEnv}{otelEnv}{agenticsProxyEnv} {vibecastBin}{vibecastLogRedirect}");
 
             var startProc = Process.Start(startPsi);
             if (startProc != null)
@@ -4160,6 +4657,14 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         public string? ClaudeCredentialsScope { get; set; }
         public List<PluginRef>? Plugins { get; set; }
         public List<AgentRef>? Agents { get; set; }
+        /// <summary>
+        /// Bearer tokens for marketplace authorities the plugin clones will
+        /// touch. Runner spins up a local git proxy and registers each entry,
+        /// then `git config --global url.&lt;proxy&gt;.insteadOf https://AUTH/`
+        /// inside the container — so the existing `git clone` lines work
+        /// without auth-aware plugins. Token never enters the container.
+        /// </summary>
+        public List<MarketplaceTokenRef>? MarketplaceTokens { get; set; }
         /// <summary>W3C traceparent header from the server-side span that dispatched this job.</summary>
         public string? Traceparent { get; set; }
         /// <summary>claudeSessionId from a prior timed-out run — when set, runner injects VIBECAST_RESUME_SESSION_ID so vibecast can pass --resume to Claude.</summary>
@@ -4179,10 +4684,16 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         public RunnerOperatorConfig? OperatorConfig { get; set; }
         /// <summary>User-uploaded task assets — runner downloads each into {workspace}/.agentics/assets/{fileName}.</summary>
         public List<TaskAssetDef>? TaskAssets { get; set; }
-        /// <summary>Job type — defaults to alp_operator. Use git_push for runner-proxied git push operations.</summary>
+        /// <summary>Job type — defaults to alp_operator. Use git_push for runner-proxied git push operations,
+        /// or git_distribute for source-code mirroring with an allowlist filter.</summary>
         public string? JobType { get; set; }
         /// <summary>Payload for git_push jobs. Runner clones targetRepo, writes files, commits, and pushes.</summary>
         public GitPushPayloadModel? GitPushPayload { get; set; }
+        /// <summary>Payload for git_distribute jobs. Runner clones SourceRepo, applies the allowlist
+        /// (AdminDistallowPatterns ∪ honored .agentics/.distallow from the source HEAD), replaces the
+        /// TargetRepo working tree with the filtered subset, commits, and pushes. No credentials carried
+        /// here — runner resolves source/target auth on its own.</summary>
+        public DistributePayloadModel? DistributePayload { get; set; }
     }
 
     private class TaskAssetDef
@@ -4201,10 +4712,31 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         public Dictionary<string, string> Files { get; set; } = new();
     }
 
+    private class DistributePayloadModel
+    {
+        public string ProductId { get; set; } = "";
+        public string TargetId { get; set; } = "";
+        public string SourceRepo { get; set; } = "";
+        public string SourceBranch { get; set; } = "main";
+        public string TargetRepo { get; set; } = "";
+        public string TargetBranch { get; set; } = "main";
+        /// <summary>`{sourceCommit}` is replaced with the source HEAD SHA at runner time.</summary>
+        public string CommitMessage { get; set; } = "chore: sync from agentics ({sourceCommit})";
+        public List<string> AdminDistallowPatterns { get; set; } = new();
+        public bool HonorDistallow { get; set; } = true;
+    }
+
     private class RunnerOperatorConfig
     {
         public bool AutoApproveImageUploads { get; set; }
         public bool DisableBackgroundTasks { get; set; }
+        /// <summary>
+        /// Opt-in to Claude Sonnet's 1M-token context window. Resolved server-side
+        /// from the station / assembly-line settings. When false (default), the runner
+        /// exports CLAUDE_CODE_DISABLE_1M_CONTEXT=1 to remove 1M model variants
+        /// from Claude's model picker.
+        /// </summary>
+        public bool Enable1mContext { get; set; }
     }
 
     private class PluginRef
@@ -4219,6 +4751,20 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         public string Id { get; set; } = "";
         public string Name { get; set; } = "";
         public string Content { get; set; } = "";
+    }
+
+    /// <summary>
+    /// Pair of (marketplace authority, bearer JWT). agentic-live emits one of
+    /// these for every distinct marketplace host the plugin list references.
+    /// </summary>
+    private class MarketplaceTokenRef
+    {
+        /// <summary>Host[:port] of the marketplace (e.g. "x.devtunnels.ms" or "marketplace.agentics.dk").</summary>
+        public string Authority { get; set; } = "";
+        /// <summary>The Bearer JWT (or opaque bearer for bearer-mode profiles).</summary>
+        public string Bearer { get; set; } = "";
+        /// <summary>Optional explicit upstream prefix override. Defaults to <c>https://{Authority}/</c>.</summary>
+        public string? UpstreamPrefix { get; set; }
     }
 
     private class RegisterRunnerResponse

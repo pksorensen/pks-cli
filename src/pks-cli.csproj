@@ -82,6 +82,11 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Infrastructure\Resources\bootstrap.Dockerfile" />
+    <EmbeddedResource Include="Infrastructure\Resources\Brain\brain-extract.SKILL.md" LogicalName="brain-extract.SKILL.md" />
+    <EmbeddedResource Include="Infrastructure\Resources\Brain\brain-synth-cluster.SKILL.md" LogicalName="brain-synth-cluster.SKILL.md" />
+    <EmbeddedResource Include="Infrastructure\Resources\Brain\brain-synth-habits.SKILL.md" LogicalName="brain-synth-habits.SKILL.md" />
+    <EmbeddedResource Include="Infrastructure\Resources\Brain\brain-wiki-page.SKILL.md" LogicalName="brain-wiki-page.SKILL.md" />
+    <EmbeddedResource Include="Infrastructure\Resources\Brain\brain-adr.SKILL.md" LogicalName="brain-adr.SKILL.md" />
   </ItemGroup>
 
   <!-- Firecracker scripts: copy alongside binary so docker cp gets everything -->

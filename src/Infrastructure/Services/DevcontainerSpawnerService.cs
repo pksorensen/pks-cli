@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Formats.Tar;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -3558,6 +3559,61 @@ DEVCONTAINER_EOF";
     {
         var result = await ExecuteInBootstrapAsync(containerId, command, workingDir, timeoutSeconds, onOutput);
         return (result.Success, result.Output ?? string.Empty, result.Error ?? string.Empty, result.ExitCode);
+    }
+
+    public async Task CopyFileToContainerAsync(
+        string containerId,
+        string remotePath,
+        byte[] content,
+        int mode = 420,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(remotePath) || !remotePath.StartsWith('/'))
+            throw new ArgumentException($"remotePath must be an absolute Linux path, got: {remotePath}", nameof(remotePath));
+
+        // Split into directory + file name. Use Linux-only conventions; the host might be
+        // Windows but the container target is always Linux.
+        var lastSlash = remotePath.LastIndexOf('/');
+        var dir = lastSlash == 0 ? "/" : remotePath.Substring(0, lastSlash);
+        var fileName = remotePath.Substring(lastSlash + 1);
+        if (string.IsNullOrEmpty(fileName))
+            throw new ArgumentException($"remotePath must include a file name: {remotePath}", nameof(remotePath));
+
+        _logger.LogDebug("CopyFileToContainerAsync: container={ContainerId} path={Path} size={Size}",
+            containerId, remotePath, content.Length);
+
+        // Ensure the destination directory exists. ExtractArchive does NOT create parents.
+        var mkdir = await ExecuteInBootstrapAsync(containerId, $"mkdir -p '{dir}'", timeoutSeconds: 30);
+        if (!mkdir.Success)
+        {
+            throw new InvalidOperationException(
+                $"mkdir -p '{dir}' failed in container {containerId}: " +
+                $"exit={mkdir.ExitCode} stderr={(mkdir.Error ?? string.Empty).TrimEnd()}");
+        }
+
+        // Build an uncompressed TAR archive in memory with a single regular-file entry.
+        // The Docker daemon's extract endpoint unpacks it at `dir` so the file lands at
+        // `dir/fileName` = remotePath. No argv ever carries the content.
+        using var tarStream = new MemoryStream();
+        using (var writer = new TarWriter(tarStream, TarEntryFormat.Ustar, leaveOpen: true))
+        {
+            var entry = new UstarTarEntry(TarEntryType.RegularFile, fileName)
+            {
+                DataStream = new MemoryStream(content),
+                Mode = (UnixFileMode)mode,
+                ModificationTime = DateTimeOffset.UtcNow,
+            };
+            writer.WriteEntry(entry);
+        }
+        tarStream.Position = 0;
+
+        await _dockerClient.Containers.ExtractArchiveToContainerAsync(
+            containerId,
+            new ContainerPathStatParameters { Path = dir, AllowOverwriteDirWithFile = false },
+            tarStream,
+            ct);
+
+        _logger.LogDebug("CopyFileToContainerAsync: wrote {Size} bytes to {Path}", content.Length, remotePath);
     }
 
     /// <summary>

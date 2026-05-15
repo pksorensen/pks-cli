@@ -82,6 +82,18 @@ public class AzureUsageCommandTests
                 It.IsAny<DateTime>(), It.IsAny<DateTime>(),
                 CostGrouping.None, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new CostQueryResult { Currency = "USD", TotalCost = 42.50m });
+        billing.Setup(x => x.QueryDailyCostAsync("tok", "/subscriptions/sub-1",
+                It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DailyCostResult
+            {
+                Currency = "USD",
+                Points = new List<DailyCostPoint>
+                {
+                    new(new DateTime(2026, 5, 11, 0, 0, 0, DateTimeKind.Utc), 10m),
+                    new(new DateTime(2026, 5, 12, 0, 0, 0, DateTimeKind.Utc), 20m),
+                    new(new DateTime(2026, 5, 13, 0, 0, 0, DateTimeKind.Utc), 12.5m),
+                }
+            });
         billing.Setup(x => x.QueryCostAsync("tok", "/subscriptions/sub-1",
                 It.IsAny<DateTime>(), It.IsAny<DateTime>(),
                 CostGrouping.Meter, It.IsAny<CancellationToken>()))
@@ -128,6 +140,9 @@ public class AzureUsageCommandTests
                 It.IsAny<DateTime>(), It.IsAny<DateTime>(),
                 It.IsAny<CostGrouping>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new CostQueryResult { Currency = "USD", TotalCost = 5m });
+        billing.Setup(x => x.QueryDailyCostAsync("tok", It.IsAny<string>(),
+                It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DailyCostResult { Currency = "USD" });
 
         var console = new TestConsole();
         console.Profile.Capabilities.Interactive = true;

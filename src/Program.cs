@@ -140,6 +140,25 @@ services.AddHttpClient<PKS.Infrastructure.Services.IModelDownloadService, PKS.In
 services.AddSingleton<PKS.Infrastructure.Services.Claude.IClaudeMarketplaceConfigurationService, PKS.Infrastructure.Services.Claude.ClaudeMarketplaceConfigurationService>();
 services.AddSingleton<PKS.Infrastructure.Services.Claude.IClaudeManagedSettingsRenderer, PKS.Infrastructure.Services.Claude.ClaudeManagedSettingsRenderer>();
 services.AddSingleton<PKS.Infrastructure.Services.Claude.IClaudeMarketplaceFetcher, PKS.Infrastructure.Services.Claude.ClaudeMarketplaceFetcher>();
+
+// Brain services — ingest, extract, and synthesize Claude session history
+// See /home/node/.claude/plans/atomic-mixing-allen.md for the multi-phase design.
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainPathResolver, PKS.Infrastructure.Services.Brain.BrainPathResolver>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainIndexStore, PKS.Infrastructure.Services.Brain.BrainIndexStore>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.ISessionDiscoveryService, PKS.Infrastructure.Services.Brain.SessionDiscoveryService>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.ISessionParser, PKS.Infrastructure.Services.Brain.SessionParser>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IPricingService, PKS.Infrastructure.Services.Brain.PricingService>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IPlanFileIndexer, PKS.Infrastructure.Services.Brain.PlanFileIndexer>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainIngestPipeline, PKS.Infrastructure.Services.Brain.BrainIngestPipeline>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainSkillReader, PKS.Infrastructure.Services.Brain.BrainSkillReader>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainExtractContextBuilder, PKS.Infrastructure.Services.Brain.BrainExtractContextBuilder>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IClaudeRunner, PKS.Infrastructure.Services.Brain.ClaudeRunner>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainExtractPipeline, PKS.Infrastructure.Services.Brain.BrainExtractPipeline>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IExtractReader, PKS.Infrastructure.Services.Brain.ExtractReader>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainSynthesisPipeline, PKS.Infrastructure.Services.Brain.BrainSynthesisPipeline>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainWikiPipeline, PKS.Infrastructure.Services.Brain.BrainWikiPipeline>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainSkillCatalog, PKS.Infrastructure.Services.Brain.BrainSkillCatalog>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainAdrPipeline, PKS.Infrastructure.Services.Brain.BrainAdrPipeline>();
 // Legacy MCP services removed in Phase 3 - now using SDK-based services only
 
 // New SDK-based MCP hosting services
@@ -1053,6 +1072,75 @@ app.Configure(config =>
         claude.AddCommand<PKS.Commands.Claude.ClaudeBackupCommand>("backup")
             .WithDescription("Backup ~/.claude/ (sessions, projects, settings) to registered rsync targets")
             .WithExample(["claude", "backup"]);
+    });
+
+    // Add brain commands — personal "brain" built from Claude session history
+    // See /home/node/.claude/plans/atomic-mixing-allen.md for the multi-phase design.
+    config.AddBranch<PKS.Commands.Brain.BrainSettings>("brain", brain =>
+    {
+        brain.SetDescription("Personal brain — ingest, extract, and synthesize from your Claude session history");
+
+        brain.AddCommand<PKS.Commands.Brain.BrainInitCommand>("init")
+            .WithDescription("Initialize ~/.pks-cli/brain/ and (if in a git repo) ./.pks/brain/")
+            .WithExample(["brain", "init"]);
+
+        brain.AddCommand<PKS.Commands.Brain.BrainIngestCommand>("ingest")
+            .WithDescription("Deterministic ingest of all Claude session JSONL files (no AI). Phase 1.")
+            .WithExample(["brain", "ingest"]);
+
+        brain.AddCommand<PKS.Commands.Brain.BrainExtractCommand>("extract")
+            .WithDescription("AI-extract per-session summaries via the editable brain-extract skill. Phase 2.")
+            .WithExample(["brain", "extract", "--limit", "1", "--dry-run"])
+            .WithExample(["brain", "extract", "--since", "7d", "--model", "haiku"]);
+
+        brain.AddCommand<PKS.Commands.Brain.BrainSynthCommand>("synth")
+            .WithDescription("Synthesise per-session extracts into themes.md + bad-habits.md + clusters.json. Phase 3.")
+            .WithExample(["brain", "synth", "--dry-run"])
+            .WithExample(["brain", "synth", "--no-ai"])
+            .WithExample(["brain", "synth", "--max-clusters", "10"]);
+
+        brain.AddCommand<PKS.Commands.Brain.BrainWikiCommand>("wiki")
+            .WithDescription("Generate per-cluster wiki pages from synthesis/clusters.json. Phase 4.")
+            .WithExample(["brain", "wiki", "--dry-run"])
+            .WithExample(["brain", "wiki", "--max-clusters", "5"])
+            .WithExample(["brain", "wiki", "--no-ai"]);
+
+        brain.AddCommand<PKS.Commands.Brain.BrainAdrCommand>("adr")
+            .WithDescription("Distil architectural clusters into ADRs (Status/Context/Decision/Consequences). Phase 5.")
+            .WithExample(["brain", "adr", "--dry-run"])
+            .WithExample(["brain", "adr", "--max-adrs", "5"])
+            .WithExample(["brain", "adr", "--include-tag", "rsc", "--include-tag", "monorepo"]);
+
+        brain.AddCommand<PKS.Commands.Brain.BrainRefreshCommand>("refresh")
+            .WithDescription("Bring the whole brain up to date: ingest → extract → synth → wiki → adr in one go")
+            .WithExample(["brain", "refresh", "--dry-run"])
+            .WithExample(["brain", "refresh", "-y"])
+            .WithExample(["brain", "refresh", "--no-ai"]);
+
+        brain.AddCommand<PKS.Commands.Brain.BrainStatusCommand>("status")
+            .WithDescription("Show what the brain knows so far (projects, sessions, prompts, tools, errors)")
+            .WithExample(["brain", "status"]);
+
+        brain.AddCommand<PKS.Commands.Brain.BrainSearchCommand>("search")
+            .WithDescription("Grep across the brain firehoses (prompts, tools, files, errors) and extracts")
+            .WithExample(["brain", "search", "streamId"])
+            .WithExample(["brain", "search", "auth", "--in", "extracts", "--limit", "5"])
+            .WithExample(["brain", "search", "Keycloak", "--since", "7d"]);
+
+        brain.AddBranch("skill", skill =>
+        {
+            skill.SetDescription("Inspect and edit the brain skills (extract / synth / wiki prompts)");
+            skill.AddCommand<PKS.Commands.Brain.BrainSkillListCommand>("list")
+                .WithDescription("List all brain skills and where each resolves from (embedded vs user override)")
+                .WithExample(["brain", "skill", "list"]);
+            skill.AddCommand<PKS.Commands.Brain.BrainSkillInitCommand>("init")
+                .WithDescription("Copy a skill's embedded default to ~/.claude/skills/<name>/SKILL.md so you can edit it")
+                .WithExample(["brain", "skill", "init", "brain-extract"])
+                .WithExample(["brain", "skill", "init", "brain-wiki-page", "--force"]);
+            skill.AddCommand<PKS.Commands.Brain.BrainSkillShowCommand>("show")
+                .WithDescription("Print the currently-resolved body of a skill to stdout")
+                .WithExample(["brain", "skill", "show", "brain-extract"]);
+        });
     });
 
     // Add git branch command (credential helpers)

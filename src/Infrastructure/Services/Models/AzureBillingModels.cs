@@ -50,3 +50,17 @@ public class CostQueryResult
     public decimal TotalCost { get; set; }
     public List<CostRow> Rows { get; set; } = new();
 }
+
+/// <summary>
+/// One day of cost.
+/// </summary>
+public record DailyCostPoint(DateTime Date, decimal Cost);
+
+/// <summary>
+/// Daily-granularity Cost Management result.
+/// </summary>
+public class DailyCostResult
+{
+    public string Currency { get; set; } = string.Empty;
+    public List<DailyCostPoint> Points { get; set; } = new();
+}

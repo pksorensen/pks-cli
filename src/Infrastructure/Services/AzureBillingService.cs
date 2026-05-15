@@ -21,6 +21,11 @@ public interface IAzureBillingService
     /// </summary>
     /// <param name="scope">ARM scope path, e.g. "/subscriptions/{id}" or "/subscriptions/{id}/resourceGroups/{rg}/providers/Microsoft.CognitiveServices/accounts/{name}".</param>
     Task<CostQueryResult> QueryCostAsync(string accessToken, string scope, DateTime startUtc, DateTime endUtc, CostGrouping grouping, CancellationToken ct = default);
+
+    /// <summary>
+    /// Query daily-granularity cost at the given ARM scope. One point per day.
+    /// </summary>
+    Task<DailyCostResult> QueryDailyCostAsync(string accessToken, string scope, DateTime startUtc, DateTime endUtc, CancellationToken ct = default);
 }
 
 public class AzureBillingService : IAzureBillingService
@@ -197,6 +202,124 @@ public class AzureBillingService : IAzureBillingService
             throw new HttpRequestException($"ARM {(int)resp.StatusCode} querying cost: {content}", null, resp.StatusCode);
 
         return ParseCostQueryResult(content);
+    }
+
+    public async Task<DailyCostResult> QueryDailyCostAsync(string accessToken, string scope, DateTime startUtc, DateTime endUtc, CancellationToken ct = default)
+    {
+        var scopePath = scope.StartsWith("/") ? scope : "/" + scope;
+        var url = $"https://management.azure.com{scopePath}/providers/Microsoft.CostManagement/query?api-version={CostManagementApiVersion}";
+
+        var from = startUtc.ToString("yyyy-MM-ddT00:00:00Z");
+        var to = endUtc.ToString("yyyy-MM-ddT23:59:59Z");
+
+        var body = new
+        {
+            type = "ActualCost",
+            timeframe = "Custom",
+            timePeriod = new { from, to },
+            dataset = new
+            {
+                granularity = "Daily",
+                aggregation = new
+                {
+                    totalCost = new { name = "Cost", function = "Sum" }
+                }
+            }
+        };
+
+        var json = JsonSerializer.Serialize(body);
+        var req = new HttpRequestMessage(HttpMethod.Post, url);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        req.Content = new StringContent(json, Encoding.UTF8, "application/json");
+
+        var resp = await _httpClient.SendAsync(req, ct);
+        var content = await resp.Content.ReadAsStringAsync(ct);
+        if (!resp.IsSuccessStatusCode)
+            throw new HttpRequestException($"ARM {(int)resp.StatusCode} querying daily cost: {content}", null, resp.StatusCode);
+
+        return ParseDailyCostResult(content);
+    }
+
+    private static DailyCostResult ParseDailyCostResult(string json)
+    {
+        var result = new DailyCostResult();
+        using var doc = JsonDocument.Parse(json);
+        if (!doc.RootElement.TryGetProperty("properties", out var props))
+            return result;
+
+        int costIdx = -1, dateIdx = -1, currencyIdx = -1;
+        if (props.TryGetProperty("columns", out var columns) && columns.ValueKind == JsonValueKind.Array)
+        {
+            var i = 0;
+            foreach (var col in columns.EnumerateArray())
+            {
+                var name = col.TryGetProperty("name", out var n) ? n.GetString() : null;
+                if (string.Equals(name, "Cost", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(name, "PreTaxCost", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(name, "CostUSD", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (costIdx < 0) costIdx = i;
+                }
+                else if (string.Equals(name, "UsageDate", StringComparison.OrdinalIgnoreCase))
+                {
+                    dateIdx = i;
+                }
+                else if (string.Equals(name, "Currency", StringComparison.OrdinalIgnoreCase))
+                {
+                    currencyIdx = i;
+                }
+                i++;
+            }
+        }
+
+        if (!props.TryGetProperty("rows", out var rows) || rows.ValueKind != JsonValueKind.Array || costIdx < 0 || dateIdx < 0)
+            return result;
+
+        foreach (var row in rows.EnumerateArray())
+        {
+            if (row.ValueKind != JsonValueKind.Array) continue;
+            var arr = row.EnumerateArray().ToArray();
+            if (costIdx >= arr.Length || dateIdx >= arr.Length) continue;
+
+            decimal cost = arr[costIdx].ValueKind == JsonValueKind.Number ? arr[costIdx].GetDecimal() : 0m;
+            DateTime? date = ParseUsageDate(arr[dateIdx]);
+            if (date is null) continue;
+
+            if (currencyIdx >= 0 && currencyIdx < arr.Length &&
+                string.IsNullOrEmpty(result.Currency) &&
+                arr[currencyIdx].ValueKind == JsonValueKind.String)
+            {
+                result.Currency = arr[currencyIdx].GetString() ?? string.Empty;
+            }
+
+            result.Points.Add(new DailyCostPoint(date.Value, cost));
+        }
+
+        result.Points = result.Points.OrderBy(p => p.Date).ToList();
+        return result;
+    }
+
+    private static DateTime? ParseUsageDate(JsonElement el)
+    {
+        if (el.ValueKind == JsonValueKind.Number)
+        {
+            // Cost Management returns UsageDate as yyyyMMdd integer (e.g. 20260513)
+            var n = el.GetInt32();
+            var y = n / 10000;
+            var m = n / 100 % 100;
+            var d = n % 100;
+            if (y >= 2000 && m is >= 1 and <= 12 && d is >= 1 and <= 31)
+                return new DateTime(y, m, d, 0, 0, 0, DateTimeKind.Utc);
+            return null;
+        }
+        if (el.ValueKind == JsonValueKind.String &&
+            DateTime.TryParse(el.GetString(), System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                out var parsed))
+        {
+            return DateTime.SpecifyKind(parsed.Date, DateTimeKind.Utc);
+        }
+        return null;
     }
 
     private static CostQueryResult ParseCostQueryResult(string json)

@@ -146,4 +146,25 @@ public interface IDevcontainerSpawnerService
         string? workingDir = null,
         int timeoutSeconds = 3600,
         Action<string>? onOutput = null);
+
+    /// <summary>
+    /// Copies arbitrary bytes to a file inside a running container.
+    ///
+    /// Uses the Docker `extract archive` endpoint (the SDK equivalent of `docker cp`), so the
+    /// content travels as a TAR stream over the Docker daemon socket — there is no ARG_MAX
+    /// cap. Prefer this over any base64-in-`bash -c` transport for prompt files, scripts, or
+    /// agent definitions: those silently truncate above ~2 MB and leave callers with an empty
+    /// file on disk.
+    /// </summary>
+    /// <param name="containerId">ID of the running container</param>
+    /// <param name="remotePath">Absolute path inside the container (parent dir is created if missing)</param>
+    /// <param name="content">Raw bytes to write</param>
+    /// <param name="mode">Unix mode bits (default 0o644 = 420)</param>
+    /// <param name="ct">Cancellation token</param>
+    Task CopyFileToContainerAsync(
+        string containerId,
+        string remotePath,
+        byte[] content,
+        int mode = 420, // 0o644
+        CancellationToken ct = default);
 }

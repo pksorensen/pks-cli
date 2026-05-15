@@ -49,6 +49,18 @@ public class FoundryUsageCommandTests
                 It.IsAny<DateTime>(), It.IsAny<DateTime>(),
                 CostGrouping.None, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new CostQueryResult { Currency = "USD", TotalCost = 7.50m });
+        billing.Setup(x => x.QueryDailyCostAsync("tok",
+                "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.CognitiveServices/accounts/foundry-1",
+                It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DailyCostResult
+            {
+                Currency = "USD",
+                Points = new List<DailyCostPoint>
+                {
+                    new(new DateTime(2026, 5, 12, 0, 0, 0, DateTimeKind.Utc), 5m),
+                    new(new DateTime(2026, 5, 13, 0, 0, 0, DateTimeKind.Utc), 2.5m),
+                }
+            });
         billing.Setup(x => x.QueryCostAsync("tok",
                 "/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.CognitiveServices/accounts/foundry-1",
                 It.IsAny<DateTime>(), It.IsAny<DateTime>(),
@@ -118,6 +130,9 @@ public class FoundryUsageCommandTests
                 It.IsAny<DateTime>(), It.IsAny<DateTime>(),
                 It.IsAny<CostGrouping>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new CostQueryResult { Currency = "USD" });
+        billing.Setup(x => x.QueryDailyCostAsync(It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DailyCostResult { Currency = "USD" });
 
         var console = new TestConsole();
         console.Profile.Capabilities.Interactive = true;

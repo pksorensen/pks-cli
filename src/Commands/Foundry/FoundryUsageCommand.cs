@@ -127,9 +127,11 @@ public class FoundryUsageCommand : Command<FoundrySettings>
         var scope = $"/subscriptions/{subId}/resourceGroups/{rg}/providers/Microsoft.CognitiveServices/accounts/{resourceName}";
         CostQueryResult summary;
         CostQueryResult byMeter;
+        DailyCostResult daily;
         try
         {
             summary = await _billingService.QueryCostAsync(token, scope, start, end, CostGrouping.None);
+            daily = await _billingService.QueryDailyCostAsync(token, scope, start, end);
             byMeter = await _billingService.QueryCostAsync(token, scope, start, end, CostGrouping.Meter);
         }
         catch (Exception ex)
@@ -149,6 +151,10 @@ public class FoundryUsageCommand : Command<FoundrySettings>
         summaryTable.AddRow("Period", $"{start:yyyy-MM-dd} → {end:yyyy-MM-dd}");
         summaryTable.AddRow("Total cost", $"{summary.TotalCost.ToString("N2", CultureInfo.InvariantCulture)} {Markup.Escape(summary.Currency)}");
         _console.Write(summaryTable);
+        _console.WriteLine();
+
+        CostChart.Render(_console, daily.Points,
+            !string.IsNullOrEmpty(daily.Currency) ? daily.Currency : summary.Currency);
         _console.WriteLine();
 
         var meterTable = new Table()

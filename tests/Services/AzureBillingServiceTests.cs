@@ -220,6 +220,53 @@ public class AzureBillingServiceTests
 
     [Fact]
     [Trait("Category", "AzureBilling")]
+    public async Task QueryDailyCostAsync_BuildsDailyBody_AndParsesNumericUsageDate()
+    {
+        string? capturedBody = null;
+        var svc = Create(async req =>
+        {
+            capturedBody = await req.Content!.ReadAsStringAsync();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""
+                {
+                  "properties": {
+                    "columns": [
+                      { "name": "Cost", "type": "Number" },
+                      { "name": "UsageDate", "type": "Number" },
+                      { "name": "Currency", "type": "String" }
+                    ],
+                    "rows": [
+                      [10.5, 20260511, "USD"],
+                      [12.0, 20260512, "USD"],
+                      [3.25, 20260513, "USD"]
+                    ]
+                  }
+                }
+                """)
+            };
+        });
+
+        var result = await svc.QueryDailyCostAsync(
+            "tok",
+            "/subscriptions/sub",
+            new DateTime(2026, 5, 1, 0, 0, 0, DateTimeKind.Utc),
+            new DateTime(2026, 5, 13, 0, 0, 0, DateTimeKind.Utc));
+
+        using var doc = JsonDocument.Parse(capturedBody!);
+        doc.RootElement.GetProperty("dataset").GetProperty("granularity").GetString().Should().Be("Daily");
+        doc.RootElement.GetProperty("dataset").TryGetProperty("grouping", out _).Should().BeFalse();
+
+        result.Currency.Should().Be("USD");
+        result.Points.Should().HaveCount(3);
+        result.Points[0].Date.Should().Be(new DateTime(2026, 5, 11, 0, 0, 0, DateTimeKind.Utc));
+        result.Points[0].Cost.Should().Be(10.5m);
+        result.Points[2].Date.Should().Be(new DateTime(2026, 5, 13, 0, 0, 0, DateTimeKind.Utc));
+        result.Points[2].Cost.Should().Be(3.25m);
+    }
+
+    [Fact]
+    [Trait("Category", "AzureBilling")]
     public async Task QueryCostAsync_GroupingNone_OmitsGroupingArrayFromBody()
     {
         string? capturedBody = null;
