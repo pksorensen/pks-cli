@@ -171,27 +171,18 @@ public class FoundryInitCommandTests
         authMock.Setup(x => x.GetAccessTokenAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("test-access-token");
 
+        var writer = new StringWriter();
         var command = new FoundryTokenCommand(authMock.Object, config);
+        command.IsOutputRedirected = () => true;
+        command.GetOutput = () => writer;
         var settings = new FoundryTokenCommand.Settings();
 
-        // Capture Console.Write output
-        var originalOut = Console.Out;
-        var writer = new StringWriter();
-        Console.SetOut(writer);
+        // Act
+        var result = command.Execute(null!, settings);
 
-        try
-        {
-            // Act
-            var result = command.Execute(null!, settings);
-
-            // Assert
-            result.Should().Be(0);
-            writer.ToString().Should().Contain("test-access-token");
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
+        // Assert
+        result.Should().Be(0);
+        writer.ToString().Should().Contain("test-access-token");
     }
 
     [Fact]
