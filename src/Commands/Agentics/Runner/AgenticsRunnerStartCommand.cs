@@ -2319,6 +2319,12 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             //    expected to be set up out-of-band by `pks-cli init`.
             var gitEnv = await PrepareGitCredentialsAsync(ct);
 
+            // Never block on an interactive password prompt — if credentials are missing
+            // for the target host (ADO, GitLab, etc.) we want git to fail fast so the
+            // job reports back to the admin UI instead of hanging the runner.
+            gitEnv["GIT_TERMINAL_PROMPT"] = "0";
+            gitEnv["GCM_INTERACTIVE"] = "Never";
+
             await RunGitArgsAsync(["config", "--global", "user.name", "Agentics Runner"], null, verbose, ct);
             await RunGitArgsAsync(["config", "--global", "user.email", "runner@agentics.dk"], null, verbose, ct);
 
@@ -2386,25 +2392,26 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             }
             _console.MarkupLine($"[cyan]Distribute: {copiedCount} file(s) survived the allowlist[/]");
 
-            // 10. Clone-or-init the target repo. Mirrors the pattern from ExecuteGitPushJobAsync.
+            // 10. Clone the target repo. For empty repos (typical first-distribute case)
+            //     ADO/GitHub send a warning but `git clone` still exits 0 with an empty
+            //     working tree — that's fine for us. A non-zero exit here means auth or
+            //     network failure; we don't fall back to `git init` because the customer
+            //     must pre-create the target repo and a local init wouldn't fix auth.
             _console.MarkupLine($"[cyan]Distribute: preparing target {payload.TargetRepo.EscapeMarkup()}...[/]");
-            // Remove the empty placeholder so `git clone` can populate it.
             Directory.Delete(targetDir, recursive: true);
-            var targetCloneExit = await RunGitArgsAsync(["clone", payload.TargetRepo, targetDir], null, verbose, ct, gitEnv);
-            if (targetCloneExit == 0)
+            var (targetCloneExit, _, targetCloneStderr) = await RunGitCaptureAsync(
+                ["clone", payload.TargetRepo, targetDir], null, ct, gitEnv);
+            if (targetCloneExit != 0)
             {
-                var checkoutExit = await RunGitArgsAsync(["checkout", payload.TargetBranch], targetDir, verbose, ct);
-                if (checkoutExit != 0)
-                    await RunGitArgsAsync(["checkout", "-b", payload.TargetBranch], targetDir, verbose, ct);
+                throw new Exception(
+                    $"git clone target failed (exit {targetCloneExit}). " +
+                    $"For non-github targets (Azure DevOps, GitLab, …) configure runner-local " +
+                    $"credentials for {new Uri(payload.TargetRepo).Host}. " +
+                    $"stderr: {Truncate(targetCloneStderr, 400)}");
             }
-            else
-            {
-                _console.MarkupLine("[yellow]Distribute: target clone failed, initialising empty repo...[/]");
-                Directory.CreateDirectory(targetDir);
-                await RunGitArgsAsync(["init"], targetDir, verbose, ct);
-                await RunGitArgsAsync(["remote", "add", "origin", payload.TargetRepo], targetDir, verbose, ct);
+            var checkoutExit = await RunGitArgsAsync(["checkout", payload.TargetBranch], targetDir, verbose, ct);
+            if (checkoutExit != 0)
                 await RunGitArgsAsync(["checkout", "-b", payload.TargetBranch], targetDir, verbose, ct);
-            }
 
             // 11. Replace target tree: delete everything except .git, then copy filtered files in.
             foreach (var entry in Directory.EnumerateFileSystemEntries(targetDir))
@@ -2437,10 +2444,14 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
 
             // 14. Push (no --force in v1).
             _console.MarkupLine($"[cyan]Distribute: pushing to {payload.TargetBranch.EscapeMarkup()}...[/]");
-            var pushExit = await RunGitArgsAsync(
+            var (pushExit, _, pushStderr) = await RunGitCaptureAsync(
                 ["push", "--set-upstream", "origin", payload.TargetBranch],
-                targetDir, verbose, ct, gitEnv);
-            if (pushExit != 0) throw new Exception($"git push failed (exit {pushExit})");
+                targetDir, ct, gitEnv);
+            if (pushExit != 0)
+            {
+                throw new Exception(
+                    $"git push failed (exit {pushExit}). stderr: {Truncate(pushStderr, 400)}");
+            }
 
             var targetCommit = (await RunGitOutputAsync(["rev-parse", "HEAD"], targetDir, ct)).Trim();
             _console.MarkupLine($"[green]Distribute: pushed {targetCommit.EscapeMarkup()} to {payload.TargetRepo.EscapeMarkup()}[/]");
@@ -2569,6 +2580,38 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         }
         return proc.ExitCode;
     }
+
+    /// <summary>
+    /// Run git and capture stdout AND stderr alongside the exit code. Used by the
+    /// distribute flow so target-side failures (auth, network, divergent history) are
+    /// reported back to the admin UI with the actual git error message attached.
+    /// </summary>
+    private static async Task<(int exitCode, string stdout, string stderr)> RunGitCaptureAsync(
+        string[] args, string? workingDir, CancellationToken ct, Dictionary<string, string>? extraEnv = null)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var arg in args)
+            psi.ArgumentList.Add(arg);
+        if (workingDir != null)
+            psi.WorkingDirectory = workingDir;
+        if (extraEnv != null)
+            foreach (var (key, value) in extraEnv)
+                psi.Environment[key] = value;
+
+        var proc = Process.Start(psi);
+        if (proc == null) return (-1, "", "");
+        var stdout = await proc.StandardOutput.ReadToEndAsync(ct);
+        var stderr = await proc.StandardError.ReadToEndAsync(ct);
+        await proc.WaitForExitAsync(ct);
+        return (proc.ExitCode, stdout, stderr);
+    }
+
+    private static string Truncate(string s, int max) =>
+        string.IsNullOrEmpty(s) ? "(empty)" : (s.Length <= max ? s.Trim() : "…" + s[^max..].Trim());
 
     /// <summary>Runs git and returns stdout as a string.</summary>
     private static async Task<string> RunGitOutputAsync(string[] args, string workingDir, CancellationToken ct)
@@ -4185,14 +4228,49 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         try
         {
             var stored = await _githubAuth.GetStoredTokenAsync();
-            if (stored == null || string.IsNullOrEmpty(stored.AccessToken))
-                return new Dictionary<string, string>();
+            var ghToken = stored?.AccessToken ?? string.Empty;
+            if (string.IsNullOrEmpty(ghToken) && _console != null)
+            {
+                _console.MarkupLine(
+                    "[yellow]No stored GitHub token — clones from github.com will fail. " +
+                    "Run [bold]pks github init[/] (or [bold]--token ghp_...[/]) to authenticate.[/]");
+            }
 
-            // Write a GIT_ASKPASS script that provides the token non-interactively
+            // Path to the running pks-cli executable so the askpass script can shell
+            // back into `pks git askpass …` for hosts (like dev.azure.com) where the
+            // credential is short-lived and must be refreshed per request.
+            var pksBinary = Environment.ProcessPath
+                ?? Process.GetCurrentProcess().MainModule?.FileName
+                ?? "pks";
+
             var scriptPath = Path.Combine(Path.GetTempPath(), $"git-askpass-{Guid.NewGuid():N}.sh");
-            var token = stored.AccessToken;
-            await File.WriteAllTextAsync(scriptPath,
-                $"#!/bin/sh\ncase \"$1\" in\n  *Username*) echo \"x-access-token\" ;;\n  *Password*) echo \"{token}\" ;;\n  *) echo \"\" ;;\nesac\n", ct);
+
+            // Dispatch by host:
+            //   *dev.azure.com*  → delegate to `pks git askpass` (refreshes ADO OAuth token)
+            //   *github.com*     → return the stored GitHub installation token (static)
+            //   everything else  → empty → git fails fast under GIT_TERMINAL_PROMPT=0
+            //
+            // We dispatch on the prompt itself: git asks "Password for 'https://host/...'",
+            // so the URL appears verbatim in $1.
+            var sb = new StringBuilder();
+            sb.AppendLine("#!/bin/sh");
+            sb.AppendLine("# Auto-generated by pks-cli agentics runner. Multi-host credential dispatch.");
+            sb.AppendLine("prompt=\"$1\"");
+            sb.AppendLine("case \"$prompt\" in");
+            sb.AppendLine("  *dev.azure.com*|*visualstudio.com*)");
+            sb.AppendLine($"    exec \"{pksBinary}\" git askpass \"$prompt\"");
+            sb.AppendLine("    ;;");
+            sb.AppendLine("esac");
+            sb.AppendLine("case \"$prompt\" in");
+            sb.AppendLine("  *Username*) echo \"x-access-token\" ;;");
+            if (!string.IsNullOrEmpty(ghToken))
+                sb.AppendLine($"  *Password*) echo \"{ghToken}\" ;;");
+            else
+                sb.AppendLine("  *Password*) exit 1 ;;");
+            sb.AppendLine("  *) exit 1 ;;");
+            sb.AppendLine("esac");
+
+            await File.WriteAllTextAsync(scriptPath, sb.ToString(), ct);
 
             if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
             {
@@ -4204,11 +4282,25 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             {
                 ["GIT_ASKPASS"] = scriptPath,
                 ["GIT_TERMINAL_PROMPT"] = "0",
+                ["GCM_INTERACTIVE"] = "Never",
+                // Neutralise any inherited credential.helper (e.g. a stale VS Code
+                // devcontainer node helper) so git uses our GIT_ASKPASS directly
+                // without first spending stderr on a broken helper.
+                ["GIT_CONFIG_COUNT"] = "1",
+                ["GIT_CONFIG_KEY_0"] = "credential.helper",
+                ["GIT_CONFIG_VALUE_0"] = "",
             };
         }
         catch
         {
-            return new Dictionary<string, string>();
+            return new Dictionary<string, string>
+            {
+                ["GIT_TERMINAL_PROMPT"] = "0",
+                ["GCM_INTERACTIVE"] = "Never",
+                ["GIT_CONFIG_COUNT"] = "1",
+                ["GIT_CONFIG_KEY_0"] = "credential.helper",
+                ["GIT_CONFIG_VALUE_0"] = "",
+            };
         }
     }
 

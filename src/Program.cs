@@ -391,6 +391,11 @@ app.Configure(config =>
     config.AddCommand<PKS.Commands.Agent.AgentCommand>("agent")
         .WithDescription("Manage AI agents for development automation");
 
+    config.AddCommand<PKS.Commands.Exec.PksExecCommand>("exec")
+        .WithDescription("Run a tool that supports the pks-cli discovery contract (PKS_DISCOVERY=1)")
+        .WithExample(new[] { "exec", "agent-photographer.exe", "shoot" })
+        .WithExample(new[] { "exec", "--provider", "foundry", "agent-photographer.exe", "preview" });
+
     config.AddCommand<AsciiCommand>("ascii")
         .WithDescription("Generate beautiful ASCII art for your projects");
 
