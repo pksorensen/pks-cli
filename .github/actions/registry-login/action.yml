@@ -14,18 +14,96 @@ runs:
       run: |
         REGISTRY="${{ inputs.registry }}"
         SOCKET="${PKS_TOKEN_URL:-/var/run/pks-creds/creds.sock}"
-        HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" --unix-socket "$SOCKET" \
-          -H "Authorization: Bearer $PKS_TOKEN" \
-          "http://localhost/registry/credential?hostname=${REGISTRY}")
-        HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -1)
-        RESPONSE=$(echo "$HTTP_RESPONSE" | head -n -1)
-        if [ "$HTTP_CODE" -ne 200 ]; then
-          echo "::error::Registry credential request failed (HTTP $HTTP_CODE): $RESPONSE"
-          echo "Ensure 'pks registry init ${REGISTRY}' has been run on this runner."
+
+        diag() {
+          echo "::group::pks credential socket diagnostics"
+          echo "registry        : $REGISTRY"
+          echo "socket path     : $SOCKET"
+          echo "PKS_TOKEN set   : $([ -n "${PKS_TOKEN:-}" ] && echo yes || echo no)"
+          echo "PKS_TOKEN_URL   : ${PKS_TOKEN_URL:-<unset, using default>}"
+          echo "uid/gid         : $(id 2>/dev/null || echo unknown)"
+          if [ -S "$SOCKET" ]; then
+            echo "socket          : present"
+            ls -la "$SOCKET" 2>/dev/null || true
+          elif [ -e "$SOCKET" ]; then
+            echo "socket          : path exists but is not a socket"
+            ls -la "$SOCKET" 2>/dev/null || true
+          else
+            echo "socket          : missing"
+            SOCKET_DIR="$(dirname "$SOCKET")"
+            if [ -d "$SOCKET_DIR" ]; then
+              echo "socket dir      : exists ($SOCKET_DIR)"
+              ls -la "$SOCKET_DIR" 2>/dev/null || true
+            else
+              echo "socket dir      : missing ($SOCKET_DIR)"
+            fi
+          fi
+          echo "::endgroup::"
+        }
+
+        # Pre-flight: socket must exist and PKS_TOKEN must be set.
+        if [ ! -S "$SOCKET" ]; then
+          echo "::error::pks credential socket not found at $SOCKET"
+          diag
+          echo "Hint: the runner bind-mounts the socket into the devcontainer at /var/run/pks-creds."
+          echo "Jobs using 'container:', 'services:', or that run this step inside another"
+          echo "docker container do NOT inherit that mount. Run registry-login in the runner"
+          echo "job (no 'container:' key) before any containerized steps."
           exit 1
         fi
+        if [ -z "${PKS_TOKEN:-}" ]; then
+          echo "::error::PKS_TOKEN is not set in this step's environment."
+          diag
+          echo "Hint: the runner injects PKS_TOKEN into the job environment. If it's missing,"
+          echo "the step may be running outside the runner's container (see hint above)."
+          exit 1
+        fi
+
+        # Capture curl exit code separately from HTTP status so we can distinguish
+        # connection failures (exit 7) from server-side errors.
+        CURL_BODY="$(mktemp)"
+        trap 'rm -f "$CURL_BODY"' EXIT
+
+        set +e
+        HTTP_CODE=$(curl -sS -o "$CURL_BODY" -w "%{http_code}" --unix-socket "$SOCKET" \
+          -H "Authorization: Bearer $PKS_TOKEN" \
+          "http://localhost/registry/credential?hostname=${REGISTRY}" 2>&1)
+        CURL_EXIT=$?
+        set -e
+
+        if [ "$CURL_EXIT" -ne 0 ]; then
+          echo "::error::curl failed to query pks credential socket (exit $CURL_EXIT)"
+          case "$CURL_EXIT" in
+            7)  echo "  -> connection refused / socket not reachable" ;;
+            22) echo "  -> HTTP error returned" ;;
+            28) echo "  -> request timed out" ;;
+          esac
+          # When curl errors out before getting a response, the -w output ends up
+          # in HTTP_CODE; surface it for context.
+          if [ -n "$HTTP_CODE" ]; then echo "  curl stderr: $HTTP_CODE"; fi
+          diag
+          exit "$CURL_EXIT"
+        fi
+
+        RESPONSE="$(cat "$CURL_BODY")"
+
+        if [ "$HTTP_CODE" -ne 200 ]; then
+          echo "::error::Registry credential request failed (HTTP $HTTP_CODE): $RESPONSE"
+          case "$HTTP_CODE" in
+            401) echo "Hint: PKS_TOKEN is invalid or expired for this job." ;;
+            404) echo "Hint: no registry registered for $REGISTRY. Run 'pks registry init $REGISTRY' on the runner host." ;;
+            503) echo "Hint: registry service is unavailable on the runner." ;;
+          esac
+          exit 1
+        fi
+
         USER=$(echo "$RESPONSE" | jq -r '.username')
         PASS=$(echo "$RESPONSE" | jq -r '.password')
+        if [ -z "$USER" ] || [ "$USER" = "null" ] || [ -z "$PASS" ] || [ "$PASS" = "null" ]; then
+          echo "::error::credential response missing username or password"
+          exit 1
+        fi
         echo "::add-mask::$PASS"
+
         echo "$PASS" | docker login "$REGISTRY" --username "$USER" --password-stdin
         echo "REGISTRY_LOGGED_IN=$REGISTRY" >> "$GITHUB_ENV"
