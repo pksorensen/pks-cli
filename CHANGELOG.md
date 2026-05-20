@@ -49,6 +49,15 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.14.0](https://github.com/pksorensen/pks-cli/compare/v6.13.0...v6.14.0) (2026-05-20)
+
+
+### Features
+
+* **foundry:** enhance FoundryTokenCommand with output redirection and clipboard copy functionality ([5f38275](https://github.com/pksorensen/pks-cli/commit/5f38275de662017312adfe79abbdbdebcf8d71ac))
+* **registry-login:** add mount-layer diagnostics for credential socket ([cf10d52](https://github.com/pksorensen/pks-cli/commit/cf10d5227d8eacee22e00c94a907d00ded1eacc5))
+* **registry-login:** enhance error handling and diagnostics for credential socket ([a8adb0c](https://github.com/pksorensen/pks-cli/commit/a8adb0c0a8c11346d8155caca07bb894d273d733))
+
 ## [6.13.0](https://github.com/pksorensen/pks-cli/compare/v6.12.0...v6.13.0) (2026-05-18)
 
 
