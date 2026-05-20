@@ -38,6 +38,17 @@ runs:
               echo "socket dir      : missing ($SOCKET_DIR)"
             fi
           fi
+          # Mount-layer diagnostics: tells us whether /var/run/pks-creds is a real
+          # bind mount, whether something is shadowing /var/run (e.g. dind tmpfs),
+          # or whether the mount was never applied at all.
+          SOCKET_DIR="$(dirname "$SOCKET")"
+          echo "--- mount layer ---"
+          echo "findmnt $SOCKET_DIR :"
+          findmnt "$SOCKET_DIR" 2>&1 || echo "  (not a mountpoint)"
+          echo "findmnt /var/run :"
+          findmnt /var/run 2>&1 || echo "  (not a mountpoint)"
+          echo "/proc/self/mountinfo (var/run | pks-creds) :"
+          grep -E "var/run|pks-creds" /proc/self/mountinfo 2>/dev/null || echo "  (no matching entries)"
           echo "::endgroup::"
         }
 
