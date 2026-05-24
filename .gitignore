@@ -435,4 +435,10 @@ data
 src/Infrastructure/Resources/pks-linux-x64
 src/Infrastructure/Resources/heypoul-win-amd64.exe
 # pks brain — local raw extracts (see `pks brain init`)
-.pks/brain/
+# .pks/brain/ tracking policy (FT-12 backwatch):
+#   Track:  feature-specs/, adr/
+#   Ignore: extracts/, synthesis/, wiki/, refs.json (regenerated locally per devcontainer)
+.pks/brain/extracts/
+.pks/brain/synthesis/
+.pks/brain/wiki/
+.pks/brain/refs.json
