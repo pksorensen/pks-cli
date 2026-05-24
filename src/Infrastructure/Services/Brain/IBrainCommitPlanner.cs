@@ -21,6 +21,7 @@ public sealed class BrainCommitPlanOptions
     public bool IncludeBash { get; init; }
     public DateTime? SinceUtc { get; init; }
     public int MinFiles { get; init; } = 2;
+    public bool IncludePrompts { get; init; }
 }
 
 public sealed class BrainCommitPlanResult
@@ -40,10 +41,17 @@ public sealed class BrainCommitGroup
     public List<BrainCommitContributingSession> ContributingSessions { get; init; } = new();
     /// <summary>Files this session touched that were already assigned to earlier groups: file → group_id.</summary>
     public Dictionary<string, int> SharedFiles { get; init; } = new();
+    public List<BrainCommitGroupPrompt> Prompts { get; init; } = new();
 }
 
 public sealed class BrainCommitContributingSession
 {
     public string SessionId { get; init; } = string.Empty;
     public int FileCount { get; init; }
+}
+
+public sealed class BrainCommitGroupPrompt
+{
+    public DateTime TimestampUtc { get; init; }
+    public string Text { get; init; } = string.Empty;
 }

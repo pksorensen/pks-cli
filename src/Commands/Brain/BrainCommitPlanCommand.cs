@@ -51,6 +51,10 @@ public class BrainCommitPlanSettings : BrainSettings
     [CommandOption("--format")]
     [Description("Output format: text (default), json, or jsonl.")]
     public string Format { get; set; } = "text";
+
+    [CommandOption("--include-prompts")]
+    [Description("Include user prompts that preceded the file edits per group (max 10).")]
+    public bool IncludePrompts { get; set; }
 }
 
 public class BrainCommitPlanCommand : AsyncCommand<BrainCommitPlanSettings>
@@ -118,6 +122,7 @@ public class BrainCommitPlanCommand : AsyncCommand<BrainCommitPlanSettings>
             IncludeBash = settings.IncludeBash,
             SinceUtc = since,
             MinFiles = settings.MinFiles,
+            IncludePrompts = settings.IncludePrompts,
         });
 
         switch (format)
@@ -238,6 +243,15 @@ public class BrainCommitPlanCommand : AsyncCommand<BrainCommitPlanSettings>
                     .Select(c => $"{Shorten(c.SessionId)} ({c.FileCount})"));
                 AnsiConsole.MarkupLine($"  [grey]Contributing: {contribDesc}[/]");
             }
+            if (g.Prompts.Count > 0)
+            {
+                AnsiConsole.MarkupLine("  [grey]Prompts that drove the edits:[/]");
+                foreach (var p in g.Prompts)
+                {
+                    var line = p.Text.Replace("\r", " ").Replace("\n", " ");
+                    AnsiConsole.MarkupLine($"    [grey][[{p.TimestampUtc:HH:mm:ss}]][/] {Markup.Escape(line)}");
+                }
+            }
             AnsiConsole.WriteLine();
         }
 
@@ -295,6 +309,11 @@ public class BrainCommitPlanCommand : AsyncCommand<BrainCommitPlanSettings>
         {
             session_id = c.SessionId,
             file_count = c.FileCount,
+        }),
+        prompts = g.Prompts.Select(p => new
+        {
+            timestamp = p.TimestampUtc.ToString("o"),
+            text = p.Text,
         }),
     };
 }

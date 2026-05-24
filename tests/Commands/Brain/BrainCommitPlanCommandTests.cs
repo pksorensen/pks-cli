@@ -109,15 +109,17 @@ public sealed class BrainCommitPlanCommandTests : IDisposable
     [Fact]
     public async Task tc_plan_records_contributing_sessions()
     {
-        // session-A touches all 3 files; session-B touches 2 of them.
-        var now = DateTime.UtcNow;
+        // session-A is the last-editor of all 3 files; session-B also touched
+        // 2 of them earlier (so it qualifies as a contributing — not primary — session).
+        var earlier = DateTime.UtcNow.AddMinutes(-5);
+        var later = DateTime.UtcNow;
         WriteSession("sess-A",
-            ("/repo/f1.cs", now),
-            ("/repo/f2.cs", now),
-            ("/repo/f3.cs", now));
+            ("/repo/f1.cs", later),
+            ("/repo/f2.cs", later),
+            ("/repo/f3.cs", later));
         WriteSession("sess-B",
-            ("/repo/f1.cs", now),
-            ("/repo/f2.cs", now));
+            ("/repo/f1.cs", earlier),
+            ("/repo/f2.cs", earlier));
 
         var result = await _planner.PlanAsync(new BrainCommitPlanOptions
         {
@@ -212,5 +214,110 @@ public sealed class BrainCommitPlanCommandTests : IDisposable
             doc.GetProperty("files").GetArrayLength().Should().BeGreaterThan(0);
             doc.GetProperty("primary_session").GetString().Should().NotBeNullOrEmpty();
         }
+    }
+
+    [Fact]
+    public async Task tc_plan_uses_last_edit_author_heuristic()
+    {
+        // SEMANTIC TEST: ranking is "files this session is last-editor of",
+        // not "files this session touched". Session A touched f1,f2,f3 at t=100;
+        // session B re-edited f3 at t=200. Even though A "touched" 3 files,
+        // last-editor counts are: A={f1,f2} (count=2), B={f3} (count=1).
+        // With min-files=2, only A qualifies as primary.
+        var t100 = DateTime.UtcNow.AddMinutes(-10);
+        var t200 = DateTime.UtcNow;
+        WriteSession("sess-A",
+            ("/repo/f1.cs", t100),
+            ("/repo/f2.cs", t100),
+            ("/repo/f3.cs", t100));
+        WriteSession("sess-B",
+            ("/repo/f3.cs", t200));
+
+        var result = await _planner.PlanAsync(new BrainCommitPlanOptions
+        {
+            Files = new[] { "/repo/f1.cs", "/repo/f2.cs", "/repo/f3.cs" },
+            ProjectsDir = _projectsDir,
+            MinFiles = 2,
+        });
+
+        result.Groups.Should().HaveCount(1);
+        result.Groups[0].PrimarySession.Should().Be("sess-A");
+        result.Groups[0].Files.Should().BeEquivalentTo(new[] { "/repo/f1.cs", "/repo/f2.cs" });
+        result.Groups[0].Files.Should().NotContain("/repo/f3.cs");
+
+        // sess-B is the last editor of only 1 file → below min-files; never primary.
+        result.Groups.Should().NotContain(g => g.PrimarySession == "sess-B");
+
+        // f3 ungrouped: sess-B owns it as last-editor but doesn't reach the threshold.
+        result.Ungrouped.Should().Contain("/repo/f3.cs");
+    }
+
+    [Fact]
+    public async Task tc_plan_include_prompts_extracts_preceding_user_messages()
+    {
+        // JSONL with: user "do X" → assistant Edit(f1) → user "now Y" → assistant Edit(f2).
+        var t1 = DateTime.UtcNow.AddMinutes(-10);
+        var t2 = DateTime.UtcNow.AddMinutes(-9);
+        var t3 = DateTime.UtcNow.AddMinutes(-8);
+        var t4 = DateTime.UtcNow.AddMinutes(-7);
+        const string f1 = "/repo/f1.cs";
+        const string f2 = "/repo/f2.cs";
+
+        var lines = new List<string>
+        {
+            JsonSerializer.Serialize(new
+            {
+                type = "user",
+                timestamp = t1.ToString("o"),
+                message = new { role = "user", content = "do X" },
+            }),
+            JsonSerializer.Serialize(new
+            {
+                type = "assistant",
+                timestamp = t2.ToString("o"),
+                message = new
+                {
+                    role = "assistant",
+                    content = new object[]
+                    {
+                        new { type = "tool_use", id = "tu_1", name = "Edit", input = new { file_path = f1 } },
+                    },
+                },
+            }),
+            JsonSerializer.Serialize(new
+            {
+                type = "user",
+                timestamp = t3.ToString("o"),
+                message = new { role = "user", content = "now Y" },
+            }),
+            JsonSerializer.Serialize(new
+            {
+                type = "assistant",
+                timestamp = t4.ToString("o"),
+                message = new
+                {
+                    role = "assistant",
+                    content = new object[]
+                    {
+                        new { type = "tool_use", id = "tu_2", name = "Edit", input = new { file_path = f2 } },
+                    },
+                },
+            }),
+        };
+        File.WriteAllLines(Path.Combine(_projectsDir, "proj1", "sess-A.jsonl"), lines);
+
+        var result = await _planner.PlanAsync(new BrainCommitPlanOptions
+        {
+            Files = new[] { f1, f2 },
+            ProjectsDir = _projectsDir,
+            MinFiles = 2,
+            IncludePrompts = true,
+        });
+
+        result.Groups.Should().HaveCount(1);
+        var g = result.Groups[0];
+        g.PrimarySession.Should().Be("sess-A");
+        g.Prompts.Should().HaveCount(2);
+        g.Prompts.Select(p => p.Text).Should().Equal("do X", "now Y");
     }
 }
