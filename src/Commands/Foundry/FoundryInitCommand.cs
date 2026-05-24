@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
@@ -14,6 +15,10 @@ namespace PKS.Commands.Foundry;
 [Description("Authenticate with Azure AI Foundry")]
 public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
 {
+    /// <summary>ActivitySource name for foundry commands. Referenced by Program.cs SetupTracing.</summary>
+    public const string ActivitySourceName = "pks-cli.foundry";
+    private static readonly ActivitySource _activitySource = new(ActivitySourceName, "1.0.0");
+
     private readonly IAzureFoundryAuthService _authService;
     private readonly AzureFoundryAuthConfig _config;
     private readonly IAnsiConsole _console;
@@ -43,6 +48,10 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
 
     private async Task<int> ExecuteAsync(Settings settings)
     {
+        using var rootSpan = _activitySource.StartActivity("foundry.init");
+        rootSpan?.SetTag("foundry.force", settings.Force);
+        rootSpan?.SetTag("foundry.tenant_id_provided", !string.IsNullOrEmpty(settings.TenantId));
+
         if (!settings.Force && await _authService.IsAuthenticatedAsync())
         {
             var existing = await _authService.GetStoredCredentialsAsync();
@@ -68,7 +77,9 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
             {
                 loginHint = email.Trim();
                 _console.MarkupLine("[dim]Discovering tenant...[/]");
+                using var discoverSpan = _activitySource.StartActivity("foundry.tenant_discover");
                 var discoveredTenant = await _authService.DiscoverTenantAsync(loginHint);
+                discoverSpan?.SetTag("foundry.tenant_discovered", !string.IsNullOrEmpty(discoveredTenant));
                 if (!string.IsNullOrEmpty(discoveredTenant))
                 {
                     tenantId = discoveredTenant;
@@ -91,19 +102,25 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
         _console.WriteLine();
 
         FoundryAuthResult authResult;
-        try
         {
-            authResult = await _authService.InitiateLoginAsync(tenantId, loginHint);
-        }
-        catch (OperationCanceledException)
-        {
-            _console.MarkupLine("[red]Authentication timed out.[/]");
-            return 1;
-        }
-        catch (Exception ex)
-        {
-            _console.MarkupLine($"[red]Authentication failed: {Markup.Escape(ex.Message)}[/]");
-            return 1;
+            using var loginSpan = _activitySource.StartActivity("foundry.login");
+            loginSpan?.SetTag("foundry.tenant", tenantId);
+            try
+            {
+                authResult = await _authService.InitiateLoginAsync(tenantId, loginHint);
+            }
+            catch (OperationCanceledException)
+            {
+                loginSpan?.SetStatus(ActivityStatusCode.Error, "timeout");
+                _console.MarkupLine("[red]Authentication timed out.[/]");
+                return 1;
+            }
+            catch (Exception ex)
+            {
+                loginSpan?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                _console.MarkupLine($"[red]Authentication failed: {Markup.Escape(ex.Message)}[/]");
+                return 1;
+            }
         }
 
         // Store initial credentials (tenantId + refreshToken) so token refresh works
@@ -116,7 +133,9 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
         });
 
         // Get management token to list subscriptions and resources
-        var managementToken = await _authService.GetAccessTokenAsync(_config.ManagementScope);
+        string? managementToken;
+        using (_activitySource.StartActivity("foundry.get_management_token"))
+            managementToken = await _authService.GetAccessTokenAsync(_config.ManagementScope);
         if (string.IsNullOrEmpty(managementToken))
         {
             _console.MarkupLine("[red]Failed to obtain management access token.[/]");
@@ -124,7 +143,12 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
         }
 
         // List subscriptions
-        var subscriptions = await _authService.ListSubscriptionsAsync(managementToken);
+        List<AzureSubscription> subscriptions;
+        using (var span = _activitySource.StartActivity("foundry.list_subscriptions"))
+        {
+            subscriptions = await _authService.ListSubscriptionsAsync(managementToken);
+            span?.SetTag("foundry.subscription_count", subscriptions.Count);
+        }
         if (subscriptions.Count == 0)
         {
             _console.MarkupLine("[red]No Azure subscriptions found for this account.[/]");
@@ -148,7 +172,13 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
         }
 
         // List Foundry resources (Cognitive Services accounts)
-        var resources = await _authService.ListFoundryResourcesAsync(managementToken, selectedSubscription.SubscriptionId);
+        List<CognitiveServicesAccount> resources;
+        using (var span = _activitySource.StartActivity("foundry.list_resources"))
+        {
+            span?.SetTag("foundry.subscription_id", selectedSubscription.SubscriptionId);
+            resources = await _authService.ListFoundryResourcesAsync(managementToken, selectedSubscription.SubscriptionId);
+            span?.SetTag("foundry.resource_count", resources.Count);
+        }
         if (resources.Count == 0)
         {
             _console.MarkupLine("[red]No Azure AI Foundry resources found in this subscription.[/]");
@@ -181,18 +211,22 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
         _console.MarkupLine($"[dim]Endpoint: [bold]{Markup.Escape(selectedResource.Properties.Endpoint)}[/][/]");
 
         // List deployments for the selected resource
-        var deployments = await _authService.ListDeploymentsAsync(managementToken, selectedSubscription.SubscriptionId, resourceGroup, selectedResource.Name);
+        List<FoundryDeployment> deployments;
+        using (var span = _activitySource.StartActivity("foundry.list_deployments"))
+        {
+            span?.SetTag("foundry.resource_name", selectedResource.Name);
+            span?.SetTag("foundry.resource_group", resourceGroup);
+            deployments = await _authService.ListDeploymentsAsync(managementToken, selectedSubscription.SubscriptionId, resourceGroup, selectedResource.Name);
+            span?.SetTag("foundry.deployment_count", deployments.Count);
+        }
         if (deployments.Count == 0)
         {
             _console.MarkupLine("[red]No model deployments found for this resource.[/]");
             return 1;
         }
 
-        // Filter to Anthropic/Claude deployments; fall back to all if none match
-        var filteredDeployments = deployments.Where(d =>
-            d.Properties.Model.Format.Contains("anthropic", StringComparison.OrdinalIgnoreCase) ||
-            d.Properties.Model.Name.Contains("claude", StringComparison.OrdinalIgnoreCase)).ToList();
-        var deploymentPool = filteredDeployments.Count > 0 ? filteredDeployments : deployments;
+        // Offer all deployments — TTS, embeddings, Claude, etc. The user picks which to enable.
+        var deploymentPool = deployments;
 
         List<string> selectedDeploymentNames;
         if (deploymentPool.Count == 1)
@@ -203,7 +237,7 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
         else
         {
             var choiceMap = deploymentPool.ToDictionary(
-                d => $"{d.Name} (model: {d.Properties.Model.Name})",
+                d => $"{d.Name} (model: {d.Properties.Model.Name}, format: {d.Properties.Model.Format})",
                 d => d.Name);
 
             var selectedDisplayNames = _console.Prompt(
@@ -245,21 +279,22 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
         var apiKey = string.IsNullOrWhiteSpace(apiKeyInput) ? null : apiKeyInput.Trim();
 
         // Store complete credentials
-        await _authService.StoreCredentialsAsync(new FoundryStoredCredentials
-        {
-            TenantId = tenantId,
-            RefreshToken = authResult.RefreshToken ?? string.Empty,
-            SelectedSubscriptionId = selectedSubscription.SubscriptionId,
-            SelectedSubscriptionName = selectedSubscription.DisplayName,
-            SelectedResourceEndpoint = foundryEndpoint,
-            SelectedResourceName = selectedResource.Name,
-            SelectedResourceGroup = resourceGroup,
-            DefaultModel = selectedDeployment.Name,
-            EnabledModels = selectedDeploymentNames,
-            ApiKey = apiKey,
-            CreatedAt = DateTime.UtcNow,
-            LastRefreshedAt = DateTime.UtcNow,
-        });
+        using (_activitySource.StartActivity("foundry.store_credentials"))
+            await _authService.StoreCredentialsAsync(new FoundryStoredCredentials
+            {
+                TenantId = tenantId,
+                RefreshToken = authResult.RefreshToken ?? string.Empty,
+                SelectedSubscriptionId = selectedSubscription.SubscriptionId,
+                SelectedSubscriptionName = selectedSubscription.DisplayName,
+                SelectedResourceEndpoint = foundryEndpoint,
+                SelectedResourceName = selectedResource.Name,
+                SelectedResourceGroup = resourceGroup,
+                DefaultModel = selectedDeployment.Name,
+                EnabledModels = selectedDeploymentNames,
+                ApiKey = apiKey,
+                CreatedAt = DateTime.UtcNow,
+                LastRefreshedAt = DateTime.UtcNow,
+            });
 
         // Display success
         _console.WriteLine();

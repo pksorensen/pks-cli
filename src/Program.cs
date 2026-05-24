@@ -1274,6 +1274,7 @@ static TracerProvider? SetupTracing()
         .SetResourceBuilder(ResourceBuilder.CreateDefault()
             .AddService("pks-cli", serviceVersion: GetVersion()))
         .AddSource(PKS.Commands.Agentics.Runner.AgenticsRunnerStartCommand.ActivitySourceName)
+        .AddSource(PKS.Commands.Foundry.FoundryInitCommand.ActivitySourceName)
         .AddHttpClientInstrumentation(o =>
         {
             // Suppress polling heartbeats — they fire every few seconds, produce no signal,
