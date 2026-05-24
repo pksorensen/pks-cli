@@ -141,15 +141,10 @@ public sealed class GitProxyDaemon : IAsyncDisposable
             return;
         }
 
-        // Fetch a token. We don't try to be clever about caching here — token
-        // sources own that policy. Null → 502 (operator misconfiguration).
+        // Fetch a token. Null/empty is valid for public upstreams that only need
+        // URL rewriting (canonical → live tunnel in dev) without auth injection.
+        // Token sources own caching/refresh policy.
         var token = await match.TokenSource.GetTokenAsync(ctx.RequestAborted);
-        if (string.IsNullOrEmpty(token))
-        {
-            ctx.Response.StatusCode = 502;
-            await ctx.Response.WriteAsync($"No token available for upstream {match.UpstreamPrefix}");
-            return;
-        }
 
         var upstreamUrl = $"{match.UpstreamPrefix.TrimEnd('/')}{path}{ctx.Request.QueryString}";
         using var upstreamRequest = new HttpRequestMessage(new HttpMethod(ctx.Request.Method), upstreamUrl);
@@ -170,7 +165,10 @@ public sealed class GitProxyDaemon : IAsyncDisposable
             if (SkipHeaders.Contains(header.Key)) continue;
             upstreamRequest.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray());
         }
-        upstreamRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        if (!string.IsNullOrEmpty(token))
+        {
+            upstreamRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        }
 
         var client = httpClientFactory.CreateClient("git-proxy-upstream");
         using var upstreamResponse = await client.SendAsync(upstreamRequest, HttpCompletionOption.ResponseHeadersRead, ctx.RequestAborted);

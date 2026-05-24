@@ -16,6 +16,7 @@ public sealed class StaticBearerTokenSource : IGitProxyTokenSource
 
     public StaticBearerTokenSource(string token)
     {
+        // Empty is valid — signals "rewrite upstream, no auth". Null is not.
         _token = token ?? throw new ArgumentNullException(nameof(token));
     }
 
