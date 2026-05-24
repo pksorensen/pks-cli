@@ -159,6 +159,7 @@ services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainSynthesisPipeline,
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainWikiPipeline, PKS.Infrastructure.Services.Brain.BrainWikiPipeline>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainSkillCatalog, PKS.Infrastructure.Services.Brain.BrainSkillCatalog>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainAdrPipeline, PKS.Infrastructure.Services.Brain.BrainAdrPipeline>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainSessionScanner, PKS.Infrastructure.Services.Brain.BrainSessionScanner>();
 // Legacy MCP services removed in Phase 3 - now using SDK-based services only
 
 // New SDK-based MCP hosting services
@@ -1131,6 +1132,16 @@ app.Configure(config =>
             .WithExample(["brain", "search", "streamId"])
             .WithExample(["brain", "search", "auth", "--in", "extracts", "--limit", "5"])
             .WithExample(["brain", "search", "Keycloak", "--since", "7d"]);
+
+        brain.AddBranch("scan", scan =>
+        {
+            scan.SetDescription("Deterministic scans across session JSONL files (no AI).");
+            scan.AddCommand<PKS.Commands.Brain.BrainScanFilepathCommand>("filepath")
+                .WithDescription("Find every tool_use entry that touched a given file or directory.")
+                .WithExample(["brain", "scan", "filepath", "./src/foo.cs"])
+                .WithExample(["brain", "scan", "filepath", "./src/", "--format", "jsonl"])
+                .WithExample(["brain", "scan", "filepath", "./src/foo.cs", "--include-bash"]);
+        });
 
         brain.AddBranch("skill", skill =>
         {
