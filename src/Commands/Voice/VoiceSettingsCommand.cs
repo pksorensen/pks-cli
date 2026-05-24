@@ -70,7 +70,7 @@ public class VoiceSettingsCommand : AsyncCommand<VoiceSettings>
             if (File.Exists(candidate)) return candidate;
         }
 
-        foreach (var rel in new[] { $"./{binaryName}", $"./sandbox/heypoul/{binaryName}", $"../sandbox/heypoul/{binaryName}" })
+        foreach (var rel in new[] { $"./{binaryName}", $"./projects/heypoul/{binaryName}", $"../projects/heypoul/{binaryName}" })
         {
             var full = Path.GetFullPath(rel);
             if (File.Exists(full)) return full;

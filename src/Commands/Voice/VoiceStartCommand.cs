@@ -171,7 +171,7 @@ public class VoiceStartCommand : AsyncCommand<VoiceStartCommand.Settings>
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 _console.MarkupLine("[dim]Build with build-local.sh (embeds heypoul.exe automatically) or place heypoul.exe in PATH.[/]");
             else
-                _console.MarkupLine("[dim]Run: cd sandbox/heypoul && go build -o heypoul . (or ./build.sh)[/]");
+                _console.MarkupLine("[dim]Run: cd projects/heypoul && go build -o heypoul . (or ./build.sh)[/]");
             return 1;
         }
 
@@ -462,7 +462,7 @@ public class VoiceStartCommand : AsyncCommand<VoiceStartCommand.Settings>
     /// Resolves the heypoul binary path. Priority:
     ///   1. Explicit --heypoul flag
     ///   2. heypoul / heypoul.exe anywhere in PATH
-    ///   3. Common relative paths (sandbox/heypoul/heypoul)
+    ///   3. Common relative paths (projects/heypoul/heypoul)
     ///   4. Embedded heypoul-win-amd64 resource (extracted to %TEMP%\heypoul.exe on Windows)
     /// </summary>
     private async Task<string?> ResolveHeypoulPathAsync(string? userPath)
@@ -482,8 +482,8 @@ public class VoiceStartCommand : AsyncCommand<VoiceStartCommand.Settings>
         var relatives = new[]
         {
             $"./{binaryName}",
-            $"./sandbox/heypoul/{binaryName}",
-            $"../sandbox/heypoul/{binaryName}",
+            $"./projects/heypoul/{binaryName}",
+            $"../projects/heypoul/{binaryName}",
         };
         foreach (var rel in relatives)
         {
