@@ -49,6 +49,16 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.13.0](https://github.com/pksorensen/pks-cli/compare/v6.12.0...v6.13.0) (2026-05-18)
+
+
+### Features
+
+* Add Azure Billing and Model Management Services ([2c04bb9](https://github.com/pksorensen/pks-cli/commit/2c04bb96c43178413ada0ac0ac7f81fcb66a062f))
+* Add CopyFileToContainerAsync method to DevcontainerSpawnerService ([10f3bb9](https://github.com/pksorensen/pks-cli/commit/10f3bb929b6cb65ea4f37da5655503154e7663d5))
+* **brain:** add `pks brain` command suite for session knowledge extraction ([ee021f6](https://github.com/pksorensen/pks-cli/commit/ee021f6eaaa7bc43df3b530eb9a3f55a9cdc2d47))
+* **exec:** add PksExecCommand for executing tools with automatic provider/model configuration ([6ed4149](https://github.com/pksorensen/pks-cli/commit/6ed4149fef4cb2f72817dbfb9ed0c5f55347f938))
+
 ## [6.12.0](https://github.com/pksorensen/pks-cli/compare/v6.11.0...v6.12.0) (2026-05-06)
 
 

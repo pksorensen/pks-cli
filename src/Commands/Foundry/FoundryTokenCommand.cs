@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
@@ -19,6 +20,9 @@ public class FoundryTokenCommand : Command<FoundryTokenCommand.Settings>
 {
     private readonly IAzureFoundryAuthService _authService;
     private readonly AzureFoundryAuthConfig _config;
+
+    internal Func<bool> IsOutputRedirected { get; set; } = () => Console.IsOutputRedirected;
+    internal Func<TextWriter> GetOutput { get; set; } = () => Console.Out;
 
     public FoundryTokenCommand(IAzureFoundryAuthService authService, AzureFoundryAuthConfig config)
     {
@@ -60,6 +64,7 @@ public class FoundryTokenCommand : Command<FoundryTokenCommand.Settings>
             return 1;
         }
 
+        string outputValue;
         if (settings.Json)
         {
             var credentials = await _authService.GetStoredCredentialsAsync();
@@ -77,17 +82,96 @@ public class FoundryTokenCommand : Command<FoundryTokenCommand.Settings>
             var jsonBytes = Encoding.UTF8.GetBytes(json);
             using var ms = new MemoryStream();
             using (var gzip = new GZipStream(ms, CompressionLevel.Optimal, leaveOpen: true))
-            {
                 gzip.Write(jsonBytes);
-            }
-            Console.Write(Convert.ToBase64String(ms.ToArray()));
+            outputValue = Convert.ToBase64String(ms.ToArray());
         }
         else
         {
-            // Write raw token to stdout for piping (no markup, no newline formatting)
-            Console.Write(token);
+            outputValue = token;
+        }
+
+        if (IsOutputRedirected())
+        {
+            GetOutput().Write(outputValue);
+        }
+        else
+        {
+            ShowInteractiveToken(outputValue);
         }
 
         return 0;
+    }
+
+    private static void ShowInteractiveToken(string value)
+    {
+        AnsiConsole.MarkupLine("Here is your token (press [cyan]c[/] for copy):");
+        Console.WriteLine(value);
+
+        var key = Console.ReadKey(intercept: true);
+        if (key.KeyChar == 'c' || key.KeyChar == 'C')
+        {
+            // Move cursor up one line and rewrite the hint
+            Console.Write("\x1B[1A\r");
+            AnsiConsole.Markup("Here is your token ([green]copied[/]):");
+            Console.WriteLine("\x1B[0K");
+
+            CopyToClipboard(value);
+        }
+    }
+
+    private static void CopyToClipboard(string text)
+    {
+        try
+        {
+            ProcessStartInfo psi;
+            if (OperatingSystem.IsWindows())
+            {
+                psi = new ProcessStartInfo("cmd", "/c clip")
+                {
+                    RedirectStandardInput = true,
+                    UseShellExecute = false,
+                };
+            }
+            else if (OperatingSystem.IsMacOS())
+            {
+                psi = new ProcessStartInfo("pbcopy")
+                {
+                    RedirectStandardInput = true,
+                    UseShellExecute = false,
+                };
+            }
+            else
+            {
+                // Linux: try xclip, xsel, wl-copy
+                string? cmd = null;
+                string? args = null;
+                foreach (var (c, a) in new[] { ("xclip", "-selection clipboard"), ("xsel", "--clipboard --input"), ("wl-copy", "") })
+                {
+                    try
+                    {
+                        using var test = Process.Start(new ProcessStartInfo(c, "--version") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false });
+                        test?.WaitForExit(1000);
+                        cmd = c; args = a;
+                        break;
+                    }
+                    catch { }
+                }
+                if (cmd is null) return;
+                psi = new ProcessStartInfo(cmd, args ?? "")
+                {
+                    RedirectStandardInput = true,
+                    UseShellExecute = false,
+                };
+            }
+
+            using var proc = Process.Start(psi)!;
+            proc.StandardInput.Write(text);
+            proc.StandardInput.Close();
+            proc.WaitForExit(3000);
+        }
+        catch
+        {
+            // Best-effort: silently ignore clipboard failures
+        }
     }
 }
