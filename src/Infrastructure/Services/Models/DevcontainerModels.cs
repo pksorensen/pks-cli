@@ -537,6 +537,14 @@ public class DevcontainerSpawnOptions
     /// Mutually exclusive with InlineDevcontainerFiles — explicit files always take precedence.
     /// </summary>
     public DevcontainerTemplateRef? DevcontainerTemplate { get; set; }
+
+    /// <summary>
+    /// Hard memory cap (bytes) applied to the spawned container as both HostConfig.Memory
+    /// and HostConfig.MemorySwap, so the container can't spill to host swap and crash the
+    /// host. When null/0, no memory limit is applied (legacy behavior). The runner sets
+    /// this from the assembly-line settings, defaulting to 8 GiB.
+    /// </summary>
+    public long? MemoryBytes { get; set; }
 }
 
 /// <summary>

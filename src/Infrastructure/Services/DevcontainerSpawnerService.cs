@@ -358,7 +358,8 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                     options.RemoteEnv,
                     options.IdLabels,
                     options.RemoveExistingContainer,
-                    options.PluginVolumeName);
+                    options.PluginVolumeName,
+                    options.MemoryBytes);
 
                 if (upResult.Outcome != "success")
                 {
@@ -2362,7 +2363,8 @@ DEVCONTAINER_EOF";
     private async Task<string?> CreateOverrideConfigWithJsonElementAsync(
         string bootstrapContainerId,
         string workspaceFolder,
-        string volumeName)
+        string volumeName,
+        long? memoryBytes = null)
     {
         _logger.LogDebug("Creating override config using JsonElement approach");
 
@@ -2400,6 +2402,8 @@ DEVCONTAINER_EOF";
 
             writer.WriteStartObject();
 
+            var existingRunArgs = new List<string>();
+            var hadRunArgs = false;
             foreach (var property in root.EnumerateObject())
             {
                 // Skip workspaceMount - we use --mount flag instead
@@ -2420,9 +2424,43 @@ DEVCONTAINER_EOF";
                     continue;
                 }
 
+                // Capture existing runArgs so we can merge in our memory cap below.
+                if (property.Name == "runArgs" && property.Value.ValueKind == JsonValueKind.Array)
+                {
+                    hadRunArgs = true;
+                    foreach (var el in property.Value.EnumerateArray())
+                    {
+                        if (el.ValueKind == JsonValueKind.String)
+                        {
+                            var s = el.GetString();
+                            if (!string.IsNullOrEmpty(s)) existingRunArgs.Add(s);
+                        }
+                    }
+                    continue;
+                }
+
                 // Write property name and value using JsonElement (preserves structure)
                 writer.WritePropertyName(property.Name);
                 property.Value.WriteTo(writer);
+            }
+
+            // Inject memory cap into runArgs as a hard cap (Memory == MemorySwap).
+            // Honors any --memory/--memory-swap that already existed in devcontainer.json.
+            if (memoryBytes is long mem && mem > 0)
+            {
+                var hasMem = existingRunArgs.Any(a => a.StartsWith("--memory=", StringComparison.Ordinal) || a == "--memory" || a.StartsWith("-m=", StringComparison.Ordinal) || a == "-m");
+                var hasSwap = existingRunArgs.Any(a => a.StartsWith("--memory-swap=", StringComparison.Ordinal) || a == "--memory-swap");
+                if (!hasMem) existingRunArgs.Add($"--memory={mem}b");
+                if (!hasSwap) existingRunArgs.Add($"--memory-swap={mem}b");
+                _logger.LogInformation("Applying devcontainer memory cap: {Bytes} bytes (hard cap, Memory == MemorySwap)", mem);
+            }
+
+            if (hadRunArgs || existingRunArgs.Count > 0)
+            {
+                writer.WritePropertyName("runArgs");
+                writer.WriteStartArray();
+                foreach (var a in existingRunArgs) writer.WriteStringValue(a);
+                writer.WriteEndArray();
             }
 
             writer.WriteEndObject();
@@ -2750,7 +2788,8 @@ DEVCONTAINER_EOF";
         Dictionary<string, string>? remoteEnv = null,
         Dictionary<string, string>? idLabels = null,
         bool removeExistingContainer = false,
-        string? pluginVolumeName = null)
+        string? pluginVolumeName = null,
+        long? memoryBytes = null)
     {
         _logger.LogDebug("Running devcontainer up in bootstrap container: {WorkspaceFolder}", workspaceFolder);
 
@@ -2772,7 +2811,7 @@ DEVCONTAINER_EOF";
 
         // Create override config using JsonElement to preserve structure
         // This approach aims to preserve feature metadata processing while overriding workspace properties
-        var overrideConfigPath = await CreateOverrideConfigWithJsonElementAsync(bootstrapContainerId, workspaceFolder, volumeName);
+        var overrideConfigPath = await CreateOverrideConfigWithJsonElementAsync(bootstrapContainerId, workspaceFolder, volumeName, memoryBytes);
 
         if (overrideConfigPath == null)
         {
