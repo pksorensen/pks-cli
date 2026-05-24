@@ -33,6 +33,11 @@ internal sealed class OtlpProxy : IAsyncDisposable
     private readonly string? _aspireHeaders;
     private readonly string? _analysisEndpoint;
     private long _lastActivityTicks = DateTime.UtcNow.Ticks;
+    private long _analysisOkCount;
+    private long _analysisFailCount;
+    private long _aspireOkCount;
+    private long _aspireFailCount;
+    private long _analysisSkippedNonJson;
 
     public int Port { get; }
 
@@ -126,6 +131,9 @@ internal sealed class OtlpProxy : IAsyncDisposable
         var proxy = new OtlpProxy(port, socketDir, socketPath, aspireEndpoint, analysisEndpoint, socketDirIsExternal);
         await proxy._app.StartAsync(ct);
 
+        Console.Error.WriteLine(
+            $"[otlp-proxy] started port={port} aspire={aspireEndpoint ?? "<none>"} analysis={analysisEndpoint ?? "<none>"} socket={socketPath ?? "<none>"}");
+
         if (socketPath != null && File.Exists(socketPath) &&
             (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS()))
         {
@@ -192,9 +200,24 @@ internal sealed class OtlpProxy : IAsyncDisposable
                 }
             }
 
-            await _forwardClient.SendAsync(req, ct);
+            var resp = await _forwardClient.SendAsync(req, ct);
+            if (resp.IsSuccessStatusCode)
+            {
+                Interlocked.Increment(ref _aspireOkCount);
+            }
+            else
+            {
+                var n = Interlocked.Increment(ref _aspireFailCount);
+                if (n <= 3 || n % 50 == 0)
+                    Console.Error.WriteLine($"[otlp-proxy] aspire fanout HTTP {(int)resp.StatusCode} for {path} (fail #{n})");
+            }
         }
-        catch { /* upstream unreachable — silently drop */ }
+        catch (Exception ex)
+        {
+            var n = Interlocked.Increment(ref _aspireFailCount);
+            if (n <= 3 || n % 50 == 0)
+                Console.Error.WriteLine($"[otlp-proxy] aspire fanout error for {path} (fail #{n}): {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     private async Task ForwardToAnalysisAsync(string method, string path, string contentType, byte[] body, CancellationToken ct)
@@ -202,7 +225,12 @@ internal sealed class OtlpProxy : IAsyncDisposable
         // Next.js routes use request.json() so only forward JSON-encoded payloads.
         // Set OTEL_EXPORTER_OTLP_PROTOCOL=http/json on the agent to enable this path.
         if (!contentType.Contains("json", StringComparison.OrdinalIgnoreCase))
+        {
+            var n = Interlocked.Increment(ref _analysisSkippedNonJson);
+            if (n == 1 || n % 200 == 0)
+                Console.Error.WriteLine($"[otlp-proxy] analysis skipped: non-JSON content-type '{contentType}' (skip #{n}). Set OTEL_EXPORTER_OTLP_PROTOCOL=http/json on the agent.");
             return;
+        }
 
         try
         {
@@ -211,9 +239,26 @@ internal sealed class OtlpProxy : IAsyncDisposable
                 Content = new ByteArrayContent(body)
             };
             req.Content.Headers.TryAddWithoutValidation("Content-Type", contentType);
-            await _forwardClient.SendAsync(req, ct);
+            var resp = await _forwardClient.SendAsync(req, ct);
+            if (resp.IsSuccessStatusCode)
+            {
+                var n = Interlocked.Increment(ref _analysisOkCount);
+                if (n == 1)
+                    Console.Error.WriteLine($"[otlp-proxy] analysis fanout: first success {(int)resp.StatusCode} for {path} → {_analysisEndpoint}");
+            }
+            else
+            {
+                var n = Interlocked.Increment(ref _analysisFailCount);
+                if (n <= 3 || n % 50 == 0)
+                    Console.Error.WriteLine($"[otlp-proxy] analysis fanout HTTP {(int)resp.StatusCode} for {_analysisEndpoint}{path} (fail #{n})");
+            }
         }
-        catch { /* analysis endpoint unreachable */ }
+        catch (Exception ex)
+        {
+            var n = Interlocked.Increment(ref _analysisFailCount);
+            if (n <= 3 || n % 50 == 0)
+                Console.Error.WriteLine($"[otlp-proxy] analysis fanout error for {_analysisEndpoint}{path} (fail #{n}): {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     private static int FindFreePort()

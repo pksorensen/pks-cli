@@ -709,9 +709,12 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             await gitProxy.StartAsync(ct: ct);
             foreach (var mp in job.AgentDef!.MarketplaceTokens!)
             {
-                if (string.IsNullOrEmpty(mp.Authority) || string.IsNullOrEmpty(mp.Bearer)) continue;
+                // Empty Bearer is valid: public marketplaces that only need URL
+                // rewriting (canonical → live tunnel in dev) register without
+                // auth — the proxy forwards untouched. See GitProxyDaemon.
+                if (string.IsNullOrEmpty(mp.Authority)) continue;
                 var upstream = !string.IsNullOrEmpty(mp.UpstreamPrefix) ? mp.UpstreamPrefix! : $"https://{mp.Authority}/";
-                gitProxy.Register(upstream, new PKS.Infrastructure.Services.GitProxy.StaticBearerTokenSource(mp.Bearer));
+                gitProxy.Register(upstream, new PKS.Infrastructure.Services.GitProxy.StaticBearerTokenSource(mp.Bearer ?? string.Empty));
             }
             _console.MarkupLine($"[dim]GitProxy listening on port {gitProxy.Port} ({job.AgentDef!.MarketplaceTokens!.Count} marketplace authority/ies)[/]");
         }
@@ -882,8 +885,17 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                         if (string.IsNullOrEmpty(mp.Authority)) continue;
                         var rewriteTo = $"http://{hostGatewayIp}:{gitProxy.Port}/";
                         var rewriteFrom = $"https://{mp.Authority}/";
-                        // sh -c only — outer wraps it. Single quotes inside double
-                        // quotes survive the trip through /bin/sh -c "...".
+                        // Warm-container reuse: a previous job installed a rule with
+                        // a stale (dead) proxy port for the same insteadOf target.
+                        // Git picks the first matching url.<rewriteTo>.insteadOf and
+                        // tries to connect — fails. Strip every prior rule that maps
+                        // FROM the same canonical URL before adding the new one.
+                        // sh -c only — outer wraps it.
+                        await _spawnerService.ExecInContainerAsync(containerId,
+                            "git config --global --get-regexp '^url\\..*\\.insteadOf$' 2>/dev/null | " +
+                            $"awk -v t='{rewriteFrom}' '$2==t {{print $1}}' | " +
+                            "while read k; do git config --global --unset-all \"$k\"; done; true",
+                            timeoutSeconds: 10);
                         await _spawnerService.ExecInContainerAsync(containerId,
                             $"git config --global url.'{rewriteTo}'.insteadOf '{rewriteFrom}'",
                             timeoutSeconds: 10);
@@ -1205,7 +1217,9 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         // OTLP bridge: vibecast/Claude expect a TCP HTTP endpoint, but our OtlpProxy is reachable
         // only via a Unix socket bind-mounted at /var/run/pks-otlp/otlp.sock. A tiny Node TCP→Unix
         // bridge listens on 127.0.0.1:4318 and forwards each connection to the socket.
-        const string otlpBridgePath = "/tmp/otlp-bridge.js";
+        // NOTE: must NOT live under /tmp — dind remounts /tmp as tmpfs, and Docker's archive
+        // endpoint silently fails to write there (see ADR 0006). $vibecastHome is overlay-backed.
+        var otlpBridgePath = $"{vibecastHome}/otlp-bridge.js";
         const string otlpBridgeJs = @"const net = require('net');
 const TCP_PORT = 4318;
 const SOCK = '/var/run/pks-otlp/otlp.sock';
@@ -1568,7 +1582,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             {
                 try
                 {
-                    var actUrl = $"{registration.Server.TrimEnd('/')}/api/lives/activity?streamId={sessionIdValue}&idleThresholdMs={idleTimeoutMs}";
+                    var actUrl = $"{registration.Server.TrimEnd('/')}/api/lives/activity?sessionId={sessionIdValue}&idleThresholdMs={idleTimeoutMs}";
                     var actResp = await client.GetAsync(actUrl, ct);
                     if (actResp.IsSuccessStatusCode)
                     {
@@ -3247,7 +3261,7 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
                     try
                     {
                         var scheme = serverUri.Scheme;
-                        var activityUrl = $"{scheme}://{serverUri.Host}:{serverUri.Port}/api/lives/activity?streamId={sessionIdValue}&idleThresholdMs={idleTimeoutMs}";
+                        var activityUrl = $"{scheme}://{serverUri.Host}:{serverUri.Port}/api/lives/activity?sessionId={sessionIdValue}&idleThresholdMs={idleTimeoutMs}";
                         var actResp = await client.GetAsync(activityUrl, ct);
                         if (actResp.IsSuccessStatusCode)
                         {
@@ -4675,7 +4689,21 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             RemoveExistingContainer = true,
             InlineDevcontainerFiles = job.AgentDef?.DevcontainerFiles,
             DevcontainerTemplate = job.AgentDef?.DevcontainerTemplate,
+            // Hard memory cap for the spawned devcontainer. Defaults to 8 GiB to protect
+            // the host from a single agent's next-server (or similar) leaking memory and
+            // OOM-ing the host machine. Assembly-line settings can override via
+            // settings.runtimeResources.memoryMB on the server side.
+            MemoryBytes = ResolveMemoryBytes(job.AgentDef?.RuntimeResources?.MemoryMB),
         };
+    }
+
+    private const long DefaultMemoryBytes = 8L * 1024L * 1024L * 1024L; // 8 GiB
+
+    private static long ResolveMemoryBytes(int? memoryMB)
+    {
+        if (memoryMB is int mb && mb > 0)
+            return (long)mb * 1024L * 1024L;
+        return DefaultMemoryBytes;
     }
 
     private void DisplayBanner()
@@ -4774,6 +4802,11 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         /// <summary>Lines to ensure exist in the project .gitignore — injected into the agent system prompt.</summary>
         public List<string>? GitignoreLines { get; set; }
         public RunnerOperatorConfig? OperatorConfig { get; set; }
+        /// <summary>Per-job devcontainer resource limits resolved server-side from
+        /// assembly-line settings. When null/empty, the runner applies an 8 GiB hard cap
+        /// (HostConfig.Memory == HostConfig.MemorySwap) so the container can't spill to
+        /// host swap and crash the host.</summary>
+        public RunnerRuntimeResources? RuntimeResources { get; set; }
         /// <summary>User-uploaded task assets — runner downloads each into {workspace}/.agentics/assets/{fileName}.</summary>
         public List<TaskAssetDef>? TaskAssets { get; set; }
         /// <summary>Job type — defaults to alp_operator. Use git_push for runner-proxied git push operations,
@@ -4816,6 +4849,13 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         public string CommitMessage { get; set; } = "chore: sync from agentics ({sourceCommit})";
         public List<string> AdminDistallowPatterns { get; set; } = new();
         public bool HonorDistallow { get; set; } = true;
+    }
+
+    private class RunnerRuntimeResources
+    {
+        /// <summary>Hard memory cap in megabytes. Applied as both HostConfig.Memory and
+        /// HostConfig.MemorySwap so the container can't spill to host swap.</summary>
+        public int? MemoryMB { get; set; }
     }
 
     private class RunnerOperatorConfig
