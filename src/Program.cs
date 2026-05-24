@@ -160,6 +160,7 @@ services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainWikiPipeline, PKS.
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainSkillCatalog, PKS.Infrastructure.Services.Brain.BrainSkillCatalog>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainAdrPipeline, PKS.Infrastructure.Services.Brain.BrainAdrPipeline>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainSessionScanner, PKS.Infrastructure.Services.Brain.BrainSessionScanner>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainCommitPlanner, PKS.Infrastructure.Services.Brain.BrainCommitPlanner>();
 // Legacy MCP services removed in Phase 3 - now using SDK-based services only
 
 // New SDK-based MCP hosting services
@@ -1132,6 +1133,12 @@ app.Configure(config =>
             .WithExample(["brain", "search", "streamId"])
             .WithExample(["brain", "search", "auth", "--in", "extracts", "--limit", "5"])
             .WithExample(["brain", "search", "Keycloak", "--since", "7d"]);
+
+        brain.AddCommand<PKS.Commands.Brain.BrainCommitPlanCommand>("commit-plan")
+            .WithDescription("Group uncommitted files by shared Claude session origin to plan focused commits.")
+            .WithExample(["brain", "commit-plan", "--uncommitted"])
+            .WithExample(["brain", "commit-plan", "--files", "./src/a.cs", "./src/b.cs"])
+            .WithExample(["brain", "commit-plan", "--uncommitted", "--format", "json"]);
 
         brain.AddBranch("scan", scan =>
         {
