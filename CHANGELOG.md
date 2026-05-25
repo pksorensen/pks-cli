@@ -49,6 +49,28 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.14.0](https://github.com/pksorensen/pks-cli/compare/v6.13.0...v6.14.0) (2026-05-25)
+
+
+### Features
+
+* **agentics:** OtlpProxy diagnostics + runner hardening (paths, git-proxy reuse, mem cap) ([6e8b89e](https://github.com/pksorensen/pks-cli/commit/6e8b89e0bd3781a4c16ee2362d06e1eaa8bd1acb))
+* **brain:** add `pks brain commit-plan` for session-grouped commit planning ([8f71fc8](https://github.com/pksorensen/pks-cli/commit/8f71fc813d9621e1d750d3be9df10cd0d2c88320))
+* **brain:** add `pks brain scan filepath` for session graph backwatch ([69d5909](https://github.com/pksorensen/pks-cli/commit/69d590959d58bdf9958361a18a2bb16c761257b7))
+* **brain:** commit-plan --include-prompts + last-edit-author heuristic ([af88968](https://github.com/pksorensen/pks-cli/commit/af889683dec064a58c932ff3d4bbeefcf6291de0))
+* **devcontainer:** cap spawned-container memory to prevent host crashes ([64486de](https://github.com/pksorensen/pks-cli/commit/64486de12a5e9e1dbdfbaea4049a38c4bb694824))
+* **foundry:** emit OpenTelemetry spans from FoundryInitCommand ([6c4caa8](https://github.com/pksorensen/pks-cli/commit/6c4caa8d4f27df6ffed64700e9802e59ccf384c8))
+* **foundry:** enhance FoundryTokenCommand with output redirection and clipboard copy functionality ([5f38275](https://github.com/pksorensen/pks-cli/commit/5f38275de662017312adfe79abbdbdebcf8d71ac))
+* **git-proxy:** accept empty bearer tokens for auth-less public upstreams ([74b838a](https://github.com/pksorensen/pks-cli/commit/74b838a7c86ad0b6a8540aecb3aa04c62ee58d3c))
+* **registry-login:** add mount-layer diagnostics for credential socket ([cf10d52](https://github.com/pksorensen/pks-cli/commit/cf10d5227d8eacee22e00c94a907d00ded1eacc5))
+* **registry-login:** enhance error handling and diagnostics for credential socket ([a8adb0c](https://github.com/pksorensen/pks-cli/commit/a8adb0c0a8c11346d8155caca07bb894d273d733))
+* **writing:** add `pks writing` for Danish-first profile-aware critique ([f8b5b1b](https://github.com/pksorensen/pks-cli/commit/f8b5b1b7a01526ba6eb6d39c423ee54b9ba6697d))
+
+
+### Bug Fixes
+
+* **runner:** resolve latest GitHub Actions runner at install time ([e08965b](https://github.com/pksorensen/pks-cli/commit/e08965bb1e96cd59340e5cef2b2d0d6d75f2fe6e))
+
 ## [6.13.0](https://github.com/pksorensen/pks-cli/compare/v6.12.0...v6.13.0) (2026-05-18)
 
 
