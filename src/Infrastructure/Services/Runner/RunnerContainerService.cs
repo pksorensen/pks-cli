@@ -11,10 +11,26 @@ namespace PKS.Infrastructure.Services.Runner;
 /// </summary>
 public class RunnerContainerService : IRunnerContainerService
 {
-    private const string RunnerVersion = "2.332.0";
-    private const string RunnerTarball = $"actions-runner-linux-x64-{RunnerVersion}.tar.gz";
-    private const string RunnerDownloadUrl = $"https://github.com/actions/runner/releases/download/v{RunnerVersion}/{RunnerTarball}";
     private const string RunnerInstallPath = "/tmp/actions-runner";
+
+    // Resolves the latest GitHub Actions runner release at install time so we
+    // don't have to bump a hardcoded version every time GitHub deprecates one.
+    // The script reads the target dir from $1 and is shipped base64-encoded
+    // so we don't have to fight quoting through ProcessStartInfo.Arguments.
+    private const string RunnerInstallScript =
+        "set -e\n" +
+        "TARGET=\"$1\"\n" +
+        "VER=$(curl -sfL https://api.github.com/repos/actions/runner/releases/latest | grep -oE '\"tag_name\"[[:space:]]*:[[:space:]]*\"v[^\"]+\"' | head -n1 | sed -E 's/.*\"v([^\"]+)\"/\\1/')\n" +
+        "test -n \"$VER\" || { echo 'failed to resolve latest GitHub Actions runner version' >&2; exit 1; }\n" +
+        "echo \"Using GitHub Actions runner v$VER\"\n" +
+        "mkdir -p \"$TARGET\"\n" +
+        "curl -sfL \"https://github.com/actions/runner/releases/download/v${VER}/actions-runner-linux-x64-${VER}.tar.gz\" | tar xz -C \"$TARGET\"\n";
+
+    private static readonly string RunnerInstallScriptBase64 =
+        Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(RunnerInstallScript));
+
+    private static string BuildRunnerInstallDockerArgs(string containerId, string targetPath)
+        => $"exec {containerId} bash -c \"echo {RunnerInstallScriptBase64} | base64 -d | bash -s {targetPath}\"";
 
     private readonly IProcessRunner _processRunner;
     private readonly ICoolifyLookupService _coolifyLookup;
@@ -250,10 +266,10 @@ public class RunnerContainerService : IRunnerContainerService
             }
 
             // Step 3: Install the GitHub Actions runner inside the container
-            onProgress?.Invoke($"Installing GitHub Actions runner v{RunnerVersion} in container...");
+            onProgress?.Invoke("Installing latest GitHub Actions runner in container...");
             _logger.LogInformation("Installing runner in container {ContainerId}", containerId);
 
-            var installArgs = $"exec {containerId} bash -c \"mkdir -p {RunnerInstallPath} && curl -sfL {RunnerDownloadUrl} | tar xz -C {RunnerInstallPath}\"";
+            var installArgs = BuildRunnerInstallDockerArgs(containerId, RunnerInstallPath);
             var installResult = await _processRunner.RunAsync("docker", installArgs, null, cancellationToken);
 
             if (installResult.ExitCode != 0)
@@ -442,11 +458,11 @@ public class RunnerContainerService : IRunnerContainerService
             }
 
             // Step 1: Install the GitHub Actions runner to a unique path
-            onProgress?.Invoke($"Installing GitHub Actions runner v{RunnerVersion} in existing container {containerId[..Math.Min(12, containerId.Length)]}...");
+            onProgress?.Invoke($"Installing latest GitHub Actions runner in existing container {containerId[..Math.Min(12, containerId.Length)]}...");
             _logger.LogInformation("Installing runner to {RunnerPath} in container {ContainerId} for job {JobId}",
                 runnerPath, containerId, jobId);
 
-            var installArgs = $"exec {containerId} bash -c \"mkdir -p {runnerPath} && curl -sfL {RunnerDownloadUrl} | tar xz -C {runnerPath}\"";
+            var installArgs = BuildRunnerInstallDockerArgs(containerId, runnerPath);
             var installResult = await _processRunner.RunAsync("docker", installArgs, null, cancellationToken);
 
             if (installResult.ExitCode != 0)
