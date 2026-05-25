@@ -442,3 +442,5 @@ src/Infrastructure/Resources/heypoul-win-amd64.exe
 .pks/brain/synthesis/
 .pks/brain/wiki/
 .pks/brain/refs.json
+# pks writing — local report cache + overrides (see `pks writing init`)
+.pks/writing/

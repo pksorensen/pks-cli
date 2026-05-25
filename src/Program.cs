@@ -88,6 +88,15 @@ var isHookEventCommand = commandArgs.Length > 2 &&
 // Skip banner when --no-logo flag is passed
 var noLogo = commandArgs.Any(a => a.Equals("--no-logo", StringComparison.OrdinalIgnoreCase));
 
+// Pipeable writing commands: agents pipe stdout, banner would corrupt the JSON.
+// Detects: `pks writing prompt …` and `pks writing accept …`.
+// commandArgs[0] is the exe path; the real args start at [1].
+var isPipeableWriting = commandArgs.Length >= 3
+    && commandArgs[1].Equals("writing", StringComparison.OrdinalIgnoreCase)
+    && (commandArgs[2].Equals("prompt", StringComparison.OrdinalIgnoreCase)
+        || commandArgs[2].Equals("accept", StringComparison.OrdinalIgnoreCase));
+if (isPipeableWriting) noLogo = true;
+
 // Enable debug output when --debug flag is passed
 if (commandArgs.Any(a => a.Equals("--debug", StringComparison.OrdinalIgnoreCase)))
     Environment.SetEnvironmentVariable("PKS_DEBUG", "1");
@@ -161,6 +170,13 @@ services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainSkillCatalog, PKS.
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainAdrPipeline, PKS.Infrastructure.Services.Brain.BrainAdrPipeline>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainSessionScanner, PKS.Infrastructure.Services.Brain.BrainSessionScanner>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainCommitPlanner, PKS.Infrastructure.Services.Brain.BrainCommitPlanner>();
+
+// Writing services — Danish writing linter + portable writer profile.
+// See /home/node/.claude/plans/lazy-dazzling-neumann.md for the design.
+services.AddSingleton<PKS.Infrastructure.Services.Writing.IWritingPathResolver, PKS.Infrastructure.Services.Writing.WritingPathResolver>();
+services.AddSingleton<PKS.Infrastructure.Services.Writing.IWritingProfileStore, PKS.Infrastructure.Services.Writing.WritingProfileStore>();
+services.AddSingleton<PKS.Infrastructure.Services.Writing.IWritingLinter, PKS.Infrastructure.Services.Writing.WritingLinter>();
+services.AddSingleton<PKS.Infrastructure.Services.Writing.IWritingCritic, PKS.Infrastructure.Services.Writing.WritingCritic>();
 // Legacy MCP services removed in Phase 3 - now using SDK-based services only
 
 // New SDK-based MCP hosting services
@@ -1163,6 +1179,85 @@ app.Configure(config =>
             skill.AddCommand<PKS.Commands.Brain.BrainSkillShowCommand>("show")
                 .WithDescription("Print the currently-resolved body of a skill to stdout")
                 .WithExample(["brain", "skill", "show", "brain-extract"]);
+        });
+    });
+
+    // Add writing commands — Danish writing linter + portable writer profile.
+    // See /home/node/.claude/plans/lazy-dazzling-neumann.md for the design.
+    config.AddBranch<PKS.Commands.Writing.WritingSettings>("writing", writing =>
+    {
+        writing.SetDescription("Lint and score your writing (Danish-first); maintain a portable writer profile");
+
+        writing.AddCommand<PKS.Commands.Writing.WritingInitCommand>("init")
+            .WithDescription("Initialize ~/.pks-cli/writing/ and (if in a git repo) ./.pks/writing/")
+            .WithExample(["writing", "init"]);
+
+        writing.AddCommand<PKS.Commands.Writing.WritingLintCommand>("lint")
+            .WithDescription("Lint a markdown file or folder for anglicisms against your profile")
+            .WithExample(["writing", "lint", "blog-posts/agent-wrote-the-prompt/da.md"])
+            .WithExample(["writing", "lint", "blog-posts/"]);
+
+        writing.AddCommand<PKS.Commands.Writing.WritingScoreCommand>("score")
+            .WithDescription("[DEPRECATED — spawns local `claude` CLI] Prefer the agent-driven `prompt` + `accept` flow")
+            .WithExample(["writing", "score", "post.md", "--lint-only"]);
+
+        writing.AddCommand<PKS.Commands.Writing.WritingPromptCommand>("prompt")
+            .WithDescription("Emit the score prompt + reply schema for an agent to feed its own LLM")
+            .WithExample(["writing", "prompt", "blog-posts/x/da.md"])
+            .WithExample(["writing", "prompt", "post.md", "--format", "markdown"]);
+
+        writing.AddCommand<PKS.Commands.Writing.WritingAcceptCommand>("accept")
+            .WithDescription("Validate an LLM reply against the schema and write the report sidecar")
+            .WithExample(["writing", "accept", "post.md", "--from", "reply.json", "--model", "haiku"])
+            .WithExample(["sh", "-c", "your-llm | pks writing accept post.md --model haiku"]);
+
+        writing.AddBranch("skill", skill =>
+        {
+            skill.SetDescription("Install the pks-writing-score skill so agents discover the prompt→accept flow");
+            skill.AddCommand<PKS.Commands.Writing.WritingSkillInstallCommand>("install")
+                .WithDescription("Drop ~/.claude/skills/pks-writing-score/SKILL.md")
+                .WithExample(["writing", "skill", "install"])
+                .WithExample(["writing", "skill", "install", "--force"]);
+        });
+
+        writing.AddCommand<PKS.Commands.Writing.WritingLearnCommand>("learn")
+            .WithDescription("Turn the last report into a proposal (<stem>.LEARN.json/.md) for an agent to review")
+            .WithExample(["writing", "learn", "blog-posts/agent-wrote-the-prompt/da.md"]);
+
+        writing.AddCommand<PKS.Commands.Writing.WritingApplyCommand>("apply")
+            .WithDescription("Apply accepted actions from a .LEARN.json proposal to the global profile")
+            .WithExample(["writing", "apply", "blog-posts/.../da.LEARN.json"])
+            .WithExample(["writing", "apply", "da.LEARN.json", "--dry-run"]);
+
+        writing.AddCommand<PKS.Commands.Writing.WritingCorpusCommand>("corpus")
+            .WithDescription("Aggregate every per-post LEARN.json under a folder into one corpus-level proposal")
+            .WithExample(["writing", "corpus", "blog-posts/"])
+            .WithExample(["writing", "corpus", "blog-posts/", "--min-posts", "3"]);
+
+        writing.AddBranch("profile", profile =>
+        {
+            profile.SetDescription("Inspect, edit, and move your portable writer profile");
+            profile.AddCommand<PKS.Commands.Writing.WritingProfileShowCommand>("show")
+                .WithDescription("Print the resolved profile (global + project overrides) and counts")
+                .WithExample(["writing", "profile", "show"]);
+            profile.AddCommand<PKS.Commands.Writing.WritingProfileAuthorCommand>("author")
+                .WithDescription("Interactive: print cowork prompt or open profile.md in $EDITOR")
+                .WithExample(["writing", "profile", "author"]);
+            profile.AddCommand<PKS.Commands.Writing.WritingProfilePromptCommand>("prompt")
+                .WithDescription("Print the cowork authoring prompt to stdout (pipe-friendly)")
+                .WithExample(["writing", "profile", "prompt"])
+                .WithExample(["writing", "profile", "prompt", "|", "pbcopy"]);
+            profile.AddCommand<PKS.Commands.Writing.WritingProfileIngestCommand>("ingest")
+                .WithDescription("Ingest a cowork-produced JSON bundle (raw .json or markdown with ```json block)")
+                .WithExample(["writing", "profile", "ingest", "~/Downloads/cowork-reply.md"])
+                .WithExample(["writing", "profile", "ingest", "bundle.json", "--force"]);
+            profile.AddCommand<PKS.Commands.Writing.WritingProfileExportCommand>("export")
+                .WithDescription("Tarball ~/.pks-cli/writing/ (minus binary cache) for transport to another machine")
+                .WithExample(["writing", "profile", "export", "~/pks-writing-profile.tgz"]);
+            profile.AddCommand<PKS.Commands.Writing.WritingProfileImportCommand>("import")
+                .WithDescription("Untar an exported profile into ~/.pks-cli/writing/ (skips existing files unless --force)")
+                .WithExample(["writing", "profile", "import", "~/pks-writing-profile.tgz"])
+                .WithExample(["writing", "profile", "import", "~/pks-writing-profile.tgz", "--force"]);
         });
     });
 

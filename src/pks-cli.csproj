@@ -87,6 +87,7 @@
     <EmbeddedResource Include="Infrastructure\Resources\Brain\brain-synth-habits.SKILL.md" LogicalName="brain-synth-habits.SKILL.md"/>
     <EmbeddedResource Include="Infrastructure\Resources\Brain\brain-wiki-page.SKILL.md" LogicalName="brain-wiki-page.SKILL.md"/>
     <EmbeddedResource Include="Infrastructure\Resources\Brain\brain-adr.SKILL.md" LogicalName="brain-adr.SKILL.md"/>
+    <EmbeddedResource Include="Infrastructure\Resources\Writing\pks-writing-score.SKILL.md" LogicalName="pks-writing-score.SKILL.md"/>
   </ItemGroup>
 
   <!-- Firecracker scripts: copy alongside binary so docker cp gets everything -->
