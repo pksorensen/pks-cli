@@ -6,13 +6,24 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using PKS.Infrastructure.Services.Brain.Models;
 
 namespace PKS.Infrastructure.Services.Brain;
 
 /// <summary>
 /// Implements FT-12 (Brain) commit-plan command — group uncommitted files by
 /// shared session origin to enable focused commits.
-/// See .pks/brain/feature-specs/FT-012-*.md (when materialized).
+///
+/// Two data paths:
+///   1. **Firehose graph** (primary, fast — ~10 ms for 50 files):
+///      reads <c>~/.pks-cli/brain/files.jsonl</c> and <c>prompts.jsonl</c>
+///      via <see cref="IFirehoseReader"/>. Optionally runs <c>brain ingest</c>
+///      first so the firehose is fresh.
+///   2. **Per-file scanner fallback** (legacy, ~200 ms/file): used when the
+///      firehose is absent or when <c>--force-scan</c> is supplied. Re-parses
+///      every <c>~/.claude/projects/*.jsonl</c> from scratch.
+///
+/// See .pks/brain/feature-specs/FT-012-*.md.
 /// </summary>
 public sealed class BrainCommitPlanner : IBrainCommitPlanner
 {
@@ -21,22 +32,213 @@ public sealed class BrainCommitPlanner : IBrainCommitPlanner
         "Edit", "Write", "MultiEdit", "NotebookEdit",
     };
 
-    private readonly IBrainSessionScanner _scanner;
+    // FileOpRow.Op values that represent a write (not a read).
+    private static readonly HashSet<string> EditOps = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "write", "edit", "multi-edit", "notebook-edit",
+    };
 
+    private readonly IBrainSessionScanner _scanner;
+    private readonly IFirehoseReader? _firehose;
+    private readonly IBrainPathResolver? _paths;
+    private readonly IBrainIngestPipeline? _ingest;
+
+    /// <summary>
+    /// Legacy single-arg constructor — used by tests that drive the scanner-only
+    /// path directly. The firehose-aware overload is preferred in production.
+    /// </summary>
     public BrainCommitPlanner(IBrainSessionScanner scanner)
     {
         _scanner = scanner;
+    }
+
+    public BrainCommitPlanner(
+        IBrainSessionScanner scanner,
+        IFirehoseReader firehose,
+        IBrainPathResolver paths,
+        IBrainIngestPipeline ingest)
+    {
+        _scanner = scanner;
+        _firehose = firehose;
+        _paths = paths;
+        _ingest = ingest;
     }
 
     public async Task<BrainCommitPlanResult> PlanAsync(BrainCommitPlanOptions options, CancellationToken ct = default)
     {
         var inputFiles = options.Files.Distinct(StringComparer.Ordinal).ToList();
 
-        // session_id -> file -> latest_timestamp of any edge (used for "all touched" + contributing/shared semantic)
+        // Prefer the firehose unless explicitly disabled or unavailable.
+        if (!options.ForceScan && _firehose is not null && _paths is not null)
+        {
+            var firehosePath = _paths.GlobalFirehose(BrainFirehose.Files);
+            if (File.Exists(firehosePath))
+            {
+                if (options.AutoRefresh && _ingest is not null)
+                {
+                    await _ingest.RunAsync(
+                        new IngestOptions
+                        {
+                            Force = false,
+                            MaxParallelism = Environment.ProcessorCount,
+                        },
+                        NullIngestProgress.Instance,
+                        ct);
+                }
+
+                return await PlanFromFirehoseAsync(inputFiles, options, ct);
+            }
+        }
+
+        return await PlanFromScannerAsync(inputFiles, options, ct);
+    }
+
+    // ── Firehose path ──────────────────────────────────────────────────────────
+
+    private async Task<BrainCommitPlanResult> PlanFromFirehoseAsync(
+        List<string> inputFiles, BrainCommitPlanOptions options, CancellationToken ct)
+    {
+        var inputSet = inputFiles.ToHashSet(StringComparer.Ordinal);
+
         var sessionFileTs = new Dictionary<string, Dictionary<string, DateTime>>(StringComparer.Ordinal);
-        // session_id -> file -> latest_timestamp of EDIT-class tool_use only (drives primary-session heuristic)
         var sessionFileEditTs = new Dictionary<string, Dictionary<string, DateTime>>(StringComparer.Ordinal);
-        // session_id -> path to its JSONL (any edge will do — same per session)
+        var sessions = new HashSet<string>(StringComparer.Ordinal);
+
+        await foreach (var row in _firehose!.ReadAsync<FileOpRow>(BrainFirehose.Files, sessionId: null, ct))
+        {
+            if (!inputSet.Contains(row.FilePath)) continue;
+            if (options.SinceUtc is { } since && row.TimestampUtc < since) continue;
+
+            sessions.Add(row.SessionId);
+
+            if (!sessionFileTs.TryGetValue(row.SessionId, out var fileMap))
+            {
+                fileMap = new Dictionary<string, DateTime>(StringComparer.Ordinal);
+                sessionFileTs[row.SessionId] = fileMap;
+            }
+            if (!fileMap.TryGetValue(row.FilePath, out var existing) || row.TimestampUtc > existing)
+                fileMap[row.FilePath] = row.TimestampUtc;
+
+            if (EditOps.Contains(row.Op))
+            {
+                if (!sessionFileEditTs.TryGetValue(row.SessionId, out var editMap))
+                {
+                    editMap = new Dictionary<string, DateTime>(StringComparer.Ordinal);
+                    sessionFileEditTs[row.SessionId] = editMap;
+                }
+                if (!editMap.TryGetValue(row.FilePath, out var existingEdit) || row.TimestampUtc > existingEdit)
+                    editMap[row.FilePath] = row.TimestampUtc;
+            }
+        }
+
+        var (groups, assigned) = AssembleGroups(sessionFileTs, sessionFileEditTs, options);
+
+        // Contributing sessions (other sessions touching ≥2 files of this group).
+        AttachContributingSessions(groups, sessionFileTs);
+
+        if (options.IncludePrompts)
+        {
+            foreach (var group in groups)
+            {
+                var groupFiles = group.Files.ToHashSet(StringComparer.Ordinal);
+                var prompts = await ExtractPromptsFromFirehoseAsync(
+                    group.PrimarySession,
+                    groupFiles,
+                    sessionFileEditTs.GetValueOrDefault(group.PrimarySession),
+                    ct);
+                group.Prompts.AddRange(prompts);
+            }
+        }
+
+        var ungrouped = inputFiles
+            .Where(f => !assigned.ContainsKey(f))
+            .OrderBy(f => f, StringComparer.Ordinal)
+            .ToList();
+
+        return new BrainCommitPlanResult
+        {
+            Groups = groups,
+            Ungrouped = ungrouped,
+            InputFiles = inputFiles.Count,
+            ScannedSessions = sessions.Count,
+        };
+    }
+
+    private async Task<List<BrainCommitGroupPrompt>> ExtractPromptsFromFirehoseAsync(
+        string sessionId,
+        HashSet<string> targetFiles,
+        Dictionary<string, DateTime>? editMap,
+        CancellationToken ct)
+    {
+        var collected = new List<BrainCommitGroupPrompt>();
+        if (editMap is null) return collected;
+
+        // Collect edit timestamps for the target files in this session.
+        var editTs = editMap
+            .Where(kv => targetFiles.Contains(kv.Key))
+            .Select(kv => kv.Value)
+            .ToList();
+        if (editTs.Count == 0) return collected;
+
+        // Stream all prompts for this session; materialise sorted by timestamp.
+        var prompts = new List<PromptRow>();
+        await foreach (var p in _firehose!.ReadAsync<PromptRow>(BrainFirehose.Prompts, sessionId, ct))
+            prompts.Add(p);
+        if (prompts.Count == 0) return collected;
+
+        prompts.Sort((a, b) => a.TimestampUtc.CompareTo(b.TimestampUtc));
+        var promptTs = prompts.Select(p => p.TimestampUtc).ToArray();
+
+        var seenTexts = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var ts in editTs.OrderBy(t => t))
+        {
+            // Find latest prompt with prompts[i].Ts <= ts.
+            var idx = BinarySearchLatestLeq(promptTs, ts);
+            if (idx < 0) continue;
+            var p = prompts[idx];
+            if (string.IsNullOrEmpty(p.Text)) continue;
+            if (!seenTexts.Add(p.Text)) continue;
+            collected.Add(new BrainCommitGroupPrompt
+            {
+                TimestampUtc = p.TimestampUtc,
+                Text = Truncate(p.Text, 500),
+            });
+        }
+
+        if (collected.Count > 10)
+        {
+            collected = collected
+                .OrderByDescending(p => p.TimestampUtc)
+                .Take(10)
+                .OrderBy(p => p.TimestampUtc)
+                .ToList();
+        }
+        else
+        {
+            collected = collected.OrderBy(p => p.TimestampUtc).ToList();
+        }
+        return collected;
+    }
+
+    private static int BinarySearchLatestLeq(DateTime[] sorted, DateTime needle)
+    {
+        int lo = 0, hi = sorted.Length - 1, ans = -1;
+        while (lo <= hi)
+        {
+            int mid = (lo + hi) >>> 1;
+            if (sorted[mid] <= needle) { ans = mid; lo = mid + 1; }
+            else hi = mid - 1;
+        }
+        return ans;
+    }
+
+    // ── Scanner fallback path (unchanged behaviour) ────────────────────────────
+
+    private async Task<BrainCommitPlanResult> PlanFromScannerAsync(
+        List<string> inputFiles, BrainCommitPlanOptions options, CancellationToken ct)
+    {
+        var sessionFileTs = new Dictionary<string, Dictionary<string, DateTime>>(StringComparer.Ordinal);
+        var sessionFileEditTs = new Dictionary<string, Dictionary<string, DateTime>>(StringComparer.Ordinal);
         var sessionJsonl = new Dictionary<string, string>(StringComparer.Ordinal);
         var sessionScannedJsonls = new HashSet<string>(StringComparer.Ordinal);
 
@@ -80,9 +282,42 @@ public sealed class BrainCommitPlanner : IBrainCommitPlanner
             }
         }
 
+        var (groups, assigned) = AssembleGroups(sessionFileTs, sessionFileEditTs, options);
+        AttachContributingSessions(groups, sessionFileTs);
+
+        if (options.IncludePrompts)
+        {
+            foreach (var group in groups)
+            {
+                if (!sessionJsonl.TryGetValue(group.PrimarySession, out var jsonl)) continue;
+                var prompts = await ExtractPromptsFromJsonlAsync(jsonl, group.Files.ToHashSet(StringComparer.Ordinal), ct);
+                group.Prompts.AddRange(prompts);
+            }
+        }
+
+        var ungrouped = inputFiles
+            .Where(f => !assigned.ContainsKey(f))
+            .OrderBy(f => f, StringComparer.Ordinal)
+            .ToList();
+
+        return new BrainCommitPlanResult
+        {
+            Groups = groups,
+            Ungrouped = ungrouped,
+            InputFiles = inputFiles.Count,
+            ScannedSessions = sessionScannedJsonls.Count,
+        };
+    }
+
+    // ── Shared group-selection algorithm ───────────────────────────────────────
+
+    private static (List<BrainCommitGroup> Groups, Dictionary<string, int> Assigned) AssembleGroups(
+        Dictionary<string, Dictionary<string, DateTime>> sessionFileTs,
+        Dictionary<string, Dictionary<string, DateTime>> sessionFileEditTs,
+        BrainCommitPlanOptions options)
+    {
         var minFiles = Math.Max(1, options.MinFiles);
 
-        // For each file, the session that most-recently edited it = "last-edit-author".
         var lastEditor = new Dictionary<string, (string SessionId, DateTime Ts)>(StringComparer.Ordinal);
         foreach (var (sessionId, editMap) in sessionFileEditTs)
         {
@@ -93,7 +328,6 @@ public sealed class BrainCommitPlanner : IBrainCommitPlanner
             }
         }
 
-        // Count for each session: how many files it is last-editor of.
         var sessionLastEditFiles = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         foreach (var (file, owner) in lastEditor)
         {
@@ -118,13 +352,12 @@ public sealed class BrainCommitPlanner : IBrainCommitPlanner
             .ThenBy(s => s.SessionId, StringComparer.Ordinal)
             .ToList();
 
-        var assigned = new Dictionary<string, int>(StringComparer.Ordinal); // file -> group_id
+        var assigned = new Dictionary<string, int>(StringComparer.Ordinal);
         var groups = new List<BrainCommitGroup>();
         int nextGroupId = 1;
 
         foreach (var sess in qualified)
         {
-            // "All touched" file set across edit + read used for shared-files semantic.
             var allTouched = sessionFileTs.TryGetValue(sess.SessionId, out var ft)
                 ? ft.Keys
                 : Enumerable.Empty<string>();
@@ -138,7 +371,6 @@ public sealed class BrainCommitPlanner : IBrainCommitPlanner
             List<string> groupFiles;
             if (isFirst)
             {
-                // First group: claim ALL last-edit files of the primary session.
                 groupFiles = sess.Files.OrderBy(f => f, StringComparer.Ordinal).ToList();
                 shared.Clear();
             }
@@ -148,7 +380,6 @@ public sealed class BrainCommitPlanner : IBrainCommitPlanner
                 groupFiles = unassigned.OrderBy(f => f, StringComparer.Ordinal).ToList();
             }
 
-            // Files we are about to claim shouldn't appear in "shared".
             foreach (var f in groupFiles) shared.Remove(f);
 
             int groupId = nextGroupId++;
@@ -165,8 +396,13 @@ public sealed class BrainCommitPlanner : IBrainCommitPlanner
             });
         }
 
-        // Contributing sessions: for each group, find OTHER sessions touching >= 2
-        // of the group's files (regardless of assignment).
+        return (groups, assigned);
+    }
+
+    private static void AttachContributingSessions(
+        List<BrainCommitGroup> groups,
+        Dictionary<string, Dictionary<string, DateTime>> sessionFileTs)
+    {
         foreach (var group in groups)
         {
             var groupFileSet = group.Files.ToHashSet(StringComparer.Ordinal);
@@ -185,32 +421,11 @@ public sealed class BrainCommitPlanner : IBrainCommitPlanner
             });
             group.ContributingSessions.AddRange(contribs);
         }
-
-        if (options.IncludePrompts)
-        {
-            foreach (var group in groups)
-            {
-                if (!sessionJsonl.TryGetValue(group.PrimarySession, out var jsonl)) continue;
-                var prompts = await ExtractPromptsAsync(jsonl, group.Files.ToHashSet(StringComparer.Ordinal), ct);
-                group.Prompts.AddRange(prompts);
-            }
-        }
-
-        var ungrouped = inputFiles
-            .Where(f => !assigned.ContainsKey(f))
-            .OrderBy(f => f, StringComparer.Ordinal)
-            .ToList();
-
-        return new BrainCommitPlanResult
-        {
-            Groups = groups,
-            Ungrouped = ungrouped,
-            InputFiles = inputFiles.Count,
-            ScannedSessions = sessionScannedJsonls.Count,
-        };
     }
 
-    private static async Task<List<BrainCommitGroupPrompt>> ExtractPromptsAsync(
+    // ── Scanner-mode prompt extraction (raw JSONL) ─────────────────────────────
+
+    private static async Task<List<BrainCommitGroupPrompt>> ExtractPromptsFromJsonlAsync(
         string jsonlPath, HashSet<string> targetFiles, CancellationToken ct)
     {
         var collected = new List<BrainCommitGroupPrompt>();
@@ -283,7 +498,6 @@ public sealed class BrainCommitPlanner : IBrainCommitPlanner
 
         if (collected.Count > 10)
         {
-            // Most recent first when truncating, but return back in chronological order.
             collected = collected
                 .OrderByDescending(p => p.TimestampUtc)
                 .Take(10)

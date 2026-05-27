@@ -12,10 +12,12 @@ public sealed class BrainExtractContextBuilder : IBrainExtractContextBuilder
     private const int MaxErrorSnippetChars = 500;
 
     private readonly IBrainPathResolver _paths;
+    private readonly IFirehoseReader _firehose;
 
-    public BrainExtractContextBuilder(IBrainPathResolver paths)
+    public BrainExtractContextBuilder(IBrainPathResolver paths, IFirehoseReader firehose)
     {
         _paths = paths;
+        _firehose = firehose;
     }
 
     public async Task<ExtractContext?> BuildAsync(string sessionId, string projectSlug, CancellationToken ct = default)
@@ -32,15 +34,19 @@ public sealed class BrainExtractContextBuilder : IBrainExtractContextBuilder
         catch (JsonException) { return null; }
         if (meta is null) return null;
 
-        var prompts = await ReadFirehoseAsync<PromptRow>(BrainFirehose.Prompts, sessionId, ct);
-        prompts = prompts
+        var promptsList = new List<PromptRow>();
+        await foreach (var p in _firehose.ReadAsync<PromptRow>(BrainFirehose.Prompts, sessionId, ct))
+            promptsList.Add(p);
+        var prompts = promptsList
             .OrderBy(p => p.TimestampUtc)
             .Take(MaxPromptsVerbatim)
             .ToList();
         foreach (var p in prompts) p.Text = Truncate(p.Text, MaxPromptCharsEach);
 
-        var errors = await ReadFirehoseAsync<ErrorRow>(BrainFirehose.Errors, sessionId, ct);
-        errors = errors
+        var errorsList = new List<ErrorRow>();
+        await foreach (var e in _firehose.ReadAsync<ErrorRow>(BrainFirehose.Errors, sessionId, ct))
+            errorsList.Add(e);
+        var errors = errorsList
             .OrderBy(e => e.TimestampUtc)
             .Take(MaxErrors)
             .ToList();
@@ -49,8 +55,10 @@ public sealed class BrainExtractContextBuilder : IBrainExtractContextBuilder
         // Plan bodies are stored in tools.jsonl when ExitPlanMode was called —
         // pull the plan text out of inputPreview (parser already truncated to 200 chars,
         // so this is best-effort; the full body is in the source JSONL).
-        var tools = await ReadFirehoseAsync<ToolCallRow>(BrainFirehose.Tools, sessionId, ct);
-        var plans = tools
+        var toolsList = new List<ToolCallRow>();
+        await foreach (var t in _firehose.ReadAsync<ToolCallRow>(BrainFirehose.Tools, sessionId, ct))
+            toolsList.Add(t);
+        var plans = toolsList
             .Where(t => t.ToolName == "ExitPlanMode" && t.InputPreview is { Length: > 0 })
             .Select(t => new PlanBody { ToolUseId = t.ToolUseId, Body = t.InputPreview! })
             .ToList();
@@ -66,38 +74,6 @@ public sealed class BrainExtractContextBuilder : IBrainExtractContextBuilder
             Subagents = meta.Subagents,
             Skills = meta.Skills,
         };
-    }
-
-    private async Task<List<T>> ReadFirehoseAsync<T>(BrainFirehose firehose, string sessionId, CancellationToken ct)
-        where T : class
-    {
-        var path = _paths.GlobalFirehose(firehose);
-        if (!File.Exists(path)) return new List<T>();
-
-        // sessionId is part of every row; cheap pre-filter via Contains avoids parsing
-        // every row when the file is huge.
-        var needle = "\"sessionId\":\"" + sessionId + "\"";
-
-        var hits = new List<T>();
-        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
-            bufferSize: 64 * 1024, useAsync: true);
-        using var reader = new StreamReader(stream);
-        string? line;
-        while ((line = await reader.ReadLineAsync(ct)) is not null)
-        {
-            if (line.Length == 0) continue;
-            if (!line.Contains(needle, StringComparison.Ordinal)) continue;
-            try
-            {
-                var row = JsonSerializer.Deserialize<T>(line, BrainIndexStore.JsonOptions);
-                if (row is not null) hits.Add(row);
-            }
-            catch (JsonException)
-            {
-                // skip malformed line
-            }
-        }
-        return hits;
     }
 
     private static string Truncate(string? s, int max)

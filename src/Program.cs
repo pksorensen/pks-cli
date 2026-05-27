@@ -160,6 +160,7 @@ services.AddSingleton<PKS.Infrastructure.Services.Brain.IPricingService, PKS.Inf
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IPlanFileIndexer, PKS.Infrastructure.Services.Brain.PlanFileIndexer>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainIngestPipeline, PKS.Infrastructure.Services.Brain.BrainIngestPipeline>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainSkillReader, PKS.Infrastructure.Services.Brain.BrainSkillReader>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IFirehoseReader, PKS.Infrastructure.Services.Brain.FirehoseReader>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainExtractContextBuilder, PKS.Infrastructure.Services.Brain.BrainExtractContextBuilder>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IClaudeRunner, PKS.Infrastructure.Services.Brain.ClaudeRunner>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainExtractPipeline, PKS.Infrastructure.Services.Brain.BrainExtractPipeline>();
@@ -169,7 +170,12 @@ services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainWikiPipeline, PKS.
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainSkillCatalog, PKS.Infrastructure.Services.Brain.BrainSkillCatalog>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainAdrPipeline, PKS.Infrastructure.Services.Brain.BrainAdrPipeline>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainSessionScanner, PKS.Infrastructure.Services.Brain.BrainSessionScanner>();
-services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainCommitPlanner, PKS.Infrastructure.Services.Brain.BrainCommitPlanner>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainCommitPlanner>(sp =>
+    new PKS.Infrastructure.Services.Brain.BrainCommitPlanner(
+        sp.GetRequiredService<PKS.Infrastructure.Services.Brain.IBrainSessionScanner>(),
+        sp.GetRequiredService<PKS.Infrastructure.Services.Brain.IFirehoseReader>(),
+        sp.GetRequiredService<PKS.Infrastructure.Services.Brain.IBrainPathResolver>(),
+        sp.GetRequiredService<PKS.Infrastructure.Services.Brain.IBrainIngestPipeline>()));
 
 // Writing services — Danish writing linter + portable writer profile.
 // See /home/node/.claude/plans/lazy-dazzling-neumann.md for the design.

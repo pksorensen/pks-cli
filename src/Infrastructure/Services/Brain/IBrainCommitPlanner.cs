@@ -22,6 +22,20 @@ public sealed class BrainCommitPlanOptions
     public DateTime? SinceUtc { get; init; }
     public int MinFiles { get; init; } = 2;
     public bool IncludePrompts { get; init; }
+
+    /// <summary>
+    /// When true (default), the planner runs <c>brain ingest</c> before planning
+    /// so the firehose graph is fresh. Set to false to skip refresh (e.g. when
+    /// running against a stable fixture in tests, or when the user explicitly
+    /// passes <c>--no-refresh</c>).
+    /// </summary>
+    public bool AutoRefresh { get; init; } = true;
+
+    /// <summary>
+    /// When true, force the legacy per-file scanner path even if the firehose
+    /// exists. Useful for debugging / fallback verification.
+    /// </summary>
+    public bool ForceScan { get; init; }
 }
 
 public sealed class BrainCommitPlanResult

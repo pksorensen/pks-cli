@@ -55,6 +55,14 @@ public class BrainCommitPlanSettings : BrainSettings
     [CommandOption("--include-prompts")]
     [Description("Include user prompts that preceded the file edits per group (max 10).")]
     public bool IncludePrompts { get; set; }
+
+    [CommandOption("--no-refresh")]
+    [Description("Skip the auto-run of `brain ingest` before planning (firehose path only).")]
+    public bool NoRefresh { get; set; }
+
+    [CommandOption("--force-scan")]
+    [Description("Bypass the firehose graph and use the per-file scanner (legacy / fallback).")]
+    public bool ForceScan { get; set; }
 }
 
 public class BrainCommitPlanCommand : AsyncCommand<BrainCommitPlanSettings>
@@ -123,6 +131,8 @@ public class BrainCommitPlanCommand : AsyncCommand<BrainCommitPlanSettings>
             SinceUtc = since,
             MinFiles = settings.MinFiles,
             IncludePrompts = settings.IncludePrompts,
+            AutoRefresh = !settings.NoRefresh,
+            ForceScan = settings.ForceScan,
         });
 
         switch (format)
