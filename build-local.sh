@@ -23,10 +23,18 @@ fi
 RESOURCE_DIR="$SCRIPT_DIR/src/Infrastructure/Resources"
 PLUGIN_SRC="$CLI_DIR/claude-plugin"
 
-# Resolve heypoul source dir (sibling of pks-cli when used as submodule, or in the monorepo).
+# Resolve heypoul source dir. Layouts we support:
+#   monorepo:  agentic-live-www/projects/heypoul/  (heypoul main.go lives at cmd/heypoul/main.go)
+#   sandbox:   agentic-live-www/sandbox/heypoul/
+#   submodule: ../heypoul/ next to pks-cli
 HEYPOUL_DIR=""
-for candidate in "$SCRIPT_DIR/../../sandbox/heypoul" "$SCRIPT_DIR/../heypoul"; do
-    if [ -f "$candidate/main.go" ]; then HEYPOUL_DIR="$(cd "$candidate" && pwd)"; break; fi
+for candidate in \
+    "$SCRIPT_DIR/../../projects/heypoul" \
+    "$SCRIPT_DIR/../../sandbox/heypoul" \
+    "$SCRIPT_DIR/../heypoul"; do
+    if [ -f "$candidate/cmd/heypoul/main.go" ] || [ -f "$candidate/main.go" ]; then
+        HEYPOUL_DIR="$(cd "$candidate" && pwd)"; break
+    fi
 done
 
 # Ensure `go` is on PATH; some devcontainers install it under $HOME/go/bin.
@@ -107,10 +115,14 @@ else
     # -H windowsgui = GUI subsystem (no console window ever appears, even when spawned).
     # Required for the Gio-based overlay subprocess and to keep the daemon hidden.
     # Stdio still works when pks-cli redirects pipes — Windows allows GUI apps to use redirected stdio.
+    # Heypoul's main package moved from the repo root to cmd/heypoul. Use the new
+    # location if present, otherwise fall back to . for older checkouts.
+    HEYPOUL_PKG="./cmd/heypoul"
+    [ -f "$HEYPOUL_DIR/main.go" ] && HEYPOUL_PKG="."
     GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
         CC=x86_64-w64-mingw32-gcc \
         CXX=x86_64-w64-mingw32-g++ \
-        go build -C "$HEYPOUL_DIR" -ldflags "-H windowsgui" -o "$RESOURCE_DIR/heypoul-win-amd64.exe" . \
+        go build -C "$HEYPOUL_DIR" -ldflags "-H windowsgui" -o "$RESOURCE_DIR/heypoul-win-amd64.exe" "$HEYPOUL_PKG" \
         2>&1 | grep -v "warning:\|note:\|miniaudio\|ma_atomic" || true
     echo "      -> $RESOURCE_DIR/heypoul-win-amd64.exe"
 

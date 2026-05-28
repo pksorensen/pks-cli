@@ -444,3 +444,6 @@ src/Infrastructure/Resources/heypoul-win-amd64.exe
 .pks/brain/refs.json
 # pks writing — local report cache + overrides (see `pks writing init`)
 .pks/writing/
+# pks writing — local report cache + overrides (see `pks writing init`)
+**/_review/
+nupkg-local/pks-cli.6.13.0.nupkg
