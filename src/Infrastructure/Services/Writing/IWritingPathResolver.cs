@@ -16,6 +16,9 @@ public interface IWritingPathResolver
     string GlobalProfilePath { get; }
     string GlobalAnglicismsPath { get; }
     string GlobalAllowlistPath { get; }
+    /// Loan-translations / calques (Danish words that are literally translated
+    /// from English and read wrong). Sibling to anglicisms.txt.
+    string GlobalCalquesPath { get; }
     string GlobalChannelsDir { get; }
     string GlobalChannelRubricPath(string channel);
     string GlobalValeDir { get; }
@@ -53,4 +56,12 @@ public interface IWritingPathResolver
 
     string LearnSidecarMarkdownPath(string sourceFilePath);
     string LearnSidecarJsonPath(string sourceFilePath);
+
+    // ── naturalness review loop ────────────────────────────────────────────────
+    /// `_review/<stem>.NATURALNESS-CANDIDATES.json` — critic-extracted candidates.
+    string NaturalnessCandidatesSidecarPath(string sourceFilePath);
+    /// `_review/<stem>.NATURALNESS-PICKS.json` — author picks from `review`.
+    string NaturalnessPicksSidecarPath(string sourceFilePath);
+    /// Global learning store: ~/.pks-cli/writing/naturalness-patterns.md.
+    string GlobalNaturalnessPatternsPath { get; }
 }

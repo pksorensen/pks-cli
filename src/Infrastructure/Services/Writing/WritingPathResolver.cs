@@ -22,6 +22,7 @@ public sealed class WritingPathResolver : IWritingPathResolver
     public string GlobalProfilePath => Path.Combine(GlobalRoot, "profile.md");
     public string GlobalAnglicismsPath => Path.Combine(GlobalRoot, "anglicisms.txt");
     public string GlobalAllowlistPath => Path.Combine(GlobalRoot, "allowlist.txt");
+    public string GlobalCalquesPath => Path.Combine(GlobalRoot, "calques.txt");
     public string GlobalChannelsDir => Path.Combine(GlobalRoot, "channels");
     public string GlobalChannelRubricPath(string channel) =>
         Path.Combine(GlobalChannelsDir, channel + ".md");
@@ -89,6 +90,17 @@ public sealed class WritingPathResolver : IWritingPathResolver
     public string LearnSidecarJsonPath(string sourceFilePath) =>
         Path.Combine(ReviewDir(sourceFilePath),
             $"{Path.GetFileNameWithoutExtension(sourceFilePath)}.LEARN.json");
+
+    public string NaturalnessCandidatesSidecarPath(string sourceFilePath) =>
+        Path.Combine(ReviewDir(sourceFilePath),
+            $"{Path.GetFileNameWithoutExtension(sourceFilePath)}.NATURALNESS-CANDIDATES.json");
+
+    public string NaturalnessPicksSidecarPath(string sourceFilePath) =>
+        Path.Combine(ReviewDir(sourceFilePath),
+            $"{Path.GetFileNameWithoutExtension(sourceFilePath)}.NATURALNESS-PICKS.json");
+
+    public string GlobalNaturalnessPatternsPath =>
+        Path.Combine(GlobalRoot, "naturalness-patterns.md");
 
     private static string HashPath(string path)
     {

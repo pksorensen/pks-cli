@@ -94,7 +94,13 @@ var noLogo = commandArgs.Any(a => a.Equals("--no-logo", StringComparison.Ordinal
 var isPipeableWriting = commandArgs.Length >= 3
     && commandArgs[1].Equals("writing", StringComparison.OrdinalIgnoreCase)
     && (commandArgs[2].Equals("prompt", StringComparison.OrdinalIgnoreCase)
-        || commandArgs[2].Equals("accept", StringComparison.OrdinalIgnoreCase));
+        || commandArgs[2].Equals("accept", StringComparison.OrdinalIgnoreCase)
+        // `pks writing naturalness {prompt|accept|patterns export}` are also pipeable.
+        || (commandArgs[2].Equals("naturalness", StringComparison.OrdinalIgnoreCase)
+            && commandArgs.Length >= 4
+            && (commandArgs[3].Equals("prompt", StringComparison.OrdinalIgnoreCase)
+                || commandArgs[3].Equals("accept", StringComparison.OrdinalIgnoreCase)
+                || commandArgs[3].Equals("patterns", StringComparison.OrdinalIgnoreCase))));
 if (isPipeableWriting) noLogo = true;
 
 // Enable debug output when --debug flag is passed
@@ -183,6 +189,11 @@ services.AddSingleton<PKS.Infrastructure.Services.Writing.IWritingPathResolver, 
 services.AddSingleton<PKS.Infrastructure.Services.Writing.IWritingProfileStore, PKS.Infrastructure.Services.Writing.WritingProfileStore>();
 services.AddSingleton<PKS.Infrastructure.Services.Writing.IWritingLinter, PKS.Infrastructure.Services.Writing.WritingLinter>();
 services.AddSingleton<PKS.Infrastructure.Services.Writing.IWritingCritic, PKS.Infrastructure.Services.Writing.WritingCritic>();
+// Naturalness review loop — agent-driven prompt/accept/review/apply + learning store.
+services.AddSingleton<PKS.Infrastructure.Services.Writing.INaturalnessPromptBuilder, PKS.Infrastructure.Services.Writing.NaturalnessPromptBuilder>();
+services.AddSingleton<PKS.Infrastructure.Services.Writing.INaturalnessPicksStore, PKS.Infrastructure.Services.Writing.NaturalnessPicksStore>();
+services.AddSingleton<PKS.Infrastructure.Services.Writing.INaturalnessPatternStore, PKS.Infrastructure.Services.Writing.NaturalnessPatternStore>();
+services.AddSingleton<PKS.Infrastructure.Services.Writing.INaturalnessApplier, PKS.Infrastructure.Services.Writing.NaturalnessApplier>();
 // Legacy MCP services removed in Phase 3 - now using SDK-based services only
 
 // New SDK-based MCP hosting services
@@ -1271,6 +1282,41 @@ app.Configure(config =>
                 .WithDescription("Untar an exported profile into ~/.pks-cli/writing/ (skips existing files unless --force)")
                 .WithExample(["writing", "profile", "import", "~/pks-writing-profile.tgz"])
                 .WithExample(["writing", "profile", "import", "~/pks-writing-profile.tgz", "--force"]);
+        });
+
+        // Naturalness review loop: prompt → accept → review → apply, plus a
+        // learning patterns store. Agent-driven; no LLM is invoked here.
+        writing.AddBranch("naturalness", n =>
+        {
+            n.SetDescription("Per-sentence Naturalness review loop with a learning patterns store");
+
+            n.AddCommand<PKS.Commands.Writing.NaturalnessPromptCommand>("prompt")
+                .WithDescription("Emit the JSON bundle (system+user+schema) for the naturalness critic")
+                .WithExample(["writing", "naturalness", "prompt", "blog-posts/x/da.md"]);
+
+            n.AddCommand<PKS.Commands.Writing.NaturalnessAcceptCommand>("accept")
+                .WithDescription("Validate the critic reply and persist candidates next to the source")
+                .WithExample(["writing", "naturalness", "accept", "post.md", "--from", "reply.json"]);
+
+            n.AddCommand<PKS.Commands.Writing.NaturalnessReviewCommand>("review")
+                .WithDescription("Interactive Spectre loop — pick A/B/C/skip/other per candidate")
+                .WithExample(["writing", "naturalness", "review", "post.md"]);
+
+            n.AddCommand<PKS.Commands.Writing.NaturalnessApplyCommand>("apply")
+                .WithDescription("Show diff, apply picks in-place, append accepted styles to the patterns store")
+                .WithExample(["writing", "naturalness", "apply", "post.md"]);
+
+            n.AddBranch("patterns", p =>
+            {
+                p.SetDescription("Inspect / export the global naturalness learning store");
+                p.AddCommand<PKS.Commands.Writing.NaturalnessPatternsShowCommand>("show")
+                    .WithDescription("Render the patterns store as a table")
+                    .WithExample(["writing", "naturalness", "patterns", "show"]);
+                p.AddCommand<PKS.Commands.Writing.NaturalnessPatternsExportCommand>("export")
+                    .WithDescription("Export the patterns markdown to stdout or a file")
+                    .WithExample(["writing", "naturalness", "patterns", "export"])
+                    .WithExample(["writing", "naturalness", "patterns", "export", "~/patterns.md"]);
+            });
         });
     });
 
