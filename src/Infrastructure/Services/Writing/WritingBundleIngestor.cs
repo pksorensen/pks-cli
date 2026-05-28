@@ -83,6 +83,40 @@ public static class WritingBundleIngestor
             }
         }
 
+        if (root.TryGetProperty("calques", out var calqEl) && calqEl.ValueKind == JsonValueKind.Array)
+        {
+            bundle.Calques = new List<CalqueEntry>();
+            foreach (var c in calqEl.EnumerateArray())
+            {
+                // Tolerant field names: `literalDanish`/`literal`/`danish`/`term`.
+                var literal = TryString(c, "literalDanish")
+                              ?? TryString(c, "literal")
+                              ?? TryString(c, "danish")
+                              ?? TryString(c, "term");
+                if (string.IsNullOrWhiteSpace(literal)) continue;
+
+                var alts = new List<string>();
+                if (c.TryGetProperty("alternatives", out var altsEl) && altsEl.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var v in altsEl.EnumerateArray())
+                        if (v.ValueKind == JsonValueKind.String && v.GetString() is { Length: > 0 } s)
+                            alts.Add(s.Trim());
+                }
+                else if (TryString(c, "suggestion") is { Length: > 0 } single)
+                {
+                    foreach (var part in single.Split(new[] { '/', ',' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                        alts.Add(part);
+                }
+
+                bundle.Calques.Add(new CalqueEntry
+                {
+                    LiteralDanish = literal.Trim(),
+                    Alternatives = alts,
+                    Why = TryString(c, "why") ?? TryString(c, "note"),
+                });
+            }
+        }
+
         if (root.TryGetProperty("allowlist", out var allow) && allow.ValueKind == JsonValueKind.Array)
         {
             bundle.Allowlist = new List<string>();
@@ -172,6 +206,17 @@ public static class WritingBundleIngestor
                 if (string.IsNullOrWhiteSpace(a.English)) continue;
                 await store.AddAnglicismAsync(a, ct);
                 result.AnglicismsAdded++;
+            }
+        }
+
+        // calques — additive; same per-entry add semantics as anglicisms.
+        if (bundle.Calques is { Count: > 0 } cqs)
+        {
+            foreach (var c in cqs)
+            {
+                if (string.IsNullOrWhiteSpace(c.LiteralDanish)) continue;
+                await store.AddCalqueAsync(c, ct);
+                result.CalquesAdded++;
             }
         }
 

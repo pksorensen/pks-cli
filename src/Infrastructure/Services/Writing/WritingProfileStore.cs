@@ -8,6 +8,7 @@ public sealed class WritingProfileStore : IWritingProfileStore
     private readonly IWritingPathResolver _paths;
     private readonly SemaphoreSlim _anglicismLock = new(1, 1);
     private readonly SemaphoreSlim _allowlistLock = new(1, 1);
+    private readonly SemaphoreSlim _calquesLock = new(1, 1);
 
     public static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -34,6 +35,7 @@ public sealed class WritingProfileStore : IWritingProfileStore
 
         await SeedIfMissingAsync(_paths.GlobalProfilePath, DefaultSeeds.Profile, ct);
         await SeedIfMissingAsync(_paths.GlobalAnglicismsPath, DefaultSeeds.Anglicisms, ct);
+        await SeedIfMissingAsync(_paths.GlobalCalquesPath, DefaultSeeds.Calques, ct);
         await SeedIfMissingAsync(_paths.GlobalAllowlistPath, DefaultSeeds.Allowlist, ct);
         await SeedIfMissingAsync(_paths.GlobalChannelRubricPath("blog"), DefaultSeeds.BlogRubric, ct);
         await SeedIfMissingAsync(_paths.GlobalChannelRubricPath("linkedin"), DefaultSeeds.LinkedInRubric, ct);
@@ -90,6 +92,54 @@ public sealed class WritingProfileStore : IWritingProfileStore
         }
 
         return merged.Values.OrderBy(e => e.English, StringComparer.Ordinal).ToList();
+    }
+
+    public async Task<IReadOnlyList<CalqueEntry>> LoadCalquesAsync(
+        string? projectRoot, CancellationToken ct = default)
+    {
+        // Same merge semantics as anglicisms: project overrides win on collision.
+        var merged = new Dictionary<string, CalqueEntry>(StringComparer.OrdinalIgnoreCase);
+
+        if (File.Exists(_paths.GlobalCalquesPath))
+        {
+            var text = await File.ReadAllTextAsync(_paths.GlobalCalquesPath, ct);
+            foreach (var e in AnglicismListParser.ParseCalques(text))
+                merged[e.LiteralDanish] = e;
+        }
+
+        if (projectRoot is not null)
+        {
+            var overridePath = Path.Combine(projectRoot, "overrides", "calques.txt");
+            if (File.Exists(overridePath))
+            {
+                var text = await File.ReadAllTextAsync(overridePath, ct);
+                foreach (var e in AnglicismListParser.ParseCalques(text))
+                    merged[e.LiteralDanish] = e;
+            }
+        }
+
+        return merged.Values.OrderBy(e => e.LiteralDanish, StringComparer.Ordinal).ToList();
+    }
+
+    public async Task AddCalqueAsync(CalqueEntry entry, CancellationToken ct = default)
+    {
+        await _calquesLock.WaitAsync(ct);
+        try
+        {
+            var existing = File.Exists(_paths.GlobalCalquesPath)
+                ? AnglicismListParser.ParseCalques(await File.ReadAllTextAsync(_paths.GlobalCalquesPath, ct))
+                : new List<CalqueEntry>();
+
+            var map = existing.ToDictionary(e => e.LiteralDanish, e => e, StringComparer.OrdinalIgnoreCase);
+            map[entry.LiteralDanish] = entry;
+
+            await AtomicWriteAsync(_paths.GlobalCalquesPath,
+                AnglicismListParser.RenderCalques(map.Values), ct);
+        }
+        finally
+        {
+            _calquesLock.Release();
+        }
     }
 
     public async Task<IReadOnlySet<string>> LoadAllowlistAsync(CancellationToken ct = default)

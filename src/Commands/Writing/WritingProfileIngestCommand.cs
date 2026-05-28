@@ -72,6 +72,7 @@ public class WritingProfileIngestCommand : AsyncCommand<WritingProfileIngestSett
             "[grey]not in bundle[/]");
 
         t.AddRow("Anglicisms added", $"[green]{result.AnglicismsAdded}[/]");
+        t.AddRow("Calques added",    $"[green]{result.CalquesAdded}[/]");
         t.AddRow("Allowlist added",  $"[green]{result.AllowlistAdded}[/]");
 
         if (result.ReferencesAdded.Count > 0 || result.ReferencesSkipped.Count > 0)

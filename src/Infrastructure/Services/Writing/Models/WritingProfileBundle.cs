@@ -30,6 +30,7 @@ public sealed class WritingProfileBundle
 
     public string? Profile { get; set; }
     public List<AnglicismEntry>? Anglicisms { get; set; }
+    public List<CalqueEntry>? Calques { get; set; }
     public List<string>? Allowlist { get; set; }
     public Dictionary<string, List<ReferenceSample>>? References { get; set; }
     public List<BundleLesson>? Lessons { get; set; }
@@ -47,6 +48,7 @@ public sealed class BundleIngestResult
     public bool ProfileWritten { get; set; }
     public bool ProfileSkipped { get; set; }      // existed; --force not set
     public int AnglicismsAdded { get; set; }
+    public int CalquesAdded { get; set; }
     public int AllowlistAdded { get; set; }
     public Dictionary<string, int> ReferencesAdded { get; set; } = new();
     public Dictionary<string, int> ReferencesSkipped { get; set; } = new();

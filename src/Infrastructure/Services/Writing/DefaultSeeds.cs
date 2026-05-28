@@ -95,6 +95,28 @@ trade-off → afvejning
 edge case → særtilfælde
 """;
 
+    public const string Calques =
+"""
+# pks writing — calques (loan-translations)
+# A Danish word that is literally translated from English and reads wrong
+# in Danish tech context. Distinct from anglicisms — these ARE real Danish
+# words, but the literal meaning misfires for the technical sense.
+#
+# Format: literal_danish → alt1, alt2  | why it's wrong
+# Edit by hand or via `pks writing learn` proposals.
+
+barn → barne-Claude, underordnet, sub-agent, child  | "barn" på dansk = menneskeunge, ikke en sub-proces
+barnet → barne-Claude, den underordnede, child-processen  | samme som "barn"
+sky → cloud, cloud-platform                          | "sky" på dansk = en sky på himlen, ikke cloud computing
+tråd → thread, arbejdstråd                           | "tråd" alene er stof; tech-konteksten kræver "thread"
+hav af → mængde, et univers af, en masse            | "a sea of X" oversat — ikke dansk vending
+i slutningen af dagen → i sidste ende, når alt kommer til alt  | "at the end of the day" direkte oversat
+fyre → starte, igangsætte, lancere                   | "fire (off)" oversat — "fyre" på dansk = sparke nogen ud (i tech-kontekst tvetydigt)
+spawne et barn → starte en underordnet, fyre en child af  | "spawn a child" dobbelt-calque
+række ud → kontakte, skrive til, henvende sig til    | "reach out" oversat — fungerer på engelsk, kluntet på dansk
+på dagen → om dagen, samme dag                       | "on the day" oversat
+""";
+
     public const string Allowlist =
 """
 # pks writing — allowlist
@@ -207,6 +229,9 @@ just emit the JSON in a single ```json … ``` fenced block at the end.
   "anglicisms": [
     { "english": "deploye", "danishAlternatives": ["udrulle"], "note": "verb form" }
   ],
+  "calques": [
+    { "literalDanish": "barn", "alternatives": ["barne-Claude", "underordnet", "child"], "why": "'barn' = menneskeunge på dansk, ikke en sub-proces" }
+  ],
   "allowlist": ["AppHost", "vibecast"],
   "references": {
     "blog":     [ { "id": "post-01", "content": "<full markdown of one of MY hand-written posts>" } ],
@@ -240,6 +265,9 @@ Every top-level field except `version` is optional. Empty/missing means
   Filename-safe id per post (`post-01`, `post-02`, …).
 - For `anglicisms`: add only patterns you can demonstrate I overuse.
   Don't fabricate. Don't restate the tool's defaults — they're already loaded.
+- For `calques`: loan-translations where I use a literal Danish word that
+  carries the wrong meaning in tech context (e.g. "barn" for a sub-process —
+  in Danish "barn" means a human child). Only what you can demonstrate.
 - For `allowlist`: tech/product names + jargon I use that should never be
   flagged (e.g. `AppHost`, `vibecast`, `Aspire`, `Hafeok`, etc.).
 - **NEVER include AI-written drafts in `references`.** Anything co-authored

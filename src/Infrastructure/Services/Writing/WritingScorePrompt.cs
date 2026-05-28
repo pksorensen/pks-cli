@@ -19,8 +19,10 @@ public static class WritingScorePrompt
         public string? ChannelRubric { get; init; }
         public IReadOnlyList<ReferenceSample> References { get; init; } = Array.Empty<ReferenceSample>();
         public IReadOnlyList<AnglicismEntry> Anglicisms { get; init; } = Array.Empty<AnglicismEntry>();
+        public IReadOnlyList<CalqueEntry> Calques { get; init; } = Array.Empty<CalqueEntry>();
         public int MaxReferences { get; init; } = 10;
         public int MaxAnglicisms { get; init; } = 60;
+        public int MaxCalques { get; init; } = 40;
         public int MaxFindings { get; init; } = 12;
     }
 
@@ -48,6 +50,7 @@ public static class WritingScorePrompt
                 maxFindings = r.MaxFindings,
                 referencesIncluded = Math.Min(r.References.Count, r.MaxReferences),
                 anglicismsIncluded = Math.Min(r.Anglicisms.Count, r.MaxAnglicisms),
+                calquesIncluded = Math.Min(r.Calques.Count, r.MaxCalques),
             },
         };
     }
@@ -107,6 +110,33 @@ public static class WritingScorePrompt
             {
                 var alts = string.Join(", ", a.DanishAlternatives);
                 sb.AppendLine($"- {a.English} → {alts}");
+            }
+            sb.AppendLine();
+        }
+
+        // Calques — loan-translations where literal Danish reads wrong in tech context.
+        // Worth a paragraph of explicit instruction: this is the class of error
+        // a generic Danish-fluency check misses because the words ARE valid Danish.
+        sb.AppendLine("# Calques (loan-translations) — high-priority class");
+        sb.AppendLine();
+        sb.AppendLine("Watch for Danish words that are literally translated from English but");
+        sb.AppendLine("carry the wrong literal meaning in Danish tech context. Example:");
+        sb.AppendLine("\"barn\" in Danish means a human child — NOT a sub-process; using it for");
+        sb.AppendLine("a `tmux-orchestrator-child` reads as bizarre to a Danish reader even though");
+        sb.AppendLine("each individual word is valid Danish.");
+        sb.AppendLine();
+        sb.AppendLine("When you spot a calque (from the list below OR a NEW one you notice),");
+        sb.AppendLine("flag it as `dimension: \"Terminology\"` with a clear note explaining the");
+        sb.AppendLine("literal-meaning mismatch and a suggested rewrite.");
+        sb.AppendLine();
+        if (r.Calques.Count > 0)
+        {
+            sb.AppendLine("Known calques (literal_danish → suggested_alternative(s) | why):");
+            foreach (var c in r.Calques.Take(r.MaxCalques))
+            {
+                var alts = string.Join(", ", c.Alternatives);
+                var why = string.IsNullOrEmpty(c.Why) ? "" : $"  | {c.Why}";
+                sb.AppendLine($"- {c.LiteralDanish} → {alts}{why}");
             }
             sb.AppendLine();
         }

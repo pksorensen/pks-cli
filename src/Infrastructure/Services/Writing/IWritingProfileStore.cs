@@ -21,8 +21,13 @@ public interface IWritingProfileStore
 
     Task<IReadOnlySet<string>> LoadAllowlistAsync(CancellationToken ct = default);
 
+    /// Calques (loan-translations) merged from global + per-project overrides.
+    Task<IReadOnlyList<CalqueEntry>> LoadCalquesAsync(
+        string? projectRoot, CancellationToken ct = default);
+
     Task AddAnglicismAsync(AnglicismEntry entry, CancellationToken ct = default);
     Task AddAllowedTermAsync(string term, CancellationToken ct = default);
+    Task AddCalqueAsync(CalqueEntry entry, CancellationToken ct = default);
 
     /// Appends a single dated lesson to ~/.pks-cli/writing/lessons.md.
     /// Used by `pks writing learn` when accepting a non-terminology finding.

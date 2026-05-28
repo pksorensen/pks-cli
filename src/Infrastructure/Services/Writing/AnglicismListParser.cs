@@ -75,6 +75,72 @@ public static class AnglicismListParser
         return sb.ToString();
     }
 
+    /// Parses the human-editable calque list. Same `literal → alts | why`
+    /// shape as anglicisms, just different semantics (the `literal` side is
+    /// Danish, the alternatives are what to use instead).
+    public static List<CalqueEntry> ParseCalques(string content)
+    {
+        var entries = new List<CalqueEntry>();
+        foreach (var raw in content.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r').Trim();
+            if (line.Length == 0 || line.StartsWith('#')) continue;
+
+            var arrowIdx = line.IndexOf('→');
+            int arrowLen = 1;
+            if (arrowIdx < 0)
+            {
+                arrowIdx = line.IndexOf("->", StringComparison.Ordinal);
+                arrowLen = 2;
+            }
+            if (arrowIdx < 0) continue;
+
+            var literal = line[..arrowIdx].Trim();
+            var rest = line[(arrowIdx + arrowLen)..].Trim();
+            if (literal.Length == 0) continue;
+
+            string? why = null;
+            var pipeIdx = rest.IndexOf('|');
+            if (pipeIdx >= 0)
+            {
+                why = rest[(pipeIdx + 1)..].Trim();
+                rest = rest[..pipeIdx].Trim();
+            }
+            var alts = rest
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+
+            entries.Add(new CalqueEntry
+            {
+                LiteralDanish = literal,
+                Alternatives = alts,
+                Why = string.IsNullOrEmpty(why) ? null : why,
+            });
+        }
+        return entries;
+    }
+
+    public static string RenderCalques(IEnumerable<CalqueEntry> entries)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("# pks writing — calques (loan-translations)");
+        sb.AppendLine("# A Danish word that is literally translated from English");
+        sb.AppendLine("# and carries the wrong meaning in Danish tech context.");
+        sb.AppendLine("# Format: literal_danish → alt1, alt2  | why it's wrong");
+        sb.AppendLine();
+        foreach (var e in entries.OrderBy(e => e.LiteralDanish, StringComparer.Ordinal))
+        {
+            sb.Append(e.LiteralDanish).Append(" → ");
+            sb.Append(string.Join(", ", e.Alternatives));
+            if (!string.IsNullOrEmpty(e.Why))
+            {
+                sb.Append("  | ").Append(e.Why);
+            }
+            sb.AppendLine();
+        }
+        return sb.ToString();
+    }
+
     public static List<string> ParseAllowlist(string content) =>
         content.Split('\n')
             .Select(l => l.TrimEnd('\r').Trim())

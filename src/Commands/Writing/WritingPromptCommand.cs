@@ -60,6 +60,7 @@ public class WritingPromptCommand : AsyncCommand<WritingPromptSettings>
         var rubric = await _store.LoadChannelRubricAsync(channel);
         var references = await _store.LoadReferenceSamplesAsync(channel);
         var anglicisms = await _store.LoadAnglicismsAsync(projectRoot);
+        var calques = await _store.LoadCalquesAsync(projectRoot);
 
         var bundle = WritingScorePrompt.Build(new WritingScorePrompt.Request
         {
@@ -70,6 +71,7 @@ public class WritingPromptCommand : AsyncCommand<WritingPromptSettings>
             ChannelRubric = rubric,
             References = references,
             Anglicisms = anglicisms,
+            Calques = calques,
             MaxReferences = settings.MaxReferences,
             MaxFindings = settings.MaxFindings,
         });
