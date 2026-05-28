@@ -1,19 +1,19 @@
 using System.ComponentModel;
-using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Images;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
 namespace PKS.Commands.Image;
 
-[Description("Generate an image from a text prompt using Google AI")]
+[Description("Generate an image from a text prompt. Provider is auto-resolved from --model (google, foundry).")]
 public class ImageCommand : Command<ImageCommand.Settings>
 {
-    private readonly IGoogleAiService _google;
+    private readonly IEnumerable<IImageProvider> _providers;
     private readonly IAnsiConsole _console;
 
-    public ImageCommand(IGoogleAiService google, IAnsiConsole console)
+    public ImageCommand(IEnumerable<IImageProvider> providers, IAnsiConsole console)
     {
-        _google = google;
+        _providers = providers;
         _console = console;
     }
 
@@ -28,7 +28,7 @@ public class ImageCommand : Command<ImageCommand.Settings>
         public string? PromptFile { get; set; }
 
         [CommandOption("--model|-m")]
-        [Description("Model to use (default: gemini-3.1-flash-image-preview)")]
+        [Description("Model to use (default: gemini-3.1-flash-image-preview). Use gpt-image-2 for Azure Foundry.")]
         public string Model { get; set; } = "gemini-3.1-flash-image-preview";
 
         [CommandOption("--output|-o")]
@@ -52,8 +52,8 @@ public class ImageCommand : Command<ImageCommand.Settings>
         public bool ListModels { get; set; }
 
         [CommandOption("--provider")]
-        [Description("Image generation provider (default: google)")]
-        public string Provider { get; set; } = "google";
+        [Description("Force a specific image provider (google, foundry). Default: auto-resolve from --model.")]
+        public string? Provider { get; set; }
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -86,6 +86,7 @@ public class ImageCommand : Command<ImageCommand.Settings>
         {
             _console.MarkupLine("[red]Provide a prompt via argument or --prompt-file.[/]");
             _console.MarkupLine("[dim]Example: pks image \"a dark editorial photograph\"[/]");
+            _console.MarkupLine("[dim]Example: pks image --model gpt-image-2 \"a red fox in autumn forest\"[/]");
             _console.MarkupLine("[dim]Example: pks image --prompt-file prompt.txt[/]");
             _console.MarkupLine("[dim]Example: pks image --input bg.jpg \"Add the title 'My Book' in white serif at the top\"[/]");
             return 1;
@@ -98,12 +99,9 @@ public class ImageCommand : Command<ImageCommand.Settings>
             return 1;
         }
 
-        if (!await _google.IsAuthenticatedAsync())
-        {
-            _console.MarkupLine("[red]No Google AI API key registered.[/]");
-            _console.MarkupLine("[dim]Run [bold]pks google init[/] first.[/]");
+        var provider = await ResolveProviderAsync(settings);
+        if (provider == null)
             return 1;
-        }
 
         // Resolve output path
         var outputPath = settings.Output
@@ -115,17 +113,22 @@ public class ImageCommand : Command<ImageCommand.Settings>
             Directory.CreateDirectory(dir);
 
         byte[]? imageBytes = null;
+        var request = new ImageGenerationRequest(
+            prompt,
+            settings.Model,
+            settings.AspectRatio,
+            settings.Resolution,
+            settings.InputImage);
 
         try
         {
             var spinnerLabel = settings.InputImage != null
-                ? $"Augmenting image with [bold]{Markup.Escape(settings.Model)}[/]..."
-                : $"Generating image with [bold]{Markup.Escape(settings.Model)}[/]...";
+                ? $"Augmenting image with [bold]{Markup.Escape(settings.Model)}[/] via [bold]{provider.Name}[/]..."
+                : $"Generating image with [bold]{Markup.Escape(settings.Model)}[/] via [bold]{provider.Name}[/]...";
 
             imageBytes = await _console.Status()
                 .Spinner(Spinner.Known.Dots)
-                .StartAsync(spinnerLabel, async _ =>
-                    await _google.GenerateImageAsync(prompt, settings.Model, settings.AspectRatio, settings.Resolution, settings.InputImage));
+                .StartAsync(spinnerLabel, async _ => await provider.GenerateAsync(request));
         }
         catch (HttpRequestException ex)
         {
@@ -152,37 +155,110 @@ public class ImageCommand : Command<ImageCommand.Settings>
         return 0;
     }
 
+    private async Task<IImageProvider?> ResolveProviderAsync(Settings settings)
+    {
+        // Explicit --provider wins.
+        if (!string.IsNullOrWhiteSpace(settings.Provider))
+        {
+            var forced = _providers.FirstOrDefault(p =>
+                string.Equals(p.Name, settings.Provider, StringComparison.OrdinalIgnoreCase));
+
+            if (forced == null)
+            {
+                _console.MarkupLine($"[red]Unknown provider:[/] {Markup.Escape(settings.Provider)}");
+                _console.MarkupLine($"[dim]Available: {string.Join(", ", _providers.Select(p => p.Name))}[/]");
+                return null;
+            }
+
+            if (!await forced.IsAuthenticatedAsync())
+            {
+                _console.MarkupLine($"[red]Provider '{forced.Name}' is not authenticated.[/]");
+                _console.MarkupLine($"[dim]{Markup.Escape(forced.AuthHint)}[/]");
+                return null;
+            }
+
+            return forced;
+        }
+
+        // Auto-resolve: first authenticated provider that claims the model.
+        IImageProvider? unauthMatch = null;
+
+        foreach (var p in _providers)
+        {
+            if (!await p.CanServeModelAsync(settings.Model))
+                continue;
+
+            if (await p.IsAuthenticatedAsync())
+                return p;
+
+            unauthMatch ??= p;
+        }
+
+        if (unauthMatch != null)
+        {
+            _console.MarkupLine($"[red]Model '{Markup.Escape(settings.Model)}' is served by '{unauthMatch.Name}', which is not authenticated.[/]");
+            _console.MarkupLine($"[dim]{Markup.Escape(unauthMatch.AuthHint)}[/]");
+            return null;
+        }
+
+        _console.MarkupLine($"[red]No image provider can serve model '{Markup.Escape(settings.Model)}'.[/]");
+        var authed = new List<string>();
+        foreach (var p in _providers)
+            if (await p.IsAuthenticatedAsync())
+                authed.Add(p.Name);
+
+        _console.MarkupLine($"[dim]Authenticated providers: {(authed.Count == 0 ? "(none)" : string.Join(", ", authed))}[/]");
+        _console.MarkupLine("[dim]Run [bold]pks image --list-models[/] to see what's available.[/]");
+        return null;
+    }
+
     private async Task<int> ListModelsAsync()
     {
-        List<GoogleAiModel> models;
-
-        if (await _google.IsAuthenticatedAsync())
-        {
-            models = await _console.Status()
-                .Spinner(Spinner.Known.Dots)
-                .StartAsync("Fetching available models...", async _ =>
-                    await _google.ListImageModelsAsync());
-        }
-        else
-        {
-            models = await _google.ListImageModelsAsync();
-            _console.MarkupLine("[dim](Showing known models — run [bold]pks google init[/] for live listing)[/]");
-            _console.WriteLine();
-        }
-
         var table = new Table()
             .Border(TableBorder.Rounded)
-            .Title("[bold]Google AI — Image Generation Models[/]");
+            .Title("[bold]Image Generation Models[/]");
 
+        table.AddColumn("[bold]Provider[/]");
         table.AddColumn("[bold]Model[/]");
         table.AddColumn("[bold]Display Name[/]");
         table.AddColumn("[bold]Description[/]");
 
-        foreach (var m in models)
-            table.AddRow(
-                Markup.Escape(m.Name),
-                Markup.Escape(m.DisplayName),
-                Markup.Escape(m.Description));
+        var anyAuthed = false;
+
+        foreach (var provider in _providers)
+        {
+            var authed = await provider.IsAuthenticatedAsync();
+            if (!authed)
+                continue;
+
+            anyAuthed = true;
+            IReadOnlyList<ImageModelInfo> models;
+            try
+            {
+                models = await _console.Status()
+                    .Spinner(Spinner.Known.Dots)
+                    .StartAsync($"Fetching {provider.Name} models...", async _ => await provider.ListModelsAsync());
+            }
+            catch
+            {
+                continue;
+            }
+
+            foreach (var m in models)
+                table.AddRow(
+                    Markup.Escape(provider.Name),
+                    Markup.Escape(m.Name),
+                    Markup.Escape(m.DisplayName),
+                    Markup.Escape(m.Description));
+        }
+
+        if (!anyAuthed)
+        {
+            _console.MarkupLine("[yellow]No image providers are authenticated.[/]");
+            foreach (var p in _providers)
+                _console.MarkupLine($"  [dim]{Markup.Escape(p.Name)}: {Markup.Escape(p.AuthHint)}[/]");
+            return 1;
+        }
 
         _console.Write(table);
         _console.WriteLine();

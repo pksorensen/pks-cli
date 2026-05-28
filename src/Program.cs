@@ -362,6 +362,13 @@ services.AddSingleton<IAppInsightsQueryService, AppInsightsQueryService>();
 // Register Google AI service
 services.AddHttpClient<IGoogleAiService, GoogleAiService>();
 
+// Register image providers (resolved by --model in pks image).
+// Order matters: when multiple providers claim the same model name, the first authenticated one wins.
+services.AddSingleton<PKS.Infrastructure.Services.Images.IImageProvider, PKS.Infrastructure.Services.Images.GoogleImageProvider>();
+services.AddHttpClient<PKS.Infrastructure.Services.Images.AzureFoundryImageProvider>();
+services.AddSingleton<PKS.Infrastructure.Services.Images.IImageProvider>(sp =>
+    sp.GetRequiredService<PKS.Infrastructure.Services.Images.AzureFoundryImageProvider>());
+
 // Register Report services
 services.AddSingleton<IReportService, ReportService>();
 services.AddSingleton<ITelemetryService, TelemetryService>();
@@ -1026,7 +1033,7 @@ app.Configure(config =>
 
     // Add image generation command
     config.AddCommand<ImageCommand>("image")
-        .WithDescription("Generate or augment an image using Google AI")
+        .WithDescription("Generate or augment an image using Google AI or Azure Foundry (provider auto-resolved from --model)")
         .WithExample(new[] { "image", "--list-models" })
         .WithExample(new[] { "image", "\"a dark editorial photograph of a match burning\"" })
         .WithExample(new[] { "image", "--prompt-file", "prompt.txt", "--output", "cover.jpg" })
