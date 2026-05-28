@@ -1001,6 +1001,13 @@ app.Configure(config =>
             .WithExample(new[] { "voice", "settings" });
     });
 
+    // Top-level: pks transcribe <file>. Same Foundry creds path as `pks voice start`,
+    // but runs heypoul in file-transcribe mode instead of the PTT daemon.
+    config.AddCommand<VoiceTranscribeCommand>("transcribe")
+        .WithDescription("Transcribe an audio/video file (heypoul + Azure AI Foundry Speech)")
+        .WithExample(new[] { "transcribe", "recording.mp4" })
+        .WithExample(new[] { "transcribe", "recording.mp4", "--engines", "cloud,parakeet-v3" });
+
     // Local AI models — pks model <name> <verb>
     config.AddBranch<PKS.Commands.Model.ModelSettings>("model", model =>
     {
@@ -1040,7 +1047,8 @@ app.Configure(config =>
         .WithDescription("Generate speech audio from text using Azure AI Foundry TTS")
         .WithExample(new[] { "tts", "\"Hello world\"" })
         .WithExample(new[] { "tts", "--text-file", "script.txt", "--voice", "nova", "--output", "speech.mp3" })
-        .WithExample(new[] { "tts", "\"Announcing our launch\"", "--voice", "shimmer", "--output", "launch.mp3" });
+        .WithExample(new[] { "tts", "\"Announcing our launch\"", "--voice", "shimmer", "--output", "launch.mp3" })
+        .WithExample(new[] { "tts", "--ssml-file", "dialog-da.xml", "--output", "spike-dialog-da.mp3" });
 
     // Add image generation command
     config.AddCommand<ImageCommand>("image")
