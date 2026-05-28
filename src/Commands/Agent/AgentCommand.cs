@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using PKS.CLI.Infrastructure.Services;
 using PKS.CLI.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Agent;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -15,17 +16,40 @@ public class AgentCommand : AsyncCommand<AgentSettings>
 {
     private readonly IAgentFrameworkService _agentService;
     private readonly ILogger<AgentCommand> _logger;
+    private readonly CodingAgentService? _codingAgent;
 
-    public AgentCommand(IAgentFrameworkService agentService, ILogger<AgentCommand> logger)
+    public AgentCommand(
+        IAgentFrameworkService agentService,
+        ILogger<AgentCommand> logger,
+        CodingAgentService? codingAgent = null)
     {
         _agentService = agentService;
         _logger = logger;
+        _codingAgent = codingAgent;
     }
 
     public override async Task<int> ExecuteAsync(CommandContext context, AgentSettings settings)
     {
         try
         {
+            // If a positional prompt is provided, route to the coding-agent loop.
+            if (!string.IsNullOrWhiteSpace(settings.Prompt))
+            {
+                if (_codingAgent is null)
+                {
+                    AnsiConsole.MarkupLine("[red]CodingAgentService not registered — DI wiring is incomplete.[/]");
+                    return 1;
+                }
+                var options = new CodingAgentRunOptions(
+                    Prompt: settings.Prompt!,
+                    ModelId: string.IsNullOrWhiteSpace(settings.Model) ? "gpt-5.5" : settings.Model,
+                    Cwd: string.IsNullOrWhiteSpace(settings.Cwd) ? null : settings.Cwd,
+                    SkillName: string.IsNullOrWhiteSpace(settings.Skill) ? null : settings.Skill,
+                    MaxTurns: settings.MaxTurns > 0 ? settings.MaxTurns : 50,
+                    ReadOnly: settings.ReadOnly);
+                return await _codingAgent.RunAsync(options, CancellationToken.None);
+            }
+
             return settings.Action switch
             {
                 AgentAction.Create => await CreateAgentAsync(settings),
@@ -335,6 +359,32 @@ public class AgentSettings : CommandSettings
     [CommandOption("-s|--settings")]
     [Description("Additional settings in key=value format")]
     public string[] Settings { get; set; } = Array.Empty<string>();
+
+    // ----- Coding-agent (one-shot LLM task) settings -----
+
+    [CommandArgument(0, "[prompt]")]
+    [Description("Prompt for the one-shot LLM agent (read/write/edit/bash tools available). When provided, all other action options are ignored.")]
+    public string? Prompt { get; set; }
+
+    [CommandOption("-m|--model")]
+    [Description("Model id for the coding agent. Default: gpt-5.5")]
+    public string? Model { get; set; }
+
+    [CommandOption("--cwd")]
+    [Description("Sandbox root for tool calls. Default: current working directory")]
+    public string? Cwd { get; set; }
+
+    [CommandOption("--skill")]
+    [Description("Skill name (loads ~/.pks-cli/agent-skills/<name>.md as the system prompt)")]
+    public string? Skill { get; set; }
+
+    [CommandOption("--max-turns")]
+    [Description("Maximum tool-call iterations. Default: 50")]
+    public int MaxTurns { get; set; }
+
+    [CommandOption("--read-only")]
+    [Description("Disable mutating tools (write, edit, bash); leaves read, grep, find, ls enabled")]
+    public bool ReadOnly { get; set; }
 }
 
 /// <summary>

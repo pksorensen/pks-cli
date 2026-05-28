@@ -236,6 +236,10 @@ services.PostConfigure<PKS.CLI.Infrastructure.Services.MCP.McpConfiguration>(_ =
 services.AddSingleton<IAgentFrameworkService, AgentFrameworkService>();
 services.AddSingleton<IPrdService, PrdService>();
 
+// Coding-agent (pks agent "<prompt>") — multi-provider LLM loop with file/bash tools.
+services.AddHttpClient<PKS.Infrastructure.Services.Agent.AgentChatProviderFactory>();
+services.AddSingleton<PKS.Infrastructure.Services.Agent.CodingAgentService>();
+
 // Register devcontainer services
 services.AddSingleton<IDevcontainerService, DevcontainerService>();
 services.AddSingleton<IDevcontainerFeatureRegistry, DevcontainerFeatureRegistry>();

@@ -62,6 +62,10 @@
     <!-- OpenTelemetry: ActivitySource + OTLP export to Aspire -->
     <PackageReference Include="OpenTelemetry" Version="1.15.3"/>
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3"/>
+    <!-- Agent: multi-provider LLM chat with tools -->
+    <PackageReference Include="Azure.AI.OpenAI" Version="2.2.0-beta.4"/>
+    <PackageReference Include="Azure.Identity" Version="1.13.1"/>
+    <PackageReference Include="Anthropic.SDK" Version="5.4.3"/>
   </ItemGroup>
 
   <!-- Template inclusion for normal builds (NuGet global tool) -->
