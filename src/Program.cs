@@ -1131,6 +1131,12 @@ app.Configure(config =>
         claude.AddCommand<PKS.Commands.Claude.ClaudeBackupCommand>("backup")
             .WithDescription("Backup ~/.claude/ (sessions, projects, settings) to registered rsync targets")
             .WithExample(["claude", "backup"]);
+
+        claude.AddCommand<PKS.Commands.Claude.ClaudeCodexCommand>("codex")
+            .WithDescription("Run Claude Code locally against a Codex / GPT-5.x model on Azure AI Foundry via a translating proxy")
+            .WithExample(["claude", "codex"])
+            .WithExample(["claude", "codex", "--model", "gpt-5.1-codex"])
+            .WithExample(["claude", "codex", "--print-env"]);
     });
 
     // Add brain commands — personal "brain" built from Claude session history
