@@ -103,6 +103,16 @@ var isPipeableWriting = commandArgs.Length >= 3
                 || commandArgs[3].Equals("patterns", StringComparison.OrdinalIgnoreCase))));
 if (isPipeableWriting) noLogo = true;
 
+// `pks persona prompt/accept/show` are pipeable too — same JSON/stdout shape.
+var isPipeablePersona = commandArgs.Length >= 3
+    && commandArgs[1].Equals("persona", StringComparison.OrdinalIgnoreCase)
+    && (commandArgs[2].Equals("prompt", StringComparison.OrdinalIgnoreCase)
+        || commandArgs[2].Equals("accept", StringComparison.OrdinalIgnoreCase)
+        || commandArgs[2].Equals("show", StringComparison.OrdinalIgnoreCase)
+        || (commandArgs[2].Equals("list", StringComparison.OrdinalIgnoreCase) && commandArgs.Contains("--json"))
+        || (commandArgs[2].Equals("lint", StringComparison.OrdinalIgnoreCase) && commandArgs.Contains("--json")));
+if (isPipeablePersona) noLogo = true;
+
 // Enable debug output when --debug flag is passed
 if (commandArgs.Any(a => a.Equals("--debug", StringComparison.OrdinalIgnoreCase)))
     Environment.SetEnvironmentVariable("PKS_DEBUG", "1");
@@ -194,6 +204,16 @@ services.AddSingleton<PKS.Infrastructure.Services.Writing.INaturalnessPromptBuil
 services.AddSingleton<PKS.Infrastructure.Services.Writing.INaturalnessPicksStore, PKS.Infrastructure.Services.Writing.NaturalnessPicksStore>();
 services.AddSingleton<PKS.Infrastructure.Services.Writing.INaturalnessPatternStore, PKS.Infrastructure.Services.Writing.NaturalnessPatternStore>();
 services.AddSingleton<PKS.Infrastructure.Services.Writing.INaturalnessApplier, PKS.Infrastructure.Services.Writing.NaturalnessApplier>();
+services.AddSingleton<PKS.Infrastructure.Services.Writing.INaturalnessMerger, PKS.Infrastructure.Services.Writing.NaturalnessMerger>();
+
+// Persona services — reader archetypes, rubrics, score sidecars.
+// See /home/node/.claude/plans/compiled-noodling-sparkle.md for the design.
+services.AddSingleton<PKS.Infrastructure.Services.Persona.IPersonaPathResolver, PKS.Infrastructure.Services.Persona.PersonaPathResolver>();
+services.AddSingleton<PKS.Infrastructure.Services.Persona.IPersonaStore, PKS.Infrastructure.Services.Persona.PersonaStore>();
+services.AddSingleton<PKS.Infrastructure.Services.Persona.IRubricStore, PKS.Infrastructure.Services.Persona.RubricStore>();
+services.AddSingleton<PKS.Infrastructure.Services.Persona.IPersonaLinter, PKS.Infrastructure.Services.Persona.PersonaLinter>();
+services.AddSingleton<PKS.Infrastructure.Services.Persona.IPersonaScoresStore, PKS.Infrastructure.Services.Persona.PersonaScoresStore>();
+services.AddSingleton<PKS.Infrastructure.Services.Persona.PersonaScoreRunner>();
 // Legacy MCP services removed in Phase 3 - now using SDK-based services only
 
 // New SDK-based MCP hosting services
@@ -1324,6 +1344,11 @@ app.Configure(config =>
                 .WithDescription("Show diff, apply picks in-place, append accepted styles to the patterns store")
                 .WithExample(["writing", "naturalness", "apply", "post.md"]);
 
+            n.AddCommand<PKS.Commands.Writing.NaturalnessMergeCommand>("merge")
+                .WithDescription("Re-merge per-critic sidecars into the canonical NATURALNESS-CANDIDATES.json")
+                .WithExample(["writing", "naturalness", "merge", "post.md"])
+                .WithExample(["writing", "naturalness", "merge", "post.md", "--max-alternatives-per-line", "9"]);
+
             n.AddBranch("patterns", p =>
             {
                 p.SetDescription("Inspect / export the global naturalness learning store");
@@ -1336,6 +1361,43 @@ app.Configure(config =>
                     .WithExample(["writing", "naturalness", "patterns", "export", "~/patterns.md"]);
             });
         });
+    });
+
+    // Add persona commands — reusable reader-archetype scoring across blog
+    // posts, sales pitches, feature briefs, etc. See compiled-noodling-sparkle.
+    config.AddBranch<PKS.Commands.Persona.PersonaSettings>("persona", persona =>
+    {
+        persona.SetDescription("Define reader personas and score content against them on rubric-driven metrics");
+
+        persona.AddCommand<PKS.Commands.Persona.PersonaLintCommand>("lint")
+            .WithDescription("Validate persona markdown files (frontmatter, sections, bullets, card assets)")
+            .WithExample(["persona", "lint"])
+            .WithExample(["persona", "lint", "personas/da/senior-ic-udvikler-brownfield/senior-ic-udvikler-brownfield.md"]);
+
+        persona.AddCommand<PKS.Commands.Persona.PersonaListCommand>("list")
+            .WithDescription("Enumerate personas in a locale")
+            .WithExample(["persona", "list", "--locale", "da"]);
+
+        persona.AddCommand<PKS.Commands.Persona.PersonaShowCommand>("show")
+            .WithDescription("Print one persona's markdown")
+            .WithExample(["persona", "show", "solo-indie-builder"]);
+
+        persona.AddCommand<PKS.Commands.Persona.PersonaPromptCommand>("prompt")
+            .WithDescription("Emit the persona × rubric × content scoring prompt as JSON (pipeable)")
+            .WithExample(["persona", "prompt", "blog-posts/x/da.md", "--persona", "solo-indie-builder", "--rubric", "relevance"]);
+
+        persona.AddCommand<PKS.Commands.Persona.PersonaAcceptCommand>("accept")
+            .WithDescription("Validate an LLM reply against the rubric's schema and persist to _review/<locale>.PERSONA-SCORES.json")
+            .WithExample(["persona", "accept", "blog-posts/x/da.md", "--persona", "solo-indie-builder", "--rubric", "relevance", "--from", "reply.json"]);
+
+        persona.AddCommand<PKS.Commands.Persona.PersonaScoreCommand>("score")
+            .WithDescription("Build the prompt, run it via pks agent, validate, and persist — one shot")
+            .WithExample(["persona", "score", "blog-posts/x/da.md", "--persona", "solo-indie-builder", "--rubric", "relevance"]);
+
+        persona.AddCommand<PKS.Commands.Persona.PersonaScoreAllCommand>("score-all")
+            .WithDescription("Score content against every persona (and every rubric if --rubric is omitted) via pks agent")
+            .WithExample(["persona", "score-all", "blog-posts/x/da.md", "--locale", "da"])
+            .WithExample(["persona", "score-all", "blog-posts/x/da.md", "--rubric", "relevance", "--screen-with", "claude-haiku-4-5"]);
     });
 
     // Add git branch command (credential helpers)
