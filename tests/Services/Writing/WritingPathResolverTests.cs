@@ -86,6 +86,38 @@ public sealed class WritingPathResolverTests : IDisposable
     }
 
     [Fact]
+    public void NaturalnessCandidatesSidecarPath_perCritic_includesCriticToken()
+    {
+        var src = Path.Combine(_home, "blog-posts", "x", "da.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(src)!);
+        File.WriteAllText(src, "x");
+        _sut.NaturalnessCandidatesSidecarPath(src, "opus")
+            .Should().EndWith("_review/da.NATURALNESS-CANDIDATES.opus.json");
+        // empty critic rejected
+        var act = () => _sut.NaturalnessCandidatesSidecarPath(src, " ");
+        act.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void NaturalnessCandidatesPerCriticPaths_enumeratesOnlyTaggedFiles()
+    {
+        var src = Path.Combine(_home, "blog-posts", "y", "da.md");
+        var rev = Path.Combine(_home, "blog-posts", "y", "_review");
+        Directory.CreateDirectory(rev);
+        File.WriteAllText(src, "x");
+        // canonical and per-critic files
+        File.WriteAllText(Path.Combine(rev, "da.NATURALNESS-CANDIDATES.json"), "{}");
+        File.WriteAllText(Path.Combine(rev, "da.NATURALNESS-CANDIDATES.opus.json"), "{}");
+        File.WriteAllText(Path.Combine(rev, "da.NATURALNESS-CANDIDATES.gpt5.json"), "{}");
+        // noise (different stem, plus a multi-dotted name)
+        File.WriteAllText(Path.Combine(rev, "other.NATURALNESS-CANDIDATES.opus.json"), "{}");
+        File.WriteAllText(Path.Combine(rev, "da.NATURALNESS-CANDIDATES.weird.suffix.json"), "{}");
+
+        var paths = _sut.NaturalnessCandidatesPerCriticPaths(src);
+        paths.Select(p => p.Critic).Should().Equal("gpt5", "opus");
+    }
+
+    [Fact]
     public void ProjectReportCachePath_isDeterministicForSameSource()
     {
         var projectRoot = Path.Combine(_home, "p", ".pks", "writing");

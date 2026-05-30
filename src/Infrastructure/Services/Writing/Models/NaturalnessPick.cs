@@ -26,4 +26,10 @@ public sealed class NaturalnessCandidatesFile
     public string? CriticModel { get; set; }
     public DateTime ExtractedAt { get; set; } = DateTime.UtcNow;
     public List<NaturalnessCandidate> Candidates { get; set; } = new();
+
+    // ── merged (canonical) extension fields ─────────────────────────────────
+    /// Critic names contributing to this merged file. Null on per-critic sidecars.
+    public List<string>? Critics { get; set; }
+    /// When the canonical file was last merged. Null on per-critic sidecars.
+    public DateTime? MergedAt { get; set; }
 }

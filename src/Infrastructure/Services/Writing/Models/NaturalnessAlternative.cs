@@ -8,4 +8,7 @@ public sealed class NaturalnessAlternative
     public string Rationale { get; set; } = "";
     /// In [0, 1]. How close the rewrite is to the author's profile voice.
     public double Authorlikeness { get; set; }
+    /// Critic name (e.g. "opus", "gpt5"). Populated by the merger; null on
+    /// per-critic sidecars where the source is implicit in the filename.
+    public string? Source { get; set; }
 }

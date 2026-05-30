@@ -64,21 +64,50 @@ public class NaturalnessReviewCommand : AsyncCommand<NaturalnessReviewSettings>
             AnsiConsole.Clear();
             AnsiConsole.Write(new Rule($"[bold magenta]naturalness review[/] [grey]({i}/{total})[/]").RuleStyle("magenta dim"));
             AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine($"[grey]line {cand.Line} · {Markup.Escape(cand.Id)}[/]");
+            var criticsBadge = (cand.CriticsFlagging is { Count: > 0 })
+                ? $" · critics: {string.Join(", ", cand.CriticsFlagging)}"
+                : "";
+            AnsiConsole.MarkupLine($"[grey]line {cand.Line} · {Markup.Escape(cand.Id)}{Markup.Escape(criticsBadge)}[/]");
             AnsiConsole.MarkupLine($"[white]{Markup.Escape(cand.Original)}[/]");
             AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine($"[yellow]issue:[/] {Markup.Escape(cand.Issue)}");
+            // Render issues (multi-source if available, fall back to single).
+            if (cand.Issues is { Count: > 0 })
+            {
+                foreach (var iss in cand.Issues)
+                {
+                    AnsiConsole.MarkupLine($"[yellow]issue ({Markup.Escape(iss.Source)}):[/] {Markup.Escape(iss.Text)}");
+                }
+            }
+            else
+            {
+                AnsiConsole.MarkupLine($"[yellow]issue:[/] {Markup.Escape(cand.Issue)}");
+            }
             AnsiConsole.WriteLine();
+
+            // Build dynamic labels: "A-opus" / "B-gpt5" when multi-source, plain
+            // "A"/"B"/"C" when a single critic (or the alt has no Source — old file).
+            var sources = cand.Alternatives
+                .Select(a => a.Source)
+                .Where(s => !string.IsNullOrEmpty(s))
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            bool multiSource = sources.Count > 1;
+            var labelsByAlt = cand.Alternatives
+                .Select(a => multiSource && !string.IsNullOrEmpty(a.Source)
+                    ? $"{a.Label}-{a.Source}"
+                    : a.Label)
+                .ToList();
 
             var t = new Table().Border(TableBorder.Rounded).Expand();
             t.AddColumn("");
             t.AddColumn("alternative");
             t.AddColumn(new TableColumn("rationale"));
             t.AddColumn(new TableColumn("a-like").RightAligned());
-            foreach (var alt in cand.Alternatives)
+            for (int k = 0; k < cand.Alternatives.Count; k++)
             {
+                var alt = cand.Alternatives[k];
                 t.AddRow(
-                    $"[bold]{Markup.Escape(alt.Label)}[/]",
+                    $"[bold]{Markup.Escape(labelsByAlt[k])}[/]",
                     Markup.Escape(alt.Text),
                     $"[grey]{Markup.Escape(alt.Rationale)}[/]",
                     $"{alt.Authorlikeness:F2}");
@@ -86,9 +115,10 @@ public class NaturalnessReviewCommand : AsyncCommand<NaturalnessReviewSettings>
             AnsiConsole.Write(t);
             AnsiConsole.WriteLine();
 
+            var choices = new List<string>(labelsByAlt) { "skip", "other", "quit" };
             var choice = AnsiConsole.Prompt(new SelectionPrompt<string>()
                 .Title("[bold]Pick:[/]")
-                .AddChoices(new[] { "A", "B", "C", "skip", "other", "quit" }));
+                .AddChoices(choices));
 
             if (choice == "quit")
             {
@@ -141,10 +171,9 @@ public class NaturalnessReviewCommand : AsyncCommand<NaturalnessReviewSettings>
         summary.AddColumn("");
         summary.AddColumn(new TableColumn("count").RightAligned());
         var groups = picksFile.Picks.GroupBy(p => p.Chosen).ToDictionary(g => g.Key, g => g.Count());
-        foreach (var k in new[] { "A", "B", "C", "other", "skip" })
+        foreach (var k in groups.Keys.OrderBy(x => x, StringComparer.Ordinal))
         {
-            groups.TryGetValue(k, out var n);
-            summary.AddRow(k, n.ToString());
+            summary.AddRow(k, groups[k].ToString());
         }
         AnsiConsole.Write(summary);
         AnsiConsole.WriteLine();

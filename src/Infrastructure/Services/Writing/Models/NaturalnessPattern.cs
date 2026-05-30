@@ -10,4 +10,7 @@ public sealed class NaturalnessPattern
     public string? RejectedExample { get; set; }
     public string? FirstSeenSource { get; set; }
     public int AcceptedCount { get; set; } = 1;
+    /// Critic name (e.g. "opus", "gpt5") whose alternative the author picked.
+    /// Null for back-compat with patterns recorded before the multi-critic merge.
+    public string? AcceptedFromCritic { get; set; }
 }

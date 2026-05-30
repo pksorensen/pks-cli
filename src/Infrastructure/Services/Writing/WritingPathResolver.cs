@@ -95,6 +95,40 @@ public sealed class WritingPathResolver : IWritingPathResolver
         Path.Combine(ReviewDir(sourceFilePath),
             $"{Path.GetFileNameWithoutExtension(sourceFilePath)}.NATURALNESS-CANDIDATES.json");
 
+    public string NaturalnessCandidatesSidecarPath(string sourceFilePath, string critic)
+    {
+        if (string.IsNullOrWhiteSpace(critic))
+            throw new ArgumentException("critic must be non-empty", nameof(critic));
+        return Path.Combine(ReviewDir(sourceFilePath),
+            $"{Path.GetFileNameWithoutExtension(sourceFilePath)}.NATURALNESS-CANDIDATES.{critic}.json");
+    }
+
+    public IReadOnlyList<(string Critic, string Path)> NaturalnessCandidatesPerCriticPaths(string sourceFilePath)
+    {
+        var dir = ReviewDir(sourceFilePath);
+        if (!Directory.Exists(dir)) return Array.Empty<(string, string)>();
+        var stem = Path.GetFileNameWithoutExtension(sourceFilePath);
+        var prefix = $"{stem}.NATURALNESS-CANDIDATES.";
+        const string suffix = ".json";
+        var results = new List<(string, string)>();
+        foreach (var path in Directory.EnumerateFiles(dir, $"{stem}.NATURALNESS-CANDIDATES.*.json"))
+        {
+            var name = Path.GetFileName(path);
+            if (!name.StartsWith(prefix, StringComparison.Ordinal) ||
+                !name.EndsWith(suffix, StringComparison.Ordinal)) continue;
+            var mid = name.Substring(prefix.Length, name.Length - prefix.Length - suffix.Length);
+            // The canonical merged file matches the pattern with mid == "" — skip
+            // (but Directory glob requires at least one char, so this is defensive).
+            if (string.IsNullOrEmpty(mid)) continue;
+            // Reject any further dots — critic names are single tokens.
+            if (mid.Contains('.')) continue;
+            results.Add((mid, path));
+        }
+        return results
+            .OrderBy(t => t.Item1, StringComparer.Ordinal)
+            .ToList();
+    }
+
     public string NaturalnessPicksSidecarPath(string sourceFilePath) =>
         Path.Combine(ReviewDir(sourceFilePath),
             $"{Path.GetFileNameWithoutExtension(sourceFilePath)}.NATURALNESS-PICKS.json");

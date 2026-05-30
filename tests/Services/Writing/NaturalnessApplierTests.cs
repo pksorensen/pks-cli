@@ -99,6 +99,70 @@ public sealed class NaturalnessApplierTests
     }
 
     [Fact]
+    public void Plan_resolves_chosenWithSourceSuffix_AOpus()
+    {
+        var content = "line 1\nfoo bar baz qux quux\nline 3\n";
+        var cands = new NaturalnessCandidatesFile
+        {
+            Post = "/p.md",
+            Candidates = new()
+            {
+                new NaturalnessCandidate
+                {
+                    Id = "c1", Line = 2, Original = "foo bar baz qux quux", Issue = "i",
+                    Alternatives = new()
+                    {
+                        new() { Label = "A", Source = "opus",  Text = "OPUS-A",  Authorlikeness = 0.6, Rationale = "r" },
+                        new() { Label = "A", Source = "gpt5",  Text = "GPT5-A",  Authorlikeness = 0.7, Rationale = "r" },
+                        new() { Label = "B", Source = "opus",  Text = "OPUS-B",  Authorlikeness = 0.5, Rationale = "r" },
+                    },
+                },
+            },
+        };
+        var picks = new NaturalnessPicksFile
+        {
+            Post = "/p.md",
+            Picks = new() { new() { CandidateId = "c1", Chosen = "A-gpt5" } },
+        };
+        var plan = _sut.Plan(content, cands, picks);
+        plan.Edits.Should().ContainSingle();
+        plan.Edits[0].Replacement.Should().Be("GPT5-A");
+        plan.Edits[0].AcceptedFromCritic.Should().Be("gpt5");
+    }
+
+    [Fact]
+    public void Plan_backCompat_chosenWithoutSuffix_matchesByLabel()
+    {
+        var content = "line 1\nfoo bar baz qux quux\nline 3\n";
+        var cands = new NaturalnessCandidatesFile
+        {
+            Post = "/p.md",
+            Candidates = new()
+            {
+                new NaturalnessCandidate
+                {
+                    Id = "c1", Line = 2, Original = "foo bar baz qux quux", Issue = "i",
+                    Alternatives = new()
+                    {
+                        new() { Label = "A", Text = "PLAIN-A", Authorlikeness = 0.6, Rationale = "r" },
+                        new() { Label = "B", Text = "PLAIN-B", Authorlikeness = 0.5, Rationale = "r" },
+                        new() { Label = "C", Text = "PLAIN-C", Authorlikeness = 0.4, Rationale = "r" },
+                    },
+                },
+            },
+        };
+        var picks = new NaturalnessPicksFile
+        {
+            Post = "/p.md",
+            Picks = new() { new() { CandidateId = "c1", Chosen = "A" } },
+        };
+        var plan = _sut.Plan(content, cands, picks);
+        plan.Edits.Should().ContainSingle();
+        plan.Edits[0].Replacement.Should().Be("PLAIN-A");
+        plan.Edits[0].AcceptedFromCritic.Should().BeNull();
+    }
+
+    [Fact]
     public void Apply_usesCustomText_whenChosenIsOther()
     {
         var content = "line 1\nfoo bar baz\nline 3\n";

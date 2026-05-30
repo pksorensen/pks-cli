@@ -113,6 +113,57 @@ public sealed class NaturalnessCandidatesSchemaTests
     }
 
     [Fact]
+    public void NaturalnessCandidatesFile_roundTrips_mergedSchema_withCriticsAndSource()
+    {
+        var f = new PKS.Infrastructure.Services.Writing.Models.NaturalnessCandidatesFile
+        {
+            Post = "/p.md",
+            Critics = new() { "gpt5", "opus" },
+            MergedAt = System.DateTime.UtcNow,
+            Candidates = new()
+            {
+                new PKS.Infrastructure.Services.Writing.Models.NaturalnessCandidate
+                {
+                    Id = "merged-l30",
+                    Line = 30,
+                    Original = "x",
+                    CriticsFlagging = new() { "gpt5", "opus" },
+                    Issues = new()
+                    {
+                        new() { Source = "opus", Text = "i-o" },
+                        new() { Source = "gpt5", Text = "i-g" },
+                    },
+                    Alternatives = new()
+                    {
+                        new() { Label = "A", Source = "opus", Text = "OA", Rationale = "r", Authorlikeness = 0.7 },
+                        new() { Label = "A", Source = "gpt5", Text = "GA", Rationale = "r", Authorlikeness = 0.6 },
+                    },
+                },
+            },
+        };
+        var json = System.Text.Json.JsonSerializer.Serialize(f, PKS.Infrastructure.Services.Writing.WritingProfileStore.JsonOptions);
+        var back = System.Text.Json.JsonSerializer.Deserialize<PKS.Infrastructure.Services.Writing.Models.NaturalnessCandidatesFile>(
+            json, PKS.Infrastructure.Services.Writing.WritingProfileStore.JsonOptions);
+        back.Should().NotBeNull();
+        back!.Critics.Should().Equal("gpt5", "opus");
+        back.Candidates.Single().CriticsFlagging.Should().Equal("gpt5", "opus");
+        back.Candidates.Single().Issues.Should().HaveCount(2);
+        back.Candidates.Single().Alternatives[1].Source.Should().Be("gpt5");
+    }
+
+    [Fact]
+    public void Validate_singleCriticSchema_stillAccepted_backCompat()
+    {
+        // The old shape (no critics, no issues[], no source on alternatives) must
+        // still validate so an existing per-critic file from before this change loads.
+        var r = NaturalnessCandidatesSchema.Validate(ValidJson(), LineCount);
+        r.Ok.Should().BeTrue();
+        r.Parsed!.Critics.Should().BeNull();
+        r.Parsed.Candidates.Single().CriticsFlagging.Should().BeNull();
+        r.Parsed.Candidates.Single().Alternatives.Should().OnlyContain(a => a.Source == null);
+    }
+
+    [Fact]
     public void Validate_rejects_whenNoJson()
     {
         var r = NaturalnessCandidatesSchema.Validate("nope", LineCount);

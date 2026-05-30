@@ -58,8 +58,13 @@ public interface IWritingPathResolver
     string LearnSidecarJsonPath(string sourceFilePath);
 
     // ── naturalness review loop ────────────────────────────────────────────────
-    /// `_review/<stem>.NATURALNESS-CANDIDATES.json` — critic-extracted candidates.
+    /// `_review/<stem>.NATURALNESS-CANDIDATES.json` — canonical merged sidecar.
     string NaturalnessCandidatesSidecarPath(string sourceFilePath);
+    /// `_review/<stem>.NATURALNESS-CANDIDATES.<critic>.json` — per-critic sidecar.
+    string NaturalnessCandidatesSidecarPath(string sourceFilePath, string critic);
+    /// Enumerate every per-critic sidecar present in `_review/` for this source.
+    /// Returns tuples of (criticName, absolutePath).
+    IReadOnlyList<(string Critic, string Path)> NaturalnessCandidatesPerCriticPaths(string sourceFilePath);
     /// `_review/<stem>.NATURALNESS-PICKS.json` — author picks from `review`.
     string NaturalnessPicksSidecarPath(string sourceFilePath);
     /// Global learning store: ~/.pks-cli/writing/naturalness-patterns.md.

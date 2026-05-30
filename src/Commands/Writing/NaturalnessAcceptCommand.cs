@@ -22,6 +22,10 @@ public class NaturalnessAcceptSettings : WritingSettings
     [CommandOption("--max-candidates")]
     [Description("Cap how many candidates are accepted. Default 15.")]
     public int MaxCandidates { get; set; } = NaturalnessCandidatesSchema.MaxCandidates;
+
+    [CommandOption("--critic")]
+    [Description("Critic name (e.g. opus, gpt5). Sidecar lands as <stem>.NATURALNESS-CANDIDATES.<critic>.json. Default 'opus'.")]
+    public string Critic { get; set; } = "opus";
 }
 
 /// `pks writing naturalness accept <file> --from reply.json` — validates the
@@ -30,10 +34,17 @@ public class NaturalnessAcceptSettings : WritingSettings
 public class NaturalnessAcceptCommand : AsyncCommand<NaturalnessAcceptSettings>
 {
     private readonly INaturalnessPicksStore _store;
+    private readonly INaturalnessMerger _merger;
+    private readonly IWritingPathResolver _paths;
 
-    public NaturalnessAcceptCommand(INaturalnessPicksStore store)
+    public NaturalnessAcceptCommand(
+        INaturalnessPicksStore store,
+        INaturalnessMerger merger,
+        IWritingPathResolver paths)
     {
         _store = store;
+        _merger = merger;
+        _paths = paths;
     }
 
     public override async Task<int> ExecuteAsync(CommandContext context, NaturalnessAcceptSettings settings)
@@ -88,15 +99,18 @@ public class NaturalnessAcceptCommand : AsyncCommand<NaturalnessAcceptSettings>
         if (!string.IsNullOrWhiteSpace(settings.Model))
             file.CriticModel = settings.Model;
 
-        await _store.SaveCandidatesAsync(full, file);
+        var critic = string.IsNullOrWhiteSpace(settings.Critic) ? "opus" : settings.Critic.Trim();
+        await _store.SaveCandidatesAsync(full, critic, file);
+        var canonicalPath = await _merger.MergeAsync(full);
+        var criticSidecarPath = _paths.NaturalnessCandidatesSidecarPath(full, critic);
 
         var ok = new
         {
             ok = true,
+            critic,
             candidateCount = file.Candidates.Count,
-            sidecarPath = System.IO.Path.Combine(
-                System.IO.Path.GetDirectoryName(full)!, "_review",
-                $"{System.IO.Path.GetFileNameWithoutExtension(full)}.NATURALNESS-CANDIDATES.json"),
+            criticSidecarPath,
+            canonicalSidecarPath = canonicalPath,
         };
         Console.WriteLine("RESULT: " + JsonSerializer.Serialize(ok,
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));

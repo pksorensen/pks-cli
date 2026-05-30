@@ -70,6 +70,8 @@ public sealed class NaturalnessPatternStore : INaturalnessPatternStore
             sb.AppendLine($"accepted_example: {EscapeYamlScalar(p.AcceptedExample)}");
             if (!string.IsNullOrWhiteSpace(p.RejectedExample))
                 sb.AppendLine($"rejected_example: {EscapeYamlScalar(p.RejectedExample!)}");
+            if (!string.IsNullOrWhiteSpace(p.AcceptedFromCritic))
+                sb.AppendLine($"accepted_from_critic: {EscapeYamlScalar(p.AcceptedFromCritic!)}");
             sb.AppendLine("```");
             sb.AppendLine();
         }
@@ -112,6 +114,7 @@ public sealed class NaturalnessPatternStore : INaturalnessPatternStore
                     case "trigger_summary": pat.TriggerSummary = val; break;
                     case "accepted_example": pat.AcceptedExample = val; break;
                     case "rejected_example": pat.RejectedExample = val; break;
+                    case "accepted_from_critic": pat.AcceptedFromCritic = val; break;
                 }
             }
 

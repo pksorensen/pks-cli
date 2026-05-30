@@ -26,10 +26,13 @@ public sealed class NaturalnessApplyEdit
     public required int Line { get; init; }
     public required string Original { get; init; }
     public required string Replacement { get; init; }
-    /// "A"|"B"|"C"|"other" — what the author picked.
+    /// "A"|"B"|"C"|"other"|"A-opus"|… — what the author picked (verbatim label).
     public required string Chosen { get; init; }
     /// The accepted-example-style trigger summary, persisted to patterns when applied.
     public required string TriggerSummary { get; init; }
+    /// Critic name from the chosen alternative's Source. Null when the pick
+    /// came from a single-critic (back-compat) file or was a free-form rewrite.
+    public string? AcceptedFromCritic { get; init; }
 }
 
 public sealed class NaturalnessApplyResult
