@@ -184,7 +184,23 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
 
             if (!response.IsSuccessStatusCode)
             {
-                _logger.LogError("Foundry token refresh failed: {StatusCode} {Response}", response.StatusCode, content);
+                // Differentiate "your refresh token has aged out — re-auth"
+                // from generic transient AAD errors so the user can take the
+                // single right action without digging through raw AAD JSON.
+                // AADSTS50196 ("client request loop") + invalid_grant is what
+                // we see when the refresh token itself has expired.
+                var aadExpired = content.Contains("invalid_grant", StringComparison.OrdinalIgnoreCase)
+                                 || content.Contains("AADSTS50196", StringComparison.Ordinal)
+                                 || content.Contains("AADSTS70008", StringComparison.Ordinal)
+                                 || content.Contains("AADSTS700082", StringComparison.Ordinal);
+                if (aadExpired)
+                {
+                    _logger.LogError("Foundry refresh token has expired or been revoked. Re-auth with: pks foundry login");
+                }
+                else
+                {
+                    _logger.LogError("Foundry token refresh failed: {StatusCode} {Response}", response.StatusCode, content);
+                }
                 return null;
             }
 
