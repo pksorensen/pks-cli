@@ -52,7 +52,13 @@ public static class PersonaScorePrompt
         sb.AppendLine();
         sb.AppendLine("Output a single JSON object matching the provided schema. No prose, no markdown, no preamble — only JSON. Score on the rubric's 1–5 scale.");
         sb.AppendLine();
-        sb.AppendLine("The `evidence` field MUST be an array of objects shaped { \"quote\": \"<verbatim substring of the content>\", \"note\": \"<one sentence on what the quote shows>\" }. Do NOT emit `evidence` as an array of strings. Do NOT use keys other than `quote` and `note`.");
+        sb.AppendLine("EVERY one of these top-level fields is REQUIRED and must be present in the object — omitting any of them is invalid:");
+        sb.AppendLine("  • `score`     — integer 1–5.");
+        sb.AppendLine("  • `rationale` — a non-empty string (roughly 1–4 sentences) explaining the score for THIS persona on THIS dimension. This is a SEPARATE, mandatory field; do NOT fold it into the evidence notes and do NOT skip it. Write `rationale` even when you also give evidence.");
+        sb.AppendLine("  • `evidence`  — an array of objects shaped { \"quote\": \"<verbatim substring of the content>\", \"note\": \"<one sentence on what the quote shows>\" }. Do NOT emit `evidence` as an array of strings. Do NOT use keys other than `quote` and `note`.");
+        sb.AppendLine("  • `subscores` — present when the rubric declares them (see schema), each an integer 1–5.");
+        sb.AppendLine();
+        sb.AppendLine("Before returning, verify the JSON contains a `rationale` string — replies missing it are rejected.");
         sb.AppendLine();
         sb.AppendLine("Be honest. A high score is not the default. If the content is irrelevant or weak for this persona on this dimension, score it that way and explain why.");
         return sb.ToString();
