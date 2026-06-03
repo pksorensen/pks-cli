@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using PKS.Commands.Vm;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Claude;
+using PKS.Infrastructure.Services.Security;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -40,6 +41,9 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
     private readonly IClaudeManagedSettingsRenderer? _claudeManagedSettingsRenderer;
     private readonly IAzureFoundryAuthService? _foundryAuthService;
     private readonly VmInitCommand? _vmInitCommand;
+    // Gates billable/remote actions behind a second factor. Set via the primary (subclass) ctor;
+    // null on the legacy overloads, in which case gating is skipped (those aren't the runtime path).
+    private readonly IActionGuard? _guard;
 
     public DevcontainerSpawnCommand(
         IDevcontainerSpawnerService spawnerService,
@@ -96,6 +100,7 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         IClaudeMarketplaceConfigurationService? claudeMarketplaceConfigService,
         IClaudeManagedSettingsRenderer? claudeManagedSettingsRenderer,
         IAzureFoundryAuthService? foundryAuthService,
+        IActionGuard? actionGuard,
         IAnsiConsole console)
         : base(console)
     {
@@ -109,6 +114,20 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         _claudeMarketplaceConfigService = claudeMarketplaceConfigService;
         _claudeManagedSettingsRenderer = claudeManagedSettingsRenderer;
         _foundryAuthService = foundryAuthService;
+        _guard = actionGuard;
+    }
+
+    /// <summary>Require a second factor for <paramref name="request"/>. Returns false if denied
+    /// (the command should abort). No-op pass when no guard was injected (legacy ctors).</summary>
+    protected async Task<bool> TryRequireAsync(ActionRequest request)
+    {
+        if (_guard == null) return true;
+        try { await _guard.RequireAsync(request); return true; }
+        catch (ActionGuardDeniedException ex)
+        {
+            DisplayError($"Denied: {ex.Message}");
+            return false;
+        }
     }
 
     public class Settings : DevcontainerSettings
@@ -662,6 +681,12 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
 
         DisplayInfo($"Spawning on remote: {target.Label ?? target.Host} ({target.Username}@{target.Host})");
 
+        // Spawning a devcontainer on a remote VM runs code there (and may auto-start it) — gate it.
+        // Composes vm.start, so if both are on the user is prompted once.
+        if (!await TryRequireAsync(new ActionRequest(ActionIds.DevcontainerSpawnRemote,
+                $"Spawn a devcontainer on remote '{target.Label ?? target.Host}'")))
+            return 1;
+
         // Ensure VM is running before attempting SSH
         if (!await EnsureVmRunningAsync(target))
             return 1;
@@ -1099,6 +1124,12 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         DisplayWarning($"VM '{Markup.Escape(vmRecord.VmName)}' is {Markup.Escape(status)}.");
         var start = Console.Confirm("[cyan]Start the VM?[/]", defaultValue: true);
         if (!start) return false;
+
+        // Gate the (billable) start — the Confirm above is agent-answerable; this is not.
+        // Skipped if devcontainer.spawn.remote already satisfied it this run.
+        if (!await TryRequireAsync(new ActionRequest(ActionIds.VmStart,
+                $"Start VM '{vmRecord.VmName}' (Azure) to spawn the devcontainer")))
+            return false;
 
         Exception? startError = null;
         await WithSpinnerAsync("Starting VM...", async () =>

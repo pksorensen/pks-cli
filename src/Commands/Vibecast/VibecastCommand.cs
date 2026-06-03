@@ -2,6 +2,7 @@ using PKS.Commands.Devcontainer;
 using PKS.Commands.Vm;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.ComponentModel;
@@ -27,8 +28,9 @@ public class VibecastCommand : DevcontainerSpawnCommand
         IAzureVmService vmService,
         VmInitCommand vmInitCommand,
         IAzureFoundryAuthService foundryAuthService,
+        IActionGuard actionGuard,
         IAnsiConsole console)
-        : base(spawnerService, sshTargetService, nugetTemplateService, vmMetadata, azureAuth, vmService, vmInitCommand, null, null, foundryAuthService, console)
+        : base(spawnerService, sshTargetService, nugetTemplateService, vmMetadata, azureAuth, vmService, vmInitCommand, null, null, foundryAuthService, actionGuard, console)
     {
         _vmMetadata = vmMetadata;
         _azureAuth = azureAuth;
@@ -277,6 +279,10 @@ public class VibecastCommand : DevcontainerSpawnCommand
             $"[cyan]Stop (deallocate) the VM[/] [yellow]{Markup.Escape(vmRecord.VmName)}[/][cyan]? Saves Azure compute cost; cold-start adds ~30s next time.[/]",
             defaultValue: false);
         if (!stopVm) return;
+
+        // Honor the vm.stop policy (off by default) — the Confirm above is agent-answerable; this isn't.
+        if (!await TryRequireAsync(new ActionRequest(ActionIds.VmStop, $"Stop (deallocate) VM '{vmRecord.VmName}'")))
+            return;
 
         Exception? err = null;
         await WithSpinnerAsync($"Deallocating VM {vmRecord.VmName}...", async () =>

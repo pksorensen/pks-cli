@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# pks-apply-update — the ONLY privileged step in the pks update path.
+#
+# Replaces the baked /usr/local/bin/pks (a symlink into /usr/local/lib/pks/) with a new,
+# verified binary, atomically, keeping the previous version for rollback. Runs as root and is
+# meant to be invoked from the Docker HOST (which is outside the in-container agent's reach):
+#
+#   docker exec -u root <container> /usr/local/bin/pks-apply-update /tmp/pks-staged [sha256]
+#
+# It deliberately does NOT trust the caller's environment: it re-checks root, an optional
+# checksum, and smoke-tests `--version` both before and after the swap (rolling back on failure).
+# There is intentionally NO node->root sudoers entry for this script — keeping the swap
+# host-initiated is what stops an in-container agent from installing a consent-disabled pks.
+set -euo pipefail
+
+STAGED="${1:-}"
+EXPECTED_SHA="${2:-}"
+LINK="/usr/local/bin/pks"
+LIBDIR="/usr/local/lib/pks"
+
+die() { echo "pks-apply-update: $*" >&2; exit 1; }
+
+[ "$(id -u)" = "0" ] || die "must run as root"
+[ -n "$STAGED" ]      || die "usage: pks-apply-update <staged-binary> [sha256]"
+[ -f "$STAGED" ]      || die "staged binary not found: $STAGED"
+
+if [ -n "$EXPECTED_SHA" ]; then
+  ACTUAL="$(sha256sum "$STAGED" | awk '{print $1}')"
+  [ "$ACTUAL" = "$EXPECTED_SHA" ] || die "sha256 mismatch (expected $EXPECTED_SHA, got $ACTUAL)"
+fi
+
+chmod 0755 "$STAGED"
+
+# Smoke-test the NEW binary before letting it anywhere near the symlink.
+VER="$("$STAGED" --version 2>/dev/null | head -n1 || true)"
+[ -n "$VER" ] || die "staged binary failed its --version smoke test; refusing to install"
+
+mkdir -p "$LIBDIR"
+TARGET="$LIBDIR/pks-$(date -u +%Y%m%d%H%M%S)"
+install -m 0755 -o root -g root "$STAGED" "$TARGET"
+
+# Remember the current target so we can roll back.
+PREV=""
+[ -L "$LINK" ] && PREV="$(readlink -f "$LINK" || true)"
+
+# Atomic swap (temp symlink + rename).
+ln -sfn "$TARGET" "$LINK.tmp" && mv -Tf "$LINK.tmp" "$LINK"
+
+# Post-swap smoke test; roll back on failure.
+if ! "$LINK" --version >/dev/null 2>&1; then
+  if [ -n "$PREV" ] && [ -e "$PREV" ]; then
+    ln -sfn "$PREV" "$LINK.tmp" && mv -Tf "$LINK.tmp" "$LINK"
+    rm -f "$TARGET"
+    die "new binary failed after swap; rolled back to $PREV"
+  fi
+  die "new binary failed after swap and there is no previous version to roll back to"
+fi
+
+echo "pks-apply-update: installed $TARGET ($VER)"
+
+# Keep the 3 newest versioned binaries; prune older ones.
+ls -1dt "$LIBDIR"/pks-* 2>/dev/null | tail -n +4 | xargs -r rm -f --

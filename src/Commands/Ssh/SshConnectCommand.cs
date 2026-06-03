@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Security;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -13,6 +14,7 @@ public class SshConnectCommand : Command<SshConnectCommand.Settings>
     private readonly IAzureVmMetadataService _vmMetadata;
     private readonly IAzureAuthService _azureAuth;
     private readonly IAzureVmService _vmService;
+    private readonly IActionGuard _guard;
     private readonly IAnsiConsole _console;
 
     public SshConnectCommand(
@@ -20,12 +22,14 @@ public class SshConnectCommand : Command<SshConnectCommand.Settings>
         IAzureVmMetadataService vmMetadata,
         IAzureAuthService azureAuth,
         IAzureVmService vmService,
+        IActionGuard guard,
         IAnsiConsole console)
     {
         _configService = configService;
         _vmMetadata = vmMetadata;
         _azureAuth = azureAuth;
         _vmService = vmService;
+        _guard = guard;
         _console = console;
     }
 
@@ -156,6 +160,18 @@ public class SshConnectCommand : Command<SshConnectCommand.Settings>
         var start = _console.Confirm("[cyan]Start the VM?[/]", defaultValue: true);
         if (!start)
             return false;
+
+        // Gate the (billable) start. The Confirm above is agent-answerable; this is not.
+        try
+        {
+            await _guard.RequireAsync(new ActionRequest(ActionIds.VmStart,
+                $"Start VM '{vmRecord.VmName}' (Azure) to open an SSH session"));
+        }
+        catch (ActionGuardDeniedException ex)
+        {
+            _console.MarkupLine($"[red]Start denied:[/] {Markup.Escape(ex.Message)}");
+            return false;
+        }
 
         Exception? startError = null;
         await _console.Status()

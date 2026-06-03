@@ -235,9 +235,17 @@ RUN adduser --system --home /home/pks --shell /bin/false pks && \
     chown -R pks:nogroup /home/pks/.pks-cli && \
     chmod 700 /home/pks/.pks-cli
 
-# Install pks-cli binary
-COPY --from=pks-build /out/pks-cli /usr/local/bin/pks
-RUN chmod 755 /usr/local/bin/pks
+# Install pks-cli binary into a versioned dir + symlink so it can be swapped/rolled back in place
+# (see pks-apply-update). The /usr/local/bin/pks symlink keeps PATH and behaviour unchanged.
+RUN mkdir -p /usr/local/lib/pks
+COPY --from=pks-build /out/pks-cli /usr/local/lib/pks/pks-baked
+RUN chmod 755 /usr/local/lib/pks/pks-baked && ln -sfn /usr/local/lib/pks/pks-baked /usr/local/bin/pks
+
+# Root-only in-place updater — the ONLY privileged step in `pks update`, invoked from the host
+# (e.g. scripts/host/pks-devswap.sh). Intentionally NOT exposed to `node` via sudoers: keeping the
+# swap host-initiated is what stops an in-container agent from installing a consent-disabled pks.
+COPY templates/base-images/pks-fullstack-base/pks-apply-update /usr/local/bin/pks-apply-update
+RUN chmod 755 /usr/local/bin/pks-apply-update
 
 # Credential helper wrapper script (implements git credential protocol)
 RUN cat > /usr/local/bin/pks-ado-credential <<'SCRIPT'

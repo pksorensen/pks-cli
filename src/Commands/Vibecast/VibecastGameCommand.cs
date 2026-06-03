@@ -1,6 +1,7 @@
 using PKS.Commands.Devcontainer;
 using PKS.Commands.Vm;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Security;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.ComponentModel;
@@ -22,8 +23,9 @@ public class VibecastGameCommand : VibecastCommand
         IAzureVmService vmService,
         VmInitCommand vmInitCommand,
         IAzureFoundryAuthService foundryAuthService,
+        IActionGuard actionGuard,
         IAnsiConsole console)
-        : base(spawnerService, sshTargetService, nugetTemplateService, vmMetadata, azureAuth, vmService, vmInitCommand, foundryAuthService, console)
+        : base(spawnerService, sshTargetService, nugetTemplateService, vmMetadata, azureAuth, vmService, vmInitCommand, foundryAuthService, actionGuard, console)
     {
     }
 
