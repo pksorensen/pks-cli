@@ -25,25 +25,20 @@ public sealed class NaturalnessMerger : INaturalnessMerger
             .OrderBy(k => k, StringComparer.Ordinal)
             .ToList();
 
-        // Group all candidates by (line, original-sentence) across critics. A
-        // single critic may legitimately produce *multiple* candidates at the
-        // same source line — same paragraph, different sentences. Merging
-        // those into one entry leads to "2 issues + 6 interleaved alts" UX
-        // where the user can only pick a fix for one of the sentences, so we
-        // key by the original text too. Cross-critic overlap still merges
-        // when both critics quote the same original.
-        var byKey = new SortedDictionary<(int Line, string Original), List<(string Critic, NaturalnessCandidate Cand)>>(
-            Comparer<(int Line, string Original)>.Create((a, b) =>
-            {
-                var c = a.Line.CompareTo(b.Line);
-                return c != 0 ? c : string.CompareOrdinal(a.Original, b.Original);
-            }));
+        // Group all candidates by source line across critics. Two critics
+        // rarely quote the exact same span for the same issue — one flags
+        // "short", the other "a much longer original text" — so keying by the
+        // original text as well would split one issue into two entries. We key
+        // by line alone and reconcile the original below (longest wins, with a
+        // debug-log note when they disagree), so a line surfaces as a single
+        // merged entry that carries every critic's issues and alternatives.
+        var byKey = new SortedDictionary<int, List<(string Critic, NaturalnessCandidate Cand)>>();
         foreach (var critic in critics)
         {
             var file = perCritic[critic];
             foreach (var cand in file.Candidates)
             {
-                var key = (cand.Line, NormalizeOriginal(cand.Original));
+                var key = cand.Line;
                 if (!byKey.TryGetValue(key, out var list))
                 {
                     list = new();
@@ -53,18 +48,8 @@ public sealed class NaturalnessMerger : INaturalnessMerger
             }
         }
 
-        // Track per-line ordinals so distinct sentences on the same line get
-        // unique IDs (merged-l26-1, merged-l26-2). Single-sentence lines keep
-        // the legacy merged-l<N> ID for back-compat with existing picks.
-        var perLineCount = new Dictionary<int, int>();
-        foreach (var key in byKey.Keys)
-        {
-            perLineCount[key.Line] = perLineCount.GetValueOrDefault(key.Line) + 1;
-        }
-        var perLineOrdinal = new Dictionary<int, int>();
-
         var merged = new List<NaturalnessCandidate>();
-        foreach (var ((line, _), group) in byKey)
+        foreach (var (line, group) in byKey)
         {
             // critics_flagging: sorted distinct
             var flagging = group.Select(g => g.Critic)
@@ -81,7 +66,7 @@ public sealed class NaturalnessMerger : INaturalnessMerger
                     original = cand.Original;
                     continue;
                 }
-                if (!string.Equals(original, cand.Original, StringComparison.Ordinal))
+                if (!string.Equals(NormalizeOriginal(original), NormalizeOriginal(cand.Original), StringComparison.Ordinal))
                 {
                     debugLog?.Add($"line {line}: critics disagree on original text; using longer of {original.Length}/{cand.Original.Length} chars");
                     if (cand.Original.Length > original.Length) original = cand.Original;
@@ -137,19 +122,8 @@ public sealed class NaturalnessMerger : INaturalnessMerger
             // line has exactly one issue source.
             var singleIssue = issues.Count == 1 ? issues[0].Text : "";
 
-            // ID stability: single-sentence lines keep the legacy id; multi-
-            // sentence lines get a numeric suffix in deterministic key order.
-            string id;
-            if (perLineCount[line] == 1)
-            {
-                id = $"merged-l{line}";
-            }
-            else
-            {
-                var ord = perLineOrdinal.GetValueOrDefault(line) + 1;
-                perLineOrdinal[line] = ord;
-                id = $"merged-l{line}-{ord}";
-            }
+            // One merged entry per line keeps the stable legacy id.
+            var id = $"merged-l{line}";
 
             merged.Add(new NaturalnessCandidate
             {
