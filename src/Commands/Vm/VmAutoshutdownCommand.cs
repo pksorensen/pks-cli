@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -15,17 +16,23 @@ public class VmAutoshutdownCommand : Command<VmAutoshutdownCommand.Settings>
     private readonly IAzureAuthService _azureAuth;
     private readonly IAzureVmService _vmService;
     private readonly IAzureVmMetadataService _vmMetadata;
+    private readonly VmProviderRegistry _providers;
+    private readonly IActionGuard _guard;
     private readonly IAnsiConsole _console;
 
     public VmAutoshutdownCommand(
         IAzureAuthService azureAuth,
         IAzureVmService vmService,
         IAzureVmMetadataService vmMetadata,
+        VmProviderRegistry providers,
+        IActionGuard guard,
         IAnsiConsole console)
     {
         _azureAuth = azureAuth;
         _vmService = vmService;
         _vmMetadata = vmMetadata;
+        _providers = providers;
+        _guard = guard;
         _console = console;
     }
 
@@ -82,6 +89,20 @@ public class VmAutoshutdownCommand : Command<VmAutoshutdownCommand.Settings>
             _console.MarkupLine($"[red]VM '{Markup.Escape(vmName)}' not found in tracked VMs.[/]");
             return 1;
         }
+
+        // 4b. Scheduled/idle shutdown is provider-specific (Azure DevTest schedules + an
+        // SSH idle monitor). Providers without server-side scheduling are not supported yet.
+        var provider = _providers.Resolve(record);
+        if (!provider.SupportsScheduledShutdown)
+        {
+            _console.MarkupLine($"[yellow]Auto-shutdown is not supported for {Markup.Escape(provider.DisplayName)} VMs yet.[/]");
+            _console.MarkupLine("[dim]Stop it manually with [bold]pks vm status[/] → Stop VM when idle.[/]");
+            return 0;
+        }
+
+        // 4c. Gate changing the auto-shutdown policy.
+        try { await _guard.RequireAsync(new ActionRequest(ActionIds.VmAutoshutdownWrite, $"Change auto-shutdown for VM '{record.VmName}'")); }
+        catch (ActionGuardDeniedException ex) { _console.MarkupLine($"[red]Denied:[/] {Markup.Escape(ex.Message)}"); return 1; }
 
         // 5. Get management token
         var token = await _azureAuth.GetAccessTokenAsync("https://management.azure.com/.default");

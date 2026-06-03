@@ -2,6 +2,8 @@ using Xunit;
 using Moq;
 using FluentAssertions;
 using PKS.Commands.Vm;
+using PKS.Commands.Azure;
+using PKS.Commands.Scaleway;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
@@ -45,121 +47,94 @@ public class VmInitCommandTests
         return mock;
     }
 
+    private static VmInitCommand CreateCommand(
+        Mock<IAzureAuthService> authMock,
+        Mock<IAzureVmService> vmServiceMock,
+        Mock<ISshTargetConfigurationService> sshServiceMock,
+        Mock<IAzureVmMetadataService> metadataMock,
+        IAnsiConsole console,
+        int azureInitResult = 0)
+    {
+        var scalewayMock = new Mock<IScalewayService>();
+        scalewayMock.Setup(x => x.IsAuthenticatedAsync()).ReturnsAsync(false);
+
+        var azureInitMock = new Mock<AzureInitCommand>(authMock.Object, console);
+        azureInitMock
+            .Setup(x => x.Execute(It.IsAny<CommandContext>(), It.IsAny<AzureInitCommand.Settings>()))
+            .Returns(azureInitResult);
+
+        var scalewayInitMock = new Mock<ScalewayInitCommand>(scalewayMock.Object, console);
+        scalewayInitMock
+            .Setup(x => x.Execute(It.IsAny<CommandContext>(), It.IsAny<ScalewayInitCommand.Settings>()))
+            .Returns(0);
+
+        return new VmInitCommand(
+            authMock.Object,
+            vmServiceMock.Object,
+            sshServiceMock.Object,
+            metadataMock.Object,
+            scalewayMock.Object,
+            azureInitMock.Object,
+            scalewayInitMock.Object,
+            new Mock<PKS.Infrastructure.Services.Security.IActionGuard>().Object,
+            console);
+    }
+
     // ═════════════════════════════════════════════
     //  VmInitCommand Tests
     // ═════════════════════════════════════════════
 
     [Fact]
     [Trait("Category", "VmInit")]
-    public void Execute_WhenNoProviderAuthenticated_ShowsErrorAndReturnsOne()
+    public void Execute_AzureChosen_WhenAuthFails_ReturnsOne()
     {
-        // Arrange
+        // Arrange — not authenticated; chained azure init also fails to authenticate
         var authMock = CreateAzureAuthMock(authenticated: false);
         var vmServiceMock = new Mock<IAzureVmService>();
         var sshServiceMock = new Mock<ISshTargetConfigurationService>();
-        var console = new TestConsole();
-
         var metadataMock = new Mock<IAzureVmMetadataService>();
-        var command = new VmInitCommand(authMock.Object, vmServiceMock.Object, sshServiceMock.Object, metadataMock.Object, Mock.Of<PKS.Commands.Azure.AzureInitCommand>(), console);
-        var settings = new VmInitCommand.Settings();
+        var console = new TestConsole().Interactive();
+        console.Input.PushTextWithEnter("Azure"); // provider selection prompt
+
+        var command = CreateCommand(authMock, vmServiceMock, sshServiceMock, metadataMock, console, azureInitResult: 1);
 
         // Act
-        var result = command.Execute(null!, settings);
+        var result = command.Execute(null!, new VmInitCommand.Settings());
 
         // Assert
         result.Should().Be(1);
-        console.Output.Should().Contain("No VM provider authenticated");
-        console.Output.Should().Contain("pks azure init");
+        console.Output.Should().Contain("Azure authentication required");
     }
 
     [Fact]
     [Trait("Category", "VmInit")]
-    public void Execute_WhenAzureAuthenticated_ProceedsWithVmCreation()
+    public void Execute_AzureChosen_WhenAuthenticated_ProceedsPastAuthCheck()
     {
         // Arrange
         var authMock = CreateAzureAuthMock(authenticated: true);
         var vmServiceMock = new Mock<IAzureVmService>();
         var sshServiceMock = new Mock<ISshTargetConfigurationService>();
-        var console = new TestConsole();
+        var metadataMock = new Mock<IAzureVmMetadataService>();
+        var console = new TestConsole().Interactive();
+        console.Input.PushTextWithEnter("Azure"); // provider selection prompt
 
         authMock.Setup(x => x.GetAccessTokenAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("management-token");
-
         vmServiceMock.Setup(x => x.ListResourceGroupsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<AzureResourceGroup>
             {
                 new() { Id = "/sub/rg1", Name = "existing-rg", Location = "eastus" }
             });
 
-        // Throw to stop the flow after listing resource groups (simulates user input needed)
-        vmServiceMock.Setup(x => x.CreateVmAsync(It.IsAny<AzureVmCreateOptions>(), It.IsAny<Action<string>?>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new InvalidOperationException("CreateVm called"));
+        var command = CreateCommand(authMock, vmServiceMock, sshServiceMock, metadataMock, console);
 
-        var metadataMock = new Mock<IAzureVmMetadataService>();
-        var command = new VmInitCommand(authMock.Object, vmServiceMock.Object, sshServiceMock.Object, metadataMock.Object, Mock.Of<PKS.Commands.Azure.AzureInitCommand>(), console);
-        var settings = new VmInitCommand.Settings();
-
-        // Act — expecting an exception or non-zero return since we're stopping the flow
-        // The key assertion is that IsAuthenticatedAsync was called and we proceeded past auth check
-        try
-        {
-            command.Execute(null!, settings);
-        }
+        // Act — flow stops at a later interactive prompt (no input pushed); we only assert
+        // that the Azure auth check ran and we proceeded past it.
+        try { command.Execute(null!, new VmInitCommand.Settings()); }
         catch { }
 
-        // Assert — auth was checked and passed
+        // Assert
         authMock.Verify(x => x.IsAuthenticatedAsync(), Times.Once);
         authMock.Verify(x => x.GetStoredCredentialsAsync(), Times.Once);
-    }
-
-    [Fact]
-    [Trait("Category", "VmInit")]
-    public void Execute_SuccessfulCreation_RegistersSshTarget()
-    {
-        // Arrange
-        var authMock = CreateAzureAuthMock(authenticated: true);
-        var vmServiceMock = new Mock<IAzureVmService>();
-        var sshServiceMock = new Mock<ISshTargetConfigurationService>();
-        var console = new TestConsole();
-
-        authMock.Setup(x => x.GetAccessTokenAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync("management-token");
-
-        vmServiceMock.Setup(x => x.ListResourceGroupsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<AzureResourceGroup>
-            {
-                new() { Id = "/sub/rg1", Name = "existing-rg", Location = "eastus" }
-            });
-
-        var vmInfo = new AzureVmInfo
-        {
-            VmName = "test-vm",
-            ResourceGroup = "existing-rg",
-            Location = "eastus",
-            VmSize = "Standard_B2s",
-            PublicIpAddress = "1.2.3.4",
-            AdminUsername = "azureuser",
-            SshKeyPath = "/tmp/test-key",
-            ProvisioningState = "Succeeded"
-        };
-
-        vmServiceMock.Setup(x => x.CreateVmAsync(It.IsAny<AzureVmCreateOptions>(), It.IsAny<Action<string>?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(vmInfo);
-
-        vmServiceMock.Setup(x => x.WaitForSshAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
-
-        sshServiceMock.Setup(x => x.AddTargetAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string?>()))
-            .ReturnsAsync(new SshTarget { Host = "1.2.3.4", Username = "azureuser", Port = 22 });
-
-        // We need to push inputs for prompts: vm name, rg selection, vm size, confirm
-        // The test will fail at ssh-keygen since it needs a real process, so we use
-        // a different approach: verify SSH target registration was called after VM creation
-        // This test documents the expected behavior and is a skeleton for integration
-        // The flow stops at ssh-keygen generation in a unit test environment
-
-        // For the purposes of unit testing, we verify the mock interactions
-        vmServiceMock.Verify(x => x.CreateVmAsync(It.IsAny<AzureVmCreateOptions>(), It.IsAny<Action<string>?>(), It.IsAny<CancellationToken>()), Times.Never);
-        sshServiceMock.Verify(x => x.AddTargetAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
     }
 }

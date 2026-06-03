@@ -12,6 +12,7 @@ public class VmDestroyCommandTests
 {
     private static AzureVmRecord MakeVm(string name = "pks-vm-test") => new()
     {
+        Provider = "azure",
         VmName = name,
         SubscriptionId = "sub1",
         ResourceGroup = "rg1",
@@ -22,6 +23,9 @@ public class VmDestroyCommandTests
         OsDiskSizeGb = 128
     };
 
+    private static VmProviderRegistry RegistryWith(Mock<IAzureAuthService> auth, Mock<IAzureVmService> vmSvc)
+        => new(new IVmProvider[] { new AzureVmProvider(auth.Object, vmSvc.Object) });
+
     [Fact]
     [Trait("Category", "VmDestroy")]
     public async Task ExecuteAsync_NoVms_ReturnsZero()
@@ -29,10 +33,9 @@ public class VmDestroyCommandTests
         var meta = new Mock<IAzureVmMetadataService>();
         meta.Setup(x => x.ListAsync()).ReturnsAsync(new List<AzureVmRecord>());
 
-        var console = new TestConsole();
+        var console = new TestConsole().Interactive();
         var cmd = new VmDestroyCommand(
-            new Mock<IAzureAuthService>().Object,
-            new Mock<IAzureVmService>().Object,
+            RegistryWith(new Mock<IAzureAuthService>(), new Mock<IAzureVmService>()),
             meta.Object,
             new Mock<ISshTargetConfigurationService>().Object,
             console);
@@ -48,6 +51,8 @@ public class VmDestroyCommandTests
     public async Task DestroyVmAsync_WhenConfirmed_CallsDestroyAndRemovesRecord()
     {
         var vm = MakeVm();
+        var auth = new Mock<IAzureAuthService>();
+        auth.Setup(x => x.GetAccessTokenAsync(It.IsAny<string>())).ReturnsAsync("tok");
         var vmSvc = new Mock<IAzureVmService>();
         vmSvc.Setup(x => x.DestroyVmAsync("tok", "sub1", "rg1", "pks-vm-test", It.IsAny<Action<string>>(), It.IsAny<CancellationToken>()))
              .Returns(Task.CompletedTask);
@@ -58,18 +63,17 @@ public class VmDestroyCommandTests
         var sshTargets = new Mock<ISshTargetConfigurationService>();
         sshTargets.Setup(x => x.RemoveTargetAsync("pks-vm-test")).Returns(Task.CompletedTask);
 
-        var console = new TestConsole();
+        var console = new TestConsole().Interactive();
         // Confirm "Are you sure?" → yes
         console.Input.PushTextWithEnter("y");
 
         var cmd = new VmDestroyCommand(
-            new Mock<IAzureAuthService>().Object,
-            vmSvc.Object,
+            RegistryWith(auth, vmSvc),
             meta.Object,
             sshTargets.Object,
             console);
 
-        var result = await cmd.DestroyVmAsync(vm, "tok");
+        var result = await cmd.DestroyVmAsync(vm);
 
         result.Should().Be(0);
         vmSvc.Verify(x => x.DestroyVmAsync("tok", "sub1", "rg1", "pks-vm-test",
@@ -82,21 +86,22 @@ public class VmDestroyCommandTests
     public async Task DestroyVmAsync_WhenDenied_DoesNotCallDestroyService()
     {
         var vm = MakeVm();
+        var auth = new Mock<IAzureAuthService>();
+        auth.Setup(x => x.GetAccessTokenAsync(It.IsAny<string>())).ReturnsAsync("tok");
         var vmSvc = new Mock<IAzureVmService>();
         var meta = new Mock<IAzureVmMetadataService>();
 
-        var console = new TestConsole();
+        var console = new TestConsole().Interactive();
         // Decline confirmation
         console.Input.PushTextWithEnter("n");
 
         var cmd = new VmDestroyCommand(
-            new Mock<IAzureAuthService>().Object,
-            vmSvc.Object,
+            RegistryWith(auth, vmSvc),
             meta.Object,
             new Mock<ISshTargetConfigurationService>().Object,
             console);
 
-        var result = await cmd.DestroyVmAsync(vm, "tok");
+        var result = await cmd.DestroyVmAsync(vm);
 
         result.Should().Be(0);
         vmSvc.Verify(x => x.DestroyVmAsync(

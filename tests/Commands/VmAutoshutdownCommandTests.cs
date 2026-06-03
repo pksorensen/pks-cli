@@ -27,6 +27,9 @@ public class VmAutoshutdownCommandTests
         return mock;
     }
 
+    private static VmProviderRegistry RegistryWith(Mock<IAzureAuthService> auth, Mock<IAzureVmService> vmSvc)
+        => new(new IVmProvider[] { new AzureVmProvider(auth.Object, vmSvc.Object) });
+
     [Fact]
     [Trait("Category", "VmAutoshutdown")]
     public void Execute_WhenNoVmsTracked_ReturnsError()
@@ -38,7 +41,7 @@ public class VmAutoshutdownCommandTests
 
         metadataMock.Setup(x => x.ListAsync()).ReturnsAsync(new List<AzureVmRecord>());
 
-        var command = new VmAutoshutdownCommand(authMock.Object, vmServiceMock.Object, metadataMock.Object, console);
+        var command = new VmAutoshutdownCommand(authMock.Object, vmServiceMock.Object, metadataMock.Object, RegistryWith(authMock, vmServiceMock), new Mock<PKS.Infrastructure.Services.Security.IActionGuard>().Object, console);
         var settings = new VmAutoshutdownCommand.Settings { VmName = "any-vm" };
 
         var result = command.Execute(null!, settings);
@@ -77,7 +80,7 @@ public class VmAutoshutdownCommandTests
             It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
-        var command = new VmAutoshutdownCommand(authMock.Object, vmServiceMock.Object, metadataMock.Object, console);
+        var command = new VmAutoshutdownCommand(authMock.Object, vmServiceMock.Object, metadataMock.Object, RegistryWith(authMock, vmServiceMock), new Mock<PKS.Infrastructure.Services.Security.IActionGuard>().Object, console);
         var settings = new VmAutoshutdownCommand.Settings { VmName = "my-vm", Disable = true };
 
         var result = command.Execute(null!, settings);
@@ -119,7 +122,7 @@ public class VmAutoshutdownCommandTests
             It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
-        var command = new VmAutoshutdownCommand(authMock.Object, vmServiceMock.Object, metadataMock.Object, console);
+        var command = new VmAutoshutdownCommand(authMock.Object, vmServiceMock.Object, metadataMock.Object, RegistryWith(authMock, vmServiceMock), new Mock<PKS.Infrastructure.Services.Security.IActionGuard>().Object, console);
         var settings = new VmAutoshutdownCommand.Settings { VmName = "my-vm", ScheduledTime = "22:00" };
 
         var result = command.Execute(null!, settings);
@@ -156,7 +159,7 @@ public class VmAutoshutdownCommandTests
         metadataMock.Setup(x => x.FindAsync("my-vm")).ReturnsAsync(record);
         metadataMock.Setup(x => x.SaveAsync(It.IsAny<AzureVmRecord>())).Returns(Task.CompletedTask);
 
-        var command = new VmAutoshutdownCommand(authMock.Object, vmServiceMock.Object, metadataMock.Object, console);
+        var command = new VmAutoshutdownCommand(authMock.Object, vmServiceMock.Object, metadataMock.Object, RegistryWith(authMock, vmServiceMock), new Mock<PKS.Infrastructure.Services.Security.IActionGuard>().Object, console);
         var settings = new VmAutoshutdownCommand.Settings { VmName = "my-vm", IdleMinutes = 30 };
 
         var result = command.Execute(null!, settings);

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using PKS.Commands.Azure;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -18,22 +19,31 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
     private readonly IAzureVmService _vmService;
     private readonly ISshTargetConfigurationService _sshService;
     private readonly IAzureVmMetadataService _vmMetadata;
+    private readonly IScalewayService _scaleway;
     private readonly IAnsiConsole _console;
     private readonly AzureInitCommand _azureInit;
+    private readonly PKS.Commands.Scaleway.ScalewayInitCommand _scalewayInit;
+    private readonly IActionGuard _guard;
 
     public VmInitCommand(
         IAzureAuthService azureAuth,
         IAzureVmService vmService,
         ISshTargetConfigurationService sshService,
         IAzureVmMetadataService vmMetadata,
+        IScalewayService scaleway,
         AzureInitCommand azureInit,
+        PKS.Commands.Scaleway.ScalewayInitCommand scalewayInit,
+        IActionGuard guard,
         IAnsiConsole console)
     {
         _azureAuth = azureAuth;
         _vmService = vmService;
         _sshService = sshService;
         _vmMetadata = vmMetadata;
+        _scaleway = scaleway;
         _azureInit = azureInit;
+        _scalewayInit = scalewayInit;
+        _guard = guard;
         _console = console;
     }
 
@@ -54,6 +64,20 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
     }
 
     private async Task<int> ExecuteAsync(CommandContext context, Settings settings)
+    {
+        // Choose the cloud to provision on.
+        var providerChoice = _console.Prompt(
+            new SelectionPrompt<string>()
+                .Title("[cyan]Which cloud?[/]")
+                .HighlightStyle(Style.Parse("cyan"))
+                .AddChoices("Azure", "Scaleway (GPU)"));
+
+        return providerChoice.StartsWith("Scaleway")
+            ? await RunScalewayInitAsync(context, settings)
+            : await RunAzureInitAsync(context, settings);
+    }
+
+    private async Task<int> RunAzureInitAsync(CommandContext context, Settings settings)
     {
         // 1. Check Azure authentication — chain into azure init if not yet done
         if (!await _azureAuth.IsAuthenticatedAsync())
@@ -294,6 +318,10 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
         AzureVmInfo? vmInfo = null;
         while (true)
         {
+            // Gate provisioning a new (billable) VM — before the Status spinner so the guard can prompt.
+            try { await _guard.RequireAsync(new ActionRequest(ActionIds.VmCreate, $"Create Azure VM '{vmName}' in {location}", "This provisions billable cloud resources.")); }
+            catch (ActionGuardDeniedException ex) { _console.MarkupLine($"[red]Create denied:[/] {Markup.Escape(ex.Message)}"); return 1; }
+
             Exception? createError = null;
             await _console.Status()
                 .SpinnerStyle(Style.Parse("cyan"))
@@ -471,6 +499,215 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
             """)
             .Border(BoxBorder.Rounded)
             .BorderStyle("green")
+            .Header(" [bold green]Success[/] "));
+
+        return 0;
+    }
+
+    private async Task<int> RunScalewayInitAsync(CommandContext context, Settings settings)
+    {
+        // 1. Ensure Scaleway authentication — chain into scaleway init if not yet done
+        if (!await _scaleway.IsAuthenticatedAsync())
+        {
+            _console.MarkupLine("[cyan]Scaleway not yet authenticated. Starting Scaleway sign-in...[/]");
+            var initResult = _scalewayInit.Execute(context, new PKS.Commands.Scaleway.ScalewayInitCommand.Settings());
+            if (initResult != 0 || !await _scaleway.IsAuthenticatedAsync())
+            {
+                _console.MarkupLine("[red]Scaleway authentication required to provision an instance.[/]");
+                return 1;
+            }
+        }
+
+        var creds = await _scaleway.GetStoredCredentialsAsync();
+        if (creds == null)
+        {
+            _console.MarkupLine("[red]Failed to load Scaleway credentials.[/]");
+            return 1;
+        }
+
+        // 2. VM name
+        var defaultName = $"pks-gpu-{Guid.NewGuid().ToString("N")[..4]}";
+        var vmName = _console.Prompt(new TextPrompt<string>("[cyan]Instance name:[/]").DefaultValue(defaultName));
+        if (string.IsNullOrWhiteSpace(vmName)) vmName = defaultName;
+
+        // 3. Zone
+        var zone = _console.Prompt(
+            new SelectionPrompt<string>()
+                .Title("[cyan]Zone:[/]")
+                .HighlightStyle(Style.Parse("cyan"))
+                .AddChoices(new[] { creds.DefaultZone, "fr-par-2", "pl-waw-2", "fr-par-1", "nl-ams-1" }
+                    .Where(z => !string.IsNullOrEmpty(z)).Distinct().ToArray()));
+
+        // 4. Server type — GPU types first
+        List<PKS.Infrastructure.Services.Models.ScalewayServerType> types = new();
+        await _console.Status()
+            .SpinnerStyle(Style.Parse("cyan")).Spinner(Spinner.Known.Dots)
+            .StartAsync($"Loading instance types in {zone}...", async _ =>
+            {
+                types = await _scaleway.ListServerTypesAsync(zone);
+            });
+
+        if (types.Count == 0)
+        {
+            _console.MarkupLine("[red]No instance types returned for this zone.[/]");
+            return 1;
+        }
+
+        var ordered = types.OrderByDescending(t => t.IsGpu).ThenBy(t => t.Name).ToList();
+        var selectedType = _console.Prompt(
+            new SelectionPrompt<PKS.Infrastructure.Services.Models.ScalewayServerType>()
+                .Title("[cyan]Select instance type[/] [dim](GPU types listed first)[/]:")
+                .PageSize(15)
+                .UseConverter(t => t.DisplayLabel)
+                .HighlightStyle(Style.Parse("cyan"))
+                .AddChoices(ordered));
+
+        // 5. Image — filter to the type's architecture
+        var arch = string.IsNullOrEmpty(selectedType.Arch) ? "x86_64" : selectedType.Arch;
+        List<PKS.Infrastructure.Services.Models.ScalewayImage> images = new();
+        await _console.Status()
+            .SpinnerStyle(Style.Parse("cyan")).Spinner(Spinner.Known.Dots)
+            .StartAsync("Loading images...", async _ =>
+            {
+                images = await _scaleway.ListImagesAsync(zone, arch);
+            });
+
+        if (images.Count == 0)
+        {
+            _console.MarkupLine("[red]No images available for this zone/architecture.[/]");
+            return 1;
+        }
+
+        // Surface Ubuntu / GPU-OS images first
+        var orderedImages = images
+            .OrderByDescending(i => (i.Name ?? "").Contains("gpu", StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(i => (i.Name ?? "").Contains("ubuntu", StringComparison.OrdinalIgnoreCase))
+            .ThenBy(i => i.Name)
+            .ToList();
+        var selectedImage = _console.Prompt(
+            new SelectionPrompt<PKS.Infrastructure.Services.Models.ScalewayImage>()
+                .Title("[cyan]Select OS image:[/]")
+                .PageSize(15)
+                .UseConverter(i => i.Name)
+                .HighlightStyle(Style.Parse("cyan"))
+                .AddChoices(orderedImages));
+
+        // 6. SSH key (reuse the same scheme as Azure)
+        var keyDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".pks-cli", "keys");
+        Directory.CreateDirectory(keyDir);
+        var keyPath = Path.Combine(keyDir, vmName);
+        if (!File.Exists(keyPath))
+        {
+            var keygen = Process.Start(new ProcessStartInfo("ssh-keygen")
+            {
+                Arguments = $"-t ed25519 -f \"{keyPath}\" -N \"\" -C \"pks-{vmName}\"",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            });
+            if (keygen != null) await keygen.WaitForExitAsync();
+        }
+        // The generated public key is injected via cloud-init user-data at create time so
+        // the box accepts our key on first boot (see ScalewayService.CreateServerAsync).
+        var scwPubKey = File.Exists(keyPath + ".pub") ? (await File.ReadAllTextAsync(keyPath + ".pub")).Trim() : string.Empty;
+
+        const string adminUser = "root";
+
+        // 7. Confirm
+        _console.Write(new Panel(
+            $"""
+            [cyan1]Instance:[/] {Markup.Escape(vmName)}
+            [cyan1]Zone:[/] {Markup.Escape(zone)}
+            [cyan1]Type:[/] {Markup.Escape(selectedType.DisplayLabel)}
+            [cyan1]Image:[/] {Markup.Escape(selectedImage.Name)}
+            [cyan1]Project:[/] {Markup.Escape(creds.DefaultProjectName)} ({Markup.Escape(creds.DefaultProjectId)})
+            [cyan1]SSH Key:[/] {Markup.Escape(keyPath)}
+            """)
+            .Border(BoxBorder.Rounded).BorderStyle("cyan")
+            .Header(" [bold cyan]Scaleway Instance[/] "));
+
+        if (!_console.Confirm("[cyan]Create instance?[/]", defaultValue: true))
+            return 0;
+
+        // 8. Create
+        // Gate provisioning a new (billable, often GPU) instance — before the Status spinner.
+        try { await _guard.RequireAsync(new ActionRequest(ActionIds.VmCreate, $"Create Scaleway instance '{vmName}' in {zone}", "This provisions billable GPU/compute resources.")); }
+        catch (ActionGuardDeniedException ex) { _console.MarkupLine($"[red]Create denied:[/] {Markup.Escape(ex.Message)}"); return 1; }
+
+        PKS.Infrastructure.Services.Models.ScalewayServer? server = null;
+        Exception? createError = null;
+        await _console.Status()
+            .SpinnerStyle(Style.Parse("cyan")).Spinner(Spinner.Known.Dots)
+            .StartAsync("Provisioning instance...", async ctx =>
+            {
+                try
+                {
+                    server = await _scaleway.CreateServerAsync(new PKS.Infrastructure.Services.Models.ScalewayCreateOptions
+                    {
+                        Zone = zone,
+                        ProjectId = creds.DefaultProjectId,
+                        Name = vmName,
+                        CommercialType = selectedType.Name,
+                        Image = selectedImage.Id,
+                        SshPublicKey = scwPubKey,
+                        EnablePublicIp = true,
+                        Tags = new[] { "pks" }
+                    }, msg => ctx.Status(msg));
+                }
+                catch (Exception ex) { createError = ex; }
+            });
+
+        if (createError != null || server == null)
+        {
+            _console.MarkupLine($"[red]Instance creation failed:[/] {Markup.Escape(createError?.Message ?? "unknown error")}");
+            return 1;
+        }
+
+        // 9. Wait for SSH (TCP probe is provider-agnostic)
+        if (!string.IsNullOrEmpty(server.PublicIpAddress))
+        {
+            await _console.Status()
+                .SpinnerStyle(Style.Parse("cyan")).Spinner(Spinner.Known.Dots)
+                .StartAsync("Waiting for SSH...", async _ =>
+                {
+                    await _vmService.WaitForSshAsync(server.PublicIpAddress, 22, TimeSpan.FromMinutes(5));
+                });
+
+            // 10. Register SSH target
+            await _sshService.AddTargetAsync(server.PublicIpAddress, adminUser, 22, keyPath, label: vmName);
+        }
+
+        // 11. Save record
+        await _vmMetadata.SaveAsync(new AzureVmRecord
+        {
+            Provider = "scaleway",
+            VmName = vmName,
+            AdminUsername = adminUser,
+            Zone = zone,
+            ServerId = server.Id,
+            ProjectId = creds.DefaultProjectId,
+            Location = zone,
+            PublicIpAddress = server.PublicIpAddress,
+            SshKeyPath = keyPath,
+            VmSize = selectedType.Name,
+            IdleShutdownMinutes = 0,
+            CreatedAt = DateTime.UtcNow
+        });
+
+        _console.Write(new Panel(
+            $"""
+            [green]Instance provisioned![/]
+
+            [cyan1]Instance:[/] {Markup.Escape(vmName)}
+            [cyan1]Public IP:[/] {Markup.Escape(server.PublicIpAddress)}
+            [cyan1]Admin User:[/] {adminUser}
+            [cyan1]SSH Key:[/] {Markup.Escape(keyPath)}
+
+            [dim]Connect: ssh -i {Markup.Escape(keyPath)} {adminUser}@{Markup.Escape(server.PublicIpAddress)}[/]
+            [dim]Stop to save GPU cost: pks vm status → Stop VM[/]
+            """)
+            .Border(BoxBorder.Rounded).BorderStyle("green")
             .Header(" [bold green]Success[/] "));
 
         return 0;

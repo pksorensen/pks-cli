@@ -327,6 +327,40 @@ services.AddHttpClient<PKS.Infrastructure.Services.IAzureBillingService, PKS.Inf
 services.AddSingleton<PKS.Infrastructure.Services.IAzureVmMetadataService, PKS.Infrastructure.Services.AzureVmMetadataService>();
 services.AddSingleton<PKS.Infrastructure.Services.ISshExecutor, PKS.Infrastructure.Services.SshExecutor>();
 
+// Scaleway (GPU instances) + cloud-agnostic VM provider abstraction
+services.AddHttpClient<PKS.Infrastructure.Services.IScalewayService, PKS.Infrastructure.Services.ScalewayService>();
+
+// Two-factor action guard: gates billable/sensitive ACTIONS behind a TOTP second factor whose
+// seed lives behind the pks user and whose code lives on the human's phone (see Services/Security).
+// IAnsiConsole is registered defensively so the guard singleton can resolve a console.
+services.AddSingleton<Spectre.Console.IAnsiConsole>(_ => Spectre.Console.AnsiConsole.Console);
+services.AddSingleton<PKS.Infrastructure.Services.Security.IActionCatalog, PKS.Infrastructure.Services.Security.ActionCatalog>();
+services.AddSingleton<PKS.Infrastructure.Services.Security.IActionPolicyStore>(sp =>
+    new PKS.Infrastructure.Services.Security.ActionPolicyStore(sp.GetRequiredService<PKS.Infrastructure.Services.Security.IActionCatalog>()));
+services.AddSingleton<PKS.Infrastructure.Services.Security.ITotpSeedStore>(_ =>
+    new PKS.Infrastructure.Services.Security.TotpSeedStore());
+services.AddSingleton<PKS.Infrastructure.Services.Security.ISecondFactor, PKS.Infrastructure.Services.Security.TotpSecondFactor>();
+services.AddSingleton<PKS.Infrastructure.Services.Security.IActionGuard, PKS.Infrastructure.Services.Security.ActionGuard>();
+
+// Self-update (`pks update --self`): install-method detection + channel/version discovery.
+services.AddSingleton<PKS.Infrastructure.Services.Update.IInstallMethodDetector, PKS.Infrastructure.Services.Update.InstallMethodDetector>();
+services.AddSingleton<PKS.Infrastructure.Services.Update.IUpdateService, PKS.Infrastructure.Services.Update.UpdateService>();
+
+// VM providers, each wrapped by the action guard so power ops (start/stop/destroy) require a
+// second factor. The registry sees the guarded instances, so all command paths are covered.
+services.AddSingleton<PKS.Infrastructure.Services.AzureVmProvider>();
+services.AddSingleton<PKS.Infrastructure.Services.ScalewayVmProvider>();
+services.AddSingleton<PKS.Infrastructure.Services.IVmProvider>(sp => new PKS.Infrastructure.Services.GuardedVmProvider(
+    sp.GetRequiredService<PKS.Infrastructure.Services.AzureVmProvider>(),
+    sp.GetRequiredService<PKS.Infrastructure.Services.Security.IActionGuard>()));
+services.AddSingleton<PKS.Infrastructure.Services.IVmProvider>(sp => new PKS.Infrastructure.Services.GuardedVmProvider(
+    sp.GetRequiredService<PKS.Infrastructure.Services.ScalewayVmProvider>(),
+    sp.GetRequiredService<PKS.Infrastructure.Services.Security.IActionGuard>()));
+services.AddSingleton<PKS.Infrastructure.Services.VmProviderRegistry>();
+
+// Tailscale (join VMs to the tailnet for experiments)
+services.AddSingleton<PKS.Infrastructure.Services.ITailscaleService, PKS.Infrastructure.Services.TailscaleService>();
+
 // Configure Azure File Share provider
 services.AddSingleton<PKS.Infrastructure.Services.Models.AzureFileShareAuthConfig>();
 services.AddHttpClient<AzureFileShareProvider>();
@@ -862,6 +896,24 @@ app.Configure(config =>
             .WithExample(new[] { "azure", "usage" });
     });
 
+    // Add Scaleway branch command
+    config.AddBranch<PKS.Commands.Scaleway.ScalewaySettings>("scaleway", scaleway =>
+    {
+        scaleway.SetDescription("Manage Scaleway authentication and GPU instances");
+        scaleway.AddCommand<PKS.Commands.Scaleway.ScalewayInitCommand>("init")
+            .WithDescription("Authenticate with Scaleway and select a default project and zone")
+            .WithExample(new[] { "scaleway", "init" });
+    });
+
+    // Add Tailscale branch command
+    config.AddBranch<PKS.Commands.Tailscale.TailscaleSettings>("tailscale", ts =>
+    {
+        ts.SetDescription("Manage Tailscale auth for joining VMs to your tailnet");
+        ts.AddCommand<PKS.Commands.Tailscale.TailscaleInitCommand>("init")
+            .WithDescription("Store a Tailscale auth key and join settings")
+            .WithExample(new[] { "tailscale", "init" });
+    });
+
     // Add vm branch command
     config.AddBranch<PKS.Commands.Vm.VmSettings>("vm", vm =>
     {
@@ -869,6 +921,18 @@ app.Configure(config =>
         vm.AddCommand<PKS.Commands.Vm.VmInitCommand>("init")
             .WithDescription("Provision a new VM and register it as an SSH target")
             .WithExample(new[] { "vm", "init" });
+        vm.AddCommand<PKS.Commands.Vm.VmStartCommand>("start")
+            .WithDescription("Start a VM, wait until reachable, and print connection info")
+            .WithExample(new[] { "vm", "start" });
+        vm.AddCommand<PKS.Commands.Vm.VmAddSshKeyCommand>("add-ssh-key")
+            .WithDescription("Add an SSH private key for a VM (paste it) so we can connect")
+            .WithExample(new[] { "vm", "add-ssh-key" });
+        vm.AddCommand<PKS.Commands.Vm.VmExportSshKeyCommand>("export-ssh-key")
+            .WithDescription("Print a command to install a VM's SSH key locally and connect")
+            .WithExample(new[] { "vm", "export-ssh-key" });
+        vm.AddCommand<PKS.Commands.Vm.VmTailscaleCommand>("tailscale")
+            .WithDescription("Start a VM and connect it to your Tailscale network")
+            .WithExample(new[] { "vm", "tailscale" });
         vm.AddCommand<PKS.Commands.Vm.VmAutoshutdownCommand>("autoshutdown")
             .WithDescription("Configure auto-shutdown for a VM")
             .WithExample(new[] { "vm", "autoshutdown", "my-vm", "--idle", "30" })
@@ -884,6 +948,24 @@ app.Configure(config =>
             .WithDescription("Destroy a VM and all its associated Azure resources")
             .WithExample(new[] { "vm", "destroy" });
     });
+
+    // Two-factor: enroll a TOTP authenticator and toggle which actions it gates.
+    config.AddBranch<PKS.Commands.Authenticator.AuthenticatorSettings>("authenticator", auth =>
+    {
+        auth.SetDescription("Manage the TOTP second factor that gates sensitive actions");
+        auth.AddCommand<PKS.Commands.Authenticator.AuthenticatorInitCommand>("init")
+            .WithDescription("Enroll a TOTP authenticator (shows secret + recovery codes once)")
+            .WithExample(new[] { "authenticator", "init" });
+        auth.AddCommand<PKS.Commands.Authenticator.AuthenticatorStatusCommand>("status")
+            .WithDescription("Show whether two-factor is enrolled")
+            .WithExample(new[] { "authenticator", "status" });
+    });
+    config.AddCommand<PKS.Commands.Actions.ActionsCommand>("actions")
+        .WithDescription("Toggle which actions require a two-factor code")
+        .WithExample(new[] { "actions" });
+    config.AddCommand<PKS.Commands.Update.UpdateCommand>("update")
+        .WithDescription("Update pks to the latest version (stable or daily channel)")
+        .WithExample(new[] { "update", "--self" });
 
     // Add fileshare branch (provider auth management)
     config.AddBranch<FileShareSettings>("fileshare", fs =>
@@ -1141,6 +1223,7 @@ app.Configure(config =>
             .WithDescription("Show daily API cost from local Claude Code session files (all projects by default)")
             .WithExample(["claude", "usage"])
             .WithExample(["claude", "usage", "my-project"])
+            .WithExample(["claude", "usage", "-s", "a1b2c3d4", "-s", "e5f6a7b8"])
             .WithExample(["claude", "usage", "--days", "14"]);
 
         claude.AddCommand<PKS.Commands.Claude.ManagedSettings.ClaudeManagedSettingsRenderCommand>("managed-settings")
@@ -1157,6 +1240,23 @@ app.Configure(config =>
             .WithExample(["claude", "codex"])
             .WithExample(["claude", "codex", "--model", "gpt-5.1-codex"])
             .WithExample(["claude", "codex", "--print-env"]);
+
+        claude.AddCommand<PKS.Commands.Claude.ClaudeScalewayCommand>("scaleway")
+            .WithDescription("Run Claude Code on a Scaleway serverless model via a translating proxy (picks a model)")
+            .WithExample(["claude", "scaleway"])
+            .WithExample(["claude", "scaleway", "qwen3.5-397b-a17b"]);
+
+        claude.AddCommand<PKS.Commands.Claude.ClaudeMistralCommand>("mistral")
+            .WithDescription("Run Claude Code on a Mistral / Devstral model (Scaleway)")
+            .WithExample(["claude", "mistral"]);
+
+        claude.AddCommand<PKS.Commands.Claude.ClaudeQwenCommand>("qwen")
+            .WithDescription("Run Claude Code on a Qwen model (Scaleway)")
+            .WithExample(["claude", "qwen"]);
+
+        claude.AddCommand<PKS.Commands.Claude.ClaudeAnthropicCommand>("anthropic")
+            .WithDescription("Run Claude Code on a first-party Anthropic model (no proxy)")
+            .WithExample(["claude", "anthropic"]);
     });
 
     // Add brain commands — personal "brain" built from Claude session history

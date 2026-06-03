@@ -10,26 +10,26 @@ namespace PKS.Commands.Vm;
 [Description("Show VM status with disk/memory/docker stats and an action menu")]
 public class VmStatusCommand : Command<VmStatusCommand.Settings>
 {
-    private readonly IAzureAuthService _azureAuth;
-    private readonly IAzureVmService _vmService;
+    private readonly VmProviderRegistry _providers;
     private readonly IAzureVmMetadataService _vmMetadata;
     private readonly ISshExecutor _sshExecutor;
     private readonly ISshTargetConfigurationService _sshTargets;
+    private readonly IAzureVmService _vmService;
     private readonly IAnsiConsole _console;
 
     public VmStatusCommand(
-        IAzureAuthService azureAuth,
-        IAzureVmService vmService,
+        VmProviderRegistry providers,
         IAzureVmMetadataService vmMetadata,
         ISshExecutor sshExecutor,
         ISshTargetConfigurationService sshTargets,
+        IAzureVmService vmService,
         IAnsiConsole console)
     {
-        _azureAuth = azureAuth;
-        _vmService = vmService;
+        _providers = providers;
         _vmMetadata = vmMetadata;
         _sshExecutor = sshExecutor;
         _sshTargets = sshTargets;
+        _vmService = vmService;
         _console = console;
     }
 
@@ -40,7 +40,8 @@ public class VmStatusCommand : Command<VmStatusCommand.Settings>
 
     public async Task<int> ExecuteAsync(Settings settings)
     {
-        var vms = await _vmMetadata.ListAsync();
+        var local = await _vmMetadata.ListAsync();
+        var vms = await _providers.MergeWithDiscoveryAsync(local);
         if (vms.Count == 0)
         {
             _console.MarkupLine("[yellow]No VMs tracked. Use [bold]pks vm init[/] to provision one.[/]");
@@ -66,30 +67,23 @@ public class VmStatusCommand : Command<VmStatusCommand.Settings>
 
     public async Task<int> ShowVmStatusAsync(AzureVmRecord record)
     {
-        string? token = null;
-        if (await _azureAuth.IsAuthenticatedAsync())
-            token = await _azureAuth.GetAccessTokenAsync("https://management.azure.com/.default");
+        var provider = _providers.Resolve(record);
 
         string? powerState = null;
-        if (token != null)
-        {
-            await _console.Status()
-                .SpinnerStyle(Style.Parse("cyan"))
-                .Spinner(Spinner.Known.Dots)
-                .StartAsync("Checking VM status...", async _ =>
-                {
-                    powerState = await _vmService.GetVmStatusAsync(
-                        token, record.SubscriptionId, record.ResourceGroup, record.VmName);
-                });
-        }
+        await _console.Status()
+            .SpinnerStyle(Style.Parse("cyan"))
+            .Spinner(Spinner.Known.Dots)
+            .StartAsync("Checking VM status...", async _ =>
+            {
+                try { powerState = await provider.GetStatusAsync(record); } catch { }
+            });
 
         var powerDisplay = powerState switch
         {
-            "running" => "[green]running[/]",
-            "deallocated" => "[dim]deallocated[/]",
-            "stopped" => "[yellow]stopped[/]",
-            "starting" => "[cyan]starting[/]",
-            "stopping" => "[yellow]stopping[/]",
+            VmPowerState.Running => "[green]running[/]",
+            VmPowerState.Stopped => "[yellow]stopped[/]",
+            VmPowerState.Starting => "[cyan]starting[/]",
+            VmPowerState.Stopping => "[yellow]stopping[/]",
             null => "[dim]unknown[/]",
             _ => $"[dim]{Markup.Escape(powerState)}[/]"
         };
@@ -99,12 +93,17 @@ public class VmStatusCommand : Command<VmStatusCommand.Settings>
             ? $"{Markup.Escape(record.ScheduledShutdownUtc)} UTC"
             : "none";
         var diskDisplay = record.OsDiskSizeGb > 0 ? $"{record.OsDiskSizeGb} GB" : "unknown";
+        var locationLabel = provider.ProviderKey == "scaleway" ? "Zone" : "Resource Group";
+        var locationValue = provider.ProviderKey == "scaleway"
+            ? (record.Zone ?? record.Location)
+            : record.ResourceGroup;
 
         _console.Write(new Panel(
             $"[cyan1]VM Name:[/]       {Markup.Escape(record.VmName)}\n" +
-            $"[cyan1]Resource Group:[/] {Markup.Escape(record.ResourceGroup)}\n" +
+            $"[cyan1]Provider:[/]      {Markup.Escape(provider.DisplayName)}\n" +
+            $"[cyan1]{locationLabel}:[/] {Markup.Escape(locationValue)}\n" +
             $"[cyan1]Public IP:[/]     {Markup.Escape(record.PublicIpAddress)}\n" +
-            $"[cyan1]VM Size:[/]       {Markup.Escape(record.VmSize)}\n" +
+            $"[cyan1]Type:[/]          {Markup.Escape(record.VmSize)}\n" +
             $"[cyan1]Location:[/]      {Markup.Escape(record.Location)}\n" +
             $"[cyan1]OS Disk:[/]       {diskDisplay}\n" +
             $"[cyan1]Idle Shutdown:[/] {idleDisplay}\n" +
@@ -115,7 +114,7 @@ public class VmStatusCommand : Command<VmStatusCommand.Settings>
             .Header($" [bold cyan]{Markup.Escape(record.VmName)}[/] "));
 
         int? diskPct = null;
-        if (powerState == "running" && !string.IsNullOrEmpty(record.PublicIpAddress))
+        if (powerState == VmPowerState.Running && !string.IsNullOrEmpty(record.PublicIpAddress))
         {
             SshResult? sshResult = null;
             await _console.Status()
@@ -127,7 +126,7 @@ public class VmStatusCommand : Command<VmStatusCommand.Settings>
                     {
                         Host = record.PublicIpAddress,
                         Port = 22,
-                        Username = "azureuser",
+                        Username = record.AdminUsername,
                         KeyPath = record.SshKeyPath
                     };
                     const string statsCmd =
@@ -144,11 +143,11 @@ public class VmStatusCommand : Command<VmStatusCommand.Settings>
 
         // Build action menu based on current state
         var actions = new List<string>();
-        if (powerState == "running") actions.Add("Reconnect (ssh)");
+        if (powerState == VmPowerState.Running) actions.Add("Reconnect (ssh)");
         if (diskPct.HasValue && diskPct.Value > 70)
             actions.Add("Free disk space (docker system prune -af --volumes)");
-        if (powerState is "deallocated" or "stopped") actions.Add("Start VM");
-        if (powerState == "running") actions.Add("Stop / Deallocate VM");
+        if (powerState == VmPowerState.Stopped) actions.Add("Start VM");
+        if (powerState == VmPowerState.Running) actions.Add("Stop VM");
         actions.Add("Destroy VM (delete all resources)");
         actions.Add("Quit");
 
@@ -158,7 +157,7 @@ public class VmStatusCommand : Command<VmStatusCommand.Settings>
                 .HighlightStyle(Style.Parse("cyan"))
                 .AddChoices(actions));
 
-        return await HandleActionAsync(action, record, token);
+        return await HandleActionAsync(action, record, provider);
     }
 
     private int? ParseAndRenderStats(string output)
@@ -237,7 +236,7 @@ public class VmStatusCommand : Command<VmStatusCommand.Settings>
         return "?";
     }
 
-    private async Task<int> HandleActionAsync(string action, AzureVmRecord record, string? token)
+    private async Task<int> HandleActionAsync(string action, AzureVmRecord record, IVmProvider provider)
     {
         if (action == "Quit") return 0;
 
@@ -264,7 +263,7 @@ public class VmStatusCommand : Command<VmStatusCommand.Settings>
             {
                 Host = record.PublicIpAddress,
                 Port = 22,
-                Username = "azureuser",
+                Username = record.AdminUsername,
                 KeyPath = record.SshKeyPath
             };
             SshResult? result = null;
@@ -283,52 +282,38 @@ public class VmStatusCommand : Command<VmStatusCommand.Settings>
             return 0;
         }
 
-        if (action == "Start VM" && token != null)
+        if (action == "Start VM")
         {
-            await _console.Status()
-                .SpinnerStyle(Style.Parse("cyan"))
-                .Spinner(Spinner.Known.Dots)
-                .StartAsync("Starting VM...", async _ =>
-                {
-                    await _vmService.StartVmAsync(token, record.SubscriptionId, record.ResourceGroup, record.VmName);
-                });
-            _console.MarkupLine("[green]VM start command sent.[/]");
+            var ip = await VmConnection.EnsureReachableAsync(record, provider, _vmService, _console);
+            if (string.IsNullOrEmpty(ip))
+            {
+                _console.MarkupLine("[yellow]VM started but no public IP became available in time.[/]");
+                return 1;
+            }
+            await VmConnection.RegisterTargetAsync(_sshTargets, record);
+            VmConnection.RenderConnectionPanel(_console, VmConnection.ToConnectionInfo(record, provider.DisplayName));
             return 0;
         }
 
-        if (action == "Stop / Deallocate VM" && token != null)
+        if (action == "Stop VM")
         {
-            await _console.Status()
-                .SpinnerStyle(Style.Parse("cyan"))
-                .Spinner(Spinner.Known.Dots)
-                .StartAsync("Deallocating VM...", async _ =>
-                {
-                    await _vmService.DeallocateVmAsync(token, record.SubscriptionId, record.ResourceGroup, record.VmName);
-                });
-            _console.MarkupLine("[green]VM deallocate command sent.[/]");
+            // Outside a Status spinner so the guard can prompt for a two-factor code if gated.
+            await provider.StopAsync(record);
+            _console.MarkupLine("[green]VM stop command sent.[/]");
             return 0;
         }
 
-        if (action.StartsWith("Destroy VM") && token != null)
+        if (action.StartsWith("Destroy VM"))
         {
             _console.MarkupLine($"[yellow]This will permanently delete VM [bold]{Markup.Escape(record.VmName)}[/] and all its resources.[/]");
             var confirmed = _console.Confirm("[red]Are you sure?[/]", defaultValue: false);
             if (!confirmed) return 0;
 
+            // Outside a Status spinner so the guard can prompt for a two-factor code if gated;
+            // progress is shown as plain lines instead.
             Exception? destroyError = null;
-            await _console.Status()
-                .SpinnerStyle(Style.Parse("red"))
-                .Spinner(Spinner.Known.Dots)
-                .StartAsync("Destroying VM and resources...", async ctx =>
-                {
-                    try
-                    {
-                        await _vmService.DestroyVmAsync(
-                            token, record.SubscriptionId, record.ResourceGroup, record.VmName,
-                            msg => ctx.Status(msg));
-                    }
-                    catch (Exception ex) { destroyError = ex; }
-                });
+            try { await provider.DestroyAsync(record, msg => _console.MarkupLine($"[dim]{Markup.Escape(msg)}[/]")); }
+            catch (Exception ex) { destroyError = ex; }
 
             if (destroyError != null)
             {

@@ -6,24 +6,21 @@ using Spectre.Console.Cli;
 
 namespace PKS.Commands.Vm;
 
-[Description("Destroy a VM and all its associated Azure resources")]
+[Description("Destroy a VM and all its associated cloud resources")]
 public class VmDestroyCommand : Command<VmDestroyCommand.Settings>
 {
-    private readonly IAzureAuthService _azureAuth;
-    private readonly IAzureVmService _vmService;
+    private readonly VmProviderRegistry _providers;
     private readonly IAzureVmMetadataService _vmMetadata;
     private readonly ISshTargetConfigurationService _sshTargets;
     private readonly IAnsiConsole _console;
 
     public VmDestroyCommand(
-        IAzureAuthService azureAuth,
-        IAzureVmService vmService,
+        VmProviderRegistry providers,
         IAzureVmMetadataService vmMetadata,
         ISshTargetConfigurationService sshTargets,
         IAnsiConsole console)
     {
-        _azureAuth = azureAuth;
-        _vmService = vmService;
+        _providers = providers;
         _vmMetadata = vmMetadata;
         _sshTargets = sshTargets;
         _console = console;
@@ -36,7 +33,8 @@ public class VmDestroyCommand : Command<VmDestroyCommand.Settings>
 
     public async Task<int> ExecuteAsync(Settings settings)
     {
-        var vms = await _vmMetadata.ListAsync();
+        var local = await _vmMetadata.ListAsync();
+        var vms = await _providers.MergeWithDiscoveryAsync(local);
         if (vms.Count == 0)
         {
             _console.MarkupLine("[yellow]No VMs tracked. Nothing to destroy.[/]");
@@ -57,42 +55,32 @@ public class VmDestroyCommand : Command<VmDestroyCommand.Settings>
             record = vms.First(v => v.VmName == choice);
         }
 
-        if (!await _azureAuth.IsAuthenticatedAsync())
+        var provider = _providers.Resolve(record);
+        if (!await provider.IsAuthenticatedAsync())
         {
-            _console.MarkupLine("[red]No Azure credentials. Run 'pks azure init' first.[/]");
+            _console.MarkupLine($"[red]Not authenticated with {Markup.Escape(provider.DisplayName)}. Run 'pks {provider.ProviderKey} init' first.[/]");
             return 1;
         }
 
-        var token = await _azureAuth.GetAccessTokenAsync("https://management.azure.com/.default");
-        if (string.IsNullOrEmpty(token))
-        {
-            _console.MarkupLine("[red]Failed to obtain Azure management token.[/]");
-            return 1;
-        }
-
-        return await DestroyVmAsync(record, token);
+        return await DestroyVmAsync(record);
     }
 
-    public async Task<int> DestroyVmAsync(AzureVmRecord record, string token)
+    public async Task<int> DestroyVmAsync(AzureVmRecord record)
     {
-        _console.MarkupLine($"[yellow]This will permanently delete VM [bold]{Markup.Escape(record.VmName)}[/] and all its resources.[/]");
+        var provider = _providers.Resolve(record);
+
+        _console.MarkupLine($"[yellow]This will permanently delete VM [bold]{Markup.Escape(record.VmName)}[/] ([dim]{Markup.Escape(provider.DisplayName)}[/]) and all its resources.[/]");
         var confirmed = _console.Confirm("[red]Are you sure?[/]", defaultValue: false);
         if (!confirmed) return 0;
 
+        // Outside a Status spinner so the guarded provider can prompt for a two-factor code if gated
+        // (Spectre forbids interactive prompts inside a live display); progress is shown as plain lines.
         Exception? destroyError = null;
-        await _console.Status()
-            .SpinnerStyle(Style.Parse("red"))
-            .Spinner(Spinner.Known.Dots)
-            .StartAsync("Destroying VM and resources...", async ctx =>
-            {
-                try
-                {
-                    await _vmService.DestroyVmAsync(
-                        token, record.SubscriptionId, record.ResourceGroup, record.VmName,
-                        msg => ctx.Status(msg));
-                }
-                catch (Exception ex) { destroyError = ex; }
-            });
+        try
+        {
+            await provider.DestroyAsync(record, msg => _console.MarkupLine($"[dim]{Markup.Escape(msg)}[/]"));
+        }
+        catch (Exception ex) { destroyError = ex; }
 
         if (destroyError != null)
         {
@@ -109,7 +97,7 @@ public class VmDestroyCommand : Command<VmDestroyCommand.Settings>
         }
         catch { }
 
-        // Remove from metadata store
+        // Remove from metadata store (no-op for discovered-only records)
         await _vmMetadata.RemoveAsync(record.VmName);
 
         _console.MarkupLine($"[green]VM [bold]{Markup.Escape(record.VmName)}[/] and all resources destroyed.[/]");

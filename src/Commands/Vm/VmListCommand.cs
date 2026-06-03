@@ -10,25 +10,25 @@ namespace PKS.Commands.Vm;
 public class VmListCommand : Command<VmListCommand.Settings>
 {
     private readonly IAzureVmMetadataService _vmMetadata;
-    private readonly IAzureAuthService _azureAuth;
-    private readonly IAzureVmService _vmService;
+    private readonly VmProviderRegistry _providers;
     private readonly ISshTargetConfigurationService _sshTargets;
     private readonly ISshExecutor _sshExecutor;
+    private readonly IAzureVmService _vmService;
     private readonly IAnsiConsole _console;
 
     public VmListCommand(
         IAzureVmMetadataService vmMetadata,
-        IAzureAuthService azureAuth,
-        IAzureVmService vmService,
+        VmProviderRegistry providers,
         ISshTargetConfigurationService sshTargets,
         ISshExecutor sshExecutor,
+        IAzureVmService vmService,
         IAnsiConsole console)
     {
         _vmMetadata = vmMetadata;
-        _azureAuth = azureAuth;
-        _vmService = vmService;
+        _providers = providers;
         _sshTargets = sshTargets;
         _sshExecutor = sshExecutor;
+        _vmService = vmService;
         _console = console;
     }
 
@@ -41,7 +41,17 @@ public class VmListCommand : Command<VmListCommand.Settings>
 
     public async Task<int> ExecuteAsync()
     {
-        var vms = await _vmMetadata.ListAsync();
+        var local = await _vmMetadata.ListAsync();
+        var localNames = new HashSet<string>(local.Select(v => v.VmName), StringComparer.OrdinalIgnoreCase);
+
+        List<AzureVmRecord> vms = new();
+        await _console.Status()
+            .SpinnerStyle(Style.Parse("cyan"))
+            .Spinner(Spinner.Known.Dots)
+            .StartAsync("Discovering VMs...", async _ =>
+            {
+                vms = await _providers.MergeWithDiscoveryAsync(local);
+            });
 
         if (vms.Count == 0)
         {
@@ -49,39 +59,37 @@ public class VmListCommand : Command<VmListCommand.Settings>
             return 0;
         }
 
-        // Try to get Azure token for live status checks
-        string? token = null;
-        if (await _azureAuth.IsAuthenticatedAsync())
-            token = await _azureAuth.GetAccessTokenAsync("https://management.azure.com/.default");
-
-        // Check live status for each VM and collect which ones no longer exist
+        // Check live status for each VM via its provider
         var statuses = new Dictionary<string, string?>();
-        var missing = new List<string>();
+        var missing = new List<AzureVmRecord>();
 
-        if (token != null)
-        {
-            await _console.Status()
-                .SpinnerStyle(Style.Parse("cyan"))
-                .Spinner(Spinner.Known.Dots)
-                .StartAsync("Checking VM status in Azure...", async _ =>
+        await _console.Status()
+            .SpinnerStyle(Style.Parse("cyan"))
+            .Spinner(Spinner.Known.Dots)
+            .StartAsync("Checking VM status...", async _ =>
+            {
+                var tasks = vms.Select(async vm =>
                 {
-                    var tasks = vms.Select(async vm =>
+                    try
                     {
-                        var status = await _vmService.GetVmStatusAsync(token, vm.SubscriptionId, vm.ResourceGroup, vm.VmName);
-                        return (vm.VmName, status);
-                    });
-                    foreach (var (name, status) in await Task.WhenAll(tasks))
-                    {
-                        statuses[name] = status;
-                        if (status == null)
-                            missing.Add(name);
+                        var provider = _providers.Resolve(vm);
+                        var status = await provider.GetStatusAsync(vm);
+                        return (vm, status);
                     }
+                    catch { return (vm, (string?)null); }
                 });
-        }
+                foreach (var (vm, status) in await Task.WhenAll(tasks))
+                {
+                    statuses[Key(vm)] = status;
+                    // Only auto-remove records that were locally tracked and have vanished.
+                    if (status == null && localNames.Contains(vm.VmName))
+                        missing.Add(vm);
+                }
+            });
 
         // Fetch disk usage for running VMs in parallel
         var diskPcts = new Dictionary<string, int?>();
-        var runningVms = vms.Where(v => statuses.TryGetValue(v.VmName, out var s) && s == "running"
+        var runningVms = vms.Where(v => statuses.TryGetValue(Key(v), out var s) && s == VmPowerState.Running
                                          && !string.IsNullOrEmpty(v.PublicIpAddress)).ToList();
         if (runningVms.Count > 0)
         {
@@ -96,7 +104,7 @@ public class VmListCommand : Command<VmListCommand.Settings>
                         {
                             Host = vm.PublicIpAddress,
                             Port = 22,
-                            Username = "azureuser",
+                            Username = vm.AdminUsername,
                             KeyPath = vm.SshKeyPath
                         };
                         try
@@ -107,28 +115,27 @@ public class VmListCommand : Command<VmListCommand.Settings>
                                 TimeSpan.FromSeconds(10));
                             if (!result.TimedOut && result.ExitCode == 0
                                 && int.TryParse(result.Stdout.Trim(), out var pct))
-                                return (vm.VmName, (int?)pct);
+                                return (Key(vm), (int?)pct);
                         }
                         catch { }
-                        return (vm.VmName, (int?)null);
+                        return (Key(vm), (int?)null);
                     });
-                    foreach (var (name, pct) in await Task.WhenAll(diskTasks))
-                        diskPcts[name] = pct;
+                    foreach (var (key, pct) in await Task.WhenAll(diskTasks))
+                        diskPcts[key] = pct;
                 });
         }
 
-        // Remove VMs that no longer exist in Azure
+        // Remove VMs that no longer exist (locally-tracked only)
         if (missing.Count > 0)
         {
-            _console.MarkupLine($"[yellow]Removing {missing.Count} deleted VM(s) from local state: {string.Join(", ", missing.Select(Markup.Escape))}[/]");
-            foreach (var name in missing)
+            _console.MarkupLine($"[yellow]Removing {missing.Count} deleted VM(s) from local state: {string.Join(", ", missing.Select(v => Markup.Escape(v.VmName)))}[/]");
+            foreach (var vm in missing)
             {
-                await _vmMetadata.RemoveAsync(name);
-                // Also remove the SSH target registered for this VM
-                var sshTarget = await _sshTargets.FindTargetAsync(name);
+                await _vmMetadata.RemoveAsync(vm.VmName);
+                var sshTarget = await _sshTargets.FindTargetAsync(vm.VmName);
                 if (sshTarget != null)
                     await _sshTargets.RemoveTargetAsync(sshTarget.Id);
-                vms.RemoveAll(v => v.VmName == name);
+                vms.RemoveAll(v => Key(v) == Key(vm));
             }
 
             if (vms.Count == 0)
@@ -142,14 +149,13 @@ public class VmListCommand : Command<VmListCommand.Settings>
             .Border(TableBorder.Rounded)
             .Title("[bold cyan]PKS Virtual Machines[/]")
             .AddColumn("[bold]Name[/]")
+            .AddColumn("[bold]Provider[/]")
             .AddColumn("[bold]Status[/]")
             .AddColumn("[bold]Disk %[/]")
             .AddColumn("[bold]Public IP[/]")
-            .AddColumn("[bold]Size[/]")
+            .AddColumn("[bold]Type[/]")
             .AddColumn("[bold]Location[/]")
-            .AddColumn("[bold]Resource Group[/]")
             .AddColumn("[bold]Idle Shutdown[/]")
-            .AddColumn("[bold]Scheduled[/]")
             .AddColumn("[bold]Created[/]");
 
         foreach (var vm in vms)
@@ -157,26 +163,18 @@ public class VmListCommand : Command<VmListCommand.Settings>
             var idleDisplay = vm.IdleShutdownMinutes > 0
                 ? $"{vm.IdleShutdownMinutes}m"
                 : "[dim]off[/]";
-            var scheduledDisplay = vm.ScheduledShutdownUtc != null
-                ? $"{Markup.Escape(vm.ScheduledShutdownUtc)} UTC"
-                : "[dim]none[/]";
 
             string statusDisplay;
-            if (token == null)
-            {
-                statusDisplay = "[dim]?[/]";
-            }
-            else if (statuses.TryGetValue(vm.VmName, out var s))
+            if (statuses.TryGetValue(Key(vm), out var s))
             {
                 statusDisplay = s switch
                 {
-                    "running" => "[green]running[/]",
-                    "stopped" => "[yellow]stopped[/]",
-                    "deallocated" => "[dim]deallocated[/]",
-                    "starting" => "[cyan]starting[/]",
-                    "stopping" => "[yellow]stopping[/]",
-                    "deallocating" => "[dim]deallocating[/]",
-                    _ => $"[dim]{Markup.Escape(s ?? "?")}[/]"
+                    VmPowerState.Running => "[green]running[/]",
+                    VmPowerState.Stopped => "[yellow]stopped[/]",
+                    VmPowerState.Starting => "[cyan]starting[/]",
+                    VmPowerState.Stopping => "[yellow]stopping[/]",
+                    null => "[dim]?[/]",
+                    _ => $"[dim]{Markup.Escape(s)}[/]"
                 };
             }
             else
@@ -185,7 +183,7 @@ public class VmListCommand : Command<VmListCommand.Settings>
             }
 
             string diskDisplay;
-            if (diskPcts.TryGetValue(vm.VmName, out var pct) && pct.HasValue)
+            if (diskPcts.TryGetValue(Key(vm), out var pct) && pct.HasValue)
             {
                 var color = pct.Value switch { > 90 => "red", > 70 => "yellow", _ => "green" };
                 diskDisplay = $"[{color}]{pct.Value}%[/]";
@@ -195,16 +193,17 @@ public class VmListCommand : Command<VmListCommand.Settings>
                 diskDisplay = "[dim]—[/]";
             }
 
+            var providerName = _providers.Resolve(vm).DisplayName;
+
             table.AddRow(
                 $"[cyan]{Markup.Escape(vm.VmName)}[/]",
+                Markup.Escape(providerName),
                 statusDisplay,
                 diskDisplay,
-                Markup.Escape(vm.PublicIpAddress),
+                Markup.Escape(string.IsNullOrEmpty(vm.PublicIpAddress) ? "—" : vm.PublicIpAddress),
                 Markup.Escape(vm.VmSize),
                 Markup.Escape(vm.Location),
-                Markup.Escape(vm.ResourceGroup),
                 idleDisplay,
-                scheduledDisplay,
                 vm.CreatedAt.ToString("yyyy-MM-dd HH:mm") + " UTC"
             );
         }
@@ -213,7 +212,6 @@ public class VmListCommand : Command<VmListCommand.Settings>
         _console.WriteLine();
         _console.MarkupLine($"[dim]{vms.Count} VM(s). SSH key dir: ~/.pks-cli/keys/[/]");
         _console.MarkupLine("[dim]Connect: pks ssh connect <name>[/]");
-        _console.MarkupLine("[dim]Change shutdown: pks vm autoshutdown <name> --idle 30[/]");
 
         // Drill-down: offer to inspect a specific VM
         var inspectChoices = vms.Select(v => v.VmName).ToList();
@@ -229,10 +227,17 @@ public class VmListCommand : Command<VmListCommand.Settings>
         if (inspect != "No, quit")
         {
             var selected = vms.First(v => v.VmName == inspect);
-            var statusCmd = new VmStatusCommand(_azureAuth, _vmService, _vmMetadata, _sshExecutor, _sshTargets, _console);
+            var statusCmd = new VmStatusCommand(_providers, _vmMetadata, _sshExecutor, _sshTargets, _vmService, _console);
             return await statusCmd.ShowVmStatusAsync(selected);
         }
 
         return 0;
+    }
+
+    private static string Key(AzureVmRecord r)
+    {
+        var provider = string.IsNullOrEmpty(r.Provider) ? "azure" : r.Provider;
+        var id = !string.IsNullOrEmpty(r.ServerId) ? r.ServerId : r.VmName;
+        return $"{provider}:{id}";
     }
 }

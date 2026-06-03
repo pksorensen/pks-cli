@@ -12,6 +12,7 @@ public class VmStatusCommandTests
 {
     private static AzureVmRecord MakeVm(string name = "pks-vm-test") => new()
     {
+        Provider = "azure",
         VmName = name,
         SubscriptionId = "sub1",
         ResourceGroup = "rg1",
@@ -22,6 +23,9 @@ public class VmStatusCommandTests
         OsDiskSizeGb = 128
     };
 
+    private static VmProviderRegistry RegistryWith(Mock<IAzureAuthService> auth, Mock<IAzureVmService> vmSvc)
+        => new(new IVmProvider[] { new AzureVmProvider(auth.Object, vmSvc.Object) });
+
     [Fact]
     [Trait("Category", "VmStatus")]
     public async Task Run_NoVms_ShowsHelp_Returns0()
@@ -30,13 +34,14 @@ public class VmStatusCommandTests
         var meta = new Mock<IAzureVmMetadataService>();
         meta.Setup(x => x.ListAsync()).ReturnsAsync(new List<AzureVmRecord>());
 
-        var console = new TestConsole();
+        var vmSvc = new Mock<IAzureVmService>();
+        var console = new TestConsole().Interactive();
         var cmd = new VmStatusCommand(
-            new Mock<IAzureAuthService>().Object,
-            new Mock<IAzureVmService>().Object,
+            RegistryWith(new Mock<IAzureAuthService>(), vmSvc),
             meta.Object,
             new Mock<ISshExecutor>().Object,
             new Mock<ISshTargetConfigurationService>().Object,
+            vmSvc.Object,
             console);
 
         // Act
@@ -64,13 +69,13 @@ public class VmStatusCommandTests
         vmSvc.Setup(x => x.GetVmStatusAsync("tok", "sub1", "rg1", "pks-vm-test", default))
              .ReturnsAsync("deallocated");
 
-        var console = new TestConsole();
+        var console = new TestConsole().Interactive();
         // No SSH prompts since VM is deallocated, but action menu appears — select "Quit"
         console.Input.PushTextWithEnter("Quit");
 
-        var cmd = new VmStatusCommand(auth.Object, vmSvc.Object, meta.Object,
+        var cmd = new VmStatusCommand(RegistryWith(auth, vmSvc), meta.Object,
             new Mock<ISshExecutor>().Object,
-            new Mock<ISshTargetConfigurationService>().Object, console);
+            new Mock<ISshTargetConfigurationService>().Object, vmSvc.Object, console);
 
         // Act
         var result = await cmd.ExecuteAsync(new VmStatusCommand.Settings());
@@ -109,13 +114,14 @@ public class VmStatusCommandTests
                    "__DISK__\n/dev/sda1  128G  122G  6G  95% /\n__MEM__\n              total  used  free\nMem:           8192  2048  6144\n__DOCKER__\nContainers: 2 (1 running) | Images: 5 | Server: 24.0.0\n__SPACE__\n95\n__UPTIME__\nup 2 hours, 14 minutes",
                    "", false));
 
-        var console = new TestConsole();
-        // Action menu: pick "Free disk space..." then "Quit"
-        console.Input.PushTextWithEnter("Free disk space (docker system prune -af --volumes)");
-        console.Input.PushTextWithEnter("Quit");
+        var console = new TestConsole().Interactive();
+        // Action menu order for a running VM with high disk: Reconnect, Free disk space, Stop, Destroy, Quit.
+        // Navigate down to "Free disk space" (2nd item) and select it.
+        console.Input.PushKey(ConsoleKey.DownArrow);
+        console.Input.PushKey(ConsoleKey.Enter);
 
-        var cmd = new VmStatusCommand(auth.Object, vmSvc.Object, meta.Object, sshMock.Object,
-            new Mock<ISshTargetConfigurationService>().Object, console);
+        var cmd = new VmStatusCommand(RegistryWith(auth, vmSvc), meta.Object, sshMock.Object,
+            new Mock<ISshTargetConfigurationService>().Object, vmSvc.Object, console);
 
         // Act
         var result = await cmd.ExecuteAsync(new VmStatusCommand.Settings());
