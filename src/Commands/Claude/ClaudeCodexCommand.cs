@@ -99,7 +99,7 @@ public sealed class ClaudeCodexCommand : AsyncCommand<ClaudeCodexCommand.Setting
             ?? "gpt-5.5";
 
         var responsesUrl = BuildResponsesUrl(creds.SelectedResourceEndpoint);
-        var port = settings.Port ?? FindFreePort();
+        var port = settings.Port ?? AnthropicProxyUtil.FindFreePort();
         var proxyToken = Guid.NewGuid().ToString("N");
         var emitThinking = !settings.NoThinking;
 
@@ -117,7 +117,7 @@ public sealed class ClaudeCodexCommand : AsyncCommand<ClaudeCodexCommand.Setting
 
         app.MapPost("/v1/messages/count_tokens", async (HttpContext ctx) =>
         {
-            if (!ValidateToken(ctx, proxyToken)) return;
+            if (!AnthropicProxyUtil.ValidateToken(ctx, proxyToken)) return;
             using var doc = await JsonDocument.ParseAsync(ctx.Request.Body, default, ctx.RequestAborted);
             var tokens = TokenEstimator.EstimateInputTokens(doc.RootElement);
             ctx.Response.ContentType = "application/json";
@@ -126,7 +126,7 @@ public sealed class ClaudeCodexCommand : AsyncCommand<ClaudeCodexCommand.Setting
 
         app.MapPost("/v1/messages", async (HttpContext ctx) =>
         {
-            if (!ValidateToken(ctx, proxyToken)) return;
+            if (!AnthropicProxyUtil.ValidateToken(ctx, proxyToken)) return;
 
             using var doc = await JsonDocument.ParseAsync(ctx.Request.Body, default, ctx.RequestAborted);
             var anthropic = doc.RootElement;
@@ -149,7 +149,7 @@ public sealed class ClaudeCodexCommand : AsyncCommand<ClaudeCodexCommand.Setting
 
             if (!upstream.IsSuccessStatusCode)
             {
-                await RelayUpstreamErrorAsync(ctx, upstream);
+                await AnthropicProxyUtil.RelayUpstreamErrorAsync(ctx, upstream);
                 return;
             }
 
@@ -160,7 +160,7 @@ public sealed class ClaudeCodexCommand : AsyncCommand<ClaudeCodexCommand.Setting
             {
                 ctx.Response.ContentType = "text/event-stream";
                 ctx.Response.Headers["Cache-Control"] = "no-cache";
-                await foreach (var evt in ReadSseEventsAsync(upstreamStream, ctx.RequestAborted))
+                await foreach (var evt in AnthropicProxyUtil.ReadSseEventsAsync(upstreamStream, ctx.RequestAborted))
                 {
                     foreach (var frame in converter.Handle(evt))
                     {
@@ -171,7 +171,7 @@ public sealed class ClaudeCodexCommand : AsyncCommand<ClaudeCodexCommand.Setting
             }
             else
             {
-                await foreach (var evt in ReadSseEventsAsync(upstreamStream, ctx.RequestAborted))
+                await foreach (var evt in AnthropicProxyUtil.ReadSseEventsAsync(upstreamStream, ctx.RequestAborted))
                 {
                     foreach (var _ in converter.Handle(evt)) { /* drain; accumulate */ }
                 }
@@ -240,7 +240,7 @@ public sealed class ClaudeCodexCommand : AsyncCommand<ClaudeCodexCommand.Setting
             if (resp.IsSuccessStatusCode) return null;
 
             var text = await resp.Content.ReadAsStringAsync(cts.Token);
-            return $"  HTTP {(int)resp.StatusCode}: {Truncate(text, 1200)}";
+            return $"  HTTP {(int)resp.StatusCode}: {AnthropicProxyUtil.Truncate(text, 1200)}";
         }
         catch (Exception ex)
         {
@@ -306,96 +306,6 @@ public sealed class ClaudeCodexCommand : AsyncCommand<ClaudeCodexCommand.Setting
         }
     }
 
-    private static async Task RelayUpstreamErrorAsync(HttpContext ctx, HttpResponseMessage upstream)
-    {
-        var body = await upstream.Content.ReadAsStringAsync(ctx.RequestAborted);
-        ctx.Response.StatusCode = (int)upstream.StatusCode;
-        ctx.Response.ContentType = "application/json";
-        var error = new JsonObject
-        {
-            ["type"] = "error",
-            ["error"] = new JsonObject
-            {
-                ["type"] = "api_error",
-                ["message"] = $"Foundry upstream {(int)upstream.StatusCode}: {Truncate(body, 2000)}",
-            },
-        };
-        await ctx.Response.WriteAsync(error.ToJsonString(), ctx.RequestAborted);
-    }
-
-    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max];
-
-    /// <summary>Reads an SSE stream and yields the JSON object inside each <c>data:</c> payload.</summary>
-    private static async IAsyncEnumerable<JsonElement> ReadSseEventsAsync(
-        Stream stream,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
-    {
-        using var reader = new StreamReader(stream, Encoding.UTF8);
-        var data = new StringBuilder();
-
-        while (!ct.IsCancellationRequested)
-        {
-            var line = await reader.ReadLineAsync(ct);
-            if (line is null) break;
-
-            if (line.Length == 0)
-            {
-                if (data.Length > 0)
-                {
-                    var payload = data.ToString();
-                    data.Clear();
-                    if (payload != "[DONE]" && TryParse(payload, out var el))
-                    {
-                        yield return el;
-                    }
-                }
-                continue;
-            }
-
-            if (line.StartsWith("data:", StringComparison.Ordinal))
-            {
-                var chunk = line.Length > 5 && line[5] == ' ' ? line[6..] : line[5..];
-                if (data.Length > 0) data.Append('\n');
-                data.Append(chunk);
-            }
-            // ignore "event:" / ":" comment / id: lines — the type lives inside the JSON
-        }
-
-        // trailing event with no terminating blank line
-        if (data.Length > 0)
-        {
-            var payload = data.ToString();
-            if (payload != "[DONE]" && TryParse(payload, out var el)) yield return el;
-        }
-    }
-
-    private static bool TryParse(string json, out JsonElement element)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            element = doc.RootElement.Clone();
-            return true;
-        }
-        catch (JsonException)
-        {
-            element = default;
-            return false;
-        }
-    }
-
-    private static bool ValidateToken(HttpContext ctx, string proxyToken)
-    {
-        var apiKey = ctx.Request.Headers["x-api-key"].FirstOrDefault();
-        var auth = ctx.Request.Headers["Authorization"].FirstOrDefault();
-        if (apiKey == proxyToken || auth == $"Bearer {proxyToken}")
-        {
-            return true;
-        }
-        ctx.Response.StatusCode = 401;
-        return false;
-    }
-
     private static string BuildResponsesUrl(string endpoint)
     {
         var baseUrl = endpoint.TrimEnd('/');
@@ -405,14 +315,5 @@ public sealed class ClaudeCodexCommand : AsyncCommand<ClaudeCodexCommand.Setting
         if (baseUrl.EndsWith("/openai", StringComparison.OrdinalIgnoreCase))
             return baseUrl + "/v1/responses";
         return baseUrl + "/openai/v1/responses";
-    }
-
-    private static int FindFreePort()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
     }
 }
