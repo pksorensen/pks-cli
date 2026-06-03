@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Net.Http;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -12,6 +13,10 @@ public class ClaudeUsageSettings : ClaudeSettings
     [Description("Filter to a specific project by folder name under ~/.claude/projects/. Omit to scan all projects.")]
     public string? ProjectName { get; set; }
 
+    [CommandOption("-s|--session <SESSION>")]
+    [Description("Filter to specific session id(s) — the .jsonl filename, matched as a prefix/substring across all projects. Repeat for multiple. Combines with PROJECT (intersection) when both are given.")]
+    public string[] Sessions { get; set; } = [];
+
     [CommandOption("-d|--days")]
     [Description("Highlight most-recent N days in red (default: 7)")]
     [DefaultValue(7)]
@@ -20,12 +25,19 @@ public class ClaudeUsageSettings : ClaudeSettings
 
 public class ClaudeUsageCommand : AsyncCommand<ClaudeUsageSettings>
 {
+    private const int CacheVersion = 1;
+
+    // Offline fallback only — the live LiteLLM table (LoadLiteLLMPricingAsync) takes
+    // precedence. (input, output, cache-write, cache-read) per token at Anthropic list
+    // prices. NOTE: Opus 4.5+ is $5/$25 per Mtok — a 3x cut from Opus 4.1's $15/$75 — so
+    // these Opus rows are intentionally NOT the old $15/$75.
     private static readonly Dictionary<string, ModelPricing> HardcodedPricing = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["haiku-4-5"]  = new(8e-7,  4e-6,   1e-6,    8e-8),
-        ["sonnet-4-6"] = new(3e-6,  1.5e-5, 3.75e-6, 3e-7),
-        ["opus-4-6"]   = new(1.5e-5, 7.5e-5, 1.875e-5, 1.5e-6),
-        ["opus-4-7"]   = new(1.5e-5, 7.5e-5, 1.875e-5, 1.5e-6),
+        ["haiku-4-5"]  = new(1e-6, 5e-6,   1.25e-6, 1e-7),
+        ["sonnet-4-6"] = new(3e-6, 1.5e-5, 3.75e-6, 3e-7),
+        ["opus-4-6"]   = new(5e-6, 2.5e-5, 6.25e-6, 5e-7),
+        ["opus-4-7"]   = new(5e-6, 2.5e-5, 6.25e-6, 5e-7),
+        ["opus-4-8"]   = new(5e-6, 2.5e-5, 6.25e-6, 5e-7),
     };
 
     public override async Task<int> ExecuteAsync(CommandContext context, ClaudeUsageSettings settings)
@@ -35,7 +47,7 @@ public class ClaudeUsageCommand : AsyncCommand<ClaudeUsageSettings>
         if (!Directory.Exists(claudeRoot))
             claudeRoot = Path.Combine(home, ".config", "claude", "projects");
 
-        var jsonlFiles = GetJsonlFiles(claudeRoot, settings.ProjectName).ToList();
+        var jsonlFiles = GetJsonlFiles(claudeRoot, settings.ProjectName, settings.Sessions).ToList();
 
         if (jsonlFiles.Count == 0)
         {
@@ -46,17 +58,57 @@ public class ClaudeUsageCommand : AsyncCommand<ClaudeUsageSettings>
         var liteLLM = await LoadLiteLLMPricingAsync(home);
         var pricingCache = new Dictionary<string, ModelPricing>(StringComparer.OrdinalIgnoreCase);
 
-        List<CostEntry> entries = [];
+        // Incremental parse: session files are append-only, so (size, mtime) is a
+        // reliable cheap change-key. Unchanged files reuse cached token rows instead
+        // of being re-read — turning a multi-GB scan into a few changed files.
+        var cache = LoadCache(home);
+        var fresh = new Dictionary<string, CachedFile>(cache.Files.Count);
+        var allRows = new List<UsageRow>();
+        bool dirty = false;
+        int parsed = 0, reused = 0;
+
         await AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots)
-            .StartAsync($"Parsing {jsonlFiles.Count} session files…", async _ =>
+            .StartAsync($"Scanning {jsonlFiles.Count} session files…", async ctx =>
             {
                 foreach (var file in jsonlFiles)
                 {
-                    try { entries.AddRange(await ParseCostsAsync(file, liteLLM, pricingCache)); }
+                    long size, mtime;
+                    try { var fi = new FileInfo(file); size = fi.Length; mtime = fi.LastWriteTimeUtc.Ticks; }
+                    catch { continue; }
+
+                    if (cache.Files.TryGetValue(file, out var cf) && cf.Size == size && cf.MtimeTicks == mtime)
+                    {
+                        fresh[file] = cf;
+                        allRows.AddRange(cf.Rows);
+                        reused++;
+                        continue;
+                    }
+
+                    try
+                    {
+                        var rows = await ParseUsageRowsAsync(file);
+                        var nf = new CachedFile(size, mtime, rows);
+                        fresh[file] = nf;
+                        allRows.AddRange(rows);
+                        dirty = true;
+                        parsed++;
+                        ctx.Status($"Parsing changed files… ({parsed} new, {reused} cached)");
+                    }
                     catch { }
                 }
             });
+
+        // Persist cache if anything changed (new/modified files) or stale entries were pruned.
+        if (dirty || fresh.Count != cache.Files.Count)
+            SaveCache(home, new CacheManifest(CacheVersion, fresh));
+
+        if (parsed > 0)
+            AnsiConsole.MarkupLine($"[dim]Parsed {parsed} new/changed file(s); reused {reused} from cache.[/]");
+
+        // Global dedup: every persisted content-block row of one API response shares the
+        // server-assigned requestId+message.id, so count each billed request exactly once.
+        var entries = BuildEntries(allRows, liteLLM, pricingCache);
 
         if (entries.Count == 0)
         {
@@ -91,19 +143,36 @@ public class ClaudeUsageCommand : AsyncCommand<ClaudeUsageSettings>
 
     // ── Discovery ─────────────────────────────────────────────────────────────
 
-    private static IEnumerable<string> GetJsonlFiles(string claudeRoot, string? projectName)
+    internal static IEnumerable<string> GetJsonlFiles(string claudeRoot, string? projectName, string[]? sessions = null)
     {
         if (!Directory.Exists(claudeRoot))
             return [];
 
+        IEnumerable<string> files;
         if (projectName is { Length: > 0 })
         {
-            return Directory.GetDirectories(claudeRoot)
+            files = Directory.GetDirectories(claudeRoot)
                 .Where(d => Path.GetFileName(d).Contains(projectName, StringComparison.OrdinalIgnoreCase))
                 .SelectMany(d => Directory.GetFiles(d, "*.jsonl", SearchOption.TopDirectoryOnly));
         }
+        else
+        {
+            files = Directory.GetFiles(claudeRoot, "*.jsonl", SearchOption.AllDirectories);
+        }
 
-        return Directory.GetFiles(claudeRoot, "*.jsonl", SearchOption.AllDirectories);
+        // Explicit session list: keep files whose name (the session id) matches any given id.
+        // Session ids are UUIDs, so a substring/prefix match lets the user pass a short prefix.
+        if (sessions is { Length: > 0 })
+        {
+            files = files.Where(f =>
+            {
+                var stem = Path.GetFileNameWithoutExtension(f);
+                return sessions.Any(s => s is { Length: > 0 }
+                    && stem.Contains(s, StringComparison.OrdinalIgnoreCase));
+            });
+        }
+
+        return files;
     }
 
     // ── Pricing ───────────────────────────────────────────────────────────────
@@ -194,65 +263,141 @@ public class ClaudeUsageCommand : AsyncCommand<ClaudeUsageSettings>
 
     // ── Parsing ───────────────────────────────────────────────────────────────
 
-    private static async Task<List<CostEntry>> ParseCostsAsync(
-        string path, JsonElement? liteLLM, Dictionary<string, ModelPricing> pricingCache)
+    // Parse one session file into billed-request rows. A single API response is written
+    // to the transcript as many rows (one per content block: thinking / text / tool_use),
+    // each repeating that response's requestId, message.id and *cumulative* usage. We fold
+    // those rows here (keep the first per key) so the file contributes one row per real
+    // request; cross-file folding happens later in BuildEntries.
+    internal static async Task<List<UsageRow>> ParseUsageRowsAsync(string path)
     {
-        var entries = new List<CostEntry>();
+        var rows = new List<UsageRow>();
+        var seen = new HashSet<string>();
+        int lineNo = 0;
 
         foreach (var line in await File.ReadAllLinesAsync(path))
         {
+            lineNo++;
             if (string.IsNullOrWhiteSpace(line)) continue;
 
             JsonElement root;
             try { root = JsonSerializer.Deserialize<JsonElement>(line); }
             catch { continue; }
 
-            if (root.TryGetProperty("isApiErrorMessage", out var errProp) && errProp.GetBoolean())
+            if (root.TryGetProperty("isApiErrorMessage", out var errProp) && errProp.ValueKind == JsonValueKind.True)
                 continue;
 
             if (!root.TryGetProperty("timestamp", out var tsProp)) continue;
             if (!DateTime.TryParse(tsProp.GetString(), out var ts)) continue;
             var tsUtc = ts.ToUniversalTime();
 
-            double cost = 0;
+            double direct = 0;
             if (root.TryGetProperty("costUSD", out var costProp) &&
-                costProp.TryGetDouble(out var direct) && direct > 0)
-                cost = direct;
+                costProp.ValueKind == JsonValueKind.Number &&
+                costProp.TryGetDouble(out var d) && d > 0)
+                direct = d;
 
             string model = "unknown";
+            long inp = 0, outp = 0, cc = 0, cr = 0;
+            string mid = "";
             if (root.TryGetProperty("message", out var msgEl))
             {
-                if (msgEl.TryGetProperty("model", out var mEl))
+                if (msgEl.TryGetProperty("model", out var mEl) && mEl.ValueKind == JsonValueKind.String)
                     model = mEl.GetString() ?? "unknown";
-
-                if (cost == 0 && msgEl.TryGetProperty("usage", out var usageEl))
+                if (msgEl.TryGetProperty("id", out var midEl) && midEl.ValueKind == JsonValueKind.String)
+                    mid = midEl.GetString() ?? "";
+                if (msgEl.TryGetProperty("usage", out var usageEl))
                 {
-                    int inp = GetInt(usageEl, "input_tokens");
-                    int outp = GetInt(usageEl, "output_tokens");
-                    int cc = GetInt(usageEl, "cache_creation_input_tokens");
-                    int cr = GetInt(usageEl, "cache_read_input_tokens");
-
-                    if (inp > 0 || outp > 0)
-                    {
-                        var pricing = GetModelPricing(model, liteLLM, pricingCache);
-                        if (pricing != null)
-                            cost = inp * pricing.InputPerToken
-                                 + outp * pricing.OutputPerToken
-                                 + cc * pricing.CacheCreatePerToken
-                                 + cr * pricing.CacheReadPerToken;
-                    }
+                    inp  = GetLong(usageEl, "input_tokens");
+                    outp = GetLong(usageEl, "output_tokens");
+                    cc   = GetLong(usageEl, "cache_creation_input_tokens");
+                    cr   = GetLong(usageEl, "cache_read_input_tokens");
                 }
             }
 
+            // Nothing billable on this row.
+            if (direct <= 0 && inp <= 0 && outp <= 0) continue;
+
+            // requestId is server-assigned, one per billed request; message.id pins the
+            // assistant response. Rows lacking both can't be deduped — keep each (unique key).
+            string rid = root.TryGetProperty("requestId", out var ridEl) && ridEl.ValueKind == JsonValueKind.String
+                ? ridEl.GetString() ?? "" : "";
+            string key = (rid.Length > 0 || mid.Length > 0)
+                ? rid + "|" + mid
+                : "noid|" + lineNo;
+
+            if (!seen.Add(key)) continue;
+            rows.Add(new UsageRow(tsUtc, model, inp, outp, cc, cr, direct, key));
+        }
+
+        return rows;
+    }
+
+    // Fold rows from all files into one cost entry per billed request (global dedup),
+    // pricing each surviving row once.
+    internal static List<CostEntry> BuildEntries(
+        IEnumerable<UsageRow> rows, JsonElement? liteLLM, Dictionary<string, ModelPricing> pricingCache)
+    {
+        var seen = new HashSet<string>();
+        var entries = new List<CostEntry>();
+
+        foreach (var r in rows)
+        {
+            // "noid|" keys are file-local line numbers; keep them all (can't collide safely).
+            if (!r.DedupKey.StartsWith("noid|", StringComparison.Ordinal) && !seen.Add(r.DedupKey))
+                continue;
+
+            double cost = r.Direct;
+            if (cost <= 0)
+            {
+                var pricing = GetModelPricing(r.Model, liteLLM, pricingCache);
+                if (pricing != null)
+                    cost = r.Input  * pricing.InputPerToken
+                         + r.Output * pricing.OutputPerToken
+                         + r.CacheCreate * pricing.CacheCreatePerToken
+                         + r.CacheRead   * pricing.CacheReadPerToken;
+            }
+
             if (cost > 0)
-                entries.Add(new CostEntry(tsUtc, cost, model));
+                entries.Add(new CostEntry(r.Timestamp, cost, r.Model));
         }
 
         return entries;
     }
 
-    private static int GetInt(JsonElement el, string key) =>
-        el.TryGetProperty(key, out var v) ? v.GetInt32() : 0;
+    private static long GetLong(JsonElement el, string key) =>
+        el.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n) ? n : 0;
+
+    // ── Result cache (~/.pks-cli/usage-cache/manifest.json) ─────────────────────
+
+    private static string CacheManifestPath(string home) =>
+        Path.Combine(home, ".pks-cli", "usage-cache", "manifest.json");
+
+    private static CacheManifest LoadCache(string home)
+    {
+        try
+        {
+            var p = CacheManifestPath(home);
+            if (File.Exists(p))
+            {
+                var m = JsonSerializer.Deserialize<CacheManifest>(File.ReadAllText(p));
+                if (m is { Version: CacheVersion, Files: not null })
+                    return m;
+            }
+        }
+        catch { }
+        return new CacheManifest(CacheVersion, new Dictionary<string, CachedFile>());
+    }
+
+    private static void SaveCache(string home, CacheManifest manifest)
+    {
+        try
+        {
+            var p = CacheManifestPath(home);
+            Directory.CreateDirectory(Path.GetDirectoryName(p)!);
+            File.WriteAllText(p, JsonSerializer.Serialize(manifest));
+        }
+        catch { }
+    }
 
     // ── Hourly chart ──────────────────────────────────────────────────────────
 
@@ -609,16 +754,37 @@ public class ClaudeUsageCommand : AsyncCommand<ClaudeUsageSettings>
 
     // ── Records ───────────────────────────────────────────────────────────────
 
-    private record ModelPricing(
+    internal record ModelPricing(
         double InputPerToken,
         double OutputPerToken,
         double CacheCreatePerToken,
         double CacheReadPerToken);
 
-    private record CostEntry(DateTime Timestamp, double Cost, string Model)
+    internal record CostEntry(DateTime Timestamp, double Cost, string Model)
     {
         public DateTime Date => Timestamp.Date;
     }
+
+    // One billed request, after per-file folding. Token counts are stored (not cost) so the
+    // cache survives pricing changes — cost is recomputed each run, which is cheap.
+    internal record UsageRow(
+        [property: JsonPropertyName("t")] DateTime Timestamp,
+        [property: JsonPropertyName("m")] string Model,
+        [property: JsonPropertyName("i")] long Input,
+        [property: JsonPropertyName("o")] long Output,
+        [property: JsonPropertyName("c")] long CacheCreate,
+        [property: JsonPropertyName("r")] long CacheRead,
+        [property: JsonPropertyName("d")] double Direct,
+        [property: JsonPropertyName("k")] string DedupKey);
+
+    private record CachedFile(
+        [property: JsonPropertyName("s")]  long Size,
+        [property: JsonPropertyName("mt")] long MtimeTicks,
+        [property: JsonPropertyName("rows")] List<UsageRow> Rows);
+
+    private record CacheManifest(
+        [property: JsonPropertyName("v")] int Version,
+        [property: JsonPropertyName("files")] Dictionary<string, CachedFile> Files);
 
     private record DailyCost(DateTime Date, double Cost);
 
