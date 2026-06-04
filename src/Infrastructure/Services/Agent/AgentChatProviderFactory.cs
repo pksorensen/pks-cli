@@ -93,11 +93,37 @@ public sealed class AgentChatProviderFactory
         {
             throw new InvalidOperationException($"Unknown model '{modelId}'. Configure agent.models.{modelId}.provider in ~/.pks-cli/settings.json.");
         }
+
+        var resolvedProvider = provider ?? defaults!.Provider;
+        var endpoint = (await _config.GetAsync($"agent.models.{modelId}.endpoint")) ?? defaults?.Endpoint;
+        var deployment = (await _config.GetAsync($"agent.models.{modelId}.deployment")) ?? defaults?.Deployment;
+        var apiKey = (await _config.GetAsync($"agent.models.{modelId}.apiKey")) ?? defaults?.ApiKey;
+
+        // Foundry fallback: an azure-openai model with no explicitly configured
+        // endpoint resolves to the Foundry-selected resource from `pks foundry init`
+        // (the same credentials the codex proxy and image generator use). This lets
+        // `pks agent --model gpt-5.5` work out of the box for any logged-in Foundry
+        // user — no manual agent.models.* endpoint wiring required. An explicit
+        // settings.json endpoint always wins.
+        if (string.Equals(resolvedProvider, "azure-openai", StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(endpoint)
+            && _foundryAuth is not null)
+        {
+            var creds = await _foundryAuth.GetStoredCredentialsAsync();
+            if (creds is not null && !string.IsNullOrWhiteSpace(creds.SelectedResourceEndpoint))
+            {
+                endpoint = creds.SelectedResourceEndpoint;
+                // Prefer a stored Foundry API key; otherwise BuildAzureOpenAI falls
+                // back to the FoundryTokenCredential bearer flow.
+                apiKey ??= creds.ApiKey;
+            }
+        }
+
         return new ModelEntry(
-            Provider: provider ?? defaults!.Provider,
-            Endpoint: (await _config.GetAsync($"agent.models.{modelId}.endpoint")) ?? defaults?.Endpoint,
-            Deployment: (await _config.GetAsync($"agent.models.{modelId}.deployment")) ?? defaults?.Deployment,
-            ApiKey: (await _config.GetAsync($"agent.models.{modelId}.apiKey")) ?? defaults?.ApiKey);
+            Provider: resolvedProvider,
+            Endpoint: endpoint,
+            Deployment: deployment,
+            ApiKey: apiKey);
     }
 
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
