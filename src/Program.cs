@@ -113,6 +113,14 @@ var isPipeablePersona = commandArgs.Length >= 3
         || (commandArgs[2].Equals("lint", StringComparison.OrdinalIgnoreCase) && commandArgs.Contains("--json")));
 if (isPipeablePersona) noLogo = true;
 
+// `pks ssh run/copy` stream remote stdout/stderr and forward stdin (tar|ssh-style) — the banner
+// would corrupt piped data, so suppress it like the other pipeable commands.
+var isPipeableSsh = commandArgs.Length >= 3
+    && commandArgs[1].Equals("ssh", StringComparison.OrdinalIgnoreCase)
+    && (commandArgs[2].Equals("run", StringComparison.OrdinalIgnoreCase)
+        || commandArgs[2].Equals("copy", StringComparison.OrdinalIgnoreCase));
+if (isPipeableSsh) noLogo = true;
+
 // Enable debug output when --debug flag is passed
 if (commandArgs.Any(a => a.Equals("--debug", StringComparison.OrdinalIgnoreCase)))
     Environment.SetEnvironmentVariable("PKS_DEBUG", "1");
@@ -154,6 +162,7 @@ services.AddSingleton<IDeploymentService, DeploymentService>();
 services.AddSingleton<IHooksService, HooksService>();
 services.AddSingleton<IFirstTimeWarningService, FirstTimeWarningService>();
 services.AddSingleton<PKS.Infrastructure.Services.ISshTargetConfigurationService, PKS.Infrastructure.Services.SshTargetConfigurationService>();
+services.AddSingleton<PKS.Infrastructure.Services.ISshKeyStore, PKS.Infrastructure.Services.SshKeyStore>();
 services.AddSingleton<PKS.Infrastructure.Services.ISshCommandRunner, PKS.Infrastructure.Services.SshCommandRunner>();
 services.AddSingleton<PKS.Infrastructure.Services.IRsyncTargetConfigurationService, PKS.Infrastructure.Services.RsyncTargetConfigurationService>();
 
@@ -758,6 +767,31 @@ app.Configure(config =>
         ssh.AddCommand<PKS.Commands.Ssh.SshConnectCommand>("connect")
             .WithDescription("Open an interactive SSH session to a registered target")
             .WithExample(new[] { "ssh", "connect", "pks-vm-2e93" });
+
+        ssh.AddCommand<PKS.Commands.Ssh.SshRunCommand>("run")
+            .WithDescription("Run a command on a target (non-interactive; forwards stdin, e.g. tar|ssh)")
+            .WithExample(new[] { "ssh", "run", "hetzner", "--", "uname -a" });
+
+        ssh.AddCommand<PKS.Commands.Ssh.SshCopyCommand>("copy")
+            .WithDescription("Copy files to/from a target via scp")
+            .WithExample(new[] { "ssh", "copy", "./build.tar", "hetzner:~/build.tar" });
+
+        ssh.AddBranch<PKS.Commands.Ssh.SshSettings>("key", key =>
+        {
+            key.SetDescription("Manage pks-held SSH keys (gated; agent can't use them silently)");
+
+            key.AddCommand<PKS.Commands.Ssh.SshKeyImportCommand>("import")
+                .WithDescription("Import an SSH private key into the pks-held store")
+                .WithExample(new[] { "ssh", "key", "import", "--label", "hetzner", "--register", "root@1.2.3.4" });
+
+            key.AddCommand<PKS.Commands.Ssh.SshKeyListCommand>("list")
+                .WithDescription("List pks-held SSH keys")
+                .WithExample(new[] { "ssh", "key", "list" });
+
+            key.AddCommand<PKS.Commands.Ssh.SshKeyRemoveCommand>("remove")
+                .WithDescription("Remove a pks-held SSH key")
+                .WithExample(new[] { "ssh", "key", "remove", "hetzner" });
+        });
     });
 
     config.AddBranch("vibecast", vibecast =>
