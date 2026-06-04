@@ -49,6 +49,33 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.15.0](https://github.com/pksorensen/pks-cli/compare/v6.14.0...v6.15.0) (2026-06-03)
+
+
+### Features
+
+* **agent:** port multi-provider coding-agent loop with file-system tools ([f0c211e](https://github.com/pksorensen/pks-cli/commit/f0c211e144d932e46508c8a613f365ba4059ae1c))
+* **brain:** wire commit-planner to firehose graph ([df5fd71](https://github.com/pksorensen/pks-cli/commit/df5fd718f8140675900a9196cd0da8a97d216276))
+* **claude:** add `pks claude codex` — run Claude Code on Foundry Codex/GPT-5.x ([b2684a4](https://github.com/pksorensen/pks-cli/commit/b2684a4eb7bfe8ad6038d279822a78a645ec62ae))
+* **claude:** run Claude Code on Scaleway/Mistral/Qwen via translating proxy ([7da571b](https://github.com/pksorensen/pks-cli/commit/7da571bb7c7d12032bd2f1bd69a999d9277a5794))
+* **image:** add Azure Foundry provider, route by --model ([13cdc2a](https://github.com/pksorensen/pks-cli/commit/13cdc2ada3b53992ae9675a7f3618d25f010b522))
+* **persona:** add reader-persona rubric scoring with per-model sidecars ([e7a9a1e](https://github.com/pksorensen/pks-cli/commit/e7a9a1e61a31f54c89dd18e85e13f3fd4d22db4f))
+* **security:** two-factor consent gate for billable cloud actions ([eb32d74](https://github.com/pksorensen/pks-cli/commit/eb32d74b46cb10d2da12b4e6f02a52c537a97191))
+* **vm:** add Scaleway GPU provider and cloud-agnostic VM abstraction ([85fa4ac](https://github.com/pksorensen/pks-cli/commit/85fa4ac625b69b6e17ff946c16b4cbf965e72d44))
+* **vm:** add Tailscale integration to join VMs to your tailnet ([60a548f](https://github.com/pksorensen/pks-cli/commit/60a548fcdc2f7ed3ed5f8a4b3e3d083b3c6fde6d))
+* **voice:** SSML neural-voice TTS + audio-reactive video + transcribe command ([c45ab3f](https://github.com/pksorensen/pks-cli/commit/c45ab3fc58ceec6c8b8eab03b3a448ce49ccbc4f))
+* **writing:** add calques (loan-translation) profile dimension ([7481c1c](https://github.com/pksorensen/pks-cli/commit/7481c1cfd2299452926efd745268049ffcba6930))
+* **writing:** add naturalness review loop with learning patterns store ([f37d150](https://github.com/pksorensen/pks-cli/commit/f37d15054f7b565528ab08449b73808c1bfd4122))
+* **writing:** multi-critic naturalness review with per-critic sidecars and merge ([460cd45](https://github.com/pksorensen/pks-cli/commit/460cd459946d54939e944c9ba7da94d891c5d915))
+
+
+### Bug Fixes
+
+* **claude:** dedup usage cost by request and message id ([d8bba3d](https://github.com/pksorensen/pks-cli/commit/d8bba3d2d7abe6b028bf4f8226cbbad0296059fd))
+* **foundry:** share access token across processes to survive parallel batches ([a8ba053](https://github.com/pksorensen/pks-cli/commit/a8ba0531b69cbd80ad3d90a47ab0133977138e47))
+* **persona:** require rationale explicitly in the scoring prompt ([02ff44a](https://github.com/pksorensen/pks-cli/commit/02ff44a077be9e1ebca754f237ecdee8f9778855))
+* **writing:** merge naturalness candidates by line, reconciling originals ([d1c6778](https://github.com/pksorensen/pks-cli/commit/d1c67781e5bb6532ad30ade711880975c70c3952))
+
 ## [6.14.0](https://github.com/pksorensen/pks-cli/compare/v6.13.0...v6.14.0) (2026-05-25)
 
 
