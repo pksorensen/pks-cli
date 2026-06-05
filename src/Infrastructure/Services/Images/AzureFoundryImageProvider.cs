@@ -74,7 +74,10 @@ public class AzureFoundryImageProvider : IImageProvider
         var endpoint = creds.SelectedResourceEndpoint.TrimEnd('/');
         var isEdit = !string.IsNullOrEmpty(request.InputImagePath);
         var path = isEdit ? "images/edits" : "images/generations";
-        var url = $"{endpoint}/openai/deployments/{request.Model}/{path}?api-version={ApiVersion}";
+        // gpt-image-* edits (images/edits) require the 2025 preview api-version;
+        // the older default still serves generations. Use the right one per route.
+        var apiVersion = isEdit ? "2025-04-01-preview" : ApiVersion;
+        var url = $"{endpoint}/openai/deployments/{request.Model}/{path}?api-version={apiVersion}";
 
         using var req = new HttpRequestMessage(HttpMethod.Post, url);
 
