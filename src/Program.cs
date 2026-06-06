@@ -918,6 +918,26 @@ app.Configure(config =>
             .WithExample(new[] { "foundry", "usage" });
     });
 
+    // Add Codex branch command — run the real codex CLI against Foundry (native, no translation).
+    // Typed with the default command's settings so `pks codex -m ... --print-env` binds its options
+    // (a branch typed with the base CommandSettings would not parse the default command's options).
+    config.AddBranch<PKS.Commands.Codex.CodexSettings>("codex", codex =>
+    {
+        codex.SetDescription("Run the real Codex CLI against Azure AI Foundry (native Responses, no translation)");
+        codex.SetDefaultCommand<PKS.Commands.Codex.CodexCommand>();
+
+        codex.AddCommand<PKS.Commands.Codex.CodexCommand>("run")
+            .WithDescription("Launch codex against Foundry (use this form to pass -m/-e/--print-env)")
+            .WithExample(["codex", "run"])
+            .WithExample(["codex", "run", "--model", "gpt-5-codex", "--reasoning-effort", "high"])
+            .WithExample(["codex", "run", "--print-env"]);
+
+        codex.AddCommand<PKS.Commands.Codex.CodexInitCommand>("init")
+            .WithDescription("Set up ~/.codex/config.toml to run codex against Azure AI Foundry")
+            .WithExample(["codex", "init"])
+            .WithExample(["codex", "init", "--model", "gpt-5-codex"]);
+    });
+
     // Add Azure branch command
     config.AddBranch<PKS.Commands.Azure.AzureSettings>("azure", azure =>
     {

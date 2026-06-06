@@ -14,6 +14,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Agent.Anthropic;
+using PKS.Infrastructure.Services.Agent.Foundry;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -98,7 +99,7 @@ public sealed class ClaudeCodexCommand : AsyncCommand<ClaudeCodexCommand.Setting
             ?? (LooksLikeCodex(creds.DefaultModel) ? creds.DefaultModel : null)
             ?? "gpt-5.5";
 
-        var responsesUrl = BuildResponsesUrl(creds.SelectedResourceEndpoint);
+        var responsesUrl = FoundryResponsesEndpoint.BuildResponsesUrl(creds.SelectedResourceEndpoint);
         var port = settings.Port ?? AnthropicProxyUtil.FindFreePort();
         var proxyToken = Guid.NewGuid().ToString("N");
         var emitThinking = !settings.NoThinking;
@@ -141,7 +142,7 @@ public sealed class ClaudeCodexCommand : AsyncCommand<ClaudeCodexCommand.Setting
             {
                 Content = new StringContent(responsesBody.ToJsonString(), Encoding.UTF8, "application/json"),
             };
-            await ApplyUpstreamAuthAsync(upstreamReq, creds, ctx.RequestAborted);
+            await FoundryResponsesEndpoint.ApplyUpstreamAuthAsync(upstreamReq, creds, _authService, _config.CognitiveScope, ctx.RequestAborted);
 
             var client = httpClientFactory.CreateClient("codex-upstream");
             using var upstream = await client.SendAsync(
@@ -232,7 +233,7 @@ public sealed class ClaudeCodexCommand : AsyncCommand<ClaudeCodexCommand.Setting
             {
                 Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"),
             };
-            await ApplyUpstreamAuthAsync(req, creds, default);
+            await FoundryResponsesEndpoint.ApplyUpstreamAuthAsync(req, creds, _authService, _config.CognitiveScope, default);
 
             var client = factory.CreateClient("codex-upstream");
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
@@ -289,31 +290,4 @@ public sealed class ClaudeCodexCommand : AsyncCommand<ClaudeCodexCommand.Setting
         }
     }
 
-    private async Task ApplyUpstreamAuthAsync(HttpRequestMessage req, FoundryStoredCredentials creds, CancellationToken ct)
-    {
-        // Codex deployments authenticate with an api-key (Entra ID is not supported for Codex);
-        // fall back to a bearer token for plain GPT-5 deployments.
-        if (!string.IsNullOrEmpty(creds.ApiKey))
-        {
-            req.Headers.TryAddWithoutValidation("api-key", creds.ApiKey);
-            return;
-        }
-
-        var token = await _authService.GetAccessTokenAsync(_config.CognitiveScope, ct);
-        if (!string.IsNullOrEmpty(token))
-        {
-            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        }
-    }
-
-    private static string BuildResponsesUrl(string endpoint)
-    {
-        var baseUrl = endpoint.TrimEnd('/');
-        // Normalise to the v1 Responses path regardless of how the endpoint was stored.
-        if (baseUrl.EndsWith("/openai/v1", StringComparison.OrdinalIgnoreCase))
-            return baseUrl + "/responses";
-        if (baseUrl.EndsWith("/openai", StringComparison.OrdinalIgnoreCase))
-            return baseUrl + "/v1/responses";
-        return baseUrl + "/openai/v1/responses";
-    }
 }
