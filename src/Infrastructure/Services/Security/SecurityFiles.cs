@@ -14,6 +14,13 @@ internal static class SecurityFiles
         try { File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite); } catch { /* best effort */ }
     }
 
+    /// <summary>Restrict a directory to owner read/write/execute (0700). Best-effort; no-op on Windows.</summary>
+    public static void RestrictDir(string dir)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        try { File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute); } catch { /* best effort */ }
+    }
+
     public static void EnsureDirectory(string path)
     {
         var dir = Path.GetDirectoryName(path);

@@ -14,6 +14,7 @@ public class SshConnectCommand : Command<SshConnectCommand.Settings>
     private readonly IAzureVmMetadataService _vmMetadata;
     private readonly IAzureAuthService _azureAuth;
     private readonly IAzureVmService _vmService;
+    private readonly ISshKeyStore _keyStore;
     private readonly IActionGuard _guard;
     private readonly IAnsiConsole _console;
 
@@ -22,6 +23,7 @@ public class SshConnectCommand : Command<SshConnectCommand.Settings>
         IAzureVmMetadataService vmMetadata,
         IAzureAuthService azureAuth,
         IAzureVmService vmService,
+        ISshKeyStore keyStore,
         IActionGuard guard,
         IAnsiConsole console)
     {
@@ -29,6 +31,7 @@ public class SshConnectCommand : Command<SshConnectCommand.Settings>
         _vmMetadata = vmMetadata;
         _azureAuth = azureAuth;
         _vmService = vmService;
+        _keyStore = keyStore;
         _guard = guard;
         _console = console;
     }
@@ -92,28 +95,65 @@ public class SshConnectCommand : Command<SshConnectCommand.Settings>
         if (!await EnsureVmRunningAsync(target))
             return 1;
 
-        var args = $"-o StrictHostKeyChecking=no -p {target.Port}";
-        if (!string.IsNullOrEmpty(target.KeyPath))
-            args += $" -i \"{target.KeyPath}\"";
-        args += $" {target.Username}@{target.Host}";
-
-        _console.MarkupLine($"[dim]Connecting to {Markup.Escape(target.Username)}@{Markup.Escape(target.Host)}...[/]");
-
-        var psi = new ProcessStartInfo("ssh")
+        // Gate every outbound SSH connection. This is the choke-point that stops an agent from
+        // silently SSHing out — opening a session requires the operator's second factor (once enrolled).
+        try
         {
-            Arguments = args,
-            UseShellExecute = false
-        };
-
-        using var proc = Process.Start(psi);
-        if (proc == null)
+            await _guard.RequireAsync(new ActionRequest(ActionIds.SshConnect,
+                $"Open SSH session to {target.Username}@{target.Host}:{target.Port}"));
+        }
+        catch (ActionGuardDeniedException ex)
         {
-            _console.MarkupLine("[red]Failed to start ssh process.[/]");
+            _console.MarkupLine($"[red]Connection denied:[/] {Markup.Escape(ex.Message)}");
             return 1;
         }
 
-        proc.WaitForExit();
-        return proc.ExitCode;
+        // For pks-held keys, decrypt to a short-lived 0600 temp that's shredded when the session ends.
+        MaterializedKey? materialized = null;
+        try
+        {
+            var keyPath = target.KeyPath;
+            if (!string.IsNullOrEmpty(target.ManagedKeyId))
+            {
+                try
+                {
+                    materialized = await _keyStore.MaterializeAsync(target.ManagedKeyId);
+                    keyPath = materialized.Path;
+                }
+                catch (Exception ex)
+                {
+                    _console.MarkupLine($"[red]Could not access pks-held key:[/] {Markup.Escape(ex.Message)}");
+                    return 1;
+                }
+            }
+
+            var args = $"-o StrictHostKeyChecking=no -p {target.Port}";
+            if (!string.IsNullOrEmpty(keyPath))
+                args += $" -o IdentitiesOnly=yes -i \"{keyPath}\"";
+            args += $" {target.Username}@{target.Host}";
+
+            _console.MarkupLine($"[dim]Connecting to {Markup.Escape(target.Username)}@{Markup.Escape(target.Host)}...[/]");
+
+            var psi = new ProcessStartInfo("ssh")
+            {
+                Arguments = args,
+                UseShellExecute = false
+            };
+
+            using var proc = Process.Start(psi);
+            if (proc == null)
+            {
+                _console.MarkupLine("[red]Failed to start ssh process.[/]");
+                return 1;
+            }
+
+            proc.WaitForExit();
+            return proc.ExitCode;
+        }
+        finally
+        {
+            materialized?.Dispose();
+        }
     }
 
     private async Task<bool> EnsureVmRunningAsync(SshTarget target)

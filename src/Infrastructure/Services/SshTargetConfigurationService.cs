@@ -10,6 +10,9 @@ public class SshTarget
     public int Port { get; set; } = 22;
     public string KeyPath { get; set; } = "";
     public string? Label { get; set; }
+    /// <summary>When set, the private key is held by pks (see <c>ISshKeyStore</c>) rather than at <see cref="KeyPath"/>.
+    /// pks materializes it to a short-lived 0600 temp at connect time.</summary>
+    public string? ManagedKeyId { get; set; }
     public DateTime RegisteredAt { get; set; } = DateTime.UtcNow;
 }
 
@@ -23,7 +26,7 @@ public interface ISshTargetConfigurationService
 {
     Task<SshTargetConfiguration> LoadAsync();
     Task SaveAsync(SshTargetConfiguration config);
-    Task<SshTarget> AddTargetAsync(string host, string username, int port, string keyPath, string? label);
+    Task<SshTarget> AddTargetAsync(string host, string username, int port, string keyPath, string? label, string? managedKeyId = null);
     Task RemoveTargetAsync(string id);
     Task<List<SshTarget>> ListTargetsAsync();
     Task<SshTarget?> FindTargetAsync(string hostOrLabel);
@@ -86,7 +89,7 @@ public class SshTargetConfigurationService : ISshTargetConfigurationService
         }
     }
 
-    public async Task<SshTarget> AddTargetAsync(string host, string username, int port, string keyPath, string? label)
+    public async Task<SshTarget> AddTargetAsync(string host, string username, int port, string keyPath, string? label, string? managedKeyId = null)
     {
         var config = await LoadAsync();
 
@@ -102,7 +105,8 @@ public class SshTargetConfigurationService : ISshTargetConfigurationService
             Username = username,
             Port = port,
             KeyPath = keyPath,
-            Label = label
+            Label = label,
+            ManagedKeyId = managedKeyId
         };
         config.Targets.Add(target);
         await SaveAsync(config);
