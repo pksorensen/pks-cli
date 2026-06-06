@@ -1058,6 +1058,22 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             workspaceFolderInContainer: workspaceFolder,
             ct);
 
+        // 6c. Materialize the line's static .agentics/specs/ contracts into the worktree so
+        //     station prompts can `Read .agentics/specs/<contract>.md`. These files are part of
+        //     the line definition, not authored by any worker — without this they never exist in
+        //     the container and the station degrades to guessing the schema.
+        if (job.AgentDef?.AgenticsSpecFiles is { Count: > 0 } specFiles)
+        {
+            foreach (var (relPath, content) in specFiles)
+            {
+                // Guard against path traversal — relPath is a trusted server value but keep it scoped.
+                var safeRel = relPath.Replace("\\", "/").TrimStart('/');
+                if (safeRel.Contains("..")) continue;
+                await WriteContainerFileAsync($"{workspaceFolder}/{safeRel}", content);
+            }
+            _console.MarkupLine($"  [green]✓[/] materialized {specFiles.Count} spec file(s) → {workspaceFolder}/.agentics/specs/");
+        }
+
         // 7. Build and write a launch script into the container to avoid shell quoting issues
         var vibecastTmux = $"vibecast-{job.Id[..8]}";
         var defaultAppendPrompt = "When you have completed the assigned task, use the stop_broadcast MCP tool " +
@@ -1292,6 +1308,16 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         {
             scriptLines.AppendLine("export VIBECAST_AUTO_APPROVE_IMAGES=1");
         }
+
+        // Operator: per-station capability config (model / effort). The runner only passes the
+        // resolved values through; vibecast owns the mapping to `claude --model`/`--effort`,
+        // including the specific-model → tier fallback. See vibecast internal/stream/stream.go.
+        if (!string.IsNullOrWhiteSpace(job.AgentDef?.OperatorConfig?.Model))
+            scriptLines.AppendLine($"export VIBECAST_CLAUDE_MODEL='{job.AgentDef!.OperatorConfig!.Model}'");
+        if (!string.IsNullOrWhiteSpace(job.AgentDef?.OperatorConfig?.ModelTier))
+            scriptLines.AppendLine($"export VIBECAST_CLAUDE_MODEL_TIER='{job.AgentDef!.OperatorConfig!.ModelTier}'");
+        if (!string.IsNullOrWhiteSpace(job.AgentDef?.OperatorConfig?.Effort))
+            scriptLines.AppendLine($"export VIBECAST_CLAUDE_EFFORT='{job.AgentDef!.OperatorConfig!.Effort}'");
 
         if (!string.IsNullOrEmpty(job.AgentDef?.BroadcastId))
         {
@@ -2708,6 +2734,21 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                 workspaceFolderInContainer: null,
                 ct);
 
+            // 2d. Materialize the line's static .agentics/specs/ contracts into the worktree so
+            //     station prompts can `Read .agentics/specs/<contract>.md` (see devcontainer path 6c).
+            if (job.AgentDef?.AgenticsSpecFiles is { Count: > 0 } specFilesInProc)
+            {
+                foreach (var (relPath, content) in specFilesInProc)
+                {
+                    var safeRel = relPath.Replace("\\", "/").TrimStart('/');
+                    if (safeRel.Contains("..")) continue;
+                    var dest = Path.Combine(jobWorkTree!, safeRel.Replace('/', Path.DirectorySeparatorChar));
+                    Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                    await File.WriteAllTextAsync(dest, content, ct);
+                }
+                _console.MarkupLine($"  [green]✓[/] materialized {specFilesInProc.Count} spec file(s) → {jobWorkTree}/.agentics/specs/");
+            }
+
             // 3. PATCH to in_progress
             _console.MarkupLine($"[cyan]InProcess: executing job {job.Id} in {jobWorkTree}...[/]");
             var patchInProgress = new HttpRequestMessage(HttpMethod.Patch, $"{baseUrl}/runs/{runId}/jobs/{job.Id}");
@@ -2978,6 +3019,18 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
                 ? ""
                 : " CLAUDE_CODE_DISABLE_1M_CONTEXT=1";
 
+            // Operator: per-station model/effort. Passed through verbatim; vibecast maps to
+            // `claude --model`/`--effort` and resolves the specific-model → tier fallback.
+            var modelEnv = !string.IsNullOrWhiteSpace(job.AgentDef?.OperatorConfig?.Model)
+                ? $" VIBECAST_CLAUDE_MODEL='{job.AgentDef!.OperatorConfig!.Model}'"
+                : "";
+            var modelTierEnv = !string.IsNullOrWhiteSpace(job.AgentDef?.OperatorConfig?.ModelTier)
+                ? $" VIBECAST_CLAUDE_MODEL_TIER='{job.AgentDef!.OperatorConfig!.ModelTier}'"
+                : "";
+            var effortEnv = !string.IsNullOrWhiteSpace(job.AgentDef?.OperatorConfig?.Effort)
+                ? $" VIBECAST_CLAUDE_EFFORT='{job.AgentDef!.OperatorConfig!.Effort}'"
+                : "";
+
             // SubagentStart hook: inject additionalContext into every spawned subagent
             var subagentSuffixEnv = "";
             if (!string.IsNullOrWhiteSpace(job.AgentDef?.SubagentPromptAppendix))
@@ -3047,7 +3100,7 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             // The log is captured on timeout and included in the job PATCH logs field.
             var vibecastLogRedirect = $" > \"{vibecastLogFile}\" 2>&1";
 
-            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv}{autoApproveEnv}{disableBackgroundTasksEnv}{disable1mContextEnv}{subagentSuffixEnv}{broadcastIdEnv}{allowedDirsEnv}{claudeConfigDirEnv}{otelEnv}{agenticsProxyEnv} {vibecastBin}{vibecastLogRedirect}");
+            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv}{autoApproveEnv}{disableBackgroundTasksEnv}{disable1mContextEnv}{modelEnv}{modelTierEnv}{effortEnv}{subagentSuffixEnv}{broadcastIdEnv}{allowedDirsEnv}{claudeConfigDirEnv}{otelEnv}{agenticsProxyEnv} {vibecastBin}{vibecastLogRedirect}");
 
             var startProc = Process.Start(startPsi);
             if (startProc != null)
@@ -4809,6 +4862,11 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         public RunnerRuntimeResources? RuntimeResources { get; set; }
         /// <summary>User-uploaded task assets — runner downloads each into {workspace}/.agentics/assets/{fileName}.</summary>
         public List<TaskAssetDef>? TaskAssets { get; set; }
+        /// <summary>Static control-plane files from the line's `.agentics/specs/` directory, keyed by
+        /// workspace-relative path (e.g. ".agentics/specs/findings-schema.md"). Runner writes each into
+        /// {workspace}/{path} before the station starts, so station prompts can Read the static contracts
+        /// the workers never author themselves.</summary>
+        public Dictionary<string, string>? AgenticsSpecFiles { get; set; }
         /// <summary>Job type — defaults to alp_operator. Use git_push for runner-proxied git push operations,
         /// or git_distribute for source-code mirroring with an allowlist filter.</summary>
         public string? JobType { get; set; }
@@ -4869,6 +4927,17 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         /// from Claude's model picker.
         /// </summary>
         public bool Enable1mContext { get; set; }
+        /// <summary>Model family tier (haiku|sonnet|opus), resolved server-side
+        /// (station ?? line default). Exported as VIBECAST_CLAUDE_MODEL_TIER; vibecast maps
+        /// it to `claude --model &lt;alias&gt;`.</summary>
+        public string? ModelTier { get; set; }
+        /// <summary>Exact model id/alias (station only), overriding ModelTier. Exported as
+        /// VIBECAST_CLAUDE_MODEL; vibecast honors it when the provider supports it.</summary>
+        public string? Model { get; set; }
+        /// <summary>Effort level (low|medium|high|xhigh|max), resolved server-side
+        /// (station ?? line default). Exported as VIBECAST_CLAUDE_EFFORT; vibecast maps it to
+        /// `claude --effort &lt;level&gt;`.</summary>
+        public string? Effort { get; set; }
     }
 
     private class PluginRef
