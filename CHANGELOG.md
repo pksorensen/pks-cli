@@ -49,6 +49,22 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.16.0](https://github.com/pksorensen/pks-cli/compare/v6.15.0...v6.16.0) (2026-06-06)
+
+
+### Features
+
+* **codex:** run native Codex CLI against Azure AI Foundry ([e114913](https://github.com/pksorensen/pks-cli/commit/e114913683c5511ec798eed13b631681e389862f))
+* **runner:** materialize .agentics/specs files into station worktrees ([0f53d34](https://github.com/pksorensen/pks-cli/commit/0f53d34600989786709e88bd3624453a80d477f3))
+* **ssh:** add 'pks ssh run' (non-interactive, stdin-forwarding) and 'pks ssh copy' ([a3cf946](https://github.com/pksorensen/pks-cli/commit/a3cf9464b4714d4ec34e373c86d3fff2106831fb))
+* **ssh:** pks-held SSH key with 2FA-gated connect ([2230911](https://github.com/pksorensen/pks-cli/commit/223091140f2241956c3dfc2e7d22df3850081297))
+
+
+### Bug Fixes
+
+* **agent:** resolve azure-openai endpoint from Foundry creds ([e3ccf70](https://github.com/pksorensen/pks-cli/commit/e3ccf705fb9f23ef4537c060c4f56f55f86c1421))
+* **image:** use 2025 preview api-version for gpt-image edits ([3144248](https://github.com/pksorensen/pks-cli/commit/314424816c60c408352b34a5c87d173a238b3a29))
+
 ## [6.15.0](https://github.com/pksorensen/pks-cli/compare/v6.14.0...v6.15.0) (2026-06-03)
 
 
