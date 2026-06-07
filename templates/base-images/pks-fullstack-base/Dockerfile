@@ -96,7 +96,9 @@ RUN apt update && apt install -y libsecret-1-0
 
 # Install tmux for Claude Code agent team split-pane mode
 # Install libnss3-tools for dotnet dev-certs trust (certutil needed for browser/Playwright cert trust)
-RUN apt-get update && apt-get install -y --no-install-recommends tmux libnss3-tools && \
+# Install osslsigncode so the sign-windows action can sign MSIX/EXE/MSI on a
+# self-hosted runner (job user is non-root with no apt sudo — bake it in here).
+RUN apt-get update && apt-get install -y --no-install-recommends tmux libnss3-tools osslsigncode && \
   rm -rf /var/lib/apt/lists/*
 
 # Install ttyd for web-based terminal access (useful with tmux for split-pane viewing)

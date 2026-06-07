@@ -69,9 +69,20 @@ runs:
         fi
 
         # Ensure osslsigncode is available (cross-platform Authenticode/MSIX signer).
+        # Prefer a pre-baked binary (pks-fullstack-base ships it); only attempt an
+        # install if we have non-interactive root, and fail with a clear hint
+        # otherwise — most self-hosted job containers run as a non-root user with
+        # no apt sudo, so a runtime install can't work there.
         if ! command -v osslsigncode >/dev/null 2>&1; then
-          echo "Installing osslsigncode..."
-          sudo apt-get update -y && sudo apt-get install -y osslsigncode
+          if [ "$(id -u)" = "0" ]; then
+            apt-get update -y && apt-get install -y osslsigncode
+          elif sudo -n true 2>/dev/null; then
+            sudo apt-get update -y && sudo apt-get install -y osslsigncode
+          else
+            echo "::error::osslsigncode is not installed and this runner can't install it (non-root, no passwordless sudo)."
+            echo "Hint: bake osslsigncode into the runner image (it ships in pks-fullstack-base; rebuild the runner devcontainer)."
+            exit 1
+          fi
         fi
 
         # Fetch a short-lived materialized PFX from the host's pks cert store.
