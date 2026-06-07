@@ -842,6 +842,14 @@ app.Configure(config =>
         agent.SetDescription("Manage AI agents — default runs the agent; `register` makes this session shareable");
         // Preserve the existing `pks agent …` runner as the default command.
         agent.SetDefaultCommand<PKS.Commands.Agent.AgentCommand>();
+        // Explicit `run` leaf so a positional [prompt] binds reliably. Spectre 0.47 can't
+        // bind a positional argument on a branch's DEFAULT command — it parses the first
+        // non-option token as a subcommand name (→ "Unknown command 'my prompt'"). The argv
+        // shim near app.RunAsync rewrites `agent <prompt>` → `agent run <prompt>` so the
+        // canonical `pks agent "…"` UX keeps working.
+        agent.AddCommand<PKS.Commands.Agent.AgentCommand>("run")
+            .WithDescription("Run the one-shot LLM agent on a prompt")
+            .WithExample(new[] { "agent", "run", "\"summarise this repo\"" });
         agent.AddCommand<PKS.Commands.Agent.AgentRegisterCommand>("register")
             .WithDescription("Register this session as a shareable agent (appears in the Share panel)")
             .WithExample(new[] { "agent", "register" });
@@ -1697,6 +1705,25 @@ var filteredArgs = args
     .Where(a => !a.Equals("--no-logo", StringComparison.OrdinalIgnoreCase)
              && !a.Equals("--debug", StringComparison.OrdinalIgnoreCase))
     .ToArray();
+
+// `agent` is a Spectre branch (for `agent register`), and Spectre 0.47 can't bind a
+// positional [prompt] on a branch's default command — `pks agent "my prompt"` would be
+// read as an unknown subcommand. Rewrite `agent <anything-but-a-known-subcommand>` →
+// `agent run <…>` so the canonical `pks agent "…"` UX routes to the runner leaf.
+if (filteredArgs.Length >= 1 && filteredArgs[0].Equals("agent", StringComparison.OrdinalIgnoreCase))
+{
+    var next = filteredArgs.Length >= 2 ? filteredArgs[1] : null;
+    var knownSub = next is not null && (
+        next.Equals("run", StringComparison.OrdinalIgnoreCase) ||
+        next.Equals("register", StringComparison.OrdinalIgnoreCase));
+    var wantsHelp = next is "-h" or "--help" or "--version";
+    if (!knownSub && !wantsHelp)
+    {
+        filteredArgs = new[] { filteredArgs[0], "run" }
+            .Concat(filteredArgs.Skip(1))
+            .ToArray();
+    }
+}
 
 return await app.RunAsync(filteredArgs);
 
