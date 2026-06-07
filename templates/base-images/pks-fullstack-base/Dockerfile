@@ -96,10 +96,19 @@ RUN apt update && apt install -y libsecret-1-0
 
 # Install tmux for Claude Code agent team split-pane mode
 # Install libnss3-tools for dotnet dev-certs trust (certutil needed for browser/Playwright cert trust)
-# Install osslsigncode so the sign-windows action can sign MSIX/EXE/MSI on a
-# self-hosted runner (job user is non-root with no apt sudo — bake it in here).
-RUN apt-get update && apt-get install -y --no-install-recommends tmux libnss3-tools osslsigncode && \
+RUN apt-get update && apt-get install -y --no-install-recommends tmux libnss3-tools && \
   rm -rf /var/lib/apt/lists/*
+
+# osslsigncode for the sign-windows action (MSIX/APPX signing on a self-hosted
+# runner). Ubuntu's apt build (2.5) predates APPX support, so build a current
+# release from source — the job user is non-root with no apt sudo to install it.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git cmake gcc libssl-dev libcurl4-openssl-dev zlib1g-dev pkg-config ca-certificates && \
+  git clone --depth 1 --branch 2.9 https://github.com/mtrojnar/osslsigncode /tmp/oss && \
+  cmake -S /tmp/oss -B /tmp/oss/build >/dev/null && cmake --build /tmp/oss/build -j"$(nproc)" >/dev/null && \
+  install -m 755 /tmp/oss/build/osslsigncode /usr/local/bin/osslsigncode && \
+  osslsigncode --version | head -1 && \
+  rm -rf /tmp/oss /var/lib/apt/lists/*
 
 # Install ttyd for web-based terminal access (useful with tmux for split-pane viewing)
 ARG TTYD_VERSION=1.7.7
