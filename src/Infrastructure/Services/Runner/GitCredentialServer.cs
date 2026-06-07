@@ -19,6 +19,7 @@ public class GitCredentialServer : IAsyncDisposable
     private readonly IJobTokenService? _tokenService;
     private readonly ICoolifyTokenStore? _tokenStore;
     private readonly IRegistryConfigurationService? _registryConfig;
+    private readonly ICertStore? _certStore;
     private WebApplication? _app;
 
     public GitCredentialServer(
@@ -27,7 +28,8 @@ public class GitCredentialServer : IAsyncDisposable
         Action<string>? onLog = null,
         IJobTokenService? tokenService = null,
         ICoolifyTokenStore? tokenStore = null,
-        IRegistryConfigurationService? registryConfig = null)
+        IRegistryConfigurationService? registryConfig = null,
+        ICertStore? certStore = null)
     {
         // Use a stable directory so we can bind-mount the directory (not the file).
         // Directory mounts survive socket file recreation across runner restarts.
@@ -38,6 +40,7 @@ public class GitCredentialServer : IAsyncDisposable
         _tokenService = tokenService;
         _tokenStore = tokenStore;
         _registryConfig = registryConfig;
+        _certStore = certStore;
     }
 
     /// <summary>
@@ -240,6 +243,41 @@ public class GitCredentialServer : IAsyncDisposable
 
             _onLog?.Invoke($"Registry credential served for: {hostname}");
             return Results.Json(new { username = entry.Username, password = entry.Password });
+        });
+
+        // Vend a short-lived, materialized signing PFX to an in-container `pks sign`. The encrypted
+        // blob + KEK stay on the host; only a one-shot PFX (random password) crosses the socket.
+        _app.MapGet("/cert/pfx", async (HttpRequest request) =>
+        {
+            var claims = ValidateRequest(request);
+            if (claims == null)
+                return Results.Json(new { error = "unauthorized" }, statusCode: 401);
+
+            if (_certStore == null)
+                return Results.Json(new { error = "cert service unavailable" }, statusCode: 503);
+
+            var id = request.Query["id"].FirstOrDefault();
+            CertRecord? record;
+            if (!string.IsNullOrWhiteSpace(id)) record = await _certStore.FindAsync(id);
+            else
+            {
+                var all = await _certStore.ListAsync();
+                record = all.Count == 1 ? all[0] : null;
+            }
+
+            if (record == null)
+                return Results.Json(new { error = "no certificate available" }, statusCode: 404);
+
+            using var pfx = await _certStore.MaterializePfxAsync(record.Id);
+            var bytes = await File.ReadAllBytesAsync(pfx.Path);
+            _onLog?.Invoke($"Signing cert served: {record.Id} ({record.Thumbprint})");
+            return Results.Json(new
+            {
+                pfxBase64 = Convert.ToBase64String(bytes),
+                password = pfx.Password,
+                thumbprint = record.Thumbprint,
+                publicCertPem = record.PublicCertPem,
+            });
         });
 
         await _app.StartAsync(ct);

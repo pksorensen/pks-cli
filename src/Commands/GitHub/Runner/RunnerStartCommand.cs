@@ -19,6 +19,7 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
     private readonly IJobTokenService _jobTokenService;
     private readonly ICoolifyTokenStore _coolifyTokenStore;
     private readonly IRegistryConfigurationService _registryConfig;
+    private readonly ICertStore _certStore;
 
     public RunnerStartCommand(
         IRunnerDaemonService daemonService,
@@ -28,6 +29,7 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
         IJobTokenService jobTokenService,
         ICoolifyTokenStore coolifyTokenStore,
         IRegistryConfigurationService registryConfig,
+        ICertStore certStore,
         IAnsiConsole console)
         : base(console)
     {
@@ -38,6 +40,7 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
         _jobTokenService = jobTokenService ?? throw new ArgumentNullException(nameof(jobTokenService));
         _coolifyTokenStore = coolifyTokenStore ?? throw new ArgumentNullException(nameof(coolifyTokenStore));
         _registryConfig = registryConfig ?? throw new ArgumentNullException(nameof(registryConfig));
+        _certStore = certStore ?? throw new ArgumentNullException(nameof(certStore));
     }
 
     public class Settings : RunnerSettings
@@ -216,7 +219,8 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
                 },
                 _jobTokenService,
                 _coolifyTokenStore,
-                _registryConfig);
+                _registryConfig,
+                _certStore);
             await credentialServer.StartAsync();
             DisplaySuccess($"Credential server started: {credentialServer.SocketPath}");
             DisplayInfo($"Detailed logs: {logPath}");

@@ -14,6 +14,7 @@ public static class ActionIds
     public const string PolicyWrite = "policy.write";
     public const string AuthenticatorWrite = "authenticator.write";
     public const string SshConnect = "ssh.connect";
+    public const string CertWrite = "cert.write";
 }
 
 /// <param name="DefaultRequired">Whether two-factor is required for this action out of the box.</param>
@@ -52,6 +53,7 @@ public sealed class ActionCatalog : IActionCatalog
         new ActionDefinition(ActionIds.PolicyWrite, "Change 2FA policy", "Change which actions require two-factor", true, "Control plane"),
         new ActionDefinition(ActionIds.AuthenticatorWrite, "Re-enroll authenticator", "Re-enroll or disable the second factor", true, "Control plane"),
         new ActionDefinition(ActionIds.SshConnect, "Open SSH session", "Connect to a registered SSH host using a pks-held key", true, "Access"),
+        new ActionDefinition(ActionIds.CertWrite, "Create/replace signing cert", "Create or replace a pks-held code-signing certificate", true, "Control plane"),
     };
 
     public IReadOnlyList<ActionDefinition> All => Defs;

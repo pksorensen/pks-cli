@@ -1,0 +1,104 @@
+name: 'Sign Windows Artifact'
+description: 'Sign an MSIX/EXE/MSI with the stable pks-held code-signing cert served by the runner credential socket (requires pks cert init on the runner host).'
+
+inputs:
+  input:
+    description: 'Path to the unsigned artifact (.msix/.msixbundle/.exe/.dll/.msi)'
+    required: true
+  output:
+    description: 'Output path for the signed artifact (default: <input>-signed<ext>)'
+    required: false
+    default: ''
+  cert-id:
+    description: 'pks cert id or label to use (default: the sole cert on the host)'
+    required: false
+    default: ''
+  timestamp-url:
+    description: 'RFC3161 timestamp server URL (optional)'
+    required: false
+    default: ''
+  cer-output:
+    description: 'Where to write the public trust .cer (default: AgentShare.cer next to output)'
+    required: false
+    default: ''
+
+outputs:
+  signed:
+    description: 'Path to the signed artifact'
+    value: ${{ steps.sign.outputs.signed }}
+  cer:
+    description: 'Path to the exported public trust certificate'
+    value: ${{ steps.sign.outputs.cer }}
+
+runs:
+  using: composite
+  steps:
+    - name: Sign via pks runner credentials
+      id: sign
+      shell: bash
+      run: |
+        set -euo pipefail
+        SOCKET="${PKS_TOKEN_URL:-/var/run/pks-creds/creds.sock}"
+        INPUT="${{ inputs.input }}"
+        OUTPUT="${{ inputs.output }}"
+        CERT_ID="${{ inputs.cert-id }}"
+        TS_URL="${{ inputs.timestamp-url }}"
+        CER_OUT="${{ inputs.cer-output }}"
+
+        if [ ! -S "$SOCKET" ]; then
+          echo "::error::pks credential socket not found at $SOCKET"
+          exit 1
+        fi
+        if [ -z "${PKS_TOKEN:-}" ]; then
+          echo "::error::PKS_TOKEN is not set — this step must run in a pks runner job container"
+          exit 1
+        fi
+        if [ ! -f "$INPUT" ]; then
+          echo "::error::input not found: $INPUT"
+          exit 1
+        fi
+
+        # Default output: <name>-signed<ext>
+        if [ -z "$OUTPUT" ]; then
+          dir="$(dirname "$INPUT")"; base="$(basename "$INPUT")"
+          name="${base%.*}"; ext="${base##*.}"
+          OUTPUT="$dir/${name}-signed.${ext}"
+        fi
+        if [ -z "$CER_OUT" ]; then
+          CER_OUT="$(dirname "$OUTPUT")/AgentShare.cer"
+        fi
+
+        # Ensure osslsigncode is available (cross-platform Authenticode/MSIX signer).
+        if ! command -v osslsigncode >/dev/null 2>&1; then
+          echo "Installing osslsigncode..."
+          sudo apt-get update -y && sudo apt-get install -y osslsigncode
+        fi
+
+        # Fetch a short-lived materialized PFX from the host's pks cert store.
+        QS=""
+        [ -n "$CERT_ID" ] && QS="?id=$CERT_ID"
+        RESP="$(curl -s --unix-socket "$SOCKET" -H "Authorization: Bearer $PKS_TOKEN" "http://localhost/cert/pfx$QS")"
+        if [ -z "$RESP" ] || echo "$RESP" | grep -q '"error"'; then
+          echo "::error::could not fetch signing cert from runner host: ${RESP:-<empty>}"
+          echo "Hint: run 'pks cert init' on the host that runs 'pks github runner start'."
+          exit 1
+        fi
+
+        PFX_B64="$(echo "$RESP" | jq -r '.pfxBase64')"
+        PFX_PASS="$(echo "$RESP" | jq -r '.password')"
+        echo "$RESP" | jq -r '.publicCertPem' > "$CER_OUT"
+
+        TMP_PFX="$(mktemp --suffix=.pfx)"
+        cleanup() { rm -f "$TMP_PFX"; }
+        trap cleanup EXIT
+        echo "$PFX_B64" | base64 -d > "$TMP_PFX"
+        chmod 600 "$TMP_PFX"
+
+        ARGS=(sign -pkcs12 "$TMP_PFX" -pass "$PFX_PASS" -h sha256)
+        [ -n "$TS_URL" ] && ARGS+=(-t "$TS_URL")
+        ARGS+=(-in "$INPUT" -out "$OUTPUT")
+        osslsigncode "${ARGS[@]}"
+
+        echo "signed=$OUTPUT" >> "$GITHUB_OUTPUT"
+        echo "cer=$CER_OUT"   >> "$GITHUB_OUTPUT"
+        echo "Signed -> $OUTPUT (trust cert: $CER_OUT)"

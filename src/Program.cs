@@ -163,6 +163,8 @@ services.AddSingleton<IHooksService, HooksService>();
 services.AddSingleton<IFirstTimeWarningService, FirstTimeWarningService>();
 services.AddSingleton<PKS.Infrastructure.Services.ISshTargetConfigurationService, PKS.Infrastructure.Services.SshTargetConfigurationService>();
 services.AddSingleton<PKS.Infrastructure.Services.ISshKeyStore, PKS.Infrastructure.Services.SshKeyStore>();
+services.AddSingleton<PKS.Infrastructure.Services.ICertStore, PKS.Infrastructure.Services.CertStore>();
+services.AddSingleton<PKS.Infrastructure.Services.Signing.ISignProvider, PKS.Infrastructure.Services.Signing.OsslSignProvider>();
 services.AddSingleton<PKS.Infrastructure.Services.ISshCommandRunner, PKS.Infrastructure.Services.SshCommandRunner>();
 services.AddSingleton<PKS.Infrastructure.Services.IRsyncTargetConfigurationService, PKS.Infrastructure.Services.RsyncTargetConfigurationService>();
 
@@ -793,6 +795,36 @@ app.Configure(config =>
                 .WithExample(new[] { "ssh", "key", "remove", "hetzner" });
         });
     });
+
+    config.AddBranch<PKS.Commands.Cert.CertSettings>("cert", cert =>
+    {
+        cert.SetDescription("Manage pks-held code-signing certificates (created once, reused across CI runs)");
+
+        cert.AddCommand<PKS.Commands.Cert.CertInitCommand>("init")
+            .WithDescription("Create a self-signed code-signing certificate (interactive, once)")
+            .WithExample(new[] { "cert", "init" });
+
+        cert.AddCommand<PKS.Commands.Cert.CertListCommand>("list")
+            .WithDescription("List pks-held certificates")
+            .WithExample(new[] { "cert", "list" });
+
+        cert.AddCommand<PKS.Commands.Cert.CertShowCommand>("show")
+            .WithDescription("Show a certificate (details + public PEM)")
+            .WithExample(new[] { "cert", "show", "agentics" });
+
+        cert.AddCommand<PKS.Commands.Cert.CertExportCommand>("export")
+            .WithDescription("Export the public .cer (trust certificate)")
+            .WithExample(new[] { "cert", "export", "agentics", "-o", "AgentShare.cer" });
+
+        cert.AddCommand<PKS.Commands.Cert.CertRemoveCommand>("remove")
+            .WithDescription("Remove a pks-held certificate")
+            .WithExample(new[] { "cert", "remove", "agentics" });
+    });
+
+    config.AddCommand<PKS.Commands.Sign.SignCommand>("sign")
+        .WithDescription("Sign a Windows artifact (MSIX/EXE/MSI) with a pks-held certificate")
+        .WithExample(new[] { "sign", "AgentShareCompanion.msix" })
+        .WithExample(new[] { "sign", "app.msix", "-o", "app-signed.msix", "-c", "agentics" });
 
     config.AddBranch("vibecast", vibecast =>
     {
