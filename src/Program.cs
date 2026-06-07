@@ -165,6 +165,10 @@ services.AddSingleton<PKS.Infrastructure.Services.ISshTargetConfigurationService
 services.AddSingleton<PKS.Infrastructure.Services.ISshKeyStore, PKS.Infrastructure.Services.SshKeyStore>();
 services.AddSingleton<PKS.Infrastructure.Services.ICertStore, PKS.Infrastructure.Services.CertStore>();
 services.AddSingleton<PKS.Infrastructure.Services.Signing.ISignProvider, PKS.Infrastructure.Services.Signing.OsslSignProvider>();
+// Agent Share provider: `pks share init` (login) + `pks agent register` (enroll).
+services.AddSingleton<PKS.Infrastructure.Services.Agents.IShareCredStore, PKS.Infrastructure.Services.Agents.ShareCredStore>();
+services.AddSingleton<PKS.Infrastructure.Services.Agents.OidcLoopback>();
+services.AddSingleton<PKS.Infrastructure.Services.Agents.IAgentProvider, PKS.Infrastructure.Services.Agents.ShareAgentProvider>();
 services.AddSingleton<PKS.Infrastructure.Services.ISshCommandRunner, PKS.Infrastructure.Services.SshCommandRunner>();
 services.AddSingleton<PKS.Infrastructure.Services.IRsyncTargetConfigurationService, PKS.Infrastructure.Services.RsyncTargetConfigurationService>();
 
@@ -499,9 +503,6 @@ app.Configure(config =>
     config.AddCommand<StatusCommand>("status")
         .WithDescription("View system status with real-time insights");
 
-    config.AddCommand<PKS.Commands.Agent.AgentCommand>("agent")
-        .WithDescription("Manage AI agents for development automation");
-
     config.AddCommand<PKS.Commands.Exec.PksExecCommand>("exec")
         .WithDescription("Run a tool that supports the pks-cli discovery contract (PKS_DISCOVERY=1)")
         .WithExample(new[] { "exec", "agent-photographer.exe", "shoot" })
@@ -825,6 +826,26 @@ app.Configure(config =>
         .WithDescription("Sign a Windows artifact (MSIX/EXE/MSI) with a pks-held certificate")
         .WithExample(new[] { "sign", "AgentShareCompanion.msix" })
         .WithExample(new[] { "sign", "app.msix", "-o", "app-signed.msix", "-c", "agentics" });
+
+    // Agent Share: `pks share init` configures the provider, `pks agent register`
+    // registers the current session against it (generic over IAgentProvider).
+    config.AddBranch("share", share =>
+    {
+        share.SetDescription("Agent Share — a provider that coding sessions can register against");
+        share.AddCommand<PKS.Commands.Share.ShareInitCommand>("init")
+            .WithDescription("Log in to an Agent Share server (OIDC) so agents can register against it")
+            .WithExample(new[] { "share", "init" });
+    });
+
+    config.AddBranch("agent", agent =>
+    {
+        agent.SetDescription("Manage AI agents — default runs the agent; `register` makes this session shareable");
+        // Preserve the existing `pks agent …` runner as the default command.
+        agent.SetDefaultCommand<PKS.Commands.Agent.AgentCommand>();
+        agent.AddCommand<PKS.Commands.Agent.AgentRegisterCommand>("register")
+            .WithDescription("Register this session as a shareable agent (appears in the Share panel)")
+            .WithExample(new[] { "agent", "register" });
+    });
 
     config.AddBranch("vibecast", vibecast =>
     {
