@@ -26,13 +26,29 @@ public class AgentRegisterCommand : Command<AgentRegisterCommand.Settings>
         _console = console;
     }
 
-    public class Settings : CommandSettings { }
+    public class Settings : CommandSettings
+    {
+        [CommandArgument(0, "[NAME]")]
+        [Description("Agent name as it appears when sharing (prompted if omitted in an interactive terminal)")]
+        public string? Name { get; set; }
+
+        [CommandOption("-r|--role")]
+        [Description("One-line role/description")]
+        public string? Role { get; set; }
+
+        [CommandOption("-p|--provider")]
+        [Description("Provider to register against (default: the sole configured one)")]
+        public string? Provider { get; set; }
+    }
 
     public override int Execute(CommandContext context, Settings settings)
-        => ExecuteAsync().GetAwaiter().GetResult();
+        => ExecuteAsync(settings).GetAwaiter().GetResult();
 
-    private async Task<int> ExecuteAsync()
+    private async Task<int> ExecuteAsync(Settings settings)
     {
+        // Agents invoke this non-interactively, so accept name/role/provider as
+        // args and only prompt when they're missing AND we have a real terminal.
+        var interactive = !Console.IsInputRedirected;
         // Only providers that are actually configured (e.g. `pks share init` was run).
         var configured = new List<IAgentProvider>();
         foreach (var p in _providers)
@@ -45,17 +61,42 @@ public class AgentRegisterCommand : Command<AgentRegisterCommand.Settings>
             return 1;
         }
 
-        var provider = configured.Count == 1
-            ? configured[0]
-            : configured.First(p => p.Name == _console.Prompt(
-                new SelectionPrompt<string>().Title("[cyan]Register against which provider?[/]")
-                    .AddChoices(configured.Select(c => c.Name))));
+        IAgentProvider provider;
+        if (!string.IsNullOrWhiteSpace(settings.Provider))
+        {
+            var match = configured.FirstOrDefault(p => p.Name.Equals(settings.Provider, StringComparison.OrdinalIgnoreCase));
+            if (match is null)
+            {
+                _console.MarkupLine($"[red]Provider '{Markup.Escape(settings.Provider)}' is not configured.[/]");
+                return 1;
+            }
+            provider = match;
+        }
+        else if (configured.Count == 1 || !interactive)
+        {
+            provider = configured[0];
+        }
+        else
+        {
+            var pick = _console.Prompt(new SelectionPrompt<string>()
+                .Title("[cyan]Register against which provider?[/]")
+                .AddChoices(configured.Select(c => c.Name)));
+            provider = configured.First(p => p.Name == pick);
+        }
 
-        var defaultName = SuggestName();
-        var name = _console.Prompt(new TextPrompt<string>("[cyan]Agent name[/] [dim](how it appears when sharing)[/]:")
-            .DefaultValue(defaultName).PromptStyle("cyan"));
-        var role = _console.Prompt(new TextPrompt<string>("[cyan]Role[/] [dim](one line, optional)[/]:")
-            .AllowEmpty().DefaultValue("coding session"));
+        var name = settings.Name;
+        if (string.IsNullOrWhiteSpace(name))
+            name = interactive
+                ? _console.Prompt(new TextPrompt<string>("[cyan]Agent name[/] [dim](how it appears when sharing)[/]:")
+                    .DefaultValue(SuggestName()).PromptStyle("cyan"))
+                : SuggestName();
+
+        var role = settings.Role;
+        if (string.IsNullOrWhiteSpace(role))
+            role = interactive
+                ? _console.Prompt(new TextPrompt<string>("[cyan]Role[/] [dim](one line, optional)[/]:")
+                    .AllowEmpty().DefaultValue("coding session"))
+                : "coding session";
 
         AgentRegistration reg;
         try
@@ -83,10 +124,13 @@ public class AgentRegisterCommand : Command<AgentRegisterCommand.Settings>
 
     private void WireMcp(AgentRegistration reg)
     {
+        // claude mcp add <name> <url> [flags] — name + URL are positional and must
+        // come before the options, else: "missing required argument 'commandOrUrl'".
         var args = new[]
         {
-            "mcp", "add", "share-agent", "--transport", "http",
-            "--header", $"Authorization: Bearer {reg.Token}", reg.McpUrl,
+            "mcp", "add", "share-agent", reg.McpUrl,
+            "--transport", "http",
+            "--header", $"Authorization: Bearer {reg.Token}",
         };
         try
         {
