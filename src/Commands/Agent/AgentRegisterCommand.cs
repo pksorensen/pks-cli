@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using System.Diagnostics;
 using PKS.Infrastructure.Services.Agents;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -113,42 +112,12 @@ public class AgentRegisterCommand : Command<AgentRegisterCommand.Settings>
         _console.MarkupLine($"[green]Registered[/] [bold]{Markup.Escape(name)}[/] against [cyan]{provider.Name}[/] " +
                             $"[dim](inbox {Markup.Escape(reg.InboxId)})[/].");
 
-        // Wire the MCP server for THIS session so it can receive shares. Best
-        // effort: if `claude` isn't on PATH, print the command for the user.
-        WireMcp(reg);
-
-        _console.MarkupLine("[dim]It appears as a contact in the Share panel within ~30s. " +
-                            "Shares arrive in this inbox — read them with the agent-share `share.list` loop.[/]");
+        // Intentionally does NOT run `claude mcp add` — that scatters a new MCP
+        // server per registration. The agent-share MCP server is added ONCE
+        // (agent-share install → one .mcp.json entry); sessions register through
+        // its `register` tool. This CLI path just enrolls the inbox.
+        _console.MarkupLine("[dim]Appears in the Share panel within ~30s. Wire the inbox once with[/] [cyan]agent-share install[/][dim]; sessions self-register via the share `register` tool — no per-session MCP servers.[/]");
         return 0;
-    }
-
-    private void WireMcp(AgentRegistration reg)
-    {
-        // claude mcp add <name> <url> [flags] — name + URL are positional and must
-        // come before the options, else: "missing required argument 'commandOrUrl'".
-        var args = new[]
-        {
-            "mcp", "add", "share-agent", reg.McpUrl,
-            "--transport", "http",
-            "--header", $"Authorization: Bearer {reg.Token}",
-        };
-        try
-        {
-            var psi = new ProcessStartInfo("claude") { RedirectStandardError = true, RedirectStandardOutput = true };
-            foreach (var a in args) psi.ArgumentList.Add(a);
-            var proc = Process.Start(psi);
-            if (proc == null) throw new InvalidOperationException("could not start claude");
-            proc.WaitForExit(15000);
-            if (proc.ExitCode == 0)
-            {
-                _console.MarkupLine("[green]Wired[/] the [cyan]share-agent[/] MCP server for this session.");
-                return;
-            }
-        }
-        catch { /* fall through to manual hint */ }
-
-        _console.MarkupLine("[yellow]Wire MCP manually[/] (claude not found or add failed):");
-        _console.MarkupLine($"[dim]claude mcp add share-agent --transport http --header \"Authorization: Bearer {Markup.Escape(reg.Token)}\" {Markup.Escape(reg.McpUrl)}[/]");
     }
 
     /// <summary>A sensible default name: the git repo / working-dir basename.</summary>
