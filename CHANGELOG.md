@@ -49,6 +49,21 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.17.0](https://github.com/pksorensen/pks-cli/compare/v6.16.0...v6.17.0) (2026-06-09)
+
+
+### Features
+
+* **agent:** non-interactive register (name/role/provider args) + fix MCP wire ([be03eec](https://github.com/pksorensen/pks-cli/commit/be03eeccad1063cb48556a952d3b5e9d8285d664))
+* **agent:** pks share init + pks agent register (provider abstraction) ([e69efb7](https://github.com/pksorensen/pks-cli/commit/e69efb7308412acbb970f5fe8c7a15ff8fc7be21))
+* **cert:** add pks cert + pks sign for stable code-signing ([ef119bb](https://github.com/pksorensen/pks-cli/commit/ef119bbc0bc3e1040d6156f7a2c8912c3f69711e))
+
+
+### Bug Fixes
+
+* **agent:** pks agent register no longer runs 'claude mcp add' ([36ff231](https://github.com/pksorensen/pks-cli/commit/36ff2317951a5675126701d9473a53338309b148))
+* **agent:** restore `pks agent "<prompt>"` after branch refactor ([d257275](https://github.com/pksorensen/pks-cli/commit/d2572758620f4f5bbcb392741a5922b57d143253))
+
 ## [6.16.0](https://github.com/pksorensen/pks-cli/compare/v6.15.0...v6.16.0) (2026-06-06)
 
 
