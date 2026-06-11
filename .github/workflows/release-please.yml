@@ -232,6 +232,80 @@ jobs:
       version: ${{ needs.release-please.outputs.cli_version }}
       configuration: Release
 
+  # ============================================================
+  # agentics.dk release store: same self-contained binaries, renamed
+  # to the convention pks-cli_{os}_{arch}[.exe], published via GitHub
+  # OIDC trusted publishing. Enables
+  #   curl -fsSL https://agentics.dk/install/pks-cli.sh | bash
+  # (binaryName=pks → installed command is `pks`). npm stays the
+  # other distribution channel; both ship the same artifacts.
+  # ============================================================
+  publish-agentics:
+    name: Publish binaries to agentics.dk
+    needs: [release-please, build-npm-binaries]
+    if: needs.release-please.outputs.cli_release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pks-*
+          path: artifacts
+
+      - name: Rename to agentics asset convention
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          declare -A MAP=(
+            ["pks-linux-x64"]="linux_amd64"
+            ["pks-linux-arm64"]="linux_arm64"
+            ["pks-osx-x64"]="darwin_amd64"
+            ["pks-osx-arm64"]="darwin_arm64"
+            ["pks-win-x64"]="windows_amd64"
+            ["pks-win-arm64"]="windows_arm64"
+          )
+          for artifact in "${!MAP[@]}"; do
+            osarch="${MAP[$artifact]}"
+            src=$(find "artifacts/$artifact" -type f \( -name pks-cli -o -name pks-cli.exe \) | head -n1)
+            [ -n "$src" ] || { echo "::error::binary missing in $artifact"; exit 1; }
+            out="dist/pks-cli_${osarch}"
+            [[ "$src" == *.exe ]] && out="${out}.exe"
+            cp "$src" "$out"
+            echo "prepared $out"
+          done
+          VERSION="${{ needs.release-please.outputs.cli_version }}"
+          ( cd dist && sha256sum pks-cli_* > "pks-cli_${VERSION}_checksums.txt" )
+          ls -la dist
+
+      - name: Publish to agentics.dk release store
+        working-directory: dist
+        env:
+          VERSION: ${{ needs.release-please.outputs.cli_version }}
+          TAG: ${{ needs.release-please.outputs.cli_tag_name }}
+        run: |
+          set -euo pipefail
+          REC="pks-cli-${VERSION}"
+          OIDC=$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://agentics.dk/releases" | jq -r '.value')
+          [ -n "$OIDC" ] && [ "$OIDC" != "null" ] || { echo "::error::failed to mint OIDC token"; exit 1; }
+          curl -fsS -X POST -H "Authorization: Bearer ${OIDC}" -H "Content-Type: application/json" \
+            -d "{\"component\":\"pks-cli\",\"semver\":\"${VERSION}\",\"tagName\":\"${TAG}\",\"binaryName\":\"pks\"}" \
+            https://agentics.dk/api/releases >/dev/null
+          for f in pks-cli_*; do
+            [ -f "$f" ] || continue
+            echo "uploading $f"
+            curl -fsS -X PUT -H "Authorization: Bearer ${OIDC}" \
+              --data-binary @"$f" \
+              "https://agentics.dk/api/releases/${REC}/attachments/$(basename "$f")"
+            echo
+          done
+          curl -fsS -X PUT -H "Authorization: Bearer ${OIDC}" \
+            "https://agentics.dk/api/releases/${REC}/publish" >/dev/null
+          echo "published ${REC}"
+
   create-npm-packages:
     name: Create npm packages
     needs: [release-please, build-npm-binaries]
