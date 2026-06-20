@@ -38,6 +38,7 @@ public sealed class SessionParser : ISessionParser
         var modelSet = new HashSet<string>(StringComparer.Ordinal);
         var tokenTotals = new Dictionary<string, ModelTokenTotals>(StringComparer.Ordinal);
         var pending = new Dictionary<string, PendingTool>(StringComparer.Ordinal);
+        var compact = new CompactState();
 
         DateTime? minTs = null, maxTs = null;
         string? claudeSessionId = null;
@@ -82,7 +83,7 @@ public sealed class SessionParser : ISessionParser
             switch (type)
             {
                 case "user":
-                    HandleUser(root, ts, sessionId, projectSlug, parsed, pending, ref interruptions);
+                    HandleUser(root, ts, sessionId, projectSlug, parsed, pending, compact, ref interruptions);
                     break;
                 case "assistant":
                     assistantTurns++;
@@ -140,7 +141,7 @@ public sealed class SessionParser : ISessionParser
     private static void HandleUser(
         JsonElement root, DateTime? ts, string sessionId, string projectSlug,
         ParsedSession parsed, Dictionary<string, PendingTool> pending,
-        ref int interruptions)
+        CompactState compact, ref int interruptions)
     {
         var isMeta = TryBool(root, "isMeta", out var meta) && meta;
         if (!TryGetMessage(root, out var msg)) return;
@@ -159,7 +160,7 @@ public sealed class SessionParser : ISessionParser
                 interruptions++;
                 return;
             }
-            EmitPrompt(root, ts, sessionId, projectSlug, parsed, s);
+            EmitPrompt(root, ts, sessionId, projectSlug, parsed, s, compact);
             return;
         }
 
@@ -213,14 +214,42 @@ public sealed class SessionParser : ISessionParser
             interruptions++;
             return;
         }
-        EmitPrompt(root, ts, sessionId, projectSlug, parsed, promptText);
+        EmitPrompt(root, ts, sessionId, projectSlug, parsed, promptText, compact);
     }
 
     private static void EmitPrompt(
         JsonElement root, DateTime? ts, string sessionId, string projectSlug,
-        ParsedSession parsed, string text)
+        ParsedSession parsed, string text, CompactState compact)
     {
         var (isSlash, slashCmd, slashArgs) = ParseSlash(text);
+
+        // Context-compaction tagging. Two entries are involved and they arrive in order:
+        //   1. the manual trigger  → a user message whose text contains <command-name>/compact</command-name>
+        //   2. the summary itself   → a user message with isCompactSummary=true ("This session is being continued…")
+        // Auto-compactions produce only (2). We carry a one-shot "pending manual" flag from
+        // (1) so the next summary is labelled "manual" with its <command-args> steering text.
+        // Caveat: a manual /compact whose continuation lands in a NEW session file can't be
+        // linked here and will read as "auto" — best-effort, documented in the analysis notes.
+        var isCompactSummary = TryBool(root, "isCompactSummary", out var ics) && ics;
+        string? compactTrigger = null, compactInstructions = null;
+        if (isCompactSummary)
+        {
+            compactTrigger = compact.PendingManual ? "manual" : "auto";
+            compactInstructions = compact.PendingManual ? compact.PendingArgs : null;
+            compact.Clear();
+        }
+        else if (text.Contains("<command-name>/compact</command-name>", StringComparison.Ordinal))
+        {
+            compact.PendingManual = true;
+            compact.PendingArgs = ExtractTag(text, "command-args");
+        }
+        else
+        {
+            // Any unrelated prompt between trigger and summary consumes the flag,
+            // so a stray /compact can never mislabel a later auto-compaction.
+            compact.Clear();
+        }
+
         TryString(root, "promptId", out var promptId);
         TryString(root, "uuid", out var uuid);
         TryString(root, "cwd", out var cwd);
@@ -240,7 +269,32 @@ public sealed class SessionParser : ISessionParser
             IsSlash = isSlash,
             SlashCommand = slashCmd,
             SlashArgs = slashArgs,
+            IsCompactSummary = isCompactSummary ? true : null,
+            CompactTrigger = compactTrigger,
+            CompactInstructions = compactInstructions,
         });
+    }
+
+    /// One-shot state linking a manual /compact trigger to the summary that follows it.
+    private sealed class CompactState
+    {
+        public bool PendingManual;
+        public string? PendingArgs;
+        public void Clear() { PendingManual = false; PendingArgs = null; }
+    }
+
+    /// Extracts the inner text of the first &lt;tag&gt;…&lt;/tag&gt; pair; returns null if absent or empty.
+    private static string? ExtractTag(string text, string tag)
+    {
+        var open = "<" + tag + ">";
+        var close = "</" + tag + ">";
+        var i = text.IndexOf(open, StringComparison.Ordinal);
+        if (i < 0) return null;
+        i += open.Length;
+        var j = text.IndexOf(close, i, StringComparison.Ordinal);
+        if (j < 0) return null;
+        var inner = text[i..j].Trim();
+        return inner.Length == 0 ? null : inner;
     }
 
     // ── assistant-message handler ─────────────────────────────────────────────

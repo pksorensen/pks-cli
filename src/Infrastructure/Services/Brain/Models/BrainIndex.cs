@@ -5,7 +5,8 @@ namespace PKS.Infrastructure.Services.Brain.Models;
 /// owns the count fields; init only writes a fresh empty index.
 public sealed class BrainIndex
 {
-    public const int CurrentSchemaVersion = 1;
+    // v2: PromptRow gained compaction tagging (isCompactSummary / compactTrigger / compactInstructions).
+    public const int CurrentSchemaVersion = 2;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

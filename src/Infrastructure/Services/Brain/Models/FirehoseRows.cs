@@ -19,6 +19,18 @@ public sealed class PromptRow
     public bool IsSlash { get; set; }
     public string? SlashCommand { get; set; }
     public string? SlashArgs { get; set; }
+
+    // Context-compaction tagging. Claude Code emits a synthetic user message with
+    // isCompactSummary=true whenever the conversation is summarised — either
+    // automatically (context window full) or via a manual /compact. These fields
+    // are sparse (null on ordinary prompts) so they're omitted from JSON for the
+    // common case; set only on the summary row itself.
+    /// True only on the compaction summary prompt (the "This session is being continued…" message).
+    public bool? IsCompactSummary { get; set; }
+    /// "auto" (context ran out) or "manual" (a /compact command preceded this summary in the same session). Null on non-summary rows.
+    public string? CompactTrigger { get; set; }
+    /// The user's steering text from `/compact <instructions>` (the &lt;command-args&gt;), if any. Null for auto-compactions and bare /compact.
+    public string? CompactInstructions { get; set; }
 }
 
 /// One row per assistant tool_use across every session.
