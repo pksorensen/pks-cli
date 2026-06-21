@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.18.0](https://github.com/pksorensen/pks-cli/compare/v6.17.0...v6.18.0) (2026-06-21)
+
+
+### Features
+
+* **brain:** tag context-compaction summaries in ingest ([549b93d](https://github.com/pksorensen/pks-cli/commit/549b93df6f51b58b8c886d2ae3b7fdc2153f0819))
+
 ## [6.17.0](https://github.com/pksorensen/pks-cli/compare/v6.16.0...v6.17.0) (2026-06-09)
 
 
