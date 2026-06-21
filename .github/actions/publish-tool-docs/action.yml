@@ -17,6 +17,10 @@ inputs:
     description: 'Agentic Live server URL'
     required: false
     default: 'https://agentics.dk'
+  audience:
+    description: 'OIDC audience for trusted publishing (must match the server)'
+    required: false
+    default: 'https://agentics.dk/docs'
 
 outputs:
   file-count:
@@ -37,6 +41,7 @@ runs:
         VERSION="${{ inputs.version }}"
         DOCS_DIR="${{ inputs.docs-dir }}"
         SERVER="${{ inputs.server }}"
+        AUDIENCE="${{ inputs.audience }}"
 
         if [ ! -d "$DOCS_DIR" ]; then
           echo "::warning::Docs directory '$DOCS_DIR' not found, skipping publish"
@@ -69,6 +74,19 @@ runs:
 
         echo "Publishing $FILE_COUNT doc files for $COMPONENT v$VERSION to $SERVER..."
 
+        # Mint an ephemeral GitHub OIDC token for trusted publishing (no PAT).
+        # Requires the calling job to have `permissions: id-token: write`.
+        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+          echo "::error::OIDC env not present — the job needs 'permissions: id-token: write'"
+          exit 1
+        fi
+        OIDC=$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${AUDIENCE}" | jq -r '.value')
+        if [ -z "$OIDC" ] || [ "$OIDC" = "null" ]; then
+          echo "::error::failed to mint OIDC token"
+          exit 1
+        fi
+
         # Build the full payload
         PAYLOAD=$(jq -n \
           --arg component "$COMPONENT" \
@@ -76,9 +94,10 @@ runs:
           --argjson files "$FILES_JSON" \
           '{component: $component, version: $version, files: $files}')
 
-        # POST to the API
+        # POST to the API (trusted publishing: OIDC repo + component must match a product)
         HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
           -X POST \
+          -H "Authorization: Bearer ${OIDC}" \
           -H "Content-Type: application/json" \
           -d "$PAYLOAD" \
           "${SERVER}/api/tools/docs")
