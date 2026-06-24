@@ -40,6 +40,14 @@ public class BrainExtractSettings : BrainSettings
     [Description("Hard dollar cap per invocation (forwarded to claude --max-budget-usd).")]
     public double? MaxBudgetUsd { get; set; }
 
+    [CommandOption("--agent")]
+    [Description("Summarizer backend: pks (built-in in-process agent, default) or claude (shell out to the claude CLI).")]
+    public string? Agent { get; set; }
+
+    [CommandOption("--foundry")]
+    [Description("Use Azure AI Foundry as the token/model provider (your Azure quota) instead of the agent's default Anthropic billing.")]
+    public bool Foundry { get; set; }
+
     [CommandOption("--dry-run")]
     [Description("Show which sessions would be extracted without invoking claude.")]
     public bool DryRun { get; set; }
@@ -52,6 +60,7 @@ public class BrainExtractSettings : BrainSettings
 internal static class BrainExtractDefaults
 {
     public const string Model = "haiku";
+    public const string Agent = "pks";
     public const int Parallel = 10;
     /// Skip the prompt when the run is small enough that the estimated spend is trivial.
     public const double ConfirmCostUsd = 1.00;
@@ -110,10 +119,17 @@ public class BrainExtractCommand : AsyncCommand<BrainExtractSettings>
 
         var model = settings.Model ?? BrainExtractDefaults.Model;
         var parallel = settings.Parallel ?? BrainExtractDefaults.Parallel;
+        var agent = (settings.Agent ?? BrainExtractDefaults.Agent).Trim().ToLowerInvariant();
+        if (agent is not ("pks" or "claude"))
+        {
+            AnsiConsole.MarkupLine($"[red]Unknown --agent value:[/] {agent}. Use [bold]pks[/] or [bold]claude[/].");
+            return 1;
+        }
 
         AnsiConsole.MarkupLine($"[grey]Project slug:[/] [cyan]{slug}[/]");
         AnsiConsole.MarkupLine($"[grey]Extracts dir:[/] [cyan]{Path.Combine(projectRoot, "extracts")}[/]");
         AnsiConsole.MarkupLine($"[grey]Skill source:[/] [cyan]{skill.Source}[/] [grey]({skill.Body.Length:N0} chars)[/]");
+        AnsiConsole.MarkupLine($"[grey]Agent:[/] [cyan]{agent}[/]{(settings.Foundry ? "  [grey]Provider:[/] [cyan]foundry[/]" : "")}");
         AnsiConsole.MarkupLine($"[grey]Model:[/] [cyan]{model}[/]  [grey]Parallel:[/] [cyan]{parallel}[/]");
         if (settings.MaxBudgetUsd is { } b) AnsiConsole.MarkupLine($"[grey]Max budget / call:[/] ${b:0.##}");
         if (since is { } sUtc) AnsiConsole.MarkupLine($"[grey]Since:[/] {sUtc:yyyy-MM-dd HH:mm} UTC");
@@ -133,6 +149,8 @@ public class BrainExtractCommand : AsyncCommand<BrainExtractSettings>
             Model = model,
             MaxBudgetUsd = settings.MaxBudgetUsd,
             MaxParallelism = parallel,
+            Agent = agent,
+            UseFoundry = settings.Foundry,
         };
 
         // Pre-flight: enumerate eligible + estimate cost BEFORE any claude call.

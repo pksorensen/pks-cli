@@ -3,12 +3,15 @@ using PKS.Commands.Vm;
 using PKS.Infrastructure;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Claude;
+using PKS.Infrastructure.Services.Foundry;
 using PKS.Infrastructure.Services.Models;
 using PKS.Infrastructure.Services.Security;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
@@ -25,6 +28,7 @@ public class ClaudeSpawnCommand : DevcontainerSpawnCommand
     private readonly AzureFoundryAuthConfig _foundryConfig;
     private readonly IAzureDevOpsAuthService _adoAuthService;
     private readonly IConfigurationService _configService;
+    private readonly IAzureFoundryAuthService _foundryAuthSvc;
 
     public ClaudeSpawnCommand(
         IDevcontainerSpawnerService spawnerService,
@@ -51,6 +55,168 @@ public class ClaudeSpawnCommand : DevcontainerSpawnCommand
         _foundryConfig = foundryConfig;
         _adoAuthService = adoAuthService;
         _configService = configService;
+        _foundryAuthSvc = foundryAuthService;
+    }
+
+    // ── Inline mode ────────────────────────────────────────────────────────────
+    // `pks claude --inline` (or picking "Inline" in the location prompt) runs the
+    // claude CLI directly in this shell instead of spawning a devcontainer. Useful
+    // when you're already on the box and just want a Foundry-backed claude here.
+
+    protected override Task<int?> TryPreLaunchAsync(CommandContext context, Settings settings)
+        => settings.Inline ? RunInlineAsync(settings).ContinueWith(t => (int?)t.Result) : Task.FromResult<int?>(null);
+
+    private const string InlineChoice = "Inline (run claude in this shell — no container)";
+
+    protected override IEnumerable<string> GetExtraLaunchChoices() => new[] { InlineChoice };
+
+    protected override async Task<int?> HandleExtraLaunchChoiceAsync(string choice, CommandContext context, Settings settings)
+        => choice == InlineChoice ? await RunInlineAsync(settings) : (int?)null;
+
+    private async Task<int> RunInlineAsync(Settings settings)
+    {
+        var workdir = Path.GetFullPath(settings.ProjectPath ?? Directory.GetCurrentDirectory());
+        if (!Directory.Exists(workdir))
+        {
+            Console.MarkupLine($"[red]Project path does not exist: {Markup.Escape(workdir)}[/]");
+            return 1;
+        }
+
+        var psi = new ProcessStartInfo("claude")
+        {
+            WorkingDirectory = workdir,
+            UseShellExecute = false,
+        };
+        psi.ArgumentList.Add("--dangerously-skip-permissions");
+
+        // Forward any extra --env KEY=VALUE pairs into the inline process.
+        if (settings.EnvironmentVariables != null)
+        {
+            foreach (var kv in settings.EnvironmentVariables)
+            {
+                var idx = kv.IndexOf('=');
+                if (idx > 0) psi.Environment[kv[..idx]] = kv[(idx + 1)..];
+            }
+        }
+
+        // Configure Azure AI Foundry if it's set up and the user opts in. The local MSI
+        // token server mirrors the remote one used for devcontainers, but serves over
+        // 127.0.0.1 to a claude process running on this same host.
+        await using var foundry = await TryStartLocalFoundryAsync(psi);
+
+        Console.MarkupLine($"[dim]Launching claude inline in {Markup.Escape(workdir)}...[/]");
+
+        try
+        {
+            using var proc = Process.Start(psi);
+            if (proc == null)
+            {
+                Console.MarkupLine("[red]Failed to start the claude CLI.[/]");
+                return 1;
+            }
+            await proc.WaitForExitAsync();
+            return proc.ExitCode;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            Console.MarkupLine("[red]Could not find the [bold]claude[/] CLI on PATH.[/]");
+            Console.MarkupLine("[dim]Install Claude Code (npm i -g @anthropic-ai/claude-code) and try again.[/]");
+            return 127;
+        }
+    }
+
+    /// <summary>
+    /// If Foundry is configured and the user chooses it, sets the CLAUDE_CODE_USE_FOUNDRY env vars
+    /// on <paramref name="psi"/>, lets the user pick which deployment to launch with, and starts a
+    /// local MSI token server that vends Azure tokens to the inline claude process. Returns a
+    /// disposable that stops the server (a no-op if Foundry wasn't used).
+    /// </summary>
+    private async Task<LocalMsiTokenServer> TryStartLocalFoundryAsync(ProcessStartInfo psi)
+    {
+        var env = psi.Environment;
+
+        // Don't override an environment the user has already wired up themselves.
+        if (Environment.GetEnvironmentVariable("CLAUDE_CODE_USE_FOUNDRY") == "1" ||
+            !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ANTHROPIC_BASE_URL")))
+            return LocalMsiTokenServer.None;
+
+        if (!await _foundryAuthSvc.IsAuthenticatedAsync())
+            return LocalMsiTokenServer.None;
+
+        const string UseFoundry = "Use Foundry models (Azure AI)";
+        const string UseDirect = "Use Anthropic direct (inherit current environment)";
+        var mode = Console.Prompt(
+            new SelectionPrompt<string>()
+                .Title("[cyan]Azure AI Foundry is configured. Launch mode:[/]")
+                .AddChoices(UseFoundry, UseDirect));
+        if (mode != UseFoundry)
+            return LocalMsiTokenServer.None;
+
+        var creds = await _foundryAuthSvc.GetStoredCredentialsAsync();
+        if (creds == null)
+        {
+            Console.MarkupLine("[yellow]No stored Foundry credentials — falling back to Anthropic direct.[/]");
+            return LocalMsiTokenServer.None;
+        }
+
+        var server = await LocalMsiTokenServer.StartAsync(_foundryAuthSvc, Console);
+
+        env["CLAUDE_CODE_USE_FOUNDRY"] = "1";
+        env["ANTHROPIC_FOUNDRY_RESOURCE"] = creds.SelectedResourceName;
+        env["IDENTITY_ENDPOINT"] = server.Endpoint;
+        env["IDENTITY_HEADER"] = server.Secret;
+        if (!string.IsNullOrEmpty(creds.ApiKey))
+            env["ANTHROPIC_FOUNDRY_API_KEY"] = creds.ApiKey;
+
+        var enabledModels = creds.EnabledModels.Count > 0 ? creds.EnabledModels : new List<string> { creds.DefaultModel };
+
+        // Map the enabled Claude deployments to their tiers so /model and tier routing work.
+        // IMPORTANT: only Claude chat models map to a tier — never let a non-Claude deployment
+        // (tts, image, embeddings, or even gpt-*) clobber the Sonnet/Opus/Haiku defaults.
+        foreach (var model in enabledModels)
+        {
+            var lower = model.ToLowerInvariant();
+            if (lower.Contains("sonnet")) env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = model;
+            else if (lower.Contains("opus")) env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = model;
+            else if (lower.Contains("haiku")) env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = model;
+        }
+
+        // Let the user pick which deployment to start on. Offer chat-capable deployments only
+        // (drop tts/image/embedding/transcription models that can't back a claude session).
+        var chatModels = enabledModels.Where(IsChatModel).Distinct().ToList();
+        if (chatModels.Count > 0)
+        {
+            string chosen;
+            if (chatModels.Count == 1)
+            {
+                chosen = chatModels[0];
+            }
+            else
+            {
+                var defaultModel = chatModels.Contains(creds.DefaultModel)
+                    ? creds.DefaultModel
+                    : chatModels.FirstOrDefault(m => m.ToLowerInvariant().Contains("sonnet")) ?? chatModels[0];
+                chosen = Console.Prompt(
+                    new SelectionPrompt<string>()
+                        .Title("[cyan]Which model should claude start on?[/] [dim](switch later with /model)[/]")
+                        .AddChoices(chatModels.OrderBy(m => m == defaultModel ? 0 : 1).ThenBy(m => m)));
+            }
+
+            // Start claude on the chosen deployment.
+            psi.ArgumentList.Add("--model");
+            psi.ArgumentList.Add(chosen);
+            Console.MarkupLine($"[dim]Foundry model: {Markup.Escape(chosen)}[/]");
+        }
+
+        return server;
+    }
+
+    /// <summary>True for deployments that can back an interactive claude session (chat/completion models).</summary>
+    private static bool IsChatModel(string model)
+    {
+        var l = model.ToLowerInvariant();
+        string[] nonChat = { "tts", "whisper", "transcrib", "image", "dall", "embed", "rerank", "parakeet", "audio", "moderation" };
+        return !nonChat.Any(l.Contains);
     }
 
     protected override async Task OnAfterRemoteSpawnAsync(
@@ -460,3 +626,4 @@ Orgs available in this session: {orgList}
             DisplaySuccess($"VM '{vmRecord.VmName}' deallocate command accepted (Azure may take ~30s to fully stop billing).");
     }
 }
+

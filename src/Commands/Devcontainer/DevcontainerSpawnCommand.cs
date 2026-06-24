@@ -187,7 +187,31 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         [CommandOption("--server <URL>")]
         [Description("Agentic server URL forwarded as AGENTIC_SERVER into the container (e.g. https://my-tunnel.devtunnels.ms)")]
         public string? AgenticServer { get; set; }
+
+        [CommandOption("--inline")]
+        [Description("Run inline on this machine (no devcontainer). Only honored by commands that support it, e.g. 'pks claude'.")]
+        public bool Inline { get; set; }
     }
+
+    /// <summary>
+    /// Hook invoked before any spawn flow runs. Lets a subcommand offer an alternate, non-devcontainer
+    /// launch (e.g. <c>pks claude --inline</c> runs claude in the current shell). Return a non-null exit
+    /// code to short-circuit the normal devcontainer flow; return null to continue as usual.
+    /// </summary>
+    protected virtual Task<int?> TryPreLaunchAsync(CommandContext context, Settings settings)
+        => Task.FromResult<int?>(null);
+
+    /// <summary>
+    /// Extra entries appended to the "Where would you like to spawn?" location prompt. Default: none.
+    /// </summary>
+    protected virtual IEnumerable<string> GetExtraLaunchChoices() => Array.Empty<string>();
+
+    /// <summary>
+    /// Handles a location-prompt entry returned by <see cref="GetExtraLaunchChoices"/>.
+    /// Return a non-null exit code to short-circuit the normal flow.
+    /// </summary>
+    protected virtual Task<int?> HandleExtraLaunchChoiceAsync(string choice, CommandContext context, Settings settings)
+        => Task.FromResult<int?>(null);
 
     public override int Execute(CommandContext context, Settings settings)
     {
@@ -201,6 +225,10 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
         {
             // Display banner
             DisplayBanner("Spawn");
+
+            // Alternate launch (e.g. `pks claude --inline` runs claude in this shell, no container).
+            var preLaunch = await TryPreLaunchAsync(context, settings);
+            if (preLaunch.HasValue) return preLaunch.Value;
 
             // 0. Check for remote SSH target
             SshTarget? remoteTarget = null;
@@ -219,7 +247,9 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
                 {
                     const string LocalOption = "Local (this machine)";
                     const string NewVmOption = "Spawn new VM...";
-                    var choices = new[] { LocalOption }
+                    var extraChoices = GetExtraLaunchChoices().ToList();
+                    var choices = extraChoices
+                        .Append(LocalOption)
                         .Concat(targets.Select(t => t.Label ?? t.Host))
                         .Append(NewVmOption)
                         .ToList();
@@ -228,7 +258,12 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
                             .Title("[cyan]Where would you like to spawn the devcontainer?[/]")
                             .AddChoices(choices));
 
-                    if (choice == NewVmOption)
+                    if (extraChoices.Contains(choice))
+                    {
+                        var handled = await HandleExtraLaunchChoiceAsync(choice, context, settings);
+                        if (handled.HasValue) return handled.Value;
+                    }
+                    else if (choice == NewVmOption)
                     {
                         if (_vmInitCommand == null)
                         {
@@ -1763,13 +1798,14 @@ http.server.HTTPServer(('0.0.0.0', PORT), H).serve_forever()
         if (!string.IsNullOrEmpty(creds.ApiKey))
             envVars.Append($"-e ANTHROPIC_FOUNDRY_API_KEY={creds.ApiKey} ");
 
+        // Only map Claude deployments to a tier — never let a non-Claude deployment (tts, image,
+        // embeddings, gpt-*) clobber the Sonnet default, which would launch claude on the wrong model.
         foreach (var model in enabledModels)
         {
             var lower = model.ToLowerInvariant();
             if (lower.Contains("sonnet")) envVars.Append($"-e ANTHROPIC_DEFAULT_SONNET_MODEL={model} ");
             else if (lower.Contains("opus")) envVars.Append($"-e ANTHROPIC_DEFAULT_OPUS_MODEL={model} ");
             else if (lower.Contains("haiku")) envVars.Append($"-e ANTHROPIC_DEFAULT_HAIKU_MODEL={model} ");
-            else envVars.Append($"-e ANTHROPIC_DEFAULT_SONNET_MODEL={model} ");
         }
 
         return envVars.ToString().TrimEnd();

@@ -53,6 +53,14 @@ public sealed class BrainExtractOptions
     public string? Model { get; init; }
     public double? MaxBudgetUsd { get; init; }
     public int MaxParallelism { get; init; } = 2;
+
+    /// Summarizer backend: "pks" (built-in in-process agent, default) or "claude"
+    /// (shell out to the claude CLI binary).
+    public string Agent { get; init; } = "pks";
+
+    /// Route the chosen agent through Azure AI Foundry (the user's Azure quota)
+    /// instead of the agent's default Anthropic billing.
+    public bool UseFoundry { get; init; }
 }
 
 public sealed class BrainExtractRun

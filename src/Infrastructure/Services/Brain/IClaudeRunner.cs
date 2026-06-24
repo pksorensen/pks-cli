@@ -1,3 +1,5 @@
+using PKS.Infrastructure.Services.Foundry;
+
 namespace PKS.Infrastructure.Services.Brain;
 
 /// Thin wrapper around the local `claude` CLI in headless mode
@@ -25,6 +27,15 @@ public sealed class ClaudeRunRequest
 
     /// Hard wall-clock timeout. Defaults to 5 minutes.
     public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(5);
+
+    /// When set, route the spawned `claude` process through Azure AI Foundry by
+    /// applying these env vars (CLAUDE_CODE_USE_FOUNDRY + MSI endpoint + tier models).
+    /// Used by the claude-binary runner. Null = agent default billing.
+    public FoundryEnvVars? Foundry { get; init; }
+
+    /// Pks in-process runner: route through Foundry's Claude route via the stored
+    /// Foundry refresh-token instead of the agent's default Anthropic billing.
+    public bool UseFoundry { get; init; }
 }
 
 public sealed class ClaudeRunResult

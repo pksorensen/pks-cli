@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using PKS.Infrastructure.Services.Brain.Models;
+using PKS.Infrastructure.Services.Foundry;
 
 namespace PKS.Infrastructure.Services.Brain;
 
@@ -10,7 +11,8 @@ public sealed class BrainExtractPipeline : IBrainExtractPipeline
     private readonly IBrainPathResolver _paths;
     private readonly IBrainSkillReader _skillReader;
     private readonly IBrainExtractContextBuilder _context;
-    private readonly IClaudeRunner _claude;
+    private readonly IExtractRunnerFactory _runners;
+    private readonly IFoundryExtractEnv _foundryEnv;
 
     private static readonly JsonSerializerOptions ContextJson = new()
     {
@@ -23,12 +25,14 @@ public sealed class BrainExtractPipeline : IBrainExtractPipeline
         IBrainPathResolver paths,
         IBrainSkillReader skillReader,
         IBrainExtractContextBuilder context,
-        IClaudeRunner claude)
+        IExtractRunnerFactory runners,
+        IFoundryExtractEnv foundryEnv)
     {
         _paths = paths;
         _skillReader = skillReader;
         _context = context;
-        _claude = claude;
+        _runners = runners;
+        _foundryEnv = foundryEnv;
     }
 
     public async Task<BrainExtractPlan> PlanAsync(BrainExtractOptions options, CancellationToken ct = default)
@@ -106,6 +110,26 @@ public sealed class BrainExtractPipeline : IBrainExtractPipeline
         var skill = await _skillReader.ReadAsync(options.SkillPath, ct);
         var skillHash = ShortHash(skill.Body);
 
+        // 2b) pick the summarizer backend, and (for the claude binary path) start a single
+        // shared Foundry MSI token server for the whole run when --foundry is requested.
+        var runner = _runners.Resolve(options.Agent);
+        var isClaudeBinary = string.Equals(options.Agent, "claude", StringComparison.OrdinalIgnoreCase);
+        FoundryEnvVars? foundryEnv = null;
+        await using var foundrySession = options.UseFoundry && isClaudeBinary
+            ? await _foundryEnv.StartAsync(ct)
+            : null;
+        if (options.UseFoundry && isClaudeBinary)
+        {
+            if (foundrySession is null)
+            {
+                // --foundry asked for but unavailable (not logged in). Abort cleanly rather
+                // than silently billing the default Anthropic plan.
+                run.FinishedAtUtc = DateTime.UtcNow;
+                return run;
+            }
+            foundryEnv = foundrySession.EnvVars;
+        }
+
         // 3) extract in parallel (capped) — aggregate token + cost totals as we go.
         var extracted = 0;
         var failed = 0;
@@ -135,12 +159,14 @@ public sealed class BrainExtractPipeline : IBrainExtractPipeline
                     }
 
                     var contextJson = JsonSerializer.Serialize(ctx, ContextJson);
-                    var result = await _claude.RunAsync(new ClaudeRunRequest
+                    var result = await runner.RunAsync(new ClaudeRunRequest
                     {
                         UserPrompt = contextJson,
                         SystemPrompt = skill.Body,
                         Model = options.Model,
                         MaxBudgetUsd = options.MaxBudgetUsd,
+                        Foundry = foundryEnv,
+                        UseFoundry = options.UseFoundry,
                     }, innerCt);
 
                     if (!result.Success || string.IsNullOrWhiteSpace(result.ResponseText))

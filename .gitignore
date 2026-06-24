@@ -447,3 +447,4 @@ src/Infrastructure/Resources/heypoul-win-amd64.exe
 # pks writing — local report cache + overrides (see `pks writing init`)
 **/_review/
 nupkg-local/
+src/nupkg/pks-cli.6.17.0.nupkg

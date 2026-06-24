@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace PKS.Infrastructure.Services.Brain;
 
-public sealed class ClaudeRunner : IClaudeRunner
+public sealed class ClaudeBinaryRunner : IClaudeRunner
 {
     private const string ClaudeBinary = "claude";
 
@@ -21,6 +21,9 @@ public sealed class ClaudeRunner : IClaudeRunner
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        // Route this worker through Azure AI Foundry when requested (--foundry): sets
+        // CLAUDE_CODE_USE_FOUNDRY + the MSI token endpoint + tier model deployments.
+        request.Foundry?.Apply(psi.Environment);
         psi.ArgumentList.Add("--print");
         psi.ArgumentList.Add("--no-session-persistence");
         psi.ArgumentList.Add("--output-format");
@@ -29,6 +32,11 @@ public sealed class ClaudeRunner : IClaudeRunner
         psi.ArgumentList.Add(request.SystemPrompt);
         psi.ArgumentList.Add("--disable-slash-commands");
         psi.ArgumentList.Add("--dangerously-skip-permissions");
+        // Extract workers need no tools — only read JSON, write a markdown summary.
+        // --strict-mcp-config makes claude ignore the project's .mcp.json so each worker
+        // does NOT spin up MCP servers (e.g. the aspire server, which leaks hung
+        // `nuget search` processes — one per worker, thousands over a full extract run).
+        psi.ArgumentList.Add("--strict-mcp-config");
         if (!string.IsNullOrWhiteSpace(request.Model))
         {
             psi.ArgumentList.Add("--model");

@@ -193,7 +193,12 @@ services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainIngestPipeline, PK
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainSkillReader, PKS.Infrastructure.Services.Brain.BrainSkillReader>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IFirehoseReader, PKS.Infrastructure.Services.Brain.FirehoseReader>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainExtractContextBuilder, PKS.Infrastructure.Services.Brain.BrainExtractContextBuilder>();
-services.AddSingleton<PKS.Infrastructure.Services.Brain.IClaudeRunner, PKS.Infrastructure.Services.Brain.ClaudeRunner>();
+// Extract summarizer backends: claude binary (--agent claude) and in-process pks agent (default).
+services.AddSingleton<PKS.Infrastructure.Services.Brain.ClaudeBinaryRunner>();
+services.AddHttpClient<PKS.Infrastructure.Services.Brain.PksAgentRunner>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IClaudeRunner>(sp => sp.GetRequiredService<PKS.Infrastructure.Services.Brain.ClaudeBinaryRunner>());
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IExtractRunnerFactory, PKS.Infrastructure.Services.Brain.ExtractRunnerFactory>();
+services.AddSingleton<PKS.Infrastructure.Services.Foundry.IFoundryExtractEnv, PKS.Infrastructure.Services.Foundry.FoundryExtractEnv>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainExtractPipeline, PKS.Infrastructure.Services.Brain.BrainExtractPipeline>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IExtractReader, PKS.Infrastructure.Services.Brain.ExtractReader>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainSynthesisPipeline, PKS.Infrastructure.Services.Brain.BrainSynthesisPipeline>();
@@ -1324,7 +1329,7 @@ app.Configure(config =>
     // Add claude commands — spawn devcontainer + analysis
     config.AddBranch<Spectre.Console.Cli.CommandSettings>("claude", claude =>
     {
-        claude.SetDescription("Spawn claude in a devcontainer, or analyse Claude Code usage");
+        claude.SetDescription("Spawn claude in a devcontainer (or --inline in this shell), or analyse Claude Code usage");
 
         claude.SetDefaultCommand<PKS.Commands.Claude.ClaudeSpawnCommand>();
 
