@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.19.0](https://github.com/pksorensen/pks-cli/compare/v6.18.0...v6.19.0) (2026-06-24)
+
+
+### Features
+
+* **brain:** add --foundry and --agent flags to pks brain extract ([56d4714](https://github.com/pksorensen/pks-cli/commit/56d4714993e1f7fa5d86b5baf6025fe2c39e349b))
+
 ## [6.18.0](https://github.com/pksorensen/pks-cli/compare/v6.17.0...v6.18.0) (2026-06-21)
 
 
