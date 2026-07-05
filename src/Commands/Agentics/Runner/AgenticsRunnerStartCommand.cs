@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -29,6 +30,10 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
     private readonly IAnsiConsole _console;
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+
+    /// <summary>Kind A chat capability string (external/alp-spec/2026-03-30-draft/spec/13-chat.md).
+    /// Mirrors the Server's task-dispatch.ts CHAT_SESSION_CAPABILITY constant.</summary>
+    private const string ChatSessionCapability = "chat-session:v1";
 
     /// <summary>ActivitySource name used by the runner. Referenced by Program.cs when building the TracerProvider.</summary>
     public const string ActivitySourceName = "pks-cli.agentics.runner";
@@ -101,6 +106,14 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         [CommandOption("--git-user-email <EMAIL>")]
         [Description("Git user.email to configure inside the devcontainer (default: si-14x@agentics.dk)")]
         public string? GitUserEmail { get; set; }
+
+        [CommandOption("--chat-llm-backend-url <URL>")]
+        [Description("OpenAI-compatible chat-completions backend base URL (e.g. http://localhost:11434/v1) for chat-llm:v1 Jobs (default: uses CHAT_LLM_BACKEND_URL env). Declaring this enables the chat-llm:v1 capability -- see external/alp-spec/2026-03-30-draft/spec/13-chat.md.")]
+        public string? ChatLlmBackendUrl { get; set; }
+
+        [CommandOption("--chat-llm-backend-key <KEY>")]
+        [Description("API key sent to the chat-llm:v1 backend (default: uses CHAT_LLM_BACKEND_KEY env). Never sent to or stored by the Server -- forwarded only to the configured backend, per 13-chat.md's Kind B credential invariant.")]
+        public string? ChatLlmBackendKey { get; set; }
     }
 
     public AgenticsRunnerStartCommand(
@@ -310,7 +323,9 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 };
 
                 // Compute runner capabilities once at startup
-                var capabilities = await ComputeCapabilitiesAsync(settings.InProcess, cts.Token);
+                var chatLlmBackendUrl = ResolveChatLlmBackendUrl(settings.ChatLlmBackendUrl);
+                var chatLlmBackendKey = ResolveChatLlmBackendKey(settings.ChatLlmBackendKey);
+                var capabilities = await ComputeCapabilitiesAsync(settings.InProcess, chatLlmBackendUrl, cts.Token);
                 _console.MarkupLine($"[dim]Runner capabilities: {string.Join(", ", capabilities)}[/]");
 
                 // Polling loop
@@ -350,6 +365,15 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                                 await ExecuteGitDistributeJobAsync(registration, job, settings, cts.Token);
                                 jobsProcessed++;
                                 _console.MarkupLine($"[green]Git distribute job completed.[/]");
+                            }
+                            else if (job.AgentDef?.JobType == "chat_llm")
+                            {
+                                // Kind B (chat-llm:v1, external/alp-spec/2026-03-30-draft/spec/13-chat.md): a bare
+                                // Job -- no devcontainer, no Operator. The Runner itself dials the Chat Channel and
+                                // forwards chat-completions turns to the locally configured backend.
+                                await ExecuteChatLlmJobAsync(registration, job, chatLlmBackendUrl, chatLlmBackendKey, cts.Token);
+                                jobsProcessed++;
+                                _console.MarkupLine($"[green]Chat-llm job completed.[/]");
                             }
                             else if (settings.InProcess)
                             {
@@ -544,12 +568,25 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
     /// <summary>
     /// Computes the capability strings this runner instance supports.
-    /// "alp_operator" — always present (can run vibecast/claude jobs).
+    /// "alp_operator"    — always present (can run vibecast/claude jobs).
+    /// "chat-session:v1" — always present alongside "alp_operator": Kind A chat Jobs
+    ///                     (external/alp-spec/2026-03-30-draft/spec/13-chat.md) spawn the exact same
+    ///                     Operator/devcontainer path as any other Station Job, so any runner that can
+    ///                     do that can also open a Kind A chat session -- nothing extra to check for.
+    /// "chat-llm:v1"     — present only when a local chat-llm backend has been configured
+    ///                     (<c>--chat-llm-backend-url</c> / CHAT_LLM_BACKEND_URL). Kind B chat Jobs are
+    ///                     bare (no devcontainer): the runner forwards chat-completions turns to that
+    ///                     backend directly, so declaring the capability without a configured backend
+    ///                     would let the Server dispatch a Job this runner can't actually serve.
     /// "git:push"       — present when a GitHub token is stored (so git push won't prompt).
+    /// "git-distribute" — present alongside "git:push" (source distribution needs the same credentials).
     /// </summary>
-    private async Task<List<string>> ComputeCapabilitiesAsync(bool inProcess, CancellationToken ct)
+    private async Task<List<string>> ComputeCapabilitiesAsync(bool inProcess, string? chatLlmBackendUrl, CancellationToken ct)
     {
-        var caps = new List<string> { "alp_operator" };
+        var caps = new List<string> { "alp_operator", "chat-session:v1" };
+
+        if (!string.IsNullOrEmpty(chatLlmBackendUrl))
+            caps.Add("chat-llm:v1");
 
         // In --inprocess mode: check whether the stored GitHub token is valid.
         // In spawn mode:       the GitCredentialServer is always started with a stored token,
@@ -1204,6 +1241,13 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
         // Tell vibecast it's running as a job (used for behaviour gating in vibecast itself).
         scriptLines.AppendLine("export AGENTICS_JOB_MODE=1");
+
+        // Kind A chat-session:v1 (external/alp-spec/2026-03-30-draft/spec/13-chat.md): tells the
+        // container's vibecast (Operator) to open its Chat Channel for this job's main pane. vibecast
+        // gates this behind AGENTICS_CHAT_SESSION=1 alongside the AGENTICS_JOB_ID already exported
+        // above — see maybeStartChatChannel in external/vibecast/internal/stream/stream.go.
+        if (job.IsChatSession)
+            scriptLines.AppendLine("export AGENTICS_CHAT_SESSION=1");
 
         // Resume Claude session on retry-after-timeout. Spawn-mode used to silently drop this.
         if (!string.IsNullOrEmpty(job.AgentDef?.ResumeSessionId))
@@ -2510,6 +2554,309 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         }
     }
 
+    /// <summary>
+    /// Executes a chat-llm:v1 Job (Kind B, external/alp-spec/2026-03-30-draft/spec/13-chat.md). This is a
+    /// bare Job — no devcontainer, no Operator, no repository. The Runner process itself claims the Job,
+    /// then dials the Chat Channel directly (outbound-only, per the spec's Invariants) and forwards every
+    /// chat.completion.request frame it receives verbatim to the locally configured OpenAI-compatible
+    /// backend, translating the backend's SSE stream into chat.completion.chunk/done/error frames as each
+    /// event arrives. The backend credential (<paramref name="backendKey"/>) never leaves this process —
+    /// the Server only ever sees the resulting chunks, mirroring pks-agent-gateway's "forward unchanged,
+    /// never rewrite the caller's own key" posture (projects/pks-agent-gateway/src/gateway/proxy.go).
+    /// </summary>
+    private async Task ExecuteChatLlmJobAsync(
+        AgenticsRunnerRegistration registration,
+        RunnerJob job,
+        string? backendUrl,
+        string? backendKey,
+        CancellationToken ct)
+    {
+        using var client = _httpClientFactory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", registration.Token);
+
+        var baseUrl = $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}";
+
+        if (string.IsNullOrEmpty(backendUrl))
+        {
+            // Shouldn't normally happen — the Server only dispatches chat-llm:v1 Jobs to runners that
+            // declared the capability, and we only declare it when a backend is configured. Guard anyway.
+            _console.MarkupLine("[red]ChatLlm: no backend configured (--chat-llm-backend-url / CHAT_LLM_BACKEND_URL) — cannot serve this job.[/]");
+            return;
+        }
+
+        // 1. Claim the job
+        string runId;
+        _console.MarkupLine($"[cyan]ChatLlm: claiming job {job.Id}...[/]");
+        try
+        {
+            var claimResponse = await client.PostAsJsonAsync(
+                $"{baseUrl}/runners/generate-jitconfig",
+                new { jobId = job.Id, name = "chat-llm-runner" },
+                ct);
+            claimResponse.EnsureSuccessStatusCode();
+            var claimData = JsonSerializer.Deserialize<JsonElement>(
+                await claimResponse.Content.ReadAsStringAsync(ct), JsonOptions);
+            runId = claimData.GetProperty("runId").GetString()!;
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[red]ChatLlm: failed to claim job: {ex.Message.EscapeMarkup()}[/]");
+            return;
+        }
+
+        // 2. Mark in_progress
+        await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "in_progress", null, ct);
+
+        // 3. Dial the Chat Channel and serve turns until an explicit chat.end arrives (either direction)
+        //    or the channel drops. Per 13-chat.md, Kind B reconnect is "just accept a new connection for
+        //    the same Job" — so on an unexpected drop we redial once before giving up.
+        var channelUrl = BuildChatChannelUrl(registration, job.Id);
+        string? reason = null;
+        var failed = false;
+        var reconnected = false;
+
+        while (!ct.IsCancellationRequested)
+        {
+            using var ws = new ClientWebSocket();
+            try
+            {
+                _console.MarkupLine($"[cyan]ChatLlm: opening Chat Channel for job {job.Id}{(reconnected ? " (reconnect)" : "")}...[/]");
+                await ws.ConnectAsync(channelUrl, ct);
+            }
+            catch (Exception ex)
+            {
+                _console.MarkupLine($"[red]ChatLlm: failed to open Chat Channel: {ex.Message.EscapeMarkup()}[/]");
+                reason = ex.Message;
+                failed = true;
+                break;
+            }
+
+            var (ended, endReason, sessionFailed) =
+                await RunChatLlmChannelSessionAsync(ws, job.Id, backendUrl, backendKey, ct);
+
+            if (ended || reconnected || ct.IsCancellationRequested)
+            {
+                reason = endReason ?? "chat.end";
+                failed = sessionFailed;
+                break;
+            }
+
+            reconnected = true;
+            _console.MarkupLine("[yellow]ChatLlm: Chat Channel dropped unexpectedly, reconnecting once...[/]");
+        }
+
+        // 4. Report the Job outcome — a Chat Job reports success/failure like any other Job once it
+        //    concludes, regardless of how the chat itself ended (08-runner.md Job Outcome Schema).
+        await PatchJobStatusWithLogsAsync(client, baseUrl, runId, job.Id,
+            "completed", failed ? "failure" : "success", reason ?? "chat.end", ct);
+    }
+
+    /// <summary>
+    /// Builds the Chat Channel WebSocket URL for a chat-llm:v1 Job, reusing the exact auth convention the
+    /// existing /api/lives/broadcast/ws connection already uses to authenticate a Runner/Operator: the
+    /// token as a `?token=` query parameter (see external/vibecast/internal/broadcast/broadcast.go,
+    /// `broadcastPath += "&token=" + token`) rather than a new mechanism.
+    /// </summary>
+    private static Uri BuildChatChannelUrl(AgenticsRunnerRegistration registration, string jobId)
+    {
+        var serverUri = new Uri(registration.Server);
+        var scheme = string.Equals(serverUri.Scheme, "https", StringComparison.OrdinalIgnoreCase) ? "wss" : "ws";
+        return new Uri($"{scheme}://{serverUri.Authority}/api/lives/chat/channel/ws" +
+            $"?jobId={Uri.EscapeDataString(jobId)}&token={Uri.EscapeDataString(registration.Token)}");
+    }
+
+    /// <summary>
+    /// Drives a single Chat Channel connection for a chat-llm:v1 Job: receives frames and, for every
+    /// chat.completion.request, forwards it to the configured backend and streams back
+    /// chat.completion.chunk/done/error frames. Returns Ended=false when the socket dropped without an
+    /// explicit chat.end (caller may redial), Ended=true once either side sent chat.end.
+    /// </summary>
+    private async Task<(bool Ended, string? Reason, bool Failed)> RunChatLlmChannelSessionAsync(
+        ClientWebSocket ws, string jobId, string backendUrl, string? backendKey, CancellationToken ct)
+    {
+        using var backendClient = _httpClientFactory.CreateClient();
+        // Chat turns can run for minutes (long completions) — never let HttpClient's 100s default abort
+        // an in-flight backend stream. Mirrors pks-agent-gateway's WriteTimeout: 0 posture.
+        backendClient.Timeout = Timeout.InfiniteTimeSpan;
+
+        try
+        {
+            while (ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
+            {
+                var (message, closed) = await ReceiveChatFrameTextAsync(ws, ct);
+                if (closed)
+                    return (false, "channel closed by peer", false);
+                if (message is null)
+                    continue;
+
+                JsonElement frame;
+                try
+                {
+                    frame = JsonSerializer.Deserialize<JsonElement>(message, JsonOptions);
+                }
+                catch (JsonException)
+                {
+                    continue; // ignore a malformed frame rather than tearing down the whole channel
+                }
+
+                var type = frame.TryGetProperty("type", out var typeProp) ? typeProp.GetString() : null;
+                switch (type)
+                {
+                    case "chat.completion.request":
+                    {
+                        var requestId = frame.TryGetProperty("requestId", out var ridProp) ? ridProp.GetString() ?? "" : "";
+                        if (frame.TryGetProperty("body", out var bodyProp))
+                        {
+                            await ForwardChatCompletionRequestAsync(
+                                ws, backendClient, backendUrl, backendKey, jobId, requestId, bodyProp, ct);
+                        }
+                        break;
+                    }
+                    case "chat.end":
+                    {
+                        var endReason = frame.TryGetProperty("reason", out var reasonProp) ? reasonProp.GetString() : null;
+                        return (true, endReason ?? "chat.end", false);
+                    }
+                    default:
+                        // Unknown/forward-compatible frame type — ignore rather than fail the session.
+                        break;
+                }
+            }
+
+            return (false, "cancelled", false);
+        }
+        catch (OperationCanceledException)
+        {
+            return (false, "cancelled", false);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message, true);
+        }
+        finally
+        {
+            if (ws.State is WebSocketState.Open or WebSocketState.CloseReceived)
+            {
+                try { await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", CancellationToken.None); }
+                catch { /* best-effort */ }
+            }
+        }
+    }
+
+    /// <summary>Receives one full WebSocket text message, reassembling fragments until EndOfMessage.</summary>
+    private static async Task<(string? Message, bool Closed)> ReceiveChatFrameTextAsync(ClientWebSocket ws, CancellationToken ct)
+    {
+        var buffer = new byte[16 * 1024];
+        using var ms = new MemoryStream();
+        WebSocketReceiveResult result;
+        do
+        {
+            result = await ws.ReceiveAsync(buffer, ct);
+            if (result.MessageType == WebSocketMessageType.Close)
+                return (null, true);
+            ms.Write(buffer, 0, result.Count);
+        } while (!result.EndOfMessage);
+
+        return (Encoding.UTF8.GetString(ms.ToArray()), false);
+    }
+
+    /// <summary>
+    /// Forwards one chat.completion.request body verbatim to the configured OpenAI-compatible backend
+    /// (HttpCompletionOption.ResponseHeadersRead, no response buffering) and translates its SSE stream
+    /// into chat.completion.chunk frames the instant each event is parsed — no batching across events,
+    /// mirroring pks-agent-gateway's FlushInterval=-1 unbuffered-streaming guarantee
+    /// (projects/pks-agent-gateway/src/gateway/proxy.go) — ending with chat.completion.done, or
+    /// chat.completion.error on failure.
+    /// </summary>
+    private async Task ForwardChatCompletionRequestAsync(
+        ClientWebSocket ws,
+        HttpClient backendClient,
+        string backendUrl,
+        string? backendKey,
+        string jobId,
+        string requestId,
+        JsonElement body,
+        CancellationToken ct)
+    {
+        try
+        {
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{backendUrl}/chat/completions")
+            {
+                Content = new StringContent(body.GetRawText(), Encoding.UTF8, "application/json"),
+            };
+            if (!string.IsNullOrEmpty(backendKey))
+                httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", backendKey);
+            httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+
+            using var response = await backendClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                var errBody = await response.Content.ReadAsStringAsync(ct);
+                await SendChatFrameAsync(ws,
+                    new { type = "chat.completion.error", jobId, requestId, error = $"backend returned {(int)response.StatusCode}: {Truncate(errBody, 2000)}" },
+                    ct);
+                return;
+            }
+
+            var contentType = response.Content.Headers.ContentType?.MediaType;
+            var stream = await response.Content.ReadAsStreamAsync(ct);
+            await using (stream.ConfigureAwait(false))
+            {
+                if (contentType != null && contentType.Contains("event-stream", StringComparison.OrdinalIgnoreCase))
+                {
+                    using var reader = new StreamReader(stream, Encoding.UTF8);
+                    while (!reader.EndOfStream)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        var line = await reader.ReadLineAsync();
+                        if (line is null) break;
+                        if (line.Length == 0 || !line.StartsWith("data:", StringComparison.Ordinal))
+                            continue;
+
+                        var data = line["data:".Length..].TrimStart();
+                        if (data.Length == 0) continue;
+                        if (data == "[DONE]") break;
+
+                        JsonElement chunk;
+                        try { chunk = JsonSerializer.Deserialize<JsonElement>(data, JsonOptions); }
+                        catch (JsonException) { continue; }
+
+                        await SendChatFrameAsync(ws, new { type = "chat.completion.chunk", jobId, requestId, chunk }, ct);
+                    }
+                }
+                else
+                {
+                    // Non-streaming backend response — forward the single completion object as one chunk.
+                    using var reader = new StreamReader(stream, Encoding.UTF8);
+                    var json = await reader.ReadToEndAsync();
+                    if (!string.IsNullOrWhiteSpace(json))
+                    {
+                        var chunk = JsonSerializer.Deserialize<JsonElement>(json, JsonOptions);
+                        await SendChatFrameAsync(ws, new { type = "chat.completion.chunk", jobId, requestId, chunk }, ct);
+                    }
+                }
+            }
+
+            await SendChatFrameAsync(ws, new { type = "chat.completion.done", jobId, requestId }, ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await SendChatFrameAsync(ws, new { type = "chat.completion.error", jobId, requestId, error = ex.Message }, ct);
+            }
+            catch { /* channel may already be gone — the job-level outcome still gets reported by the caller */ }
+        }
+    }
+
+    /// <summary>Serializes and sends one Chat Channel frame as a single WebSocket text message.</summary>
+    private static async Task SendChatFrameAsync(ClientWebSocket ws, object frame, CancellationToken ct)
+    {
+        var json = JsonSerializer.SerializeToUtf8Bytes(frame);
+        await ws.SendAsync(json, WebSocketMessageType.Text, endOfMessage: true, ct);
+    }
+
     private static void CopyDirectory(string src, string dst)
     {
         Directory.CreateDirectory(dst);
@@ -3044,6 +3391,12 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
                 ? $" BROADCAST_ID={job.AgentDef.BroadcastId}"
                 : "";
 
+            // Kind A chat-session:v1 (external/alp-spec/2026-03-30-draft/spec/13-chat.md): tells the
+            // spawned vibecast (Operator) to open its Chat Channel for this job's main pane. vibecast
+            // gates this behind AGENTICS_CHAT_SESSION=1 alongside the AGENTICS_JOB_ID already set below
+            // — see maybeStartChatChannel in external/vibecast/internal/stream/stream.go.
+            var chatSessionEnv = job.IsChatSession ? " AGENTICS_CHAT_SESSION=1" : "";
+
             // initBranch: create a task-scoped branch in the worktree before launching Claude
             if (job.AgentDef?.InitBranch == true && !string.IsNullOrEmpty(job.AgentDef.TaskId))
             {
@@ -3100,7 +3453,7 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             // The log is captured on timeout and included in the job PATCH logs field.
             var vibecastLogRedirect = $" > \"{vibecastLogFile}\" 2>&1";
 
-            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv}{autoApproveEnv}{disableBackgroundTasksEnv}{disable1mContextEnv}{modelEnv}{modelTierEnv}{effortEnv}{subagentSuffixEnv}{broadcastIdEnv}{allowedDirsEnv}{claudeConfigDirEnv}{otelEnv}{agenticsProxyEnv} {vibecastBin}{vibecastLogRedirect}");
+            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv}{autoApproveEnv}{disableBackgroundTasksEnv}{disable1mContextEnv}{modelEnv}{modelTierEnv}{effortEnv}{subagentSuffixEnv}{broadcastIdEnv}{chatSessionEnv}{allowedDirsEnv}{claudeConfigDirEnv}{otelEnv}{agenticsProxyEnv} {vibecastBin}{vibecastLogRedirect}");
 
             var startProc = Process.Start(startPsi);
             if (startProc != null)
@@ -3559,6 +3912,32 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         // 3. Fallback to npx
         return "npx vibecast";
     }
+
+    /// <summary>
+    /// Resolves the chat-llm:v1 backend base URL (an OpenAI-compatible chat-completions endpoint,
+    /// e.g. http://localhost:11434/v1 for Ollama): explicit --chat-llm-backend-url flag, else the
+    /// CHAT_LLM_BACKEND_URL env var, else null (capability not advertised — mirrors ResolveVibecastBinary's
+    /// flag-then-env fallback shape, minus the "always has a default" step since there's no sane default backend).
+    /// </summary>
+    private static string? ResolveChatLlmBackendUrl(string? explicitValue)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitValue))
+            return explicitValue.TrimEnd('/');
+
+        var envValue = Environment.GetEnvironmentVariable("CHAT_LLM_BACKEND_URL");
+        return !string.IsNullOrWhiteSpace(envValue) ? envValue.TrimEnd('/') : null;
+    }
+
+    /// <summary>
+    /// Resolves the chat-llm:v1 backend API key: explicit --chat-llm-backend-key flag, else the
+    /// CHAT_LLM_BACKEND_KEY env var, else null (some local backends, e.g. Ollama, need no key at all).
+    /// This value is only ever sent to the configured backend, never to the Server — see 13-chat.md's
+    /// Kind B credential invariant.
+    /// </summary>
+    private static string? ResolveChatLlmBackendKey(string? explicitValue) =>
+        !string.IsNullOrWhiteSpace(explicitValue)
+            ? explicitValue
+            : Environment.GetEnvironmentVariable("CHAT_LLM_BACKEND_KEY");
 
     private static async Task<string?> SendControlSocketRequestAsync(
         string socketPath, string method, string path, string? body, CancellationToken ct)
@@ -4791,10 +5170,24 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         public string? ProjectName { get; set; }
         public string? ProjectPath { get; set; }
         public string? DevcontainerPath { get; set; }
+        /// <summary>Capability strings the claiming Runner had to declare to be matched to this Job
+        /// (mirrors the Server's AgentJob.needs, populated from AgentDefinition.needs at dispatch
+        /// time — see task-dispatch.ts). Used here to detect a Kind A chat-session:v1 Job
+        /// (external/alp-spec/2026-03-30-draft/spec/13-chat.md), which carries
+        /// needs: ["chat-session:v1"] but otherwise dispatches through the ordinary alp_operator
+        /// spawn path with no JobType of its own.</summary>
+        public List<string>? Needs { get; set; }
         public RunnerAgentDefinition? AgentDefinition { get; set; }
 
         /// <summary>Convenience accessor for agentDefinition.</summary>
         public RunnerAgentDefinition? AgentDef => AgentDefinition;
+
+        /// <summary>True when this Job's needs declare the chat-session:v1 capability (Kind A chat
+        /// Job). Checked in addition to Needs/AgentDefinition.Needs since the Server populates both
+        /// with the same array — belt-and-suspenders against either being trimmed in a future change.</summary>
+        public bool IsChatSession =>
+            (Needs?.Contains(ChatSessionCapability) ?? false) ||
+            (AgentDefinition?.Needs?.Contains(ChatSessionCapability) ?? false);
     }
 
     private class RunnerAgentDefinition
@@ -4868,8 +5261,16 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         /// the workers never author themselves.</summary>
         public Dictionary<string, string>? AgenticsSpecFiles { get; set; }
         /// <summary>Job type — defaults to alp_operator. Use git_push for runner-proxied git push operations,
-        /// or git_distribute for source-code mirroring with an allowlist filter.</summary>
+        /// git_distribute for source-code mirroring with an allowlist filter, or chat_llm for a bare
+        /// chat-llm:v1 Job (external/alp-spec/2026-03-30-draft/spec/13-chat.md Kind B — no devcontainer;
+        /// the Runner dials the Chat Channel directly and forwards chat-completions turns to its
+        /// locally configured backend). Kind A (chat-session:v1) Jobs need no JobType of their own —
+        /// they dispatch through the default alp_operator spawn path unchanged.</summary>
         public string? JobType { get; set; }
+        /// <summary>Capability strings a runner had to declare to be matched to this Job (server-side
+        /// AgentDefinition.needs). See RunnerJob.Needs/IsChatSession — this is the same array, just
+        /// also reachable via AgentDef for call sites that already have that reference in hand.</summary>
+        public List<string>? Needs { get; set; }
         /// <summary>Payload for git_push jobs. Runner clones targetRepo, writes files, commits, and pushes.</summary>
         public GitPushPayloadModel? GitPushPayload { get; set; }
         /// <summary>Payload for git_distribute jobs. Runner clones SourceRepo, applies the allowlist
