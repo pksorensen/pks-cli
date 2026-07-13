@@ -54,39 +54,60 @@ public static class CodexCliConfig
         return existing.TrimEnd() + "\n\n" + managed + "\n";
     }
 
-    /// <summary>The TOML body for the Foundry passthrough provider (loopback; auth is injected by pks).</summary>
-    public static string BuildProviderBlock(int port) =>
-$@"# Native Codex provider routed through the pks loopback passthrough, which injects fresh
-# Azure AI Foundry auth on every request. Select it per-run via `pks codex` (do not flip your
-# global default here). Requires the passthrough to be running, e.g. `pks codex`.
+    public const string ApiKeyEnvVar = "PKS_CODEX_FOUNDRY_API_KEY";
+
+    /// <summary>The TOML body for direct Azure OpenAI / Foundry API-key auth.</summary>
+    public static string BuildDirectProviderBlock(string endpoint) =>
+$@"# Native Codex provider for Azure AI Foundry / Azure OpenAI. Select it per-run via
+# `pks codex`; pks injects {ApiKeyEnvVar} into the launched codex process.
+[model_providers.{ProviderName}]
+name = ""PKS Foundry (Codex)""
+base_url = ""{BuildOpenAiV1BaseUrl(endpoint)}""
+env_key = ""{ApiKeyEnvVar}""
+wire_api = ""responses""";
+
+    /// <summary>The TOML body for the Foundry passthrough provider (loopback; Entra auth is handled by pks).</summary>
+    public static string BuildProxyProviderBlock(int port) =>
+$@"# Native Codex provider routed through the pks loopback passthrough, which injects
+# Foundry Entra auth while forwarding Codex Responses requests unchanged.
 [model_providers.{ProviderName}]
 name = ""PKS Foundry (Codex)""
 base_url = ""http://127.0.0.1:{port}/openai/v1""
 env_key = ""PKS_CODEX_TOKEN""
 wire_api = ""responses""";
 
+    public static string BuildOpenAiV1BaseUrl(string endpoint)
+    {
+        var baseUrl = endpoint.TrimEnd('/');
+        if (baseUrl.EndsWith("/openai/v1", StringComparison.OrdinalIgnoreCase))
+            return baseUrl;
+        if (baseUrl.EndsWith("/openai", StringComparison.OrdinalIgnoreCase))
+            return baseUrl + "/v1";
+        return baseUrl + "/openai/v1";
+    }
+
     public static string ConfigTomlPath() => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "config.toml");
 
-    /// <summary>True if the managed Foundry provider block is present and targets <paramref name="port"/>.</summary>
-    public static bool HasManagedBlockForPort(string? existing, int port)
+    /// <summary>True if the managed Foundry provider block is present and targets <paramref name="baseUrl"/>.</summary>
+    public static bool HasManagedBlockForBaseUrl(string? existing, string baseUrl)
     {
         if (string.IsNullOrEmpty(existing)) return false;
         var beginIdx = existing.IndexOf(BeginMarker, StringComparison.Ordinal);
         if (beginIdx < 0) return false;
         var endIdx = existing.IndexOf(EndMarker, beginIdx, StringComparison.Ordinal);
         if (endIdx < 0) return false;
-        return existing[beginIdx..endIdx].Contains($"127.0.0.1:{port}/openai/v1", StringComparison.Ordinal);
+        return existing[beginIdx..endIdx].Contains($"base_url = \"{baseUrl}\"", StringComparison.Ordinal);
     }
 
     /// <summary>Writes the managed Foundry provider block into <c>~/.codex/config.toml</c>, creating the file if needed.</summary>
-    public static void WriteProviderBlock(int port)
+    public static void WriteProviderBlock(string blockBody)
     {
         var path = ConfigTomlPath();
         var dir = Path.GetDirectoryName(path)!;
         Directory.CreateDirectory(dir);
         var existing = File.Exists(path) ? File.ReadAllText(path) : null;
-        File.WriteAllText(path, UpsertManagedBlock(existing, BuildProviderBlock(port)));
+        File.WriteAllText(path, UpsertManagedBlock(existing, blockBody));
     }
 
     // ---- pks-side launch defaults (~/.pks-cli/codex.json) ----
@@ -113,6 +134,23 @@ wire_api = ""responses""";
         SecurityFiles.EnsureDirectory(path);
         File.WriteAllText(path, JsonSerializer.Serialize(cfg, JsonOpts));
         SecurityFiles.Restrict(path);
+    }
+
+    /// <summary>
+    /// Normalizes common human-entered deployment spellings, e.g. "gpt 5.6 sol" -> "gpt-5.6-sol".
+    /// Also maps the early shorthand "gpt-6-sol" to the actual Foundry deployment name.
+    /// Foundry still requires the resulting value to be an actual deployment name.
+    /// </summary>
+    public static string? NormalizeDeploymentName(string? deployment)
+    {
+        if (string.IsNullOrWhiteSpace(deployment)) return null;
+        var trimmed = deployment.Trim();
+        var normalized = trimmed.Any(char.IsWhiteSpace)
+            ? string.Join('-', trimmed.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            : trimmed;
+        return normalized.Equals("gpt-6-sol", StringComparison.OrdinalIgnoreCase)
+            ? "gpt-5.6-sol"
+            : normalized;
     }
 
     /// <summary>Heuristic: does this deployment name look like a Codex/GPT model worth defaulting to?</summary>

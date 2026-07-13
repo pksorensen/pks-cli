@@ -21,6 +21,9 @@ ARG TZ
 ENV TZ="$TZ"
 
 ARG CLAUDE_CODE_VERSION=latest
+# OpenAI Codex CLI — the alternative vibecast Operator runtime (VIBECAST_AGENT=codex).
+# Pinned to the version the vibecast conformance suite is green against (status-codex.md).
+ARG CODEX_VERSION=0.142.5
 ARG WORKSPACE_NAME=workspace
 ARG GIT_COMMIT=unknown
 ARG BUILD_DATE=unknown
@@ -164,7 +167,8 @@ RUN npx -y playwright@1.56.1 install --with-deps chromium
 # Usage: cat /etc/image-info
 RUN echo "commit=${GIT_COMMIT}" > /etc/image-info && \
   echo "build_date=${BUILD_DATE}" >> /etc/image-info && \
-  echo "claude_code=${CLAUDE_CODE_VERSION}" >> /etc/image-info
+  echo "claude_code=${CLAUDE_CODE_VERSION}" >> /etc/image-info && \
+  echo "codex=${CODEX_VERSION}" >> /etc/image-info
 
 # Set up non-root user
 USER node
@@ -329,5 +333,11 @@ COPY templates/base-images/pks-fullstack-base/.tmux.conf /home/node/.tmux.conf
 
 # Install Claude Code (supports: "latest", "stable", or specific version like "1.0.58")
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- ${CLAUDE_CODE_VERSION}
+
+# Install OpenAI Codex CLI so VIBECAST_AGENT=codex resolves via exec.LookPath("codex").
+# Global npm install lands the `codex` binary on PATH (npm-global/bin). Auth is provided at
+# runtime (OPENAI_API_KEY forwarded by the runner, or a copied ~/.codex/auth.json) and the
+# vibecast config-seed writes the per-session CODEX_HOME (hooks + MCP + trust).
+RUN npm install -g @openai/codex@${CODEX_VERSION}
 
 USER node

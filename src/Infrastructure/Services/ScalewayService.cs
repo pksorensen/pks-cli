@@ -202,15 +202,35 @@ public class ScalewayService : IScalewayService
             ?? throw new InvalidOperationException("Scaleway returned no server on create.");
         created.Zone ??= options.Zone;
 
-        // Inject our SSH public key via cloud-init user-data BEFORE first boot so the box
-        // accepts our key (Scaleway has no per-create ssh-key field; cloud-init is per-VM).
+        // Inject our SSH public key (and optionally join the tailnet) via cloud-init
+        // user-data BEFORE first boot so the box accepts our key on first contact
+        // (Scaleway has no per-create ssh-key field; cloud-init is per-VM).
         if (!string.IsNullOrWhiteSpace(options.SshPublicKey))
         {
             onProgress?.Invoke("Setting cloud-init (ssh key)...");
+            var key = options.SshPublicKey.Trim();
+            // ssh_authorized_keys targets cloud-init's default_user, which on some Scaleway
+            // images (e.g. GPU OS) is "ubuntu", not root — so also runcmd it straight into
+            // /root/.ssh/authorized_keys to guarantee root@ works regardless of the image.
+            var runcmd =
+                "runcmd:\n" +
+                "  - mkdir -p /root/.ssh\n" +
+                "  - chmod 700 /root/.ssh\n" +
+                $"  - echo '{key}' >> /root/.ssh/authorized_keys\n" +
+                "  - chmod 600 /root/.ssh/authorized_keys\n" +
+                "  - sort -u -o /root/.ssh/authorized_keys /root/.ssh/authorized_keys\n";
+            if (!string.IsNullOrWhiteSpace(options.TailscaleUpArgs))
+            {
+                onProgress?.Invoke("Setting cloud-init (ssh key + tailscale)...");
+                runcmd +=
+                    "  - curl -fsSL https://tailscale.com/install.sh | sh\n" +
+                    $"  - tailscale up {options.TailscaleUpArgs}\n";
+            }
             var cloudInit =
                 "#cloud-config\n" +
                 "ssh_authorized_keys:\n" +
-                $"  - {options.SshPublicKey.Trim()}\n";
+                $"  - {key}\n" +
+                runcmd;
             await SetCloudInitAsync(options.Zone, created.Id, cloudInit, secret, ct);
         }
 
@@ -268,6 +288,9 @@ public class ScalewayService : IScalewayService
             $"{BaseUrl}/instance/v1/zones/{zone}/servers/{serverId}/user_data/cloud-init");
         req.Headers.Add("X-Auth-Token", secretKey);
         req.Content = new StringContent(cloudInit, Encoding.UTF8, "text/plain");
+        // Scaleway rejects a charset parameter on this endpoint ("Content-Type must be
+        // text/plain and not text/plain; charset=utf-8") — StringContent always adds one.
+        req.Content.Headers.ContentType!.CharSet = null;
         var resp = await _httpClient.SendAsync(req, ct);
         await EnsureSuccessAsync(resp);
     }

@@ -3277,7 +3277,12 @@ DEVCONTAINER_EOF";
             Cmd = new[]
             {
                 "-c",
-                $"GIT_TERMINAL_PROMPT=0 git clone --depth=1 --branch {branch} {gitUrl} /workspace/{projectName} && git -C /workspace/{projectName} rev-parse HEAD"
+                // No --depth=1: pks-agent-git's Smart-HTTP server never advertises the
+                // "shallow" capability and explicitly rejects shallow requests (see
+                // upload_pack.go), so a shallow clone against it fails outright with
+                // "Server does not support shallow clients" rather than falling back
+                // to a full clone.
+                $"GIT_TERMINAL_PROMPT=0 git clone --branch {branch} {gitUrl} /workspace/{projectName} && git -C /workspace/{projectName} rev-parse HEAD"
             },
             HostConfig = new HostConfig
             {

@@ -1,4 +1,6 @@
 using System.Net.Http;
+using System.Text;
+using System.Text.Json;
 using FluentAssertions;
 using Moq;
 using PKS.CLI.Tests.Infrastructure;
@@ -24,7 +26,7 @@ public class CodexConfigTests
     [Fact]
     public void UpsertManagedBlock_IntoEmpty_WritesSingleBlock()
     {
-        var result = CodexCliConfig.UpsertManagedBlock(null, CodexCliConfig.BuildProviderBlock(8788));
+        var result = CodexCliConfig.UpsertManagedBlock(null, CodexCliConfig.BuildProxyProviderBlock(8788));
 
         CountOccurrences(result, CodexCliConfig.BeginMarker).Should().Be(1);
         result.Should().Contain("[model_providers.pks-foundry]");
@@ -34,8 +36,8 @@ public class CodexConfigTests
     [Fact]
     public void UpsertManagedBlock_IsIdempotent_AndUpdatesPort()
     {
-        var first = CodexCliConfig.UpsertManagedBlock(null, CodexCliConfig.BuildProviderBlock(8788));
-        var second = CodexCliConfig.UpsertManagedBlock(first, CodexCliConfig.BuildProviderBlock(9999));
+        var first = CodexCliConfig.UpsertManagedBlock(null, CodexCliConfig.BuildProxyProviderBlock(8788));
+        var second = CodexCliConfig.UpsertManagedBlock(first, CodexCliConfig.BuildProxyProviderBlock(9999));
 
         CountOccurrences(second, CodexCliConfig.BeginMarker).Should().Be(1);
         CountOccurrences(second, "[model_providers.pks-foundry]").Should().Be(1);
@@ -48,7 +50,7 @@ public class CodexConfigTests
     {
         var existing = "model = \"o3\"\nmodel_provider = \"openai\"\n\n[tui]\ntheme = \"dark\"\n";
 
-        var result = CodexCliConfig.UpsertManagedBlock(existing, CodexCliConfig.BuildProviderBlock(8788));
+        var result = CodexCliConfig.UpsertManagedBlock(existing, CodexCliConfig.BuildProxyProviderBlock(8788));
 
         result.Should().Contain("model_provider = \"openai\"");
         result.Should().Contain("[tui]");
@@ -58,13 +60,25 @@ public class CodexConfigTests
     }
 
     [Fact]
-    public void HasManagedBlockForPort_MatchesOnlyConfiguredPort()
+    public void HasManagedBlockForBaseUrl_MatchesOnlyConfiguredBaseUrl()
     {
-        var toml = CodexCliConfig.UpsertManagedBlock(null, CodexCliConfig.BuildProviderBlock(8788));
+        var toml = CodexCliConfig.UpsertManagedBlock(null, CodexCliConfig.BuildProxyProviderBlock(8788));
 
-        CodexCliConfig.HasManagedBlockForPort(toml, 8788).Should().BeTrue();
-        CodexCliConfig.HasManagedBlockForPort(toml, 9999).Should().BeFalse();
-        CodexCliConfig.HasManagedBlockForPort("model = \"o3\"", 8788).Should().BeFalse();
+        CodexCliConfig.HasManagedBlockForBaseUrl(toml, "http://127.0.0.1:8788/openai/v1").Should().BeTrue();
+        CodexCliConfig.HasManagedBlockForBaseUrl(toml, "http://127.0.0.1:9999/openai/v1").Should().BeFalse();
+        CodexCliConfig.HasManagedBlockForBaseUrl("model = \"o3\"", "http://127.0.0.1:8788/openai/v1").Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("gpt 5.6 sol", "gpt-5.6-sol")]
+    [InlineData("  gpt   5.6   sol  ", "gpt-5.6-sol")]
+    [InlineData("gpt-5.6-sol", "gpt-5.6-sol")]
+    [InlineData("gpt 6 sol", "gpt-5.6-sol")]
+    [InlineData("gpt-6-sol", "gpt-5.6-sol")]
+    [InlineData("", null)]
+    public void NormalizeDeploymentName_CollapsesHumanSpacing(string input, string? expected)
+    {
+        CodexCliConfig.NormalizeDeploymentName(input).Should().Be(expected);
     }
 
     // ---- responses URL normalisation ----
@@ -77,6 +91,16 @@ public class CodexConfigTests
     public void BuildResponsesUrl_NormalisesToV1ResponsesPath(string endpoint, string expected)
     {
         FoundryResponsesEndpoint.BuildResponsesUrl(endpoint).Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("https://r.cognitiveservices.azure.com", "https://r.cognitiveservices.azure.com/openai/v1")]
+    [InlineData("https://r.cognitiveservices.azure.com/", "https://r.cognitiveservices.azure.com/openai/v1")]
+    [InlineData("https://r.openai.azure.com/openai", "https://r.openai.azure.com/openai/v1")]
+    [InlineData("https://r.openai.azure.com/openai/v1", "https://r.openai.azure.com/openai/v1")]
+    public void BuildOpenAiV1BaseUrl_NormalisesToV1BaseUrl(string endpoint, string expected)
+    {
+        CodexCliConfig.BuildOpenAiV1BaseUrl(endpoint).Should().Be(expected);
     }
 
     // ---- upstream auth selection ----
@@ -109,6 +133,56 @@ public class CodexConfigTests
         req.Headers.Authorization!.Scheme.Should().Be("Bearer");
         req.Headers.Authorization!.Parameter.Should().Be("aad-token");
         req.Headers.Contains("api-key").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ApplyUpstreamAuth_UsesBearer_WhenForcedEvenWithApiKey()
+    {
+        var auth = new Mock<IAzureFoundryAuthService>();
+        auth.Setup(x => x.GetAccessTokenAsync("scope", It.IsAny<CancellationToken>())).ReturnsAsync("aad-token");
+        var creds = new FoundryStoredCredentials { ApiKey = "secret-key" };
+        using var req = new HttpRequestMessage(HttpMethod.Post, "https://upstream/responses");
+
+        await FoundryResponsesEndpoint.ApplyUpstreamAuthAsync(req, creds, auth.Object, "scope", default, forceBearer: true);
+
+        req.Headers.Authorization.Should().NotBeNull();
+        req.Headers.Authorization!.Scheme.Should().Be("Bearer");
+        req.Headers.Authorization!.Parameter.Should().Be("aad-token");
+        req.Headers.Contains("api-key").Should().BeFalse();
+    }
+
+    [Fact]
+    public void FilterFoundryIncompatibleAdditionalTools_RemovesOnlyCollaborationGroup()
+    {
+        var json = """
+        {
+          "model": "gpt-5.6-sol",
+          "input": [
+            {
+              "type": "additional_tools",
+              "tools": [
+                { "name": "js_repl", "description": "Run JavaScript" },
+                { "name": "collaboration", "description": "Tools for spawning and managing sub-agents." },
+                { "name": "browser", "namespace": "browser_use" }
+              ]
+            },
+            {
+              "type": "message",
+              "role": "user",
+              "content": [{ "type": "input_text", "text": "test" }]
+            }
+          ]
+        }
+        """;
+
+        var filtered = FoundryResponsesPassthrough.FilterFoundryIncompatibleAdditionalTools(
+            Encoding.UTF8.GetBytes(json),
+            out var summary);
+
+        summary.Should().Contain("Removed 1 `collaboration` additional_tools entry");
+        using var doc = JsonDocument.Parse(filtered);
+        var tools = doc.RootElement.GetProperty("input")[0].GetProperty("tools").EnumerateArray().ToArray();
+        tools.Select(t => t.GetProperty("name").GetString()).Should().Equal("js_repl", "browser");
     }
 
     private static int CountOccurrences(string haystack, string needle)

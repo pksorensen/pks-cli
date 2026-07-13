@@ -986,8 +986,8 @@ app.Configure(config =>
 
     // Add Codex branch command — run the real codex CLI against Foundry (native, no translation).
     // Typed with the default command's settings so `pks codex -m ... --print-env` binds its options
-    // (a branch typed with the base CommandSettings would not parse the default command's options).
-    config.AddBranch<PKS.Commands.Codex.CodexSettings>("codex", codex =>
+    // (a branch typed with the base CommandSettings would pass them through as native Codex args).
+    config.AddBranch<PKS.Commands.Codex.CodexBranchSettings>("codex", codex =>
     {
         codex.SetDescription("Run the real Codex CLI against Azure AI Foundry (native Responses, no translation)");
         codex.SetDefaultCommand<PKS.Commands.Codex.CodexCommand>();
@@ -997,6 +997,27 @@ app.Configure(config =>
             .WithExample(["codex", "run"])
             .WithExample(["codex", "run", "--model", "gpt-5-codex", "--reasoning-effort", "high"])
             .WithExample(["codex", "run", "--print-env"]);
+
+        codex.AddCommand<PKS.Commands.Codex.CodexCommand>("resume")
+            .WithDescription("Run `codex resume` against Foundry")
+            .WithExample(["codex", "resume", "--last"])
+            .WithExample(["codex", "resume", "019f3e01-b0c1-7bf2-b1d8-d0befe7232fd"]);
+
+        codex.AddCommand<PKS.Commands.Codex.CodexCommand>("exec")
+            .WithDescription("Run `codex exec` against Foundry")
+            .WithExample(["codex", "exec", "resume", "--last", "Continue the previous task"]);
+
+        codex.AddCommand<PKS.Commands.Codex.CodexCommand>("fork")
+            .WithDescription("Run `codex fork` against Foundry");
+
+        codex.AddCommand<PKS.Commands.Codex.CodexCommand>("archive")
+            .WithDescription("Run `codex archive` against Foundry");
+
+        codex.AddCommand<PKS.Commands.Codex.CodexCommand>("unarchive")
+            .WithDescription("Run `codex unarchive` against Foundry");
+
+        codex.AddCommand<PKS.Commands.Codex.CodexCommand>("delete")
+            .WithDescription("Run `codex delete` against Foundry");
 
         codex.AddCommand<PKS.Commands.Codex.CodexInitCommand>("init")
             .WithDescription("Set up ~/.codex/config.toml to run codex against Azure AI Foundry")
@@ -1044,6 +1065,9 @@ app.Configure(config =>
         vm.AddCommand<PKS.Commands.Vm.VmStartCommand>("start")
             .WithDescription("Start a VM, wait until reachable, and print connection info")
             .WithExample(new[] { "vm", "start" });
+        vm.AddCommand<PKS.Commands.Vm.VmStopCommand>("stop")
+            .WithDescription("Stop a VM (power off; disk/attached storage is preserved)")
+            .WithExample(new[] { "vm", "stop" });
         vm.AddCommand<PKS.Commands.Vm.VmAddSshKeyCommand>("add-ssh-key")
             .WithDescription("Add an SSH private key for a VM (paste it) so we can connect")
             .WithExample(new[] { "vm", "add-ssh-key" });
@@ -1729,6 +1753,8 @@ if (filteredArgs.Length >= 1 && filteredArgs[0].Equals("agent", StringComparison
             .ToArray();
     }
 }
+
+PKS.Commands.Codex.CodexCommand.CurrentArgv = filteredArgs;
 
 return await app.RunAsync(filteredArgs);
 

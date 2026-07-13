@@ -43,6 +43,92 @@ public sealed class AgentChatProviderFactory
         }
     }
 
+    /// <summary>
+    /// Enumerate the model ids this Runner can actually serve right now — the union of built-in
+    /// defaults, custom <c>agent.models.&lt;id&gt;</c> settings entries, and Foundry-enabled models,
+    /// filtered to those whose credentials/endpoint are currently satisfiable (see
+    /// <see cref="CanResolveAsync"/>). Used to populate a web UI /model picker. Order is stable
+    /// (first-seen across the three sources) and ids are deduped case-insensitively.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> ListAvailableModelsAsync(CancellationToken ct = default)
+    {
+        var candidates = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void Add(string id)
+        {
+            if (!string.IsNullOrWhiteSpace(id) && seen.Add(id))
+                candidates.Add(id);
+        }
+
+        // 1. Built-in known models.
+        foreach (var id in BuiltInDefaults.Keys)
+            Add(id);
+
+        // 2. Custom model ids configured directly in settings (agent.models.<id>.provider).
+        const string prefix = "agent.models.";
+        const string suffix = ".provider";
+        var all = await _config.GetAllAsync();
+        foreach (var key in all.Keys)
+        {
+            if (key.StartsWith(prefix, StringComparison.Ordinal)
+                && key.EndsWith(suffix, StringComparison.Ordinal)
+                && key.Length > prefix.Length + suffix.Length)
+            {
+                Add(key.Substring(prefix.Length, key.Length - prefix.Length - suffix.Length));
+            }
+        }
+
+        // 3. Models the user enabled via `pks foundry init` / `pks foundry select`.
+        if (_foundryAuth is not null)
+        {
+            var creds = await _foundryAuth.GetStoredCredentialsAsync();
+            if (creds is not null && creds.EnabledModels.Count > 0)
+            {
+                foreach (var id in creds.EnabledModels)
+                    Add(id);
+            }
+        }
+
+        // 4. Keep only ids that would resolve to a usable provider right now.
+        var available = new List<string>();
+        foreach (var id in candidates)
+        {
+            if (await CanResolveAsync(id, ct))
+                available.Add(id);
+        }
+
+        return available;
+    }
+
+    /// <summary>
+    /// True if <paramref name="modelId"/> would resolve to a usable provider right now, mirroring the
+    /// preconditions <see cref="BuildAzureOpenAI"/>/<see cref="BuildAnthropic"/> enforce — without
+    /// constructing a provider or making a network call. An azure-openai model needs an endpoint; an
+    /// anthropic model needs an apiKey, the <c>ANTHROPIC_API_KEY</c> env var, or a Foundry-served
+    /// Claude endpoint.
+    /// </summary>
+    private async Task<bool> CanResolveAsync(string modelId, CancellationToken ct)
+    {
+        try
+        {
+            var entry = await GetModelEntryAsync(modelId, ct);
+            return entry.Provider switch
+            {
+                "azure-openai" => !string.IsNullOrWhiteSpace(entry.Endpoint),
+                "anthropic" => !string.IsNullOrWhiteSpace(entry.ApiKey)
+                    || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"))
+                    || (_foundryAuth is not null && entry.Endpoint is not null
+                        && new Uri(entry.Endpoint).Host.EndsWith(".services.ai.azure.com", StringComparison.OrdinalIgnoreCase)),
+                _ => false,
+            };
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private IChatProvider BuildAzureOpenAI(ModelEntry entry)
     {
         if (string.IsNullOrWhiteSpace(entry.Endpoint))
@@ -63,7 +149,12 @@ public sealed class AgentChatProviderFactory
 
     private IChatProvider BuildAnthropic(ModelEntry entry)
     {
-        var endpoint = new Uri(entry.Endpoint ?? "https://api.anthropic.com");
+        // Endpoint precedence: explicit settings entry → ANTHROPIC_BASE_URL env
+        // (lets the runner point chat-llm at the pks-agent-gateway LLM sim the
+        // same way the spawned claude is pointed at it) → the real API.
+        var endpoint = new Uri(entry.Endpoint
+            ?? Environment.GetEnvironmentVariable("ANTHROPIC_BASE_URL")
+            ?? "https://api.anthropic.com");
         var key = entry.ApiKey ?? Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
         if (!string.IsNullOrWhiteSpace(key))
         {

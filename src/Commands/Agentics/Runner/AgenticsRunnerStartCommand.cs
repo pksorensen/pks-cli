@@ -8,6 +8,8 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.FileSystemGlobbing;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Agent;
+using PKS.Infrastructure.Services.Agent.Chat;
 using PKS.Infrastructure.Services.AgenticsProxy;
 using PKS.Infrastructure.Services.Models;
 using PKS.Infrastructure.Services.Runner;
@@ -27,6 +29,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
     private readonly IGitHubAuthenticationService _githubAuth;
     private readonly IAzureFoundryAuthService _foundryAuthService;
     private readonly AzureFoundryAuthConfig _foundryConfig;
+    private readonly AgentChatProviderFactory _chatProviderFactory;
     private readonly IAnsiConsole _console;
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
@@ -34,6 +37,13 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
     /// <summary>Kind A chat capability string (external/alp-spec/2026-03-30-draft/spec/13-chat.md).
     /// Mirrors the Server's task-dispatch.ts CHAT_SESSION_CAPABILITY constant.</summary>
     private const string ChatSessionCapability = "chat-session:v1";
+
+    /// <summary>Devcontainer-hosted sub-agent capability (plan `snappy-wandering-mochi` Phase 2). Like
+    /// chat-session:v1 this carries no JobType of its own -- it dispatches through the ordinary
+    /// alp_operator spawn path unchanged, just without AGENTICS_CHAT_SESSION=1, so the Operator opens
+    /// a plain long-lived vibecast/Claude session in the project's own devcontainer instead of dialing
+    /// the ALP Chat Channel. Mirrors the Server's task-dispatch.ts DEVCONTAINER_SESSION_CAPABILITY constant.</summary>
+    private const string DevAgentSessionCapability = "devcontainer-session:v1";
 
     /// <summary>ActivitySource name used by the runner. Referenced by Program.cs when building the TracerProvider.</summary>
     public const string ActivitySourceName = "pks-cli.agentics.runner";
@@ -59,6 +69,41 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
     // Track active job resources for cleanup on shutdown
     private readonly List<ActiveJobContext> _activeJobs = new();
     private readonly object _activeJobsLock = new();
+
+    // Track in-flight job executions so the poll loop can keep claiming new jobs (e.g. an
+    // ALP task dispatch) instead of blocking on a long-lived one (e.g. a chat_llm session
+    // held open for the lifetime of a chat). Drained (not abandoned) on shutdown.
+    private readonly List<Task> _runningJobTasks = new();
+    private readonly object _runningJobTasksLock = new();
+
+    private void TrackRunningJob(Task jobTask)
+    {
+        lock (_runningJobTasksLock)
+        {
+            _runningJobTasks.Add(jobTask);
+            _runningJobTasks.RemoveAll(t => t.IsCompleted);
+        }
+    }
+
+    private async Task DrainRunningJobTasksAsync()
+    {
+        List<Task> pending;
+        lock (_runningJobTasksLock)
+        {
+            pending = _runningJobTasks.Where(t => !t.IsCompleted).ToList();
+        }
+        if (pending.Count == 0) return;
+
+        _console.MarkupLine($"[yellow]Waiting for {pending.Count} in-flight job(s) to finish...[/]");
+        try
+        {
+            await Task.WhenAll(pending);
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[yellow]Warning: one or more in-flight jobs ended with an error during shutdown: {ex.Message.EscapeMarkup()}[/]");
+        }
+    }
 
     private record ActiveJobContext(
         string JobId,
@@ -112,8 +157,16 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         public string? ChatLlmBackendUrl { get; set; }
 
         [CommandOption("--chat-llm-backend-key <KEY>")]
-        [Description("API key sent to the chat-llm:v1 backend (default: uses CHAT_LLM_BACKEND_KEY env). Never sent to or stored by the Server -- forwarded only to the configured backend, per 13-chat.md's Kind B credential invariant.")]
+        [Description("API key sent to the chat-llm:v1 backend (default: uses CHAT_LLM_BACKEND_KEY env). Never sent to or stored by the Server -- forwarded only to the configured backend, per 13-chat.md's Kind B credential invariant. Ignored when --chat-llm-backend-url is not set (the AgentChatProviderFactory-resolved path manages its own credentials).")]
         public string? ChatLlmBackendKey { get; set; }
+
+        [CommandOption("--chat-llm-model <MODEL>")]
+        [Description("Model id for chat-llm:v1 Jobs when no --chat-llm-backend-url override is set (default: uses CHAT_LLM_MODEL env, else 'gpt-5.5'). Resolved via the same AgentChatProviderFactory 'pks agent' uses (agent.models.<id> in ~/.pks-cli/settings.json, then built-in defaults), so an already-authorized `pks foundry init` session or stored Anthropic/Azure OpenAI key is used automatically -- no manual backend URL/key needed.")]
+        public string? ChatLlmModel { get; set; }
+
+        [CommandOption("--chat-llm-verbose")]
+        [Description("Log every chat-llm:v1 Chat Channel frame (chat.completion.request/chunk/done/error, chat.models.request/response, chat.end) to this console as it's sent/received, for debugging the chat pipeline. Frame text is markup-escaped and truncated -- it can include the user's own chat content, so avoid this on a shared/recorded terminal if that matters.")]
+        public bool ChatLlmVerbose { get; set; }
     }
 
     public AgenticsRunnerStartCommand(
@@ -123,6 +176,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         IGitHubAuthenticationService githubAuth,
         IAzureFoundryAuthService foundryAuthService,
         AzureFoundryAuthConfig foundryConfig,
+        AgentChatProviderFactory chatProviderFactory,
         IAnsiConsole console)
     {
         _configService = configService ?? throw new ArgumentNullException(nameof(configService));
@@ -131,6 +185,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         _githubAuth = githubAuth ?? throw new ArgumentNullException(nameof(githubAuth));
         _foundryAuthService = foundryAuthService ?? throw new ArgumentNullException(nameof(foundryAuthService));
         _foundryConfig = foundryConfig ?? throw new ArgumentNullException(nameof(foundryConfig));
+        _chatProviderFactory = chatProviderFactory ?? throw new ArgumentNullException(nameof(chatProviderFactory));
         _console = console ?? throw new ArgumentNullException(nameof(console));
     }
 
@@ -325,7 +380,9 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 // Compute runner capabilities once at startup
                 var chatLlmBackendUrl = ResolveChatLlmBackendUrl(settings.ChatLlmBackendUrl);
                 var chatLlmBackendKey = ResolveChatLlmBackendKey(settings.ChatLlmBackendKey);
-                var capabilities = await ComputeCapabilitiesAsync(settings.InProcess, chatLlmBackendUrl, cts.Token);
+                var chatLlmModelId = ResolveChatLlmModelId(settings.ChatLlmModel);
+                var chatLlmVerbose = settings.ChatLlmVerbose;
+                var capabilities = await ComputeCapabilitiesAsync(settings.InProcess, chatLlmBackendUrl, chatLlmModelId, cts.Token);
                 _console.MarkupLine($"[dim]Runner capabilities: {string.Join(", ", capabilities)}[/]");
 
                 // Polling loop
@@ -370,10 +427,42 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                             {
                                 // Kind B (chat-llm:v1, external/alp-spec/2026-03-30-draft/spec/13-chat.md): a bare
                                 // Job -- no devcontainer, no Operator. The Runner itself dials the Chat Channel and
-                                // forwards chat-completions turns to the locally configured backend.
-                                await ExecuteChatLlmJobAsync(registration, job, chatLlmBackendUrl, chatLlmBackendKey, cts.Token);
+                                // forwards chat-completions turns to the locally configured backend. This holds a
+                                // long-lived connection for the entire chat session, so it runs on its own
+                                // background Task instead of being awaited here -- otherwise an open chat tab would
+                                // starve the poll loop and block every other job (e.g. an ALP floor dispatch) for
+                                // as long as the chat stays open. jobActivity's span is started fresh inside the
+                                // background task so its lifetime matches the actual execution, not this iteration.
+                                var chatJob = job;
+                                var chatTraceparent = chatJob.AgentDef?.Traceparent;
+                                var chatJobTask = Task.Run(async () =>
+                                {
+                                    System.Diagnostics.ActivityContext chatParentCtx = default;
+                                    if (!string.IsNullOrEmpty(chatTraceparent))
+                                        System.Diagnostics.ActivityContext.TryParse(chatTraceparent, null, isRemote: true, out chatParentCtx);
+                                    using var chatJobActivity = _activitySource.StartActivity(
+                                        "runner.execute_job", System.Diagnostics.ActivityKind.Consumer, chatParentCtx);
+                                    chatJobActivity?.SetTag("agentics.job_id", chatJob.Id);
+                                    chatJobActivity?.SetTag("agentics.task_id", chatJob.AgentDef?.TaskId);
+                                    chatJobActivity?.SetTag("agentics.assembly_line_id", chatJob.AgentDef?.AssemblyLineId);
+                                    chatJobActivity?.SetTag("agentics.mode", "chat_llm");
+
+                                    try
+                                    {
+                                        await ExecuteChatLlmJobAsync(registration, chatJob, chatLlmBackendUrl, chatLlmBackendKey, chatLlmModelId, chatLlmVerbose, cts.Token);
+                                        _console.MarkupLine($"[green]Chat-llm job completed.[/] {chatJob.Id}");
+                                    }
+                                    catch (OperationCanceledException)
+                                    {
+                                        // Shutdown while a chat session was in flight -- DrainRunningJobTasksAsync already waits for us.
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _console.MarkupLine($"[red]Chat-llm job failed:[/] {chatJob.Id} {ex.Message.EscapeMarkup()}");
+                                    }
+                                }, cts.Token);
+                                TrackRunningJob(chatJobTask);
                                 jobsProcessed++;
-                                _console.MarkupLine($"[green]Chat-llm job completed.[/]");
                             }
                             else if (settings.InProcess)
                             {
@@ -422,7 +511,9 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
                 _console.WriteLine();
 
-                // Clean up all active jobs on shutdown
+                // Wait for any backgrounded jobs (e.g. an in-flight chat_llm session) to finish,
+                // then clean up all active spawn-mode job resources.
+                await DrainRunningJobTasksAsync();
                 await CleanupAllActiveJobsAsync();
 
                 DisplaySuccess($"Runner daemon stopped. Jobs processed: {jobsProcessed}");
@@ -573,20 +664,42 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
     ///                     (external/alp-spec/2026-03-30-draft/spec/13-chat.md) spawn the exact same
     ///                     Operator/devcontainer path as any other Station Job, so any runner that can
     ///                     do that can also open a Kind A chat session -- nothing extra to check for.
-    /// "chat-llm:v1"     — present only when a local chat-llm backend has been configured
-    ///                     (<c>--chat-llm-backend-url</c> / CHAT_LLM_BACKEND_URL). Kind B chat Jobs are
-    ///                     bare (no devcontainer): the runner forwards chat-completions turns to that
-    ///                     backend directly, so declaring the capability without a configured backend
-    ///                     would let the Server dispatch a Job this runner can't actually serve.
+    /// "devcontainer-session:v1" — always present alongside "chat-session:v1", same reasoning: a
+    ///                     devcontainer-hosted sub-agent session (plan `snappy-wandering-mochi`) is the
+    ///                     same Operator/devcontainer spawn path, just without the Chat Channel dial.
+    /// "chat-llm:v1"     — present when either an explicit local chat-llm backend has been configured
+    ///                     (<c>--chat-llm-backend-url</c> / CHAT_LLM_BACKEND_URL, forwarded to verbatim)
+    ///                     or AgentChatProviderFactory can resolve <c>chatLlmModelId</c> to a usable
+    ///                     provider (a stored Foundry session from `pks foundry init`, or an
+    ///                     agent.models.* / ANTHROPIC_API_KEY / AZURE_OPENAI_API_KEY credential —
+    ///                     the same resolution `pks agent` already uses). Kind B chat Jobs are bare (no
+    ///                     devcontainer): the runner forwards chat-completions turns to whichever of
+    ///                     these it resolved, so declaring the capability without either would let the
+    ///                     Server dispatch a Job this runner can't actually serve.
     /// "git:push"       — present when a GitHub token is stored (so git push won't prompt).
     /// "git-distribute" — present alongside "git:push" (source distribution needs the same credentials).
     /// </summary>
-    private async Task<List<string>> ComputeCapabilitiesAsync(bool inProcess, string? chatLlmBackendUrl, CancellationToken ct)
+    private async Task<List<string>> ComputeCapabilitiesAsync(bool inProcess, string? chatLlmBackendUrl, string chatLlmModelId, CancellationToken ct)
     {
-        var caps = new List<string> { "alp_operator", "chat-session:v1" };
+        var caps = new List<string> { "alp_operator", "chat-session:v1", DevAgentSessionCapability };
 
         if (!string.IsNullOrEmpty(chatLlmBackendUrl))
+        {
             caps.Add("chat-llm:v1");
+        }
+        else
+        {
+            try
+            {
+                await _chatProviderFactory.ResolveAsync(chatLlmModelId, ct);
+                caps.Add("chat-llm:v1");
+            }
+            catch
+            {
+                // No authorized backend for chatLlmModelId (no Foundry session, no stored/env key) --
+                // don't advertise a capability this runner can't actually serve.
+            }
+        }
 
         // In --inprocess mode: check whether the stored GitHub token is valid.
         // In spawn mode:       the GitCredentialServer is always started with a stored token,
@@ -1018,10 +1131,16 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         var repoName = spawnOptions.ProjectName;
         var workspaceFolder = $"/workspaces/{repoName}";
 
-        // localhost on the host is not localhost inside the container — use host.docker.internal
+        // localhost on the host is not localhost inside the container.
+        // host.docker.internal only resolves on Docker Desktop (mac/win); on plain
+        // Linux Docker / dind we use the bridge gateway IP — same pattern as the
+        // git proxy's hostGatewayIp above. AGENTICS_CONTAINER_HOST overrides for
+        // custom bridge subnets.
         var serverUri = new Uri(registration.Server);
+        var containerHostIp = Environment.GetEnvironmentVariable("AGENTICS_CONTAINER_HOST")
+            ?? (OperatingSystem.IsLinux() ? "172.17.0.1" : "host.docker.internal");
         var hostForContainer = serverUri.Host is "localhost" or "127.0.0.1"
-            ? "host.docker.internal"
+            ? containerHostIp
             : serverUri.Host;
         var agenticServerForContainer = $"{hostForContainer}:{serverUri.Port}";
 
@@ -1169,7 +1288,8 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                   "Edit(.claude/**)",
                   "Bash(mkdir**)"
                 ]
-              }
+              },
+              "enableAllProjectMcpServers": true
             }
             """);
         await WriteContainerFileAsync($"{workspaceClaudeDir}/.gitignore",
@@ -1215,6 +1335,36 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         var keyboardPin = job.Id[..8].ToUpperInvariant();
         scriptLines.AppendLine($"export VIBECAST_KEYBOARD_PIN={keyboardPin}");
         scriptLines.AppendLine("export VIBECAST_DEBUG=1");
+
+        // Forward Anthropic provider env from the runner host into the job so the
+        // spawned claude can use a real API key or the pks-agent-gateway LLM sim
+        // (ANTHROPIC_API_KEY=sim-*) instead of the OAuth credentials volume. A
+        // localhost ANTHROPIC_BASE_URL is rebased onto the container-reachable
+        // host, same as the stage git URL above.
+        var anthropicKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+        var anthropicBaseUrl = Environment.GetEnvironmentVariable("ANTHROPIC_BASE_URL");
+        if (!string.IsNullOrEmpty(anthropicKey))
+            scriptLines.AppendLine($"export ANTHROPIC_API_KEY='{anthropicKey}'");
+        if (!string.IsNullOrEmpty(anthropicBaseUrl))
+        {
+            if (Uri.TryCreate(anthropicBaseUrl, UriKind.Absolute, out var anthropicUri)
+                && anthropicUri.Host is "localhost" or "127.0.0.1")
+            {
+                anthropicBaseUrl = new UriBuilder(anthropicUri) { Host = containerHostIp }
+                    .Uri.ToString().TrimEnd('/');
+            }
+            scriptLines.AppendLine($"export ANTHROPIC_BASE_URL='{anthropicBaseUrl}'");
+        }
+
+        // Forward the OpenAI API key from the runner host so a codex Operator
+        // (VIBECAST_AGENT=codex) can authenticate via env-key auth. vibecast's config-seed
+        // (StartStream Prepare) tolerates a missing ~/.codex/auth.json precisely because this
+        // env-key path may cover it. Harmless for claude (ignored). NOTE: a ChatGPT-login
+        // (auth.json) codex account would instead need that file copied into the container —
+        // an alternative not wired here (would bill against the subscription, not the API).
+        var openaiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        if (!string.IsNullOrEmpty(openaiKey))
+            scriptLines.AppendLine($"export OPENAI_API_KEY='{openaiKey}'");
 
         // If a vibecast binary was embedded at build time (local dev only, -p:EmbedVibecast=true),
         // extract it into the container and point VIBECAST_BIN at it so the hooks also pick it up.
@@ -1362,6 +1512,11 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             scriptLines.AppendLine($"export VIBECAST_CLAUDE_MODEL_TIER='{job.AgentDef!.OperatorConfig!.ModelTier}'");
         if (!string.IsNullOrWhiteSpace(job.AgentDef?.OperatorConfig?.Effort))
             scriptLines.AppendLine($"export VIBECAST_CLAUDE_EFFORT='{job.AgentDef!.OperatorConfig!.Effort}'");
+        // Operator: which coding-agent CLI vibecast runs (claude|codex|pi). Resolved server-side
+        // (station ?? line default); unset → vibecast defaults to claude. vibecast owns the
+        // per-agent launch/config-seed — see internal/agent + StartStream's Prepare seam.
+        if (!string.IsNullOrWhiteSpace(job.AgentDef?.OperatorConfig?.Agent))
+            scriptLines.AppendLine($"export VIBECAST_AGENT='{job.AgentDef!.OperatorConfig!.Agent}'");
 
         if (!string.IsNullOrEmpty(job.AgentDef?.BroadcastId))
         {
@@ -1384,6 +1539,47 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         // Remove any stale .mcp.json left by an older vibecast session (plugin dir handles MCP now).
         // Tools like `aspire agent init` run during the session and will recreate it correctly.
         scriptLines.AppendLine("rm -f .mcp.json");
+
+        // Devagent session (plan `snappy-wandering-mochi` Phase 3): wire Claude's `agent-share
+        // channel` stdio bridge to the project's dedicated inbox so the light chat's
+        // delegate_to_devagent tool can push tasks in and get replies back via complete().
+        // AGENT_SHARE_SERVER/AGENT_SHARE_TOKEN are read by channel.go's channelAuth() — env
+        // takes precedence over any stored login. VIBECAST_CLAUDE_CHANNEL tells vibecast to
+        // add --dangerously-load-development-channels server:agent-share to the claude invocation.
+        // Gated only on DevAgentChannel presence, not IsDevAgentSession/needs: www-site sends this
+        // channel on ordinary alp_operator jobs too, without declaring the (unclaimed) capability.
+        if (job.AgentDef?.DevAgentChannel is { } devAgentChannel &&
+            !string.IsNullOrEmpty(devAgentChannel.McpUrl) && !string.IsNullOrEmpty(devAgentChannel.Token))
+        {
+            // Same distribution channel as vibecast itself (docs/cli-install) — installs to
+            // ~/.local/bin (already on PATH in the pks-fullstack base image) if not already present.
+            scriptLines.AppendLine("which agent-share >/dev/null 2>&1 || curl -fsSL https://agentics.dk/install/agent-share.sh | bash");
+            var a2aBaseUrl = System.Text.RegularExpressions.Regex.Replace(devAgentChannel.McpUrl, "/mcp/?$", "");
+            var mcpJson = JsonSerializer.Serialize(new
+            {
+                mcpServers = new Dictionary<string, object>
+                {
+                    ["agent-share"] = new
+                    {
+                        command = "agent-share",
+                        args = new[] { "channel" },
+                        env = new Dictionary<string, string>
+                        {
+                            ["AGENT_SHARE_SERVER"] = a2aBaseUrl,
+                            ["AGENT_SHARE_TOKEN"] = devAgentChannel.Token
+                        }
+                    }
+                }
+            });
+            scriptLines.AppendLine($"cat > .mcp.json <<'AGENT_SHARE_MCP_JSON_EOF'\n{mcpJson}\nAGENT_SHARE_MCP_JSON_EOF");
+            scriptLines.AppendLine("export VIBECAST_CLAUDE_CHANNEL=server:agent-share");
+
+            // The .mcp.json-declared server's interactive "New MCP server found ..." trust
+            // prompt is pre-approved by the `enableAllProjectMcpServers` key already baked into
+            // .claude/settings.local.json above (written unconditionally, before this block runs,
+            // for every job — not just ones with a devAgentChannel).
+        }
+
         // Write a targeted .claude/.gitignore so only job/session-scoped files are excluded from git.
         // A blanket "*" would also suppress MCP configs written by tools like `aspire agent init`.
         scriptLines.AppendLine("mkdir -p .claude");
@@ -2093,6 +2289,32 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         }
     }
 
+    /// <summary>
+    /// Refreshes this runner's lastSeen (via the same /progress endpoint devcontainer-spawn jobs use for
+    /// provisioning updates) at a fixed cadence well inside the server's RUNNER_OFFLINE_THRESHOLD_MS (60s),
+    /// so a Chat Channel session that blocks the main polling loop for a whole idle chat thread never gets
+    /// mistaken for a dead runner. Runs until cancelled; errors are swallowed (best-effort, same as
+    /// PostJobProgressAsync) since a missed beat or two is harmless as long as the next one lands in time.
+    /// </summary>
+    private async Task RunChatLlmHeartbeatLoopAsync(HttpClient client, string baseUrl, string runId, string jobId, CancellationToken ct)
+    {
+        var interval = TimeSpan.FromSeconds(20);
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(interval, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+
+            if (ct.IsCancellationRequested) break;
+            await PostJobProgressAsync(client, baseUrl, runId, jobId, "chat_llm_active", null, ct);
+        }
+    }
+
     private async Task PostJobLogChunkAsync(
         HttpClient client,
         string baseUrl,
@@ -2558,17 +2780,22 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
     /// Executes a chat-llm:v1 Job (Kind B, external/alp-spec/2026-03-30-draft/spec/13-chat.md). This is a
     /// bare Job — no devcontainer, no Operator, no repository. The Runner process itself claims the Job,
     /// then dials the Chat Channel directly (outbound-only, per the spec's Invariants) and forwards every
-    /// chat.completion.request frame it receives verbatim to the locally configured OpenAI-compatible
-    /// backend, translating the backend's SSE stream into chat.completion.chunk/done/error frames as each
-    /// event arrives. The backend credential (<paramref name="backendKey"/>) never leaves this process —
-    /// the Server only ever sees the resulting chunks, mirroring pks-agent-gateway's "forward unchanged,
-    /// never rewrite the caller's own key" posture (projects/pks-agent-gateway/src/gateway/proxy.go).
+    /// chat.completion.request frame it receives to a backend, translating that backend's replies into
+    /// chat.completion.chunk/done/error frames as each event arrives. When <paramref name="backendUrl"/>
+    /// is set, requests forward verbatim to that OpenAI-compatible URL and the backend credential
+    /// (<paramref name="backendKey"/>) never leaves this process, mirroring pks-agent-gateway's "forward
+    /// unchanged, never rewrite the caller's own key" posture (projects/pks-agent-gateway/src/gateway/proxy.go).
+    /// Otherwise <paramref name="chatLlmModelId"/> is resolved via AgentChatProviderFactory (the same
+    /// Foundry/Anthropic/Azure OpenAI credential resolution `pks agent` uses) — the Server only ever sees
+    /// the resulting chunks either way.
     /// </summary>
     private async Task ExecuteChatLlmJobAsync(
         AgenticsRunnerRegistration registration,
         RunnerJob job,
         string? backendUrl,
         string? backendKey,
+        string chatLlmModelId,
+        bool verbose,
         CancellationToken ct)
     {
         using var client = _httpClientFactory.CreateClient();
@@ -2576,14 +2803,6 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             new AuthenticationHeaderValue("Bearer", registration.Token);
 
         var baseUrl = $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}";
-
-        if (string.IsNullOrEmpty(backendUrl))
-        {
-            // Shouldn't normally happen — the Server only dispatches chat-llm:v1 Jobs to runners that
-            // declared the capability, and we only declare it when a backend is configured. Guard anyway.
-            _console.MarkupLine("[red]ChatLlm: no backend configured (--chat-llm-backend-url / CHAT_LLM_BACKEND_URL) — cannot serve this job.[/]");
-            return;
-        }
 
         // 1. Claim the job
         string runId;
@@ -2611,39 +2830,57 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         // 3. Dial the Chat Channel and serve turns until an explicit chat.end arrives (either direction)
         //    or the channel drops. Per 13-chat.md, Kind B reconnect is "just accept a new connection for
         //    the same Job" — so on an unexpected drop we redial once before giving up.
+        //
+        //    This loop can legitimately block for the entire lifetime of a chat thread (a Chat Job is
+        //    opened once per thread, not once per turn), which starves the outer polling loop in
+        //    ExecuteAsync — the only place that otherwise refreshes this runner's lastSeen. Left alone,
+        //    an idle-but-healthy chat (no turns for 60s+) would have the server's RUNNER_OFFLINE_THRESHOLD_MS
+        //    logic decide the runner died mid-job and force-cancel the Job out from under it. Run a
+        //    heartbeat concurrently so lastSeen keeps refreshing while this loop is busy.
         var channelUrl = BuildChatChannelUrl(registration, job.Id);
         string? reason = null;
         var failed = false;
         var reconnected = false;
 
-        while (!ct.IsCancellationRequested)
+        using var heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var heartbeatTask = RunChatLlmHeartbeatLoopAsync(client, baseUrl, runId, job.Id, heartbeatCts.Token);
+
+        try
         {
-            using var ws = new ClientWebSocket();
-            try
+            while (!ct.IsCancellationRequested)
             {
-                _console.MarkupLine($"[cyan]ChatLlm: opening Chat Channel for job {job.Id}{(reconnected ? " (reconnect)" : "")}...[/]");
-                await ws.ConnectAsync(channelUrl, ct);
-            }
-            catch (Exception ex)
-            {
-                _console.MarkupLine($"[red]ChatLlm: failed to open Chat Channel: {ex.Message.EscapeMarkup()}[/]");
-                reason = ex.Message;
-                failed = true;
-                break;
-            }
+                using var ws = new ClientWebSocket();
+                try
+                {
+                    _console.MarkupLine($"[cyan]ChatLlm: opening Chat Channel for job {job.Id}{(reconnected ? " (reconnect)" : "")}...[/]");
+                    await ws.ConnectAsync(channelUrl, ct);
+                }
+                catch (Exception ex)
+                {
+                    _console.MarkupLine($"[red]ChatLlm: failed to open Chat Channel: {ex.Message.EscapeMarkup()}[/]");
+                    reason = ex.Message;
+                    failed = true;
+                    break;
+                }
 
-            var (ended, endReason, sessionFailed) =
-                await RunChatLlmChannelSessionAsync(ws, job.Id, backendUrl, backendKey, ct);
+                var (ended, endReason, sessionFailed) =
+                    await RunChatLlmChannelSessionAsync(ws, job.Id, backendUrl, backendKey, chatLlmModelId, verbose, ct);
 
-            if (ended || reconnected || ct.IsCancellationRequested)
-            {
-                reason = endReason ?? "chat.end";
-                failed = sessionFailed;
-                break;
+                if (ended || reconnected || ct.IsCancellationRequested)
+                {
+                    reason = endReason ?? "chat.end";
+                    failed = sessionFailed;
+                    break;
+                }
+
+                reconnected = true;
+                _console.MarkupLine("[yellow]ChatLlm: Chat Channel dropped unexpectedly, reconnecting once...[/]");
             }
-
-            reconnected = true;
-            _console.MarkupLine("[yellow]ChatLlm: Chat Channel dropped unexpectedly, reconnecting once...[/]");
+        }
+        finally
+        {
+            heartbeatCts.Cancel();
+            try { await heartbeatTask; } catch (OperationCanceledException) { /* expected on cancel */ }
         }
 
         // 4. Report the Job outcome — a Chat Job reports success/failure like any other Job once it
@@ -2668,12 +2905,14 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
 
     /// <summary>
     /// Drives a single Chat Channel connection for a chat-llm:v1 Job: receives frames and, for every
-    /// chat.completion.request, forwards it to the configured backend and streams back
-    /// chat.completion.chunk/done/error frames. Returns Ended=false when the socket dropped without an
-    /// explicit chat.end (caller may redial), Ended=true once either side sent chat.end.
+    /// chat.completion.request, forwards it to either the explicit <paramref name="backendUrl"/> override
+    /// (verbatim OpenAI-compatible forward) or, when unset, to whatever AgentChatProviderFactory resolves
+    /// <paramref name="chatLlmModelId"/> to — and streams back chat.completion.chunk/done/error frames.
+    /// Returns Ended=false when the socket dropped without an explicit chat.end (caller may redial),
+    /// Ended=true once either side sent chat.end.
     /// </summary>
     private async Task<(bool Ended, string? Reason, bool Failed)> RunChatLlmChannelSessionAsync(
-        ClientWebSocket ws, string jobId, string backendUrl, string? backendKey, CancellationToken ct)
+        ClientWebSocket ws, string jobId, string? backendUrl, string? backendKey, string chatLlmModelId, bool verbose, CancellationToken ct)
     {
         using var backendClient = _httpClientFactory.CreateClient();
         // Chat turns can run for minutes (long completions) — never let HttpClient's 100s default abort
@@ -2700,6 +2939,9 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                     continue; // ignore a malformed frame rather than tearing down the whole channel
                 }
 
+                if (verbose)
+                    _console.MarkupLine($"[grey]«[/] {TruncateHead(message, 500).EscapeMarkup()}");
+
                 var type = frame.TryGetProperty("type", out var typeProp) ? typeProp.GetString() : null;
                 switch (type)
                 {
@@ -2708,9 +2950,33 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                         var requestId = frame.TryGetProperty("requestId", out var ridProp) ? ridProp.GetString() ?? "" : "";
                         if (frame.TryGetProperty("body", out var bodyProp))
                         {
-                            await ForwardChatCompletionRequestAsync(
-                                ws, backendClient, backendUrl, backendKey, jobId, requestId, bodyProp, ct);
+                            if (!string.IsNullOrEmpty(backendUrl))
+                            {
+                                await ForwardChatCompletionRequestAsync(
+                                    ws, backendClient, backendUrl, backendKey, jobId, requestId, bodyProp, verbose, ct);
+                            }
+                            else
+                            {
+                                var requestedModel = bodyProp.TryGetProperty("model", out var modelProp) ? modelProp.GetString() : null;
+                                var effectiveModelId = string.IsNullOrWhiteSpace(requestedModel) ? chatLlmModelId : requestedModel;
+                                await ForwardChatCompletionRequestViaProviderAsync(
+                                    ws, effectiveModelId, jobId, requestId, bodyProp, verbose, ct);
+                            }
                         }
+                        break;
+                    }
+                    case "chat.models.request":
+                    {
+                        var requestId = frame.TryGetProperty("requestId", out var ridProp) ? ridProp.GetString() ?? "" : "";
+                        IReadOnlyList<string> models = Array.Empty<string>();
+                        // Literal-forward mode bypasses the factory entirely, so its model list would be
+                        // misleading — respond with an empty list rather than querying it.
+                        if (string.IsNullOrEmpty(backendUrl))
+                        {
+                            try { models = await _chatProviderFactory.ListAvailableModelsAsync(ct); }
+                            catch { /* empty list on failure */ }
+                        }
+                        await SendChatFrameAsync(ws, new { type = "chat.models.response", jobId, requestId, models }, verbose, ct);
                         break;
                     }
                     case "chat.end":
@@ -2777,6 +3043,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         string jobId,
         string requestId,
         JsonElement body,
+        bool verbose,
         CancellationToken ct)
     {
         try
@@ -2795,7 +3062,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                 var errBody = await response.Content.ReadAsStringAsync(ct);
                 await SendChatFrameAsync(ws,
                     new { type = "chat.completion.error", jobId, requestId, error = $"backend returned {(int)response.StatusCode}: {Truncate(errBody, 2000)}" },
-                    ct);
+                    verbose, ct);
                 return;
             }
 
@@ -2822,7 +3089,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                         try { chunk = JsonSerializer.Deserialize<JsonElement>(data, JsonOptions); }
                         catch (JsonException) { continue; }
 
-                        await SendChatFrameAsync(ws, new { type = "chat.completion.chunk", jobId, requestId, chunk }, ct);
+                        await SendChatFrameAsync(ws, new { type = "chat.completion.chunk", jobId, requestId, chunk }, verbose, ct);
                     }
                 }
                 else
@@ -2833,27 +3100,73 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                     if (!string.IsNullOrWhiteSpace(json))
                     {
                         var chunk = JsonSerializer.Deserialize<JsonElement>(json, JsonOptions);
-                        await SendChatFrameAsync(ws, new { type = "chat.completion.chunk", jobId, requestId, chunk }, ct);
+                        await SendChatFrameAsync(ws, new { type = "chat.completion.chunk", jobId, requestId, chunk }, verbose, ct);
                     }
                 }
             }
 
-            await SendChatFrameAsync(ws, new { type = "chat.completion.done", jobId, requestId }, ct);
+            await SendChatFrameAsync(ws, new { type = "chat.completion.done", jobId, requestId }, verbose, ct);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
             try
             {
-                await SendChatFrameAsync(ws, new { type = "chat.completion.error", jobId, requestId, error = ex.Message }, ct);
+                await SendChatFrameAsync(ws, new { type = "chat.completion.error", jobId, requestId, error = ex.Message }, verbose, ct);
+            }
+            catch { /* channel may already be gone — the job-level outcome still gets reported by the caller */ }
+        }
+    }
+
+    /// <summary>
+    /// Serves one chat.completion.request turn via AgentChatProviderFactory instead of a literal
+    /// --chat-llm-backend-url: parses the OpenAI-shaped request body into a provider-neutral ChatRequest
+    /// (OpenAiChatBridge.ParseRequest), resolves <paramref name="modelId"/> to a concrete IChatProvider +
+    /// deployment name (a Foundry session from `pks foundry init`, or a stored Anthropic/Azure OpenAI
+    /// credential — the same resolution `pks agent` already uses), and translates each ChatStreamEvent the
+    /// provider yields back into a chat.completion.chunk frame (OpenAiChatBridge.ChunkBuilder) as it
+    /// arrives — same streaming/error/done frame semantics as ForwardChatCompletionRequestAsync's literal
+    /// HTTP forward.
+    /// </summary>
+    private async Task ForwardChatCompletionRequestViaProviderAsync(
+        ClientWebSocket ws,
+        string modelId,
+        string jobId,
+        string requestId,
+        JsonElement body,
+        bool verbose,
+        CancellationToken ct)
+    {
+        try
+        {
+            var request = OpenAiChatBridge.ParseRequest(body);
+            var (provider, deployment) = await _chatProviderFactory.ResolveAsync(modelId, ct);
+            var chunkBuilder = new OpenAiChatBridge.ChunkBuilder($"chatcmpl-{jobId}-{requestId}", modelId);
+
+            await foreach (var evt in provider.StreamAsync(request, deployment, ct))
+            {
+                var chunk = chunkBuilder.Build(evt);
+                if (chunk is null) continue;
+                await SendChatFrameAsync(ws, new { type = "chat.completion.chunk", jobId, requestId, chunk }, verbose, ct);
+            }
+
+            await SendChatFrameAsync(ws, new { type = "chat.completion.done", jobId, requestId }, verbose, ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await SendChatFrameAsync(ws, new { type = "chat.completion.error", jobId, requestId, error = ex.Message }, verbose, ct);
             }
             catch { /* channel may already be gone — the job-level outcome still gets reported by the caller */ }
         }
     }
 
     /// <summary>Serializes and sends one Chat Channel frame as a single WebSocket text message.</summary>
-    private static async Task SendChatFrameAsync(ClientWebSocket ws, object frame, CancellationToken ct)
+    private async Task SendChatFrameAsync(ClientWebSocket ws, object frame, bool verbose, CancellationToken ct)
     {
         var json = JsonSerializer.SerializeToUtf8Bytes(frame);
+        if (verbose)
+            _console.MarkupLine($"[grey]»[/] {TruncateHead(Encoding.UTF8.GetString(json), 500).EscapeMarkup()}");
         await ws.SendAsync(json, WebSocketMessageType.Text, endOfMessage: true, ct);
     }
 
@@ -2999,6 +3312,11 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
 
     private static string Truncate(string s, int max) =>
         string.IsNullOrEmpty(s) ? "(empty)" : (s.Length <= max ? s.Trim() : "…" + s[^max..].Trim());
+
+    /// <summary>Like <see cref="Truncate"/> but keeps the start of the string -- used for --chat-llm-verbose
+    /// frame logging, where the interesting bit (frame "type") is always near the front of the JSON.</summary>
+    private static string TruncateHead(string s, int max) =>
+        string.IsNullOrEmpty(s) ? "(empty)" : (s.Length <= max ? s.Trim() : s[..max].Trim() + "…");
 
     /// <summary>Runs git and returns stdout as a string.</summary>
     private static async Task<string> RunGitOutputAsync(string[] args, string workingDir, CancellationToken ct)
@@ -3277,7 +3595,8 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
       "Edit(.claude/**)",
       "Bash(mkdir**)"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true
 }
 """, ct);
                 // Write a CLAUDE.md that anchors project root, instructs Claude on isolation rules,
@@ -3377,6 +3696,10 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             var effortEnv = !string.IsNullOrWhiteSpace(job.AgentDef?.OperatorConfig?.Effort)
                 ? $" VIBECAST_CLAUDE_EFFORT='{job.AgentDef!.OperatorConfig!.Effort}'"
                 : "";
+            // Operator: which coding-agent CLI vibecast runs (claude|codex|pi); unset → claude.
+            var agentEnv = !string.IsNullOrWhiteSpace(job.AgentDef?.OperatorConfig?.Agent)
+                ? $" VIBECAST_AGENT='{job.AgentDef!.OperatorConfig!.Agent}'"
+                : "";
 
             // SubagentStart hook: inject additionalContext into every spawned subagent
             var subagentSuffixEnv = "";
@@ -3453,7 +3776,23 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             // The log is captured on timeout and included in the job PATCH logs field.
             var vibecastLogRedirect = $" > \"{vibecastLogFile}\" 2>&1";
 
-            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv}{autoApproveEnv}{disableBackgroundTasksEnv}{disable1mContextEnv}{modelEnv}{modelTierEnv}{effortEnv}{subagentSuffixEnv}{broadcastIdEnv}{chatSessionEnv}{allowedDirsEnv}{claudeConfigDirEnv}{otelEnv}{agenticsProxyEnv} {vibecastBin}{vibecastLogRedirect}");
+            // Forward Anthropic provider env from the runner host into the job (real
+            // key or the pks-agent-gateway LLM sim). Explicit rather than relying on
+            // tmux env inheritance — the tmux server may predate this process's env.
+            // localhost URLs work as-is on-host (no container rebase needed here).
+            var anthropicEnv = "";
+            var anthropicKeyInProc = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+            var anthropicBaseInProc = Environment.GetEnvironmentVariable("ANTHROPIC_BASE_URL");
+            if (!string.IsNullOrEmpty(anthropicKeyInProc))
+                anthropicEnv += $" ANTHROPIC_API_KEY='{anthropicKeyInProc}'";
+            if (!string.IsNullOrEmpty(anthropicBaseInProc))
+                anthropicEnv += $" ANTHROPIC_BASE_URL='{anthropicBaseInProc}'";
+            // OpenAI env-key auth for a codex Operator (see the spawn-path note above).
+            var openaiKeyInProc = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+            if (!string.IsNullOrEmpty(openaiKeyInProc))
+                anthropicEnv += $" OPENAI_API_KEY='{openaiKeyInProc}'";
+
+            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv}{autoApproveEnv}{disableBackgroundTasksEnv}{disable1mContextEnv}{modelEnv}{modelTierEnv}{effortEnv}{agentEnv}{subagentSuffixEnv}{broadcastIdEnv}{chatSessionEnv}{allowedDirsEnv}{claudeConfigDirEnv}{otelEnv}{agenticsProxyEnv}{anthropicEnv} {vibecastBin}{vibecastLogRedirect}");
 
             var startProc = Process.Start(startPsi);
             if (startProc != null)
@@ -3938,6 +4277,22 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         !string.IsNullOrWhiteSpace(explicitValue)
             ? explicitValue
             : Environment.GetEnvironmentVariable("CHAT_LLM_BACKEND_KEY");
+
+    /// <summary>
+    /// Resolves the chat-llm:v1 model id used when no --chat-llm-backend-url override is set: explicit
+    /// --chat-llm-model flag, else CHAT_LLM_MODEL env, else "gpt-5.5" — the built-in AgentChatProviderFactory
+    /// default that resolves to the azure-openai provider with no fixed endpoint, so it auto-fills from
+    /// whatever resource `pks foundry init` already selected (AgentChatProviderFactory.GetModelEntryAsync's
+    /// Foundry fallback) with zero extra configuration.
+    /// </summary>
+    private static string ResolveChatLlmModelId(string? explicitValue)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitValue))
+            return explicitValue;
+
+        var envValue = Environment.GetEnvironmentVariable("CHAT_LLM_MODEL");
+        return !string.IsNullOrWhiteSpace(envValue) ? envValue : "gpt-5.5";
+    }
 
     private static async Task<string?> SendControlSocketRequestAsync(
         string socketPath, string method, string path, string? body, CancellationToken ct)
@@ -5188,6 +5543,15 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         public bool IsChatSession =>
             (Needs?.Contains(ChatSessionCapability) ?? false) ||
             (AgentDefinition?.Needs?.Contains(ChatSessionCapability) ?? false);
+
+        /// <summary>True when this Job's needs declare the devcontainer-session:v1 capability (a
+        /// devcontainer-hosted sub-agent session, plan `snappy-wandering-mochi` Phase 2/3). Same
+        /// belt-and-suspenders check as IsChatSession. Not yet read anywhere -- reserved for Phase 3,
+        /// which needs to tell this apart from a Kind A chat session (e.g. to launch the agent-share
+        /// channel bridge instead of dialing the ALP Chat Channel).</summary>
+        public bool IsDevAgentSession =>
+            (Needs?.Contains(DevAgentSessionCapability) ?? false) ||
+            (AgentDefinition?.Needs?.Contains(DevAgentSessionCapability) ?? false);
     }
 
     private class RunnerAgentDefinition
@@ -5278,6 +5642,20 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         /// TargetRepo working tree with the filtered subset, commits, and pushes. No credentials carried
         /// here — runner resolves source/target auth on its own.</summary>
         public DistributePayloadModel? DistributePayload { get; set; }
+        /// <summary>Set only for the reserved devagent Task (plan `snappy-wandering-mochi` Phase 3) —
+        /// the project's dedicated pks-agent-share inbox the outer chat's `delegate_to_devagent` tool
+        /// pushes tasks into. Whenever this is present — regardless of IsDevAgentSession/needs, since
+        /// www-site sends it on ordinary alp_operator jobs too — the runner writes a `.mcp.json`
+        /// wiring Claude's `agent-share channel` stdio bridge to this inbox so the in-container session
+        /// long-polls it and can reply via `complete()`.</summary>
+        public RunnerDevAgentChannel? DevAgentChannel { get; set; }
+    }
+
+    private class RunnerDevAgentChannel
+    {
+        public string InboxId { get; set; } = "";
+        public string Token { get; set; } = "";
+        public string McpUrl { get; set; } = "";
     }
 
     private class TaskAssetDef
@@ -5339,6 +5717,10 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         /// (station ?? line default). Exported as VIBECAST_CLAUDE_EFFORT; vibecast maps it to
         /// `claude --effort &lt;level&gt;`.</summary>
         public string? Effort { get; set; }
+        /// <summary>Coding-agent CLI the vibecast Operator runs (claude|codex|pi), resolved
+        /// server-side (station ?? line default). Exported as VIBECAST_AGENT; unset → vibecast
+        /// defaults to claude. vibecast owns the per-agent launch + config-seed.</summary>
+        public string? Agent { get; set; }
     }
 
     private class PluginRef

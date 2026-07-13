@@ -188,4 +188,11 @@ public class ScalewayCreateOptions
     public bool EnablePublicIp { get; set; } = true;
 
     public string[] Tags { get; set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// When set, the full argument string for `tailscale up` (from
+    /// <see cref="ITailscaleService.BuildUpArgs"/>) — installs Tailscale and joins the
+    /// tailnet via cloud-init runcmd at first boot, instead of a separate post-boot SSH step.
+    /// </summary>
+    public string? TailscaleUpArgs { get; set; }
 }

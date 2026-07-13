@@ -20,6 +20,7 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
     private readonly ISshTargetConfigurationService _sshService;
     private readonly IAzureVmMetadataService _vmMetadata;
     private readonly IScalewayService _scaleway;
+    private readonly ITailscaleService _tailscale;
     private readonly IAnsiConsole _console;
     private readonly AzureInitCommand _azureInit;
     private readonly PKS.Commands.Scaleway.ScalewayInitCommand _scalewayInit;
@@ -31,6 +32,7 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
         ISshTargetConfigurationService sshService,
         IAzureVmMetadataService vmMetadata,
         IScalewayService scaleway,
+        ITailscaleService tailscale,
         AzureInitCommand azureInit,
         PKS.Commands.Scaleway.ScalewayInitCommand scalewayInit,
         IActionGuard guard,
@@ -41,6 +43,7 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
         _sshService = sshService;
         _vmMetadata = vmMetadata;
         _scaleway = scaleway;
+        _tailscale = tailscale;
         _azureInit = azureInit;
         _scalewayInit = scalewayInit;
         _guard = guard;
@@ -614,6 +617,15 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
 
         const string adminUser = "root";
 
+        // 6b. Optionally join the tailnet at boot (if `pks tailscale init` has been run)
+        string? tailscaleUpArgs = null;
+        if (await _tailscale.IsAuthenticatedAsync()
+            && _console.Confirm("[cyan]Join this VM to your Tailscale network at boot?[/]", defaultValue: true))
+        {
+            var tsCreds = (await _tailscale.GetStoredCredentialsAsync())!;
+            tailscaleUpArgs = _tailscale.BuildUpArgs(tsCreds, vmName);
+        }
+
         // 7. Confirm
         _console.Write(new Panel(
             $"""
@@ -623,6 +635,7 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
             [cyan1]Image:[/] {Markup.Escape(selectedImage.Name)}
             [cyan1]Project:[/] {Markup.Escape(creds.DefaultProjectName)} ({Markup.Escape(creds.DefaultProjectId)})
             [cyan1]SSH Key:[/] {Markup.Escape(keyPath)}
+            [cyan1]Tailscale:[/] {(tailscaleUpArgs != null ? "[green]join at boot[/]" : "[dim]no[/]")}
             """)
             .Border(BoxBorder.Rounded).BorderStyle("cyan")
             .Header(" [bold cyan]Scaleway Instance[/] "));
@@ -652,7 +665,8 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
                         Image = selectedImage.Id,
                         SshPublicKey = scwPubKey,
                         EnablePublicIp = true,
-                        Tags = new[] { "pks" }
+                        Tags = new[] { "pks" },
+                        TailscaleUpArgs = tailscaleUpArgs
                     }, msg => ctx.Status(msg));
                 }
                 catch (Exception ex) { createError = ex; }

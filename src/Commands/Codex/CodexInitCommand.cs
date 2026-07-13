@@ -52,14 +52,16 @@ public sealed class CodexInitCommand : AsyncCommand<CodexSettings>
             return 1;
         }
 
-        var deployment = settings.Model
-            ?? (CodexCliConfig.LooksLikeCodex(creds.DefaultModel) ? creds.DefaultModel : null)
+        var deployment = CodexCliConfig.NormalizeDeploymentName(settings.Model)
+            ?? (CodexCliConfig.LooksLikeCodex(creds.DefaultModel)
+                ? CodexCliConfig.NormalizeDeploymentName(creds.DefaultModel)
+                : null)
             ?? "gpt-5-codex";
 
         // Preflight the deployment so a wrong name / auth issue surfaces here, not deep inside codex.
         var client = _httpClientFactory.CreateClient("codex-passthrough");
         var preflightError = await FoundryResponsesEndpoint.PreflightAsync(
-            client, creds, _authService, _config.CognitiveScope, deployment);
+            client, creds, _authService, _config.AiFoundryScope, deployment, forceBearer: true);
         if (preflightError is not null)
         {
             _console.MarkupLine($"[red]Foundry preflight failed for deployment [bold]{deployment}[/]:[/]");
@@ -68,7 +70,7 @@ public sealed class CodexInitCommand : AsyncCommand<CodexSettings>
             return 1;
         }
 
-        CodexCliConfig.WriteProviderBlock(port);
+        CodexCliConfig.WriteProviderBlock(CodexCliConfig.BuildProxyProviderBlock(port));
         CodexCliConfig.SaveLaunchConfig(new CodexLaunchConfig
         {
             Deployment = deployment,
@@ -76,7 +78,8 @@ public sealed class CodexInitCommand : AsyncCommand<CodexSettings>
             ReasoningEffort = reasoningEffort,
         });
 
-        _console.MarkupLine($"[green]Codex CLI configured for Foundry[/] [dim](provider [bold]{CodexCliConfig.ProviderName}[/], default {deployment})[/]");
+        var mode = "passthrough with Entra auth";
+        _console.MarkupLine($"[green]Codex CLI configured for Foundry[/] [dim](provider [bold]{CodexCliConfig.ProviderName}[/], default {deployment}, {mode})[/]");
         _console.MarkupLine($"[dim]Wrote managed block to [bold]{CodexCliConfig.ConfigTomlPath()}[/] (your other Codex config is untouched).[/]");
         _console.MarkupLine("[dim]Launch with [bold]pks codex[/] — it boots the auth passthrough and runs the real codex CLI.[/]");
         return 0;

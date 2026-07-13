@@ -78,12 +78,23 @@ public class ScalewayVmProvider : IVmProvider
     public async Task DestroyAsync(AzureVmRecord record, Action<string>? onProgress = null)
     {
         RequireIds(record);
-        // Power off first so the server can be deleted cleanly, then delete it.
+        // Power off first so the server can be deleted cleanly, then delete it. Scaleway's
+        // poweroff is async ("stopping" -> "stopped"), so wait for it to actually land —
+        // deleting while still "stopping" 400s with "instance should be powered off".
         var state = await _scaleway.GetServerStateAsync(record.Zone!, record.ServerId!);
         if (!string.Equals(state, "stopped", StringComparison.OrdinalIgnoreCase))
         {
             onProgress?.Invoke("Powering off...");
             try { await _scaleway.PerformActionAsync(record.Zone!, record.ServerId!, "poweroff"); } catch { }
+
+            var deadline = DateTime.UtcNow + TimeSpan.FromMinutes(3);
+            while (DateTime.UtcNow < deadline)
+            {
+                state = await _scaleway.GetServerStateAsync(record.Zone!, record.ServerId!);
+                if (string.Equals(state, "stopped", StringComparison.OrdinalIgnoreCase)) break;
+                onProgress?.Invoke($"Waiting for power off ({state})...");
+                await Task.Delay(TimeSpan.FromSeconds(5));
+            }
         }
         onProgress?.Invoke("Deleting server...");
         await _scaleway.DeleteServerAsync(record.Zone!, record.ServerId!);

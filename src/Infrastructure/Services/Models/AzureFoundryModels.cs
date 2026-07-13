@@ -38,6 +38,11 @@ public class AzureFoundryAuthConfig
     public string CognitiveScope { get; set; } = "https://cognitiveservices.azure.com/.default";
 
     /// <summary>
+    /// Azure AI Foundry project/data-plane scope
+    /// </summary>
+    public string AiFoundryScope { get; set; } = "https://ai.azure.com/.default";
+
+    /// <summary>
     /// Initial scope for first authentication including offline_access for refresh tokens
     /// </summary>
     public string InitialScope { get; set; } = "https://cognitiveservices.azure.com/.default offline_access";

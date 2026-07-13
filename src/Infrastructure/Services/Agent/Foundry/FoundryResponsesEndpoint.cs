@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json.Nodes;
+using Azure.Core;
 using PKS.Infrastructure.Services.Agent.Anthropic;
 using PKS.Infrastructure.Services.Models;
 
@@ -26,28 +27,28 @@ public static class FoundryResponsesEndpoint
     }
 
     /// <summary>
-    /// Applies upstream auth to a Foundry Responses request. Codex deployments authenticate with an
-    /// api-key (Entra ID is not supported for Codex); plain GPT-5 deployments fall back to a bearer token.
-    /// The bearer is fetched fresh from the auth service on every call, so long-lived sessions never expire.
+    /// Applies upstream auth to a Foundry Responses request. By default, a stored API key is preferred.
+    /// Callers that specifically need Entra auth can set <paramref name="forceBearer"/>.
     /// </summary>
     public static async Task ApplyUpstreamAuthAsync(
         HttpRequestMessage req,
         FoundryStoredCredentials creds,
         IAzureFoundryAuthService authService,
         string cognitiveScope,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool forceBearer = false)
     {
-        if (!string.IsNullOrEmpty(creds.ApiKey))
+        if (!forceBearer && !string.IsNullOrEmpty(creds.ApiKey))
         {
             req.Headers.TryAddWithoutValidation("api-key", creds.ApiKey);
             return;
         }
 
-        var token = await authService.GetAccessTokenAsync(cognitiveScope, ct);
-        if (!string.IsNullOrEmpty(token))
-        {
-            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        }
+        var credential = new FoundryTokenCredential(authService);
+        var token = await credential.GetTokenAsync(
+            new TokenRequestContext(new[] { cognitiveScope }),
+            ct);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
     }
 
     /// <summary>
@@ -60,7 +61,8 @@ public static class FoundryResponsesEndpoint
         IAzureFoundryAuthService authService,
         string cognitiveScope,
         string deployment,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool forceBearer = false)
     {
         try
         {
@@ -76,7 +78,7 @@ public static class FoundryResponsesEndpoint
             {
                 Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"),
             };
-            await ApplyUpstreamAuthAsync(req, creds, authService, cognitiveScope, ct);
+            await ApplyUpstreamAuthAsync(req, creds, authService, cognitiveScope, ct, forceBearer);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(60));

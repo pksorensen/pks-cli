@@ -57,6 +57,8 @@ public class VmInitCommandTests
     {
         var scalewayMock = new Mock<IScalewayService>();
         scalewayMock.Setup(x => x.IsAuthenticatedAsync()).ReturnsAsync(false);
+        var tailscaleMock = new Mock<ITailscaleService>();
+        tailscaleMock.Setup(x => x.IsAuthenticatedAsync()).ReturnsAsync(false);
 
         var azureInitMock = new Mock<AzureInitCommand>(authMock.Object, console);
         azureInitMock
@@ -74,6 +76,7 @@ public class VmInitCommandTests
             sshServiceMock.Object,
             metadataMock.Object,
             scalewayMock.Object,
+            tailscaleMock.Object,
             azureInitMock.Object,
             scalewayInitMock.Object,
             new Mock<PKS.Infrastructure.Services.Security.IActionGuard>().Object,
