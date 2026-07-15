@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Text.Json;
 using Spectre.Console.Cli;
 using PKS.Infrastructure.Services.Persona;
+using PKS.Infrastructure.Services.Persona.Models;
 
 namespace PKS.Commands.Persona;
 
@@ -46,6 +47,7 @@ public class PersonaScoreCommand : AsyncCommand<PersonaScoreSettings>
     private readonly IPersonaStore _personas;
     private readonly IRubricStore _rubrics;
     private readonly IPersonaScoresStore _scores;
+    private readonly IPersonaSessionStore _session;
     private readonly PersonaScoreRunner _runner;
 
     public PersonaScoreCommand(
@@ -53,12 +55,14 @@ public class PersonaScoreCommand : AsyncCommand<PersonaScoreSettings>
         IPersonaStore personas,
         IRubricStore rubrics,
         IPersonaScoresStore scores,
+        IPersonaSessionStore session,
         PersonaScoreRunner runner)
     {
         _paths = paths;
         _personas = personas;
         _rubrics = rubrics;
         _scores = scores;
+        _session = session;
         _runner = runner;
     }
 
@@ -82,6 +86,20 @@ public class PersonaScoreCommand : AsyncCommand<PersonaScoreSettings>
 
         var content = await System.IO.File.ReadAllTextAsync(full);
         var result = await _runner.RunAsync(persona, rubric, full, content, settings.Model, settings.MaxOutputTokens);
+
+        var modelTagForSession = settings.PerModel ? settings.Model : null;
+        await _session.AppendCallAsync(full, settings.Locale, new PersonaSessionCall
+        {
+            PersonaId = persona.Id,
+            Rubric = rubric.Id,
+            Model = settings.Model,
+            InputTokens = result.Usage?.InputTokens ?? 0,
+            OutputTokens = result.Usage?.OutputTokens ?? 0,
+            CostUsd = result.CostUsd,
+            DurationMs = (long)result.Duration.TotalMilliseconds,
+            Ok = result.Ok,
+            At = DateTime.UtcNow,
+        }, modelTagForSession);
 
         if (!result.Ok || result.Score is null)
         {
@@ -111,6 +129,13 @@ public class PersonaScoreCommand : AsyncCommand<PersonaScoreSettings>
             model = settings.Model,
             score = result.Score.Score,
             sidecarPath = sidecar,
+            session = new
+            {
+                sidecarPath = _paths.SessionSidecarPath(full, settings.Locale, modelTagForSession),
+                inputTokens = result.Usage?.InputTokens ?? 0,
+                outputTokens = result.Usage?.OutputTokens ?? 0,
+                costUsd = result.CostUsd,
+            },
         };
         Console.WriteLine("RESULT: " + JsonSerializer.Serialize(ok,
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));

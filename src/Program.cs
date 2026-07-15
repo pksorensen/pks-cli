@@ -233,6 +233,7 @@ services.AddSingleton<PKS.Infrastructure.Services.Persona.IPersonaStore, PKS.Inf
 services.AddSingleton<PKS.Infrastructure.Services.Persona.IRubricStore, PKS.Infrastructure.Services.Persona.RubricStore>();
 services.AddSingleton<PKS.Infrastructure.Services.Persona.IPersonaLinter, PKS.Infrastructure.Services.Persona.PersonaLinter>();
 services.AddSingleton<PKS.Infrastructure.Services.Persona.IPersonaScoresStore, PKS.Infrastructure.Services.Persona.PersonaScoresStore>();
+services.AddSingleton<PKS.Infrastructure.Services.Persona.IPersonaSessionStore, PKS.Infrastructure.Services.Persona.PersonaSessionStore>();
 services.AddSingleton<PKS.Infrastructure.Services.Persona.PersonaScoreRunner>();
 // Legacy MCP services removed in Phase 3 - now using SDK-based services only
 

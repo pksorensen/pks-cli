@@ -60,4 +60,35 @@ public sealed class PersonaPathResolverTests : IDisposable
     {
         PersonaPathResolver.ModelTagSlug(model).Should().Be(expected);
     }
+
+    [Fact]
+    public void SessionSidecar_default_isSharedFile()
+    {
+        var src = Path.Combine(_home, "blog-posts", "foo", "da.md");
+        var reviewDir = Path.Combine(_home, "blog-posts", "foo", "_review");
+        _sut.SessionSidecarPath(src, "da")
+            .Should().Be(Path.Combine(reviewDir, "da.PERSONA-SESSION.json"));
+        _sut.SessionSidecarPath(src, "da", null)
+            .Should().Be(Path.Combine(reviewDir, "da.PERSONA-SESSION.json"));
+        _sut.SessionSidecarPath(src, "da", "  ")
+            .Should().Be(Path.Combine(reviewDir, "da.PERSONA-SESSION.json"));
+    }
+
+    [Fact]
+    public void SessionSidecar_perModel_scopesFilenameByModelSlug()
+    {
+        var src = Path.Combine(_home, "blog-posts", "x", "da.md");
+        _sut.SessionSidecarPath(src, "da", "gpt-5.5")
+            .Should().EndWith(Path.Combine("_review", "da.PERSONA-SESSION.gpt-5-5.json"));
+        _sut.SessionSidecarPath(src, "da", "gpt-5.5")
+            .Should().NotBe(_sut.SessionSidecarPath(src, "da", "claude-opus-4-8"));
+    }
+
+    [Fact]
+    public void SessionSidecar_distinctFromScoresSidecar()
+    {
+        var src = Path.Combine(_home, "blog-posts", "y", "da.md");
+        _sut.SessionSidecarPath(src, "da")
+            .Should().NotBe(_sut.ScoresSidecarPath(src, "da"));
+    }
 }

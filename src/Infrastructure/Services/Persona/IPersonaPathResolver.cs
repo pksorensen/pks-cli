@@ -50,4 +50,13 @@ public interface IPersonaPathResolver
     /// the basis for a per-post model A/B.
     /// </summary>
     string ScoresSidecarPath(string contentFilePath, string locale, string? modelTag = null);
+
+    /// <summary>
+    /// <c>_review/&lt;locale&gt;.PERSONA-SESSION.json</c> next to the content —
+    /// a running log of every LLM call `pks persona score`/`score-all` made
+    /// against this content (tokens, estimated cost, duration), mirroring
+    /// the session-file convention `claude`/`codex` write for their own
+    /// runs. Same model-scoping rule as <see cref="ScoresSidecarPath"/>.
+    /// </summary>
+    string SessionSidecarPath(string contentFilePath, string locale, string? modelTag = null);
 }

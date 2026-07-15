@@ -33,6 +33,17 @@ public sealed class FoundryResponsesPassthrough
     private static readonly string PksDir =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".pks-cli");
     private static readonly string FailureLogPath = Path.Combine(PksDir, "codex-passthrough-failures.log");
+
+    /// <summary>
+    /// The Generic Host defaults to a <see cref="Microsoft.Extensions.FileProviders.PhysicalFileProvider"/>
+    /// watch (<c>FileSystemWatcher</c>, <c>IncludeSubdirectories = true</c>) rooted at the current
+    /// directory for appsettings.json hot-reload — regardless of whether appsettings.json exists. This
+    /// passthrough never reads config at runtime, so on a large project tree (e.g. a JS repo with
+    /// node_modules) that watcher alone can burn 100k+ inotify watches per `pks codex` session for no
+    /// benefit. Passing this disables it. See HostDefaults.ReloadConfigOnChangeKey.
+    /// </summary>
+    private static readonly string[] NoConfigReloadArgs = ["--hostBuilder:reloadConfigOnChange=false"];
+
     private WebApplication? _app;
 
     public int Port { get; }
@@ -54,7 +65,7 @@ public sealed class FoundryResponsesPassthrough
 
     public async Task StartAsync(CancellationToken ct = default)
     {
-        var builder = WebApplication.CreateSlimBuilder(Array.Empty<string>());
+        var builder = WebApplication.CreateSlimBuilder(NoConfigReloadArgs);
         builder.WebHost.UseUrls($"http://127.0.0.1:{Port}");
         builder.WebHost.UseSetting("suppressStatusMessages", "true");
         builder.Logging.ClearProviders();

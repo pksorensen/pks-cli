@@ -3,6 +3,7 @@ using System.Text.Json;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using PKS.Infrastructure.Services.Persona;
+using PKS.Infrastructure.Services.Persona.Models;
 
 namespace PKS.Commands.Persona;
 
@@ -55,6 +56,7 @@ public class PersonaScoreAllCommand : AsyncCommand<PersonaScoreAllSettings>
     private readonly IPersonaStore _personas;
     private readonly IRubricStore _rubrics;
     private readonly IPersonaScoresStore _scores;
+    private readonly IPersonaSessionStore _session;
     private readonly PersonaScoreRunner _runner;
 
     public PersonaScoreAllCommand(
@@ -62,14 +64,29 @@ public class PersonaScoreAllCommand : AsyncCommand<PersonaScoreAllSettings>
         IPersonaStore personas,
         IRubricStore rubrics,
         IPersonaScoresStore scores,
+        IPersonaSessionStore session,
         PersonaScoreRunner runner)
     {
         _paths = paths;
         _personas = personas;
         _rubrics = rubrics;
         _scores = scores;
+        _session = session;
         _runner = runner;
     }
+
+    private Task LogCallAsync(string full, string locale, string? modelTag, string personaId, string rubricId, string model, PersonaScoreRunner.Result result) =>
+        _session.AppendCallAsync(full, locale, new PersonaSessionCall
+        {
+            PersonaId = personaId,
+            Rubric = rubricId,
+            Model = model,
+            InputTokens = result.Usage?.InputTokens ?? 0,
+            OutputTokens = result.Usage?.OutputTokens ?? 0,
+            CostUsd = result.CostUsd,
+            DurationMs = result.Duration.TotalMilliseconds,
+            Ok = result.Ok,
+        }, modelTag);
 
     public override async Task<int> ExecuteAsync(CommandContext context, PersonaScoreAllSettings settings)
     {
@@ -119,6 +136,7 @@ public class PersonaScoreAllCommand : AsyncCommand<PersonaScoreAllSettings>
         try
         {
             var probe = await _runner.RunAsync(personas[0], rubrics[0], full, content, settings.Model, settings.MaxOutputTokens);
+            await LogCallAsync(full, settings.Locale, modelTag, personas[0].Id, rubrics[0].Id, settings.Model, probe);
             if (probe.Ok && probe.Score is not null)
             {
                 await _scores.SaveScoreAsync(full, settings.Locale, probe.Score, modelTag);
@@ -168,6 +186,7 @@ public class PersonaScoreAllCommand : AsyncCommand<PersonaScoreAllSettings>
                         EmitAuthFailureSummary(full, settings.Locale, ex, rolled, ok + skipped + fail, modelTag);
                         return 2;
                     }
+                    await LogCallAsync(full, settings.Locale, modelTag, p.Id, r.Id, screen, screenResult);
                     if (screenResult.Ok && screenResult.Score is not null && screenResult.Score.Score < 3)
                     {
                         // Below threshold — keep the cheap score, skip Opus.
@@ -187,6 +206,7 @@ public class PersonaScoreAllCommand : AsyncCommand<PersonaScoreAllSettings>
                     EmitAuthFailureSummary(full, settings.Locale, ex, rolled, ok + skipped + fail, modelTag);
                     return 2;
                 }
+                await LogCallAsync(full, settings.Locale, modelTag, p.Id, r.Id, settings.Model, result);
                 if (!result.Ok || result.Score is null)
                 {
                     fail++;
@@ -210,6 +230,8 @@ public class PersonaScoreAllCommand : AsyncCommand<PersonaScoreAllSettings>
         }
 
         var sidecar = _paths.ScoresSidecarPath(full, settings.Locale, modelTag);
+        var sessionFile = await _session.LoadAsync(full, settings.Locale, modelTag);
+        AnsiConsole.MarkupLine($"[grey]Session: {sessionFile.TotalCalls} call(s), {sessionFile.TotalInputTokens}+{sessionFile.TotalOutputTokens} tokens, ~${sessionFile.TotalCostUsd:0.0000}[/]");
         var summary = new
         {
             ok = fail == 0,
@@ -217,6 +239,14 @@ public class PersonaScoreAllCommand : AsyncCommand<PersonaScoreAllSettings>
             sidecarPath = sidecar,
             counts = new { ok, fail, skipped, total },
             results = rolled,
+            session = new
+            {
+                sidecarPath = _paths.SessionSidecarPath(full, settings.Locale, modelTag),
+                calls = sessionFile.TotalCalls,
+                inputTokens = sessionFile.TotalInputTokens,
+                outputTokens = sessionFile.TotalOutputTokens,
+                costUsd = sessionFile.TotalCostUsd,
+            },
         };
         Console.WriteLine("RESULT: " + JsonSerializer.Serialize(summary,
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));

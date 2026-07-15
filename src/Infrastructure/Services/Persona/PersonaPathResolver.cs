@@ -45,6 +45,14 @@ public sealed class PersonaPathResolver : IPersonaPathResolver
         return Path.Combine(ReviewDir(contentFilePath), fileName);
     }
 
+    public string SessionSidecarPath(string contentFilePath, string locale, string? modelTag = null)
+    {
+        var fileName = string.IsNullOrWhiteSpace(modelTag)
+            ? $"{locale}.PERSONA-SESSION.json"
+            : $"{locale}.PERSONA-SESSION.{ModelTagSlug(modelTag)}.json";
+        return Path.Combine(ReviewDir(contentFilePath), fileName);
+    }
+
     /// <summary>
     /// Filename-safe slug for a model id, used to scope a sidecar to one
     /// scoring model. Lowercases, replaces every non-alphanumeric run with a

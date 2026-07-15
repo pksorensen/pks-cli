@@ -27,6 +27,16 @@ public class McpHostingService : IMcpHostingService, IDisposable
     private CancellationTokenSource? _hostCancellation;
     private TaskCompletionSource<bool>? _shutdownCompletion;
 
+    /// <summary>
+    /// The Generic Host defaults to a <see cref="Microsoft.Extensions.FileProviders.PhysicalFileProvider"/>
+    /// watch (<c>FileSystemWatcher</c>, <c>IncludeSubdirectories = true</c>) rooted at the current
+    /// directory for appsettings.json hot-reload — regardless of whether appsettings.json exists. None of
+    /// the MCP transports below read config at runtime, so on a large project tree that watcher alone can
+    /// burn 100k+ inotify watches per `pks mcp start` for no benefit. Passing this disables it. See
+    /// HostDefaults.ReloadConfigOnChangeKey.
+    /// </summary>
+    private static readonly string[] NoConfigReloadArgs = ["--hostBuilder:reloadConfigOnChange=false"];
+
     public McpHostingService(
         ILogger<McpHostingService> logger,
         IServiceProvider serviceProvider,
@@ -242,7 +252,7 @@ public class McpHostingService : IMcpHostingService, IDisposable
             _hostCancellation = new CancellationTokenSource();
             _shutdownCompletion = new TaskCompletionSource<bool>();
 
-            var builder = Host.CreateApplicationBuilder();
+            var builder = Host.CreateApplicationBuilder(NoConfigReloadArgs);
             builder.Logging.AddConsole(consoleLogOptions =>
             {
                 // Configure all logs to go to stderr
@@ -292,7 +302,7 @@ public class McpHostingService : IMcpHostingService, IDisposable
             _hostCancellation = new CancellationTokenSource();
 
 
-            var builder = WebApplication.CreateBuilder();
+            var builder = WebApplication.CreateBuilder(NoConfigReloadArgs);
 
             // Configure to listen on all interfaces for devcontainer access
             builder.WebHost.UseUrls($"http://localhost:{config.Port}");
@@ -347,7 +357,7 @@ public class McpHostingService : IMcpHostingService, IDisposable
             _hostCancellation = new CancellationTokenSource();
 
             // Create host builder with MCP services and SSE transport
-            var builder = Host.CreateApplicationBuilder();
+            var builder = Host.CreateApplicationBuilder(NoConfigReloadArgs);
             builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
             // Register MCP server with SSE transport
