@@ -49,11 +49,12 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
-## [6.20.0](https://github.com/pksorensen/pks-cli/compare/v6.19.0...v6.20.0) (2026-07-15)
+## [6.20.0](https://github.com/pksorensen/pks-cli/compare/v6.19.0...v6.20.0) (2026-07-16)
 
 
 ### Features
 
+* Implement usage panel parser and tmux driver for Claude Code ([d5e85f9](https://github.com/pksorensen/pks-cli/commit/d5e85f931ebf19e097ea371a696d111ab4d72b70))
 * Implement VM stop command and enhance Scaleway VM destruction process ([8ea8267](https://github.com/pksorensen/pks-cli/commit/8ea82678ecd3ae5377bee81f4151186729449bca))
 * **persona:** add session management for persona scoring with session sidecar support ([6ec1999](https://github.com/pksorensen/pks-cli/commit/6ec19996cfbc6d416b638325682e8e58c682cc8b))
 * **runner:** add chat-session:v1 and chat-llm:v1 capabilities ([7231d20](https://github.com/pksorensen/pks-cli/commit/7231d20c1432642446cb084d6b50b5a09677a77a))
