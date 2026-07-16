@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -25,6 +26,8 @@ namespace PKS.Infrastructure.Services.Agent.Codex;
 /// </summary>
 public sealed class FoundryResponsesPassthrough
 {
+    internal const long MaxRequestBodySize = 256L * 1024 * 1024;
+
     private readonly FoundryStoredCredentials _creds;
     private readonly IAzureFoundryAuthService _authService;
     private readonly string _foundryScope;
@@ -67,6 +70,7 @@ public sealed class FoundryResponsesPassthrough
     {
         var builder = WebApplication.CreateSlimBuilder(NoConfigReloadArgs);
         builder.WebHost.UseUrls($"http://127.0.0.1:{Port}");
+        builder.WebHost.ConfigureKestrel(ConfigureKestrel);
         builder.WebHost.UseSetting("suppressStatusMessages", "true");
         builder.Logging.ClearProviders();
         builder.Logging.SetMinimumLevel(LogLevel.None);
@@ -85,6 +89,15 @@ public sealed class FoundryResponsesPassthrough
 
         _app = app;
         await app.StartAsync(ct);
+    }
+
+    internal static void ConfigureKestrel(KestrelServerOptions options)
+    {
+        // Codex sends the complete local conversation on each Responses request. Browser
+        // screenshots are embedded as base64 and can push a healthy session beyond Kestrel's
+        // 30,000,000-byte default. Keep a generous but bounded loopback-only ceiling so those
+        // sessions can compact or resume without allowing unbounded buffering below.
+        options.Limits.MaxRequestBodySize = MaxRequestBodySize;
     }
 
     private async Task ForwardAsync(HttpContext ctx, IHttpClientFactory factory)

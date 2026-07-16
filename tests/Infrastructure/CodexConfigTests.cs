@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Moq;
 using PKS.CLI.Tests.Infrastructure;
 using PKS.Infrastructure.Services;
@@ -183,6 +184,17 @@ public class CodexConfigTests
         using var doc = JsonDocument.Parse(filtered);
         var tools = doc.RootElement.GetProperty("input")[0].GetProperty("tools").EnumerateArray().ToArray();
         tools.Select(t => t.GetProperty("name").GetString()).Should().Equal("js_repl", "browser");
+    }
+
+    [Fact]
+    public void ConfigureKestrel_AllowsLargeCodexSessionRequestsWithinBoundedLimit()
+    {
+        var options = new KestrelServerOptions();
+
+        FoundryResponsesPassthrough.ConfigureKestrel(options);
+
+        options.Limits.MaxRequestBodySize.Should().Be(256L * 1024 * 1024);
+        options.Limits.MaxRequestBodySize.Should().BeGreaterThan(30_000_000);
     }
 
     private static int CountOccurrences(string haystack, string needle)

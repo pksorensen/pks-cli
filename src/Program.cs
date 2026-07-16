@@ -88,6 +88,13 @@ var isHookEventCommand = commandArgs.Length > 2 &&
 // Skip banner when --no-logo flag is passed
 var noLogo = commandArgs.Any(a => a.Equals("--no-logo", StringComparison.OrdinalIgnoreCase));
 
+// Skip banner for `claude limits` / `claude session-usage` — a scriptable command whose
+// stdout must stay clean (JSON in --json mode; a bare table otherwise) for hourly cron use.
+var isClaudeLimits = commandArgs.Length > 2 &&
+                     commandArgs[1].Equals("claude", StringComparison.OrdinalIgnoreCase) &&
+                     (commandArgs[2].Equals("limits", StringComparison.OrdinalIgnoreCase) ||
+                      commandArgs[2].Equals("session-usage", StringComparison.OrdinalIgnoreCase));
+
 // Pipeable writing commands: agents pipe stdout, banner would corrupt the JSON.
 // Detects: `pks writing prompt …` and `pks writing accept …`.
 // commandArgs[0] is the exe path; the real args start at [1].
@@ -126,7 +133,7 @@ if (commandArgs.Any(a => a.Equals("--debug", StringComparison.OrdinalIgnoreCase)
     Environment.SetEnvironmentVariable("PKS_DEBUG", "1");
 
 // Display welcome banner with fancy ASCII art (unless we should skip it)
-if (!isMcpStdio && !isGitAskPass && !isFoundryProxy && !isAdoGitProxy && !noLogo && !(isHooksCommand && (hasJsonFlag || isHookEventCommand)))
+if (!isMcpStdio && !isGitAskPass && !isFoundryProxy && !isAdoGitProxy && !noLogo && !isClaudeLimits && !(isHooksCommand && (hasJsonFlag || isHookEventCommand)))
 {
     DisplayWelcomeBanner();
 
@@ -259,6 +266,7 @@ services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.ProjectToolServi
 services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.AgentToolService>();
 services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.DeploymentToolService>();
 services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.StatusToolService>();
+services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.LimitsReportToolService>();
 services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.SwarmToolService>();
 services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.UtilityToolService>();
 services.AddSingleton<PKS.CLI.Infrastructure.Services.MCP.Tools.DevcontainerToolService>();
@@ -1402,6 +1410,17 @@ app.Configure(config =>
         claude.AddCommand<PKS.Commands.Claude.ClaudeAnthropicCommand>("anthropic")
             .WithDescription("Run Claude Code on a first-party Anthropic model (no proxy)")
             .WithExample(["claude", "anthropic"]);
+
+        claude.AddCommand<PKS.Commands.Claude.ClaudeLimitsCommand>("limits")
+            .WithDescription("Report session/week usage limits + reset times + pace as structured data (parses /usage via tmux)")
+            .WithExample(["claude", "limits"])
+            .WithExample(["claude", "limits", "--json"])
+            .WithExample(["claude", "limits", "--llm"]);
+
+        // Alias subcommand — same command type, different name.
+        claude.AddCommand<PKS.Commands.Claude.ClaudeLimitsCommand>("session-usage")
+            .WithDescription("Alias of 'claude limits' — session/week usage limits as structured data")
+            .WithExample(["claude", "session-usage", "--json"]);
     });
 
     // Add brain commands — personal "brain" built from Claude session history

@@ -52,4 +52,10 @@
     <!-- <ProjectReference Include="Aspire/AppHost/AspireTestAppHost.csproj" /> -->
   </ItemGroup>
 
+  <!-- Fixture files (golden files, sample captures) copied next to the test binaries so
+       tests read them via AppContext.BaseDirectory instead of the source tree / scratch paths. -->
+  <ItemGroup>
+    <None Include="fixtures/**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
