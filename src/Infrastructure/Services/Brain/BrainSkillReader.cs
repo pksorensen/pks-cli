@@ -4,6 +4,20 @@ namespace PKS.Infrastructure.Services.Brain;
 
 public sealed class BrainSkillReader : IBrainSkillReader
 {
+    private readonly string _home;
+    private readonly string _workingDirectory;
+
+    public BrainSkillReader()
+        : this(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), Directory.GetCurrentDirectory())
+    {
+    }
+
+    public BrainSkillReader(string home, string workingDirectory)
+    {
+        _home = home;
+        _workingDirectory = workingDirectory;
+    }
+
     public Task<BrainSkillSource> ReadAsync(string? overridePath = null, CancellationToken ct = default) =>
         ReadAsync("brain-extract", overridePath, ct);
 
@@ -19,12 +33,13 @@ public sealed class BrainSkillReader : IBrainSkillReader
             return new BrainSkillSource(await File.ReadAllTextAsync(op, ct), op);
         }
 
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        string[] candidates =
-        [
-            Path.Combine(home, ".claude", "plugins", "pks-brain", "skills", skillName, "SKILL.md"),
-            Path.Combine(home, ".claude", "skills", skillName, "SKILL.md"),
-        ];
+        var candidates = ProjectCandidates(skillName).Concat(new[]
+        {
+            Path.Combine(_home, ".agents", "skills", skillName, "SKILL.md"),
+            Path.Combine(_home, ".claude", "plugins", "pks-brain", "skills", skillName, "SKILL.md"),
+            Path.Combine(_home, ".claude", "skills", skillName, "SKILL.md"),
+            Path.Combine(_home, ".codex", "skills", skillName, "SKILL.md"),
+        });
         foreach (var c in candidates)
         {
             if (File.Exists(c)) return new BrainSkillSource(await File.ReadAllTextAsync(c, ct), c);
@@ -37,5 +52,19 @@ public sealed class BrainSkillReader : IBrainSkillReader
                 $"Embedded skill '{resourceName}' missing from pks-cli build.");
         using var reader = new StreamReader(stream);
         return new BrainSkillSource(await reader.ReadToEndAsync(ct), $"embedded:{skillName}");
+    }
+
+    private IEnumerable<string> ProjectCandidates(string skillName)
+    {
+        DirectoryInfo? directory;
+        try { directory = new DirectoryInfo(Path.GetFullPath(_workingDirectory)); }
+        catch { yield break; }
+
+        while (directory is not null)
+        {
+            yield return Path.Combine(directory.FullName, ".agents", "skills", skillName, "SKILL.md");
+            yield return Path.Combine(directory.FullName, ".claude", "skills", skillName, "SKILL.md");
+            directory = directory.Parent;
+        }
     }
 }

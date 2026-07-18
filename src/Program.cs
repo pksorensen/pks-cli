@@ -194,6 +194,7 @@ services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainPathResolver, PKS.
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainIndexStore, PKS.Infrastructure.Services.Brain.BrainIndexStore>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.ISessionDiscoveryService, PKS.Infrastructure.Services.Brain.SessionDiscoveryService>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.ISessionParser, PKS.Infrastructure.Services.Brain.SessionParser>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainConversationExporter, PKS.Infrastructure.Services.Brain.BrainConversationExporter>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IPricingService, PKS.Infrastructure.Services.Brain.PricingService>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IPlanFileIndexer, PKS.Infrastructure.Services.Brain.PlanFileIndexer>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainIngestPipeline, PKS.Infrastructure.Services.Brain.BrainIngestPipeline>();
@@ -1437,6 +1438,11 @@ app.Configure(config =>
             .WithDescription("Deterministic ingest of all Claude session JSONL files (no AI). Phase 1.")
             .WithExample(["brain", "ingest"]);
 
+        brain.AddCommand<PKS.Commands.Brain.BrainConversationCommand>("conversation")
+            .WithDescription("Export human prompts + assistant replies; replace tool traffic with raw source references (no AI).")
+            .WithExample(["brain", "conversation", "40dafe36-24bd-4169-aacb-3955d6a442a2"])
+            .WithExample(["brain", "conversation", "./session.jsonl", "--output", "./conversation.md"]);
+
         brain.AddCommand<PKS.Commands.Brain.BrainExtractCommand>("extract")
             .WithDescription("AI-extract per-session summaries via the editable brain-extract skill. Phase 2.")
             .WithExample(["brain", "extract", "--limit", "1", "--dry-run"])
@@ -1499,8 +1505,9 @@ app.Configure(config =>
                 .WithDescription("List all brain skills and where each resolves from (embedded vs user override)")
                 .WithExample(["brain", "skill", "list"]);
             skill.AddCommand<PKS.Commands.Brain.BrainSkillInitCommand>("init")
-                .WithDescription("Copy a skill's embedded default to ~/.claude/skills/<name>/SKILL.md so you can edit it")
+                .WithDescription("Copy an embedded skill to Claude skills or project-shared .agents/skills")
                 .WithExample(["brain", "skill", "init", "brain-extract"])
+                .WithExample(["brain", "skill", "init", "brain-extract", "--agents"])
                 .WithExample(["brain", "skill", "init", "brain-wiki-page", "--force"]);
             skill.AddCommand<PKS.Commands.Brain.BrainSkillShowCommand>("show")
                 .WithDescription("Print the currently-resolved body of a skill to stdout")

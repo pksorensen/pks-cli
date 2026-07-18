@@ -2,9 +2,10 @@ namespace PKS.Infrastructure.Services.Brain;
 
 /// Locates a brain skill's SKILL.md body. Override hierarchy (first hit wins):
 ///   1. Explicit path passed in `overridePath`
-///   2. ~/.claude/plugins/pks-brain/skills/&lt;name&gt;/SKILL.md  (marketplace install)
-///   3. ~/.claude/skills/&lt;name&gt;/SKILL.md                   (user copy)
-///   4. Embedded resource (always present — the shipped default)
+///   2. nearest .agents/skills or .claude/skills project copy
+///   3. ~/.agents/skills/&lt;name&gt;/SKILL.md                    (shared agent copy)
+///   4. Claude plugin / ~/.claude/skills / ~/.codex/skills copies
+///   5. Embedded resource (always present — the shipped default)
 ///
 /// The user can `cp` the embedded default to (2) or (3) and edit it to tune any
 /// skill behavior without rebuilding pks-cli.

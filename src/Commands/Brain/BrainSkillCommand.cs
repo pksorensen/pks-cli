@@ -85,7 +85,7 @@ public class BrainSkillListCommand : AsyncCommand<BrainSkillListSettings>
         AnsiConsole.Write(table);
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[grey]Customize a skill with[/] [bold]pks brain skill init <name>[/] [grey]— copies the embedded default to[/]");
-        AnsiConsole.MarkupLine($"[grey]~/.claude/skills/<name>/SKILL.md, where you can edit it. The next run picks it up automatically.[/]");
+        AnsiConsole.MarkupLine("[grey]Use --agents to write .agents/skills/<name>/SKILL.md for a project-shared Claude + Codex skill.[/]");
         return 0;
     }
 
@@ -103,6 +103,10 @@ public class BrainSkillInitSettings : BrainSettings
     [CommandOption("--target")]
     [Description("Destination dir. Default: ~/.claude/skills/<name>/")]
     public string? Target { get; set; }
+
+    [CommandOption("--agents")]
+    [Description("Install into the current repo's .agents/skills/<name>/ so Claude and Codex can share it.")]
+    public bool Agents { get; set; }
 
     [CommandOption("--force")]
     [Description("Overwrite an existing file instead of refusing.")]
@@ -135,7 +139,15 @@ public class BrainSkillInitCommand : AsyncCommand<BrainSkillInitSettings>
         }
 
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var targetDir = settings.Target ?? Path.Combine(home, ".claude", "skills", entry.Name);
+        if (settings.Target is not null && settings.Agents)
+        {
+            AnsiConsole.MarkupLine("[red]Use either --target or --agents, not both.[/]");
+            return 1;
+        }
+        var targetDir = settings.Target ?? (settings.Agents
+            ? Path.Combine(FindRepositoryRoot(Directory.GetCurrentDirectory()) ?? Directory.GetCurrentDirectory(),
+                ".agents", "skills", entry.Name)
+            : Path.Combine(home, ".claude", "skills", entry.Name));
         var targetPath = Path.Combine(targetDir, "SKILL.md");
 
         if (File.Exists(targetPath) && !settings.Force)
@@ -161,6 +173,19 @@ public class BrainSkillInitCommand : AsyncCommand<BrainSkillInitSettings>
         AnsiConsole.MarkupLine($"[grey]Edit it. Next [/][bold]{entry.Command}[/][grey] picks up the changes automatically.[/]");
         AnsiConsole.MarkupLine($"[grey]Check status with[/] [bold]pks brain skill list[/]");
         return 0;
+    }
+
+    private static string? FindRepositoryRoot(string start)
+    {
+        var directory = new DirectoryInfo(Path.GetFullPath(start));
+        while (directory is not null)
+        {
+            if (Directory.Exists(Path.Combine(directory.FullName, ".git")) ||
+                File.Exists(Path.Combine(directory.FullName, ".git")))
+                return directory.FullName;
+            directory = directory.Parent;
+        }
+        return null;
     }
 
     private static async Task<string?> ReadEmbeddedAsync(string skillName)
