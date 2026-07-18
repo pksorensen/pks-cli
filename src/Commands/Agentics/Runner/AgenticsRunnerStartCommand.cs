@@ -31,6 +31,36 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
     private readonly AzureFoundryAuthConfig _foundryConfig;
     private readonly AgentChatProviderFactory _chatProviderFactory;
     private readonly IAnsiConsole _console;
+    private readonly IRunnerExecutionCapabilityProbe _capabilityProbe;
+
+    /// <summary>Phase 4 (SSH handoff) collaborators. Trailing-optional (default null) rather than
+    /// retrofitted into every existing call site: DI still injects the registered singletons here at
+    /// runtime (see DevcontainerSpawnerService's ISshCommandRunner? for precedent), while the two
+    /// pre-existing test fixtures that positionally construct this command with exactly 9 args keep
+    /// compiling unchanged. Null (as in those tests) simply means "the degraded-start SSH-handoff
+    /// offer never fires" -- everything else behaves exactly as before Phase 4.</summary>
+    private readonly PKS.Infrastructure.Services.ISshTargetConfigurationService? _sshTargetConfig;
+    private readonly IAgenticsRunnerSshHandoffService? _sshHandoffService;
+
+    /// <summary>Phase 5 (credential forwarding) collaborators. Same trailing-optional pattern as the
+    /// Phase 4 pair above -- when null (as in the two 9-arg test fixtures), the post-handoff
+    /// credential-volume warning and the opt-in forwarding offer both silently skip rather than
+    /// throwing, so nothing that already constructs this command with fewer args breaks.</summary>
+    private readonly PKS.Infrastructure.Services.Security.IActionGuard? _guard;
+    private readonly PKS.Infrastructure.Services.Security.ITotpSeedStore? _totpStore;
+    private readonly PKS.Infrastructure.IConfigurationService? _configurationService;
+
+    /// <summary>Job ids already logged as "declined -- devcontainer spawning unavailable".
+    /// Rate-limits the pre-claim-refusal grey line to once per job id instead of once per
+    /// poll cycle -- the same queued job keeps coming back every cycle until Phase 2's
+    /// server-side `needs` filtering ships (see docs/remote-runner-targets-plan.md D2) or the
+    /// operator intervenes.</summary>
+    private readonly HashSet<string> _declinedSpawnJobIds = new();
+
+    /// <summary>Last capability set logged to the console, so the poll loop only prints
+    /// "Runner capabilities: ..." when it actually changes (e.g. Docker comes back) instead
+    /// of every single cycle now that capabilities are recomputed each iteration.</summary>
+    private List<string>? _lastLoggedCapabilities;
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
@@ -167,6 +197,10 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         [CommandOption("--chat-llm-verbose")]
         [Description("Log every chat-llm:v1 Chat Channel frame (chat.completion.request/chunk/done/error, chat.models.request/response, chat.end) to this console as it's sent/received, for debugging the chat pipeline. Frame text is markup-escaped and truncated -- it can include the user's own chat content, so avoid this on a shared/recorded terminal if that matters.")]
         public bool ChatLlmVerbose { get; set; }
+
+        [CommandOption("--configure")]
+        [Description("Re-run the interactive capability/chat-model configuration prompts even if this registration already has a persisted profile from a previous run. Ignored on a non-interactive console (never blocks).")]
+        public bool Configure { get; set; }
     }
 
     public AgenticsRunnerStartCommand(
@@ -177,7 +211,13 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         IAzureFoundryAuthService foundryAuthService,
         AzureFoundryAuthConfig foundryConfig,
         AgentChatProviderFactory chatProviderFactory,
-        IAnsiConsole console)
+        IAnsiConsole console,
+        IRunnerExecutionCapabilityProbe capabilityProbe,
+        PKS.Infrastructure.Services.ISshTargetConfigurationService? sshTargetConfig = null,
+        IAgenticsRunnerSshHandoffService? sshHandoffService = null,
+        PKS.Infrastructure.Services.Security.IActionGuard? guard = null,
+        PKS.Infrastructure.Services.Security.ITotpSeedStore? totpStore = null,
+        PKS.Infrastructure.IConfigurationService? configurationService = null)
     {
         _configService = configService ?? throw new ArgumentNullException(nameof(configService));
         _spawnerService = spawnerService ?? throw new ArgumentNullException(nameof(spawnerService));
@@ -187,6 +227,12 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         _foundryConfig = foundryConfig ?? throw new ArgumentNullException(nameof(foundryConfig));
         _chatProviderFactory = chatProviderFactory ?? throw new ArgumentNullException(nameof(chatProviderFactory));
         _console = console ?? throw new ArgumentNullException(nameof(console));
+        _capabilityProbe = capabilityProbe ?? throw new ArgumentNullException(nameof(capabilityProbe));
+        _sshTargetConfig = sshTargetConfig;
+        _sshHandoffService = sshHandoffService;
+        _guard = guard;
+        _totpStore = totpStore;
+        _configurationService = configurationService;
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -254,12 +300,73 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 DisplayInfo($"Polling interval: {settings.PollingInterval}s");
             }
 
+            // Probe Docker/spawn availability BEFORE the two blocking preflights below: the
+            // GitHub device-code preflight (hard `return 1` on failure) and the
+            // GitCredentialServer construction (Kestrel ListenUnixSocket on a Path.GetTempPath()
+            // path, which can hang/throw on a Windows box without Docker Desktop). Neither is
+            // needed to serve git_push/git_distribute/chat_llm jobs -- those never touch the
+            // spawner, only ExecuteSpawnModeAsync does. Skipping both when spawn mode is
+            // unavailable is what lets a Docker-less runner reach "Polling every Ns..." instead
+            // of stalling or hard-failing at startup. See docs/remote-runner-targets-plan.md
+            // Phase 1 (this ordering fix is the load-bearing part of that phase).
+            var spawnCapabilityStatus = settings.InProcess
+                ? null
+                : await _capabilityProbe.GetStatusAsync(CancellationToken.None);
+            var spawnModeAvailable = settings.InProcess || (spawnCapabilityStatus?.DockerAvailable ?? false);
+
+            if (!settings.InProcess && !spawnModeAvailable)
+            {
+                var reason = spawnCapabilityStatus?.Reason ?? "Docker availability check did not run";
+                if (_console.Profile.Capabilities.Interactive)
+                {
+                    var panel = new Panel(
+                        $"[yellow]Devcontainer spawning is unavailable on this machine.[/]\n" +
+                        $"[dim]Reason: {reason.EscapeMarkup()}[/]\n\n" +
+                        "This runner will advertise reduced capabilities (no [bold]alp_operator[/], " +
+                        "[bold]chat-session:v1[/], [bold]devcontainer-session:v1[/]) and will leave any " +
+                        "devcontainer job it is offered [bold]queued[/] for a capable runner instead of " +
+                        "claiming and failing it.\n" +
+                        "[dim]git_push / git_distribute / chat-llm:v1 jobs are unaffected.[/]")
+                        .Header("[yellow]Degraded start[/]")
+                        .Border(BoxBorder.Rounded)
+                        .BorderColor(Color.Yellow);
+                    _console.Write(panel);
+
+                    // Phase 4 (SSH handoff, docs/remote-runner-targets-plan.md): Docker is
+                    // unavailable here, but if the operator has registered SSH targets (`pks ssh
+                    // register` / `pks vm init`), offer to run this project's runner on one of them
+                    // instead of continuing locally with reduced capabilities. Only offered when both
+                    // Phase 4 collaborators were actually injected (see the constructor note) and at
+                    // least one target is registered.
+                    if (_sshTargetConfig != null && _sshHandoffService != null)
+                    {
+                        var sshTargets = await _sshTargetConfig.ListTargetsAsync();
+                        if (sshTargets.Count > 0 && await OfferSshHandoffAsync(registration, sshTargets))
+                        {
+                            // The handoff itself started the runner remotely -- this local process
+                            // has nothing left to do.
+                            return 0;
+                        }
+                    }
+                }
+                else
+                {
+                    // Non-interactive: never block on a prompt -- just say so and continue with
+                    // reduced capabilities (checked via the injectable _console.Profile, not the
+                    // static System.Console.IsInputRedirected).
+                    _console.MarkupLine($"[yellow]Devcontainer spawning unavailable ({reason.EscapeMarkup()}) — starting with reduced capabilities; devcontainer jobs will be left queued for a capable runner.[/]");
+                }
+            }
+
             // GitHub authentication pre-flight: only run when the project actually
-            // points at github.com. Self-hosted projects (repo on the agentics server)
-            // never need GitHub credentials, so prompting would be both unnecessary and
-            // surprising. The runner queries the server to find out.
+            // points at github.com AND spawn mode is available (see above -- this preflight
+            // exists to support ExecuteSpawnModeAsync via the GitCredentialServer below, not
+            // git_push/git_distribute, which resolve their own credentials independently).
+            // Self-hosted projects (repo on the agentics server) never need GitHub credentials,
+            // so prompting would be both unnecessary and surprising. The runner queries the
+            // server to find out.
             var requiresGitHub = false;
-            if (!settings.InProcess)
+            if (!settings.InProcess && spawnModeAvailable)
             {
                 requiresGitHub = await ProjectRequiresGitHubAsync(registration);
                 if (!requiresGitHub && settings.Verbose)
@@ -267,7 +374,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                     DisplayInfo("Project does not use GitHub — skipping GitHub auth preflight.");
                 }
             }
-            if (!settings.InProcess && requiresGitHub)
+            if (!settings.InProcess && spawnModeAvailable && requiresGitHub)
             {
                 var isAuthenticated = await _githubAuth.IsAuthenticatedAsync();
 
@@ -339,9 +446,15 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             _console.WriteLine();
 
             GitCredentialServer? credentialServer = null;
-            if (!settings.InProcess)
+            if (!settings.InProcess && spawnModeAvailable)
             {
-                // Start credential server (serves locally stored device-code OAuth token)
+                // Start credential server (serves locally stored device-code OAuth token). This is
+                // the second blocking preflight hoisted behind the capability probe (see above) --
+                // StartAsync() calls Kestrel's ListenUnixSocket on a Path.GetTempPath() path, which
+                // can hang/throw on a Docker-less Windows box. Only ExecuteSpawnModeAsync ever reads
+                // credentialServer.SocketPath, so it's safe to leave unconstructed (null) whenever
+                // spawn mode is unavailable -- git_push/git_distribute/chat_llm resolve credentials
+                // independently and never touch it.
                 credentialServer = new GitCredentialServer(_githubAuth, registration.Id);
                 await credentialServer.StartAsync();
 
@@ -350,7 +463,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                     DisplayInfo($"Credential server started at: {credentialServer.SocketPath}");
                 }
             }
-            else
+            else if (settings.InProcess)
             {
                 DisplayInfo("Running in [yellow]--inprocess[/] mode (no devcontainer spawning)");
             }
@@ -377,114 +490,51 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                     }
                 };
 
-                // Compute runner capabilities once at startup
+                // Runner configuration flow (Phase 3, docs/remote-runner-targets-plan.md): decide
+                // which capabilities/chat-models this registration advertises. First run (no
+                // persisted profile) or an explicit --configure prompts interactively; every
+                // subsequent start is silent and just reuses the persisted profile. A
+                // non-interactive console never blocks on a prompt -- it always falls back to the
+                // persisted profile, or "auto" (null profile, probe/factory decide) if none exists.
+                if (_console.Profile.Capabilities.Interactive && (settings.Configure || registration.Profile == null))
+                {
+                    registration.Profile = await RunInteractiveConfigureAsync(
+                        registration, settings, spawnCapabilityStatus, cts.Token);
+                    await _configService.AddRegistrationAsync(registration);
+                }
+                else if (settings.Configure && !_console.Profile.Capabilities.Interactive)
+                {
+                    _console.MarkupLine("[yellow]--configure requested but this console is non-interactive — using the persisted profile (or auto) instead.[/]");
+                }
+
                 var chatLlmBackendUrl = ResolveChatLlmBackendUrl(settings.ChatLlmBackendUrl);
                 var chatLlmBackendKey = ResolveChatLlmBackendKey(settings.ChatLlmBackendKey);
-                var chatLlmModelId = ResolveChatLlmModelId(settings.ChatLlmModel);
+                // Explicit --chat-llm-model flag / CHAT_LLM_MODEL env always wins; the persisted
+                // profile's DefaultChatModel is only the fallback before the hardcoded "gpt-5.5".
+                var chatLlmModelId = ResolveChatLlmModelId(settings.ChatLlmModel, registration.Profile?.DefaultChatModel);
                 var chatLlmVerbose = settings.ChatLlmVerbose;
-                var capabilities = await ComputeCapabilitiesAsync(settings.InProcess, chatLlmBackendUrl, chatLlmModelId, cts.Token);
-                _console.MarkupLine($"[dim]Runner capabilities: {string.Join(", ", capabilities)}[/]");
 
-                // Polling loop
+                // Polling loop. Capabilities are recomputed every iteration inside
+                // PollAndDispatchOnceAsync (behind the capability probe's 60s memo) rather than
+                // once here at startup, so a Docker daemon that DIES mid-run stops advertising
+                // spawn capabilities without requiring a restart -- see
+                // docs/remote-runner-targets-plan.md Phase 1.
+                //
+                // The reverse (a daemon that comes BACK mid-run) deliberately does NOT re-enable
+                // spawn work: credentialServer and the GitHub device-code preflight are one-shot
+                // startup work, so a runner that started degraded stays degraded for its process
+                // lifetime and must be restarted. PollAndDispatchOnceAsync enforces that by passing
+                // `spawnEnabled: credentialServer != null` into ComputeCapabilitiesAsync, so we
+                // never advertise a spawn capability we would then decline every job for.
                 var jobsProcessed = 0;
                 while (!cts.Token.IsCancellationRequested)
                 {
                     try
                     {
-                        var job = await PollForJobAsync(registration, capabilities, cts.Token);
-
-                        if (job != null)
-                        {
-                            _console.MarkupLine($"[green]Job received:[/] {job.Id}");
-                            if (!string.IsNullOrEmpty(job.AgentDef?.Traceparent))
-                                _console.MarkupLine($"[dim]trace: {job.AgentDef.Traceparent}[/]");
-
-                            // Restore parent trace context so this runner span is a child of the
-                            // server-side span that dispatched the job (visible in Aspire dashboard).
-                            System.Diagnostics.ActivityContext parentCtx = default;
-                            if (!string.IsNullOrEmpty(job.AgentDef?.Traceparent))
-                                System.Diagnostics.ActivityContext.TryParse(job.AgentDef.Traceparent, null, isRemote: true, out parentCtx);
-                            using var jobActivity = _activitySource.StartActivity(
-                                "runner.execute_job", System.Diagnostics.ActivityKind.Consumer, parentCtx);
-                            jobActivity?.SetTag("agentics.job_id", job.Id);
-                            jobActivity?.SetTag("agentics.task_id", job.AgentDef?.TaskId);
-                            jobActivity?.SetTag("agentics.assembly_line_id", job.AgentDef?.AssemblyLineId);
-                            jobActivity?.SetTag("agentics.mode", settings.InProcess ? "inprocess" : "spawn");
-
-                            if (job.AgentDef?.JobType == "git_push" && job.AgentDef?.GitPushPayload != null)
-                            {
-                                await ExecuteGitPushJobAsync(registration, job, settings, cts.Token);
-                                jobsProcessed++;
-                                _console.MarkupLine($"[green]Git push job completed.[/]");
-                            }
-                            else if (job.AgentDef?.JobType == "git_distribute" && job.AgentDef?.DistributePayload != null)
-                            {
-                                await ExecuteGitDistributeJobAsync(registration, job, settings, cts.Token);
-                                jobsProcessed++;
-                                _console.MarkupLine($"[green]Git distribute job completed.[/]");
-                            }
-                            else if (job.AgentDef?.JobType == "chat_llm")
-                            {
-                                // Kind B (chat-llm:v1, external/alp-spec/2026-03-30-draft/spec/13-chat.md): a bare
-                                // Job -- no devcontainer, no Operator. The Runner itself dials the Chat Channel and
-                                // forwards chat-completions turns to the locally configured backend. This holds a
-                                // long-lived connection for the entire chat session, so it runs on its own
-                                // background Task instead of being awaited here -- otherwise an open chat tab would
-                                // starve the poll loop and block every other job (e.g. an ALP floor dispatch) for
-                                // as long as the chat stays open. jobActivity's span is started fresh inside the
-                                // background task so its lifetime matches the actual execution, not this iteration.
-                                var chatJob = job;
-                                var chatTraceparent = chatJob.AgentDef?.Traceparent;
-                                var chatJobTask = Task.Run(async () =>
-                                {
-                                    System.Diagnostics.ActivityContext chatParentCtx = default;
-                                    if (!string.IsNullOrEmpty(chatTraceparent))
-                                        System.Diagnostics.ActivityContext.TryParse(chatTraceparent, null, isRemote: true, out chatParentCtx);
-                                    using var chatJobActivity = _activitySource.StartActivity(
-                                        "runner.execute_job", System.Diagnostics.ActivityKind.Consumer, chatParentCtx);
-                                    chatJobActivity?.SetTag("agentics.job_id", chatJob.Id);
-                                    chatJobActivity?.SetTag("agentics.task_id", chatJob.AgentDef?.TaskId);
-                                    chatJobActivity?.SetTag("agentics.assembly_line_id", chatJob.AgentDef?.AssemblyLineId);
-                                    chatJobActivity?.SetTag("agentics.mode", "chat_llm");
-
-                                    try
-                                    {
-                                        await ExecuteChatLlmJobAsync(registration, chatJob, chatLlmBackendUrl, chatLlmBackendKey, chatLlmModelId, chatLlmVerbose, cts.Token);
-                                        _console.MarkupLine($"[green]Chat-llm job completed.[/] {chatJob.Id}");
-                                    }
-                                    catch (OperationCanceledException)
-                                    {
-                                        // Shutdown while a chat session was in flight -- DrainRunningJobTasksAsync already waits for us.
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        _console.MarkupLine($"[red]Chat-llm job failed:[/] {chatJob.Id} {ex.Message.EscapeMarkup()}");
-                                    }
-                                }, cts.Token);
-                                TrackRunningJob(chatJobTask);
-                                jobsProcessed++;
-                            }
-                            else if (settings.InProcess)
-                            {
-                                await ExecuteInProcessAsync(registration, job, settings, cts.Token);
-                                jobsProcessed++;
-                                _console.MarkupLine($"[green]InProcess job completed.[/]");
-                            }
-                            else
-                            {
-                                await ExecuteSpawnModeAsync(registration, job, settings, credentialServer!, cts.Token);
-                            }
-                        }
-                        else
-                        {
-                            if (settings.Verbose)
-                                _console.MarkupLine($"[dim]{DateTime.UtcNow:HH:mm:ss} No jobs available, waiting {settings.PollingInterval}s...[/]");
-                        }
-
-                        _pollCounter.Add(1,
-                            new KeyValuePair<string, object?>("owner", registration.Owner),
-                            new KeyValuePair<string, object?>("project", registration.Project),
-                            new KeyValuePair<string, object?>("result", job != null ? "job_found" : "empty"));
+                        jobsProcessed += await PollAndDispatchOnceAsync(
+                            registration, settings, credentialServer,
+                            chatLlmBackendUrl, chatLlmBackendKey, chatLlmModelId, chatLlmVerbose,
+                            cts.Token);
                     }
                     catch (OperationCanceledException)
                     {
@@ -626,7 +676,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         var runnerName = System.Net.Dns.GetHostName();
 
         using var httpClient = new HttpClient();
-        var requestBody = new { name = runnerName, labels = Array.Empty<string>() };
+        var requestBody = new { name = runnerName, labels = BuildDefaultRunnerLabels() };
         var httpResponse = await httpClient.PostAsJsonAsync(
             $"{serverUrl}/api/owners/{owner}/projects/{project}/runners",
             requestBody);
@@ -658,6 +708,368 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
     }
 
     /// <summary>
+    /// Default job-targeting labels sent at registration when the operator hasn't configured any
+    /// (Phase 3, work item 6 -- registration used to send <c>Array.Empty&lt;string&gt;()</c>
+    /// unconditionally, which meant a runner could never be targeted by label). "self-hosted"
+    /// matches the convention already used by RunnerDaemonService's (unrelated, GitHub Actions)
+    /// self-hosted-runner labels; the OS name lets a job request "windows"/"macos"/"linux"
+    /// specifically. Duplicated in AgenticsRunnerRegisterCommand.cs rather than extracted, matching
+    /// this codebase's existing pattern of small per-command helpers over shared utility classes.
+    /// </summary>
+    private static string[] BuildDefaultRunnerLabels()
+    {
+        var os = OperatingSystem.IsWindows() ? "windows"
+            : OperatingSystem.IsMacOS() ? "macos"
+            : OperatingSystem.IsLinux() ? "linux"
+            : "unknown";
+        return new[] { "self-hosted", os };
+    }
+
+    /// <summary>
+    /// Offers to hand this project's runner off to a registered SSH target instead of continuing
+    /// locally with reduced capabilities (Phase 4, docs/remote-runner-targets-plan.md, work item 7).
+    /// Only called when interactive, both Phase 4 collaborators are injected, and at least one SSH
+    /// target is registered. Returns true (and has already started the remote runner) when the
+    /// operator went through with a successful handoff; returns false (declined, or the handoff
+    /// failed) for every other outcome, in which case the caller falls through to the ordinary
+    /// reduced-capability local start.
+    /// </summary>
+    internal async Task<bool> OfferSshHandoffAsync(AgenticsRunnerRegistration registration, List<PKS.Infrastructure.Services.SshTarget> sshTargets)
+    {
+        _console.WriteLine();
+        if (!_console.Confirm("[cyan]Hand off this runner to a registered SSH target instead?[/]", defaultValue: true))
+            return false;
+
+        var target = await PKS.Commands.Ssh.SshTargetSelection.PickAsync(_console, sshTargets, null, "[cyan]Select SSH target:[/]");
+        if (target == null) return false;
+
+        SshProbeResult? probe = null;
+        string? probeError = null;
+        await _console.Status()
+            .SpinnerStyle(Style.Parse("cyan"))
+            .Spinner(Spinner.Known.Dots)
+            .StartAsync($"Probing {target.Host}...", async _ =>
+            {
+                try { probe = await _sshHandoffService!.ProbeAsync(target); }
+                catch (Exception ex) { probeError = ex.Message; }
+            });
+
+        if (probeError != null)
+        {
+            DisplayError($"Could not probe {target.Host}: {probeError}");
+            return false;
+        }
+
+        _console.MarkupLine($"[cyan1]Docker:[/]  {(probe!.DockerAvailable ? "[green]available[/]" : "[red]unavailable[/]")}");
+        _console.MarkupLine($"[cyan1]tmux:[/]    {(probe.TmuxAvailable ? $"[green]{probe.TmuxVersion.EscapeMarkup()}[/]" : "[red]unavailable[/]")}");
+        _console.MarkupLine($"[cyan1]dotnet:[/]  {(probe.DotnetAvailable ? $"[green]{probe.DotnetVersion.EscapeMarkup()}[/]" : "[red]unavailable[/]")}");
+        _console.MarkupLine($"[cyan1]dnx:[/]     {(probe.DnxAvailable ? "[green]available[/]" : "[red]unavailable[/]")}");
+
+        if (!probe.IsReady)
+        {
+            _console.MarkupLine("[yellow]Target is not fully ready for a handoff.[/]");
+            if (!_console.Confirm("[yellow]Proceed anyway?[/]", defaultValue: false))
+                return false;
+        }
+
+        var defaultName = SanitizeSuggestedRunnerName(target.Label ?? target.Host);
+        var runnerName = _console.Prompt(new TextPrompt<string>("[cyan]Runner name[/]").DefaultValue(defaultName));
+
+        SshHandoffResult? result = null;
+        await _console.Status()
+            .SpinnerStyle(Style.Parse("cyan"))
+            .Spinner(Spinner.Known.Dots)
+            .StartAsync($"Handing off to {target.Host}...", async ctx =>
+            {
+                result = await _sshHandoffService!.HandoffAsync(
+                    target, registration.Owner, registration.Project, registration.Server, runnerName,
+                    onProgress: msg => ctx.Status(msg.EscapeMarkup()));
+            });
+
+        if (result!.Success)
+        {
+            // Record the handoff on the LOCAL registration. HandoffAsync stamps SshTargetLabel on a
+            // brand-new registration object that is serialized and scp'd to the remote box only --
+            // nothing writes it back here. Without this, SshHandoffCommandHelpers.ResolveAsync (which
+            // matches purely on Profile.SshTargetLabel in the local config) finds no match and every
+            // one of `pks agentics runner status|logs|stop|claude-login <target>` prints
+            // "No project has been handed off to '<target>'" -- including the exact command the
+            // success message below tells the operator to run.
+            var targetLabel = target.Label ?? target.Host;
+            registration.Profile ??= new RunnerProfile();
+            registration.Profile.SshTargetLabel = targetLabel;
+            registration.Profile.ConfiguredAt = DateTime.UtcNow;
+            await _configService.AddRegistrationAsync(registration);
+
+            DisplaySuccess($"Runner '{runnerName}' is online on {target.Host} ({result.Elapsed.TotalSeconds:0}s). " +
+                $"Check on it any time with: pks agentics runner status {targetLabel}");
+
+            await WarnIfClaudeCredentialVolumeMissingAsync(target, registration.Owner, registration.Project);
+            await OfferCredentialForwardingAsync(target);
+
+            return true;
+        }
+
+        DisplayError($"Handoff failed: {result.FailureReason}");
+        if (!string.IsNullOrEmpty(result.RemoteTmuxOutput))
+        {
+            _console.MarkupLine("[dim]Remote tmux output:[/]");
+            _console.WriteLine(result.RemoteTmuxOutput);
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Phase 5 work item 1 (docs/remote-runner-targets-plan.md): warns when the remote doesn't yet
+    /// have the default project-scoped <c>pks-claude-*</c> credential volume -- without it, the
+    /// first headless devcontainer spawn there will stall waiting on an interactive Claude OAuth
+    /// login nobody is attached to see. Best-effort: a probe failure right after a fresh handoff
+    /// (e.g. the target is momentarily busy) is silently skipped rather than treated as an error --
+    /// this is advisory, not a gate. Work item 4: this is the "degraded, not broken" path staying
+    /// documented in the command's own output -- see also `pks agentics runner status`.
+    /// </summary>
+    private async Task WarnIfClaudeCredentialVolumeMissingAsync(PKS.Infrastructure.Services.SshTarget target, string owner, string project)
+    {
+        if (_sshHandoffService == null) return;
+
+        bool? present;
+        try { present = await _sshHandoffService.DetectClaudeCredentialVolumeAsync(target, owner, project); }
+        catch { return; }
+
+        if (present != false) return;
+
+        _console.WriteLine();
+        _console.MarkupLine(
+            $"[yellow]No Claude credentials volume found on {target.Host.EscapeMarkup()} for {owner.EscapeMarkup()}/{project.EscapeMarkup()}.[/]");
+        _console.MarkupLine(
+            "[dim]A headless devcontainer spawn there will stall waiting for an interactive OAuth login. " +
+            $"Populate it first: [bold]pks agentics runner claude-login {(target.Label ?? target.Host).EscapeMarkup()}[/][/]");
+    }
+
+    /// <summary>
+    /// Phase 5 work item 3 (docs/remote-runner-targets-plan.md, decision D3): opt-in, per-file
+    /// credential forwarding. The GitHub token and Foundry credentials are offered as two separate
+    /// consents -- declining one never silently declines the other -- and each raw already-serialized
+    /// value is copied verbatim from this machine's own <c>~/.pks-cli/settings.json</c> rather than
+    /// re-serialized (the two files use different JSON naming conventions internally; copying the
+    /// raw string is the only way to guarantee the remote's own auth services can still parse it).
+    /// Skipped entirely (no prompt at all) when nothing is stored locally to forward, or when the
+    /// SSH-handoff/config collaborators weren't injected.
+    /// </summary>
+    private async Task OfferCredentialForwardingAsync(PKS.Infrastructure.Services.SshTarget target)
+    {
+        if (_sshHandoffService == null || _configurationService == null) return;
+
+        var githubTokenRaw = await _configurationService.GetAsync("github.auth.token");
+        var foundryCredsRaw = await _configurationService.GetAsync("foundry.auth.credentials");
+        if (string.IsNullOrEmpty(githubTokenRaw) && string.IsNullOrEmpty(foundryCredsRaw)) return;
+
+        _console.WriteLine();
+        if (!_console.Confirm(
+                "[cyan]Forward locally stored credentials to this target so it can advertise git:push / Foundry chat capabilities?[/]",
+                defaultValue: false))
+        {
+            // Work item 4: declining is not an error -- the remote just advertises fewer
+            // capabilities (git:push / chat-llm's Foundry models won't appear; see
+            // AdvertiseCapabilities/GetAvailableCapabilitiesAsync's own credential checks). Say so
+            // explicitly rather than leaving the operator to infer it from a missing capability later.
+            _console.MarkupLine("[dim]Skipped. This target will run degraded, not broken -- it simply won't advertise git:push or Foundry chat capabilities without these credentials.[/]");
+            return;
+        }
+
+        var factorEnrolled = _totpStore != null && await _totpStore.IsEnrolledAsync();
+
+        if (!string.IsNullOrEmpty(githubTokenRaw))
+            await ForwardOneCredentialAsync(target, "GitHub token", factorEnrolled, "github.auth.token", githubTokenRaw);
+        else
+            _console.MarkupLine("[dim]No GitHub token stored locally -- nothing to forward for git:push.[/]");
+
+        if (!string.IsNullOrEmpty(foundryCredsRaw))
+            await ForwardOneCredentialAsync(target, "Foundry credentials", factorEnrolled, "foundry.auth.credentials", foundryCredsRaw);
+        else
+            _console.MarkupLine("[dim]No Foundry credentials stored locally -- nothing to forward for Foundry chat.[/]");
+    }
+
+    private async Task ForwardOneCredentialAsync(
+        PKS.Infrastructure.Services.SshTarget target, string fileLabel, bool factorEnrolled, string configKey, string configValue)
+    {
+        var prompt = PKS.Infrastructure.Services.Runner.CredentialForwardConsent.BuildPrompt(fileLabel, factorEnrolled);
+        if (!_console.Confirm(prompt, defaultValue: false))
+            return;
+
+        if (_guard != null)
+        {
+            try
+            {
+                await _guard.RequireAsync(new PKS.Infrastructure.Services.Security.ActionRequest(
+                    PKS.Infrastructure.Services.Security.ActionIds.RunnerCredentialForward,
+                    $"Forward {fileLabel} to {target.Host}"));
+            }
+            catch (PKS.Infrastructure.Services.Security.ActionGuardDeniedException ex)
+            {
+                _console.MarkupLine($"[red]Forwarding {fileLabel.EscapeMarkup()} denied:[/] {ex.Message.EscapeMarkup()}");
+                return;
+            }
+        }
+
+        var error = await _sshHandoffService!.ForwardConfigValueAsync(target, configKey, configValue);
+        if (error != null)
+            _console.MarkupLine($"[red]Failed to forward {fileLabel.EscapeMarkup()}:[/] {error.EscapeMarkup()}");
+        else
+            _console.MarkupLine($"[green]{fileLabel.EscapeMarkup()} forwarded to {target.Host.EscapeMarkup()} (0600).[/]");
+    }
+
+    private static string SanitizeSuggestedRunnerName(string value)
+    {
+        var chars = value.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '-').ToArray();
+        return new string(chars);
+    }
+
+    /// <summary>
+    /// Interactive first-run (or --configure) prompt flow (Phase 3, docs/remote-runner-targets-plan.md):
+    /// lets the operator pick which capabilities to advertise and which chat models to expose, then
+    /// persists the choice as a <see cref="RunnerProfile"/> so every subsequent start is silent. Only
+    /// ever called when <c>_console.Profile.Capabilities.Interactive</c> is true (checked by the
+    /// caller) -- never blocks a non-interactive console.
+    /// </summary>
+    private async Task<RunnerProfile> RunInteractiveConfigureAsync(
+        AgenticsRunnerRegistration registration,
+        Settings settings,
+        RunnerExecutionCapabilityStatus? spawnCapabilityStatus,
+        CancellationToken ct)
+    {
+        _console.WriteLine();
+        _console.MarkupLine("[bold cyan]Runner configuration[/] [dim](first run for this registration -- re-run any time with --configure)[/]");
+
+        // ── Capabilities ─────────────────────────────────────────────────────────────────
+        // Spectre.Console 0.47's MultiSelectionPrompt has no per-item "disabled" concept, so a
+        // capability the phase-1 probe says is unavailable right now is shown as an informational
+        // line above the prompt (with the probe's reason) instead of as an unselectable choice --
+        // it simply isn't offered as a choice at all. chat-llm:v1 / git:push / git-distribute are
+        // always offered: their real availability is nuanced (resolved per-model / per-credential)
+        // and is re-checked live every poll regardless of what the operator selects here (see
+        // ComputeCapabilitiesAsync's capabilityOverride intersection).
+        var dockerAvailable = settings.InProcess || (spawnCapabilityStatus?.DockerAvailable ?? false);
+        var availableCapabilities = new List<string>();
+        if (settings.InProcess || dockerAvailable)
+            availableCapabilities.Add("alp_operator");
+        if (dockerAvailable)
+        {
+            availableCapabilities.Add(ChatSessionCapability);
+            availableCapabilities.Add(DevAgentSessionCapability);
+        }
+        availableCapabilities.Add("chat-llm:v1");
+        availableCapabilities.Add("git:push");
+        availableCapabilities.Add("git-distribute");
+
+        if (!dockerAvailable && !settings.InProcess)
+        {
+            var reason = spawnCapabilityStatus?.Reason ?? "Docker availability check did not run";
+            _console.MarkupLine($"[dim]alp_operator / {ChatSessionCapability} / {DevAgentSessionCapability} are unavailable right now ({reason.EscapeMarkup()}) and are not offered below.[/]");
+        }
+
+        var capabilityPrompt = new MultiSelectionPrompt<string>()
+            .Title("[cyan]Tick the capabilities this runner should advertise (space to toggle, enter to confirm):[/]")
+            .Required()
+            .AddChoices(availableCapabilities);
+
+        var previouslySelectedCapabilities = registration.Profile?.Capabilities;
+        foreach (var choice in availableCapabilities)
+        {
+            // Pre-tick from the existing profile if there is one; otherwise default to "everything
+            // currently available" so a first-run operator who just hits enter gets today's
+            // no-profile (auto) behavior.
+            if (previouslySelectedCapabilities is null ||
+                previouslySelectedCapabilities.Contains(choice, StringComparer.OrdinalIgnoreCase))
+            {
+                capabilityPrompt.Select(choice);
+            }
+        }
+
+        var selectedCapabilities = _console.Prompt(capabilityPrompt);
+
+        // ── Chat models ──────────────────────────────────────────────────────────────────
+        List<string> selectedModels = new();
+        string? defaultModel = null;
+        IReadOnlyList<string> availableModels = Array.Empty<string>();
+        try
+        {
+            availableModels = await _chatProviderFactory.ListAvailableModelsAsync(ct);
+        }
+        catch
+        {
+            // No resolvable chat provider at all (no Foundry session, no stored/env key) --
+            // fall through with an empty list and skip the chat-model prompts below.
+        }
+
+        if (availableModels.Count == 0)
+        {
+            _console.MarkupLine("[dim]No chat models currently resolve on this machine (no Foundry session / API key configured) -- skipping chat model selection.[/]");
+        }
+        else
+        {
+            var modelPrompt = new MultiSelectionPrompt<string>()
+                .Title("[cyan]Tick the chat models this runner should expose for chat-llm:v1 jobs (space to toggle, enter to confirm):[/]")
+                .Required()
+                .AddChoices(availableModels);
+
+            var previouslySelectedModels = registration.Profile?.ChatModels;
+            foreach (var choice in availableModels)
+            {
+                if (previouslySelectedModels is null ||
+                    previouslySelectedModels.Contains(choice, StringComparer.OrdinalIgnoreCase))
+                {
+                    modelPrompt.Select(choice);
+                }
+            }
+
+            selectedModels = _console.Prompt(modelPrompt);
+
+            if (selectedModels.Count == 1)
+            {
+                defaultModel = selectedModels[0];
+            }
+            else if (selectedModels.Count > 1)
+            {
+                var previousDefault = registration.Profile?.DefaultChatModel;
+                var defaultPrompt = new SelectionPrompt<string>()
+                    .Title("[cyan]Pick the default chat model (used when a request doesn't specify one):[/]")
+                    .AddChoices(selectedModels);
+                if (previousDefault != null && selectedModels.Contains(previousDefault, StringComparer.OrdinalIgnoreCase))
+                {
+                    // SelectionPrompt has no direct "pre-select" API like MultiSelectionPrompt.Select --
+                    // reorder so the previous default is offered first instead.
+                    defaultPrompt = new SelectionPrompt<string>()
+                        .Title("[cyan]Pick the default chat model (used when a request doesn't specify one):[/]")
+                        .AddChoices(selectedModels.OrderByDescending(m =>
+                            string.Equals(m, previousDefault, StringComparison.OrdinalIgnoreCase)));
+                }
+                defaultModel = _console.Prompt(defaultPrompt);
+            }
+        }
+
+        var profile = new RunnerProfile
+        {
+            Capabilities = selectedCapabilities,
+            ChatModels = selectedModels.Count > 0 ? selectedModels : null,
+            DefaultChatModel = defaultModel,
+            // Labels/SshTargetLabel are untouched by this flow (Phase 3 doesn't prompt for them) --
+            // carry forward whatever was already persisted so a reconfigure doesn't silently drop
+            // a Phase-4 SSH-target assignment or an operator-set label list.
+            Labels = registration.Profile?.Labels,
+            SshTargetLabel = registration.Profile?.SshTargetLabel,
+            ConfiguredAt = DateTime.UtcNow,
+        };
+
+        _console.MarkupLine($"[green]Configuration saved.[/] Capabilities: [cyan]{string.Join(", ", selectedCapabilities)}[/]");
+        if (selectedModels.Count > 0)
+            _console.MarkupLine($"Chat models: [cyan]{string.Join(", ", selectedModels)}[/] (default: [cyan]{defaultModel}[/])");
+        _console.WriteLine();
+
+        return profile;
+    }
+
+    /// <summary>
     /// Computes the capability strings this runner instance supports.
     /// "alp_operator"    — always present (can run vibecast/claude jobs).
     /// "chat-session:v1" — always present alongside "alp_operator": Kind A chat Jobs
@@ -679,9 +1091,63 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
     /// "git:push"       — present when a GitHub token is stored (so git push won't prompt).
     /// "git-distribute" — present alongside "git:push" (source distribution needs the same credentials).
     /// </summary>
-    private async Task<List<string>> ComputeCapabilitiesAsync(bool inProcess, string? chatLlmBackendUrl, string chatLlmModelId, CancellationToken ct)
+    /// <summary>
+    /// Computes the capability strings this runner advertises on its next poll (Defect A fix,
+    /// docs/remote-runner-targets-plan.md Phase 1). <c>internal</c> so tests can call it directly
+    /// against a mocked <see cref="IRunnerExecutionCapabilityProbe"/> without driving the whole
+    /// poll loop -- see tests/Services/Runner/RunnerCapabilityProbeTests.cs.
+    /// </summary>
+    /// <param name="capabilityOverride">
+    /// <see cref="RunnerProfile.Capabilities"/> from the persisted profile (Phase 3), or null.
+    /// When set, the live-probed set below is intersected with this list -- an operator override
+    /// can only narrow what gets advertised, never force-advertise something the probe says this
+    /// machine cannot actually serve right now. Optional/trailing so the three existing Phase 1
+    /// gating tests (which call this with exactly 4 named args) keep compiling unchanged.
+    /// </param>
+    internal async Task<List<string>> ComputeCapabilitiesAsync(
+        bool inProcess, string? chatLlmBackendUrl, string chatLlmModelId, CancellationToken ct,
+        List<string>? capabilityOverride = null,
+        bool spawnEnabled = true)
     {
-        var caps = new List<string> { "alp_operator", "chat-session:v1", DevAgentSessionCapability };
+        var caps = new List<string>();
+
+        // Devcontainer-spawn capabilities are gated on Docker actually being reachable, not
+        // advertised unconditionally. --inprocess never spawns a devcontainer at all
+        // (ExecuteInProcessAsync runs in a git worktree), so the probe is skipped entirely in
+        // that mode -- both to avoid pinging Docker every poll cycle for no reason, and because
+        // RunnerCapabilityProbeTests asserts the probe is never invoked when inProcess=true.
+        //
+        // spawnEnabled is the STRUCTURAL half of the gate (the call site passes
+        // `settings.InProcess || credentialServer != null`). The GitCredentialServer and the
+        // GitHub device-code preflight are both one-shot startup work; when spawn mode was
+        // unavailable at startup neither ran, so ExecuteSpawnModeAsync can NEVER succeed for the
+        // rest of this process even if dockerd comes back and the live probe turns green. Without
+        // this term the runner would advertise alp_operator again, be handed every station job,
+        // and decline 100% of them at the pre-claim check in PollAndDispatchOnceAsync -- leaving
+        // those jobs queued forever while both server-side safety nets (noOnlineRunnerWarning and
+        // StaleJobMonitor) see a capable-looking online runner and stay silent. Restart the runner
+        // to pick Docker back up.
+        var dockerAvailable = false;
+        if (!inProcess && spawnEnabled)
+        {
+            var status = await _capabilityProbe.GetStatusAsync(ct);
+            dockerAvailable = status.DockerAvailable;
+        }
+
+        // alp_operator: the only capability string already advertised unconditionally by every
+        // field runner AND semantically meaning "I can run an operator + devcontainer" (see the
+        // plan's capability table) -- --inprocess satisfies this without Docker.
+        if (inProcess || dockerAvailable)
+            caps.Add("alp_operator");
+
+        // chat-session:v1 (Kind A chat) and devcontainer-session:v1 both run inside a spawned
+        // devcontainer, so --inprocess does NOT retain them (decision D1) -- only a real Docker
+        // daemon does.
+        if (dockerAvailable)
+        {
+            caps.Add(ChatSessionCapability);
+            caps.Add(DevAgentSessionCapability);
+        }
 
         if (!string.IsNullOrEmpty(chatLlmBackendUrl))
         {
@@ -701,12 +1167,15 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             }
         }
 
-        // In --inprocess mode: check whether the stored GitHub token is valid.
-        // In spawn mode:       the GitCredentialServer is always started with a stored token,
-        //                      so we only get here after authentication succeeded (see startup preflight).
-        var hasGitCredentials = inProcess
-            ? await _githubAuth.IsAuthenticatedAsync()
-            : true; // spawn mode always authenticated (preflight enforced above)
+        // Always ask the auth service directly rather than assuming a preflight established the
+        // invariant. The startup GitHub device-code preflight is skipped entirely when spawn mode
+        // is unavailable (see ExecuteAsync -- `!settings.InProcess && spawnModeAvailable`), so on a
+        // Docker-less machine no token is ever obtained or refreshed. Hardcoding `true` here would
+        // advertise git:push / git-distribute unconditionally; ExecuteGitPushJobAsync CLAIMS the job
+        // (POST runners/generate-jitconfig) before PrepareGitCredentialsAsync ever looks at the
+        // token, so the job would be claimed and then fail on push -- exactly the claim-then-fail
+        // defect the honest-capabilities work exists to eliminate.
+        var hasGitCredentials = await _githubAuth.IsAuthenticatedAsync();
 
         // Also accept credentials served via a working GIT_ASKPASS in the environment
         // (e.g. VS Code devcontainer injects a gho_ token via socket).
@@ -744,6 +1213,12 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         // pks-cli handles the target-side credentials internally (e.g. ADO PAT setup).
         if (hasGitCredentials)
             caps.Add("git-distribute");
+
+        // Operator override (RunnerProfile.Capabilities, Phase 3): narrow, never widen. Re-applied
+        // every poll (not just once at configure time) so a capability the operator opted into stays
+        // honest if the underlying probe later says it's unavailable (e.g. Docker stops mid-run).
+        if (capabilityOverride is { Count: > 0 })
+            caps = caps.Where(c => capabilityOverride.Contains(c, StringComparer.OrdinalIgnoreCase)).ToList();
 
         return caps;
     }
@@ -806,6 +1281,167 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             return null;
 
         return pollResponse.Jobs[0];
+    }
+
+    /// <summary>
+    /// One poll-loop iteration: recompute capabilities (behind the probe's 60s memo -- Phase 1,
+    /// docs/remote-runner-targets-plan.md), poll the server for a job, and dispatch it. Extracted
+    /// out of <see cref="ExecuteAsync"/>'s <c>while</c> loop so it can be exercised directly in
+    /// tests (see tests/Commands/Agentics/AgenticsRunnerDegradedStartTests.cs) without driving the
+    /// real infinite loop / CancelKeyPress plumbing. Returns the number of jobs this iteration
+    /// completed or dispatched (0 or 1) -- mirrors the original inline <c>jobsProcessed++</c>
+    /// bookkeeping (the spawn-mode branch never incremented it either; unchanged here).
+    /// </summary>
+    internal async Task<int> PollAndDispatchOnceAsync(
+        AgenticsRunnerRegistration registration,
+        Settings settings,
+        GitCredentialServer? credentialServer,
+        string? chatLlmBackendUrl,
+        string? chatLlmBackendKey,
+        string chatLlmModelId,
+        bool chatLlmVerbose,
+        CancellationToken ct)
+    {
+        // spawnEnabled: only advertise devcontainer-spawn capabilities we are structurally able to
+        // serve. credentialServer is constructed once at startup and only when spawn mode was
+        // available then; a null one means ExecuteSpawnModeAsync can never run in this process, so
+        // the live Docker probe must not be allowed to re-add alp_operator / chat-session:v1 /
+        // devcontainer-session:v1 behind its back.
+        var capabilities = await ComputeCapabilitiesAsync(
+            settings.InProcess, chatLlmBackendUrl, chatLlmModelId, ct, registration.Profile?.Capabilities,
+            spawnEnabled: settings.InProcess || credentialServer != null);
+        if (_lastLoggedCapabilities == null || !_lastLoggedCapabilities.SequenceEqual(capabilities))
+        {
+            _console.MarkupLine($"[dim]Runner capabilities: {string.Join(", ", capabilities)}[/]");
+            _lastLoggedCapabilities = capabilities;
+        }
+
+        var jobsProcessed = 0;
+        var job = await PollForJobAsync(registration, capabilities, ct);
+
+        if (job != null)
+        {
+            _console.MarkupLine($"[green]Job received:[/] {job.Id}");
+            if (!string.IsNullOrEmpty(job.AgentDef?.Traceparent))
+                _console.MarkupLine($"[dim]trace: {job.AgentDef.Traceparent}[/]");
+
+            // Restore parent trace context so this runner span is a child of the
+            // server-side span that dispatched the job (visible in Aspire dashboard).
+            System.Diagnostics.ActivityContext parentCtx = default;
+            if (!string.IsNullOrEmpty(job.AgentDef?.Traceparent))
+                System.Diagnostics.ActivityContext.TryParse(job.AgentDef.Traceparent, null, isRemote: true, out parentCtx);
+            using var jobActivity = _activitySource.StartActivity(
+                "runner.execute_job", System.Diagnostics.ActivityKind.Consumer, parentCtx);
+            jobActivity?.SetTag("agentics.job_id", job.Id);
+            jobActivity?.SetTag("agentics.task_id", job.AgentDef?.TaskId);
+            jobActivity?.SetTag("agentics.assembly_line_id", job.AgentDef?.AssemblyLineId);
+            jobActivity?.SetTag("agentics.mode", settings.InProcess ? "inprocess" : "spawn");
+
+            if (job.AgentDef?.JobType == "git_push" && job.AgentDef?.GitPushPayload != null)
+            {
+                await ExecuteGitPushJobAsync(registration, job, settings, ct);
+                jobsProcessed++;
+                _console.MarkupLine($"[green]Git push job completed.[/]");
+            }
+            else if (job.AgentDef?.JobType == "git_distribute" && job.AgentDef?.DistributePayload != null)
+            {
+                await ExecuteGitDistributeJobAsync(registration, job, settings, ct);
+                jobsProcessed++;
+                _console.MarkupLine($"[green]Git distribute job completed.[/]");
+            }
+            else if (job.AgentDef?.JobType == "chat_llm")
+            {
+                // Kind B (chat-llm:v1, external/alp-spec/2026-03-30-draft/spec/13-chat.md): a bare
+                // Job -- no devcontainer, no Operator. The Runner itself dials the Chat Channel and
+                // forwards chat-completions turns to the locally configured backend. This holds a
+                // long-lived connection for the entire chat session, so it runs on its own
+                // background Task instead of being awaited here -- otherwise an open chat tab would
+                // starve the poll loop and block every other job (e.g. an ALP floor dispatch) for
+                // as long as the chat stays open. jobActivity's span is started fresh inside the
+                // background task so its lifetime matches the actual execution, not this iteration.
+                var chatJob = job;
+                var chatTraceparent = chatJob.AgentDef?.Traceparent;
+                var chatJobTask = Task.Run(async () =>
+                {
+                    System.Diagnostics.ActivityContext chatParentCtx = default;
+                    if (!string.IsNullOrEmpty(chatTraceparent))
+                        System.Diagnostics.ActivityContext.TryParse(chatTraceparent, null, isRemote: true, out chatParentCtx);
+                    using var chatJobActivity = _activitySource.StartActivity(
+                        "runner.execute_job", System.Diagnostics.ActivityKind.Consumer, chatParentCtx);
+                    chatJobActivity?.SetTag("agentics.job_id", chatJob.Id);
+                    chatJobActivity?.SetTag("agentics.task_id", chatJob.AgentDef?.TaskId);
+                    chatJobActivity?.SetTag("agentics.assembly_line_id", chatJob.AgentDef?.AssemblyLineId);
+                    chatJobActivity?.SetTag("agentics.mode", "chat_llm");
+
+                    try
+                    {
+                        await ExecuteChatLlmJobAsync(registration, chatJob, chatLlmBackendUrl, chatLlmBackendKey, chatLlmModelId, chatLlmVerbose, ct);
+                        _console.MarkupLine($"[green]Chat-llm job completed.[/] {chatJob.Id}");
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Shutdown while a chat session was in flight -- DrainRunningJobTasksAsync already waits for us.
+                    }
+                    catch (Exception ex)
+                    {
+                        _console.MarkupLine($"[red]Chat-llm job failed:[/] {chatJob.Id} {ex.Message.EscapeMarkup()}");
+                    }
+                }, ct);
+                TrackRunningJob(chatJobTask);
+                jobsProcessed++;
+            }
+            else if (settings.InProcess)
+            {
+                await ExecuteInProcessAsync(registration, job, settings, ct);
+                jobsProcessed++;
+                _console.MarkupLine($"[green]InProcess job completed.[/]");
+            }
+            else
+            {
+                // Client-side pre-claim refusal (Defect A/D2 fix, docs/remote-runner-targets-plan.md
+                // Phase 1). THIS IS PERMANENT INFRASTRUCTURE, NOT TRANSITIONAL -- do not delete once
+                // Phase 2 ships server-side `needs` filtering. Per decision D2, Phase 2 only teaches
+                // `dispatchStationJob` to emit `needs: ['alp_operator']`; the ~13 direct-`createRun`
+                // paths (task-create.ts, run/actions.ts, review/submit/actions.ts, mcp/operations.ts,
+                // runs/route.ts, distribution-store.ts, ...) keep `needs: []` forever and stay
+                // claimable by ANY runner regardless of advertised capabilities -- and every
+                // pre-Phase-2 field runner never advertised `needs` either. This refusal is the only
+                // thing stopping a Docker-less runner from claiming (POST
+                // .../runners/generate-jitconfig) an ordinary station job it has no way to run and
+                // then failing it. The poll endpoint itself never claims (jobs/route.ts only reads),
+                // so simply never calling generate-jitconfig here leaves the job `queued` for a
+                // runner that can actually serve it.
+                //
+                // credentialServer is null whenever spawn mode was unavailable at startup (see
+                // ExecuteAsync); re-check the live probe too so a Docker daemon that dies mid-run is
+                // caught even when credentialServer was constructed.
+                var spawnStatus = credentialServer != null ? await _capabilityProbe.GetStatusAsync(ct) : null;
+                if (credentialServer == null || spawnStatus is not { DockerAvailable: true })
+                {
+                    var reason = spawnStatus?.Reason ?? "devcontainer spawning was unavailable at startup";
+                    if (_declinedSpawnJobIds.Add(job.Id))
+                    {
+                        _console.MarkupLine($"[grey]Declining job {job.Id.EscapeMarkup()} — devcontainer spawning unavailable ({reason.EscapeMarkup()}); leaving it queued for a capable runner.[/]");
+                    }
+                }
+                else
+                {
+                    await ExecuteSpawnModeAsync(registration, job, settings, credentialServer, ct);
+                }
+            }
+        }
+        else
+        {
+            if (settings.Verbose)
+                _console.MarkupLine($"[dim]{DateTime.UtcNow:HH:mm:ss} No jobs available, waiting {settings.PollingInterval}s...[/]");
+        }
+
+        _pollCounter.Add(1,
+            new KeyValuePair<string, object?>("owner", registration.Owner),
+            new KeyValuePair<string, object?>("project", registration.Project),
+            new KeyValuePair<string, object?>("result", job != null ? "job_found" : "empty"));
+
+        return jobsProcessed;
     }
 
     /// <summary>
@@ -994,6 +1630,16 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                     .Concat(spawnResult.Errors)
                     .Where(s => !string.IsNullOrEmpty(s)));
                 _console.MarkupLine($"[red]Devcontainer spawn failed:[/] {spawnResult.Message.EscapeMarkup()}");
+
+                // Second hint line for the mid-job-Docker-death case (docs/remote-runner-targets-plan.md
+                // Phase 1): re-probe rather than assume -- most spawn failures are build/config errors
+                // unrelated to Docker itself, so only say "Docker died" when the probe agrees right now.
+                var postFailureStatus = await _capabilityProbe.GetStatusAsync(ct);
+                if (!postFailureStatus.DockerAvailable)
+                {
+                    _console.MarkupLine($"[yellow]Hint:[/] [dim]Docker is no longer reachable ({postFailureStatus.Reason.EscapeMarkup()}) — this looks like Docker went away mid-job rather than a build/config error. Future jobs will be left queued for a capable runner instead of claimed and failed.[/]");
+                }
+
                 await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "failure", ct);
                 await ReportJobResultAsync(registration, "failed", errorMsg, ct);
                 return;
@@ -2864,7 +3510,8 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                 }
 
                 var (ended, endReason, sessionFailed) =
-                    await RunChatLlmChannelSessionAsync(ws, job.Id, backendUrl, backendKey, chatLlmModelId, verbose, ct);
+                    await RunChatLlmChannelSessionAsync(
+                        ws, job.Id, backendUrl, backendKey, chatLlmModelId, registration.Profile?.ChatModels, verbose, ct);
 
                 if (ended || reconnected || ct.IsCancellationRequested)
                 {
@@ -2911,8 +3558,17 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
     /// Returns Ended=false when the socket dropped without an explicit chat.end (caller may redial),
     /// Ended=true once either side sent chat.end.
     /// </summary>
+    /// <param name="chatModelAllowlist">
+    /// <see cref="RunnerProfile.ChatModels"/> from the persisted profile (Phase 3), or null/empty for
+    /// "no restriction". This is a real enforcement gate, not a display preference: a
+    /// chat.completion.request naming a disallowed model is rejected with a chat.completion.error
+    /// frame instead of being resolved, and chat.models.request's response list is filtered to it.
+    /// Only applies to the provider-resolution path -- literal-forward mode (<paramref name="backendUrl"/>
+    /// set) is unaffected either way, matching the existing "empty model list on backendUrl" behavior.
+    /// </param>
     private async Task<(bool Ended, string? Reason, bool Failed)> RunChatLlmChannelSessionAsync(
-        ClientWebSocket ws, string jobId, string? backendUrl, string? backendKey, string chatLlmModelId, bool verbose, CancellationToken ct)
+        ClientWebSocket ws, string jobId, string? backendUrl, string? backendKey, string chatLlmModelId,
+        IReadOnlyList<string>? chatModelAllowlist, bool verbose, CancellationToken ct)
     {
         using var backendClient = _httpClientFactory.CreateClient();
         // Chat turns can run for minutes (long completions) — never let HttpClient's 100s default abort
@@ -2950,17 +3606,33 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                         var requestId = frame.TryGetProperty("requestId", out var ridProp) ? ridProp.GetString() ?? "" : "";
                         if (frame.TryGetProperty("body", out var bodyProp))
                         {
-                            if (!string.IsNullOrEmpty(backendUrl))
+                            var requestedModel = bodyProp.TryGetProperty("model", out var modelProp) ? modelProp.GetString() : null;
+                            // Enforcement gate (Phase 3): the request body's "model" can name
+                            // anything, so it must be checked against the persisted allowlist before
+                            // ever reaching AgentChatProviderFactory.ResolveAsync -- otherwise
+                            // ChatModels is a display preference, not a real allowlist. The decision
+                            // lives in DecideChatCompletionRoute so a test can pin the wiring.
+                            var decision = DecideChatCompletionRoute(
+                                backendUrl, requestedModel, chatLlmModelId, chatModelAllowlist);
+                            switch (decision.Route)
                             {
-                                await ForwardChatCompletionRequestAsync(
-                                    ws, backendClient, backendUrl, backendKey, jobId, requestId, bodyProp, verbose, ct);
-                            }
-                            else
-                            {
-                                var requestedModel = bodyProp.TryGetProperty("model", out var modelProp) ? modelProp.GetString() : null;
-                                var effectiveModelId = string.IsNullOrWhiteSpace(requestedModel) ? chatLlmModelId : requestedModel;
-                                await ForwardChatCompletionRequestViaProviderAsync(
-                                    ws, effectiveModelId, jobId, requestId, bodyProp, verbose, ct);
+                                case ChatCompletionRoute.Forward:
+                                    await ForwardChatCompletionRequestAsync(
+                                        ws, backendClient, backendUrl!, backendKey, jobId, requestId, bodyProp, verbose, ct);
+                                    break;
+                                case ChatCompletionRoute.Rejected:
+                                    await SendChatFrameAsync(ws, new
+                                    {
+                                        type = "chat.completion.error",
+                                        jobId,
+                                        requestId,
+                                        error = $"Model '{decision.ModelId}' is not in this runner's configured chat-model allowlist."
+                                    }, verbose, ct);
+                                    break;
+                                default:
+                                    await ForwardChatCompletionRequestViaProviderAsync(
+                                        ws, decision.ModelId!, jobId, requestId, bodyProp, verbose, ct);
+                                    break;
                             }
                         }
                         break;
@@ -2975,6 +3647,9 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                         {
                             try { models = await _chatProviderFactory.ListAvailableModelsAsync(ct); }
                             catch { /* empty list on failure */ }
+                            // Allowlist (Phase 3): only applies to the provider path -- the
+                            // literal-forward "empty on backendUrl" behavior above is preserved as-is.
+                            models = FilterModelsByAllowlist(models, chatModelAllowlist);
                         }
                         await SendChatFrameAsync(ws, new { type = "chat.models.response", jobId, requestId, models }, verbose, ct);
                         break;
@@ -3115,6 +3790,68 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             }
             catch { /* channel may already be gone — the job-level outcome still gets reported by the caller */ }
         }
+    }
+
+    /// <summary>
+    /// Enforcement check for <see cref="RunnerProfile.ChatModels"/> (Phase 3, docs/remote-runner-targets-plan.md
+    /// "Chat model exposure is an enforcement gap"). <c>internal static</c> so it's unit-testable in
+    /// isolation without a live WebSocket/provider harness -- see
+    /// tests/Commands/Agentics/AgenticsRunnerChatModelAllowlistTests.cs. A null or empty allowlist
+    /// means "no restriction configured" (auto/every resolvable model), matching
+    /// <see cref="RunnerProfile.ChatModels"/>'s documented null semantics.
+    /// </summary>
+    /// <summary>
+    /// Where a <c>chat.completion.request</c> frame is routed. Extracted as a testable seam so the
+    /// allowlist ENFORCEMENT (the wiring), not just the truth table, is pinned by a test -- stubbing
+    /// the guard out used to leave the whole unit suite green. See
+    /// tests/Commands/Agentics/AgenticsRunnerChatModelAllowlistTests.cs.
+    /// </summary>
+    internal enum ChatCompletionRoute
+    {
+        /// <summary>Literal --chat-llm-backend-url forwarding; bypasses the provider factory (and the allowlist).</summary>
+        Forward,
+        /// <summary>Resolve via AgentChatProviderFactory for <see cref="ChatCompletionDecision.ModelId"/>.</summary>
+        Provider,
+        /// <summary>Requested model is not in the configured allowlist -- answer chat.completion.error.</summary>
+        Rejected,
+    }
+
+    internal readonly record struct ChatCompletionDecision(ChatCompletionRoute Route, string? ModelId);
+
+    /// <summary>
+    /// Decides how one chat.completion.request is served. Pure so the enforcement path can be
+    /// asserted without a WebSocket/provider harness.
+    /// </summary>
+    internal static ChatCompletionDecision DecideChatCompletionRoute(
+        string? backendUrl, string? requestedModel, string? defaultModelId, IReadOnlyList<string>? allowlist)
+    {
+        if (!string.IsNullOrEmpty(backendUrl))
+            return new ChatCompletionDecision(ChatCompletionRoute.Forward, null);
+
+        var effectiveModelId = string.IsNullOrWhiteSpace(requestedModel) ? defaultModelId : requestedModel;
+        return IsChatModelAllowed(effectiveModelId, allowlist)
+            ? new ChatCompletionDecision(ChatCompletionRoute.Provider, effectiveModelId)
+            : new ChatCompletionDecision(ChatCompletionRoute.Rejected, effectiveModelId);
+    }
+
+    internal static bool IsChatModelAllowed(string? modelId, IReadOnlyList<string>? allowlist)
+    {
+        if (allowlist is null || allowlist.Count == 0)
+            return true;
+        if (string.IsNullOrWhiteSpace(modelId))
+            return false;
+        return allowlist.Contains(modelId, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Filters a resolved model list down to the persisted allowlist for the chat.models.request
+    /// response (Phase 3) -- same null/empty "no restriction" semantics as <see cref="IsChatModelAllowed"/>.
+    /// </summary>
+    internal static IReadOnlyList<string> FilterModelsByAllowlist(IReadOnlyList<string> models, IReadOnlyList<string>? allowlist)
+    {
+        if (allowlist is null || allowlist.Count == 0)
+            return models;
+        return models.Where(m => allowlist.Contains(m, StringComparer.OrdinalIgnoreCase)).ToList();
     }
 
     /// <summary>
@@ -4280,18 +5017,23 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
 
     /// <summary>
     /// Resolves the chat-llm:v1 model id used when no --chat-llm-backend-url override is set: explicit
-    /// --chat-llm-model flag, else CHAT_LLM_MODEL env, else "gpt-5.5" — the built-in AgentChatProviderFactory
-    /// default that resolves to the azure-openai provider with no fixed endpoint, so it auto-fills from
-    /// whatever resource `pks foundry init` already selected (AgentChatProviderFactory.GetModelEntryAsync's
-    /// Foundry fallback) with zero extra configuration.
+    /// --chat-llm-model flag, else CHAT_LLM_MODEL env, else the persisted <see cref="RunnerProfile.DefaultChatModel"/>
+    /// (Phase 3 -- set by the interactive configure flow), else "gpt-5.5" — the built-in
+    /// AgentChatProviderFactory default that resolves to the azure-openai provider with no fixed
+    /// endpoint, so it auto-fills from whatever resource `pks foundry init` already selected
+    /// (AgentChatProviderFactory.GetModelEntryAsync's Foundry fallback) with zero extra configuration.
+    /// Explicit CLI flags/env always win over the persisted profile.
     /// </summary>
-    private static string ResolveChatLlmModelId(string? explicitValue)
+    private static string ResolveChatLlmModelId(string? explicitValue, string? profileDefault = null)
     {
         if (!string.IsNullOrWhiteSpace(explicitValue))
             return explicitValue;
 
         var envValue = Environment.GetEnvironmentVariable("CHAT_LLM_MODEL");
-        return !string.IsNullOrWhiteSpace(envValue) ? envValue : "gpt-5.5";
+        if (!string.IsNullOrWhiteSpace(envValue))
+            return envValue;
+
+        return !string.IsNullOrWhiteSpace(profileDefault) ? profileDefault : "gpt-5.5";
     }
 
     private static async Task<string?> SendControlSocketRequestAsync(
@@ -5159,21 +5901,11 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
     private static (Dictionary<string, string>? Files, string VolumeName) PatchDevcontainerVolumes(
         Dictionary<string, string>? files, string owner, string project, string? taskId, string? scope)
     {
-        static string Sanitize(string s) =>
-            System.Text.RegularExpressions.Regex.Replace(s.ToLowerInvariant(), @"[^a-z0-9]", "-");
-
-        var effectiveScope = scope?.ToLowerInvariant() switch
-        {
-            "task" or "project" or "runner" => scope!.ToLowerInvariant(),
-            _ => "project",
-        };
-        var stableVolume = effectiveScope switch
-        {
-            "task" when !string.IsNullOrEmpty(taskId) =>
-                $"pks-claude-{Sanitize(owner)}-{Sanitize(project)}-task-{Sanitize(taskId)}",
-            "runner" => $"pks-claude-{Sanitize(owner)}",
-            _ => $"pks-claude-{Sanitize(owner)}-{Sanitize(project)}",
-        };
+        // Naming rules now live in ClaudeCredentialVolumes (docs/remote-runner-targets-plan.md
+        // Phase 5, work item 1) so the SSH-handoff pre-flight / runner status / runner claude-login
+        // commands resolve the exact same volume name this method does.
+        var stableVolume = PKS.Infrastructure.Services.Runner.ClaudeCredentialVolumes.ResolveVolumeName(
+            owner, project, taskId, scope);
 
         if (files == null) return (null, stableVolume);
         var patched = new Dictionary<string, string>(files);

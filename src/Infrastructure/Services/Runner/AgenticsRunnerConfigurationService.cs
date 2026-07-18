@@ -63,7 +63,24 @@ public class AgenticsRunnerConfigurationService : IAgenticsRunnerConfigurationSe
         }
         catch (JsonException ex)
         {
-            _logger.LogWarning(ex, "Failed to deserialize configuration from {Path}, returning defaults", _configFilePath);
+            // Corrupt/unparseable JSON used to silently return a fresh default here -- which loses
+            // every saved registration (tokens, owner/project, profile) with no trace. Preserve the
+            // bad file instead of overwriting it on the next SaveAsync, and say so loudly, per
+            // docs/remote-runner-targets-plan.md Phase 3.
+            var backupPath = $"{_configFilePath}.bak-{DateTime.UtcNow:yyyyMMddHHmmss}";
+            try
+            {
+                File.Move(_configFilePath, backupPath, overwrite: true);
+                _logger.LogWarning(ex,
+                    "Failed to deserialize configuration from {Path} -- moved the corrupt file to {BackupPath} and returning defaults (all registrations lost; re-register or restore from the backup)",
+                    _configFilePath, backupPath);
+            }
+            catch (Exception moveEx)
+            {
+                _logger.LogWarning(moveEx,
+                    "Failed to deserialize configuration from {Path}, AND failed to move it to a backup ({BackupPath}) -- returning defaults; the corrupt file is still at its original path",
+                    _configFilePath, backupPath);
+            }
             return new AgenticsRunnerConfiguration();
         }
         finally

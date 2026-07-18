@@ -100,7 +100,7 @@ public class AgenticsRunnerRegisterCommand(
                     try
                     {
                         using var httpClient = new HttpClient();
-                        var requestBody = new { name = runnerName, labels = Array.Empty<string>() };
+                        var requestBody = new { name = runnerName, labels = BuildDefaultRunnerLabels() };
                         var httpResponse = await httpClient.PostAsJsonAsync(
                             $"{serverUrl}/api/owners/{owner}/projects/{project}/runners",
                             requestBody);
@@ -395,6 +395,23 @@ public class AgenticsRunnerRegisterCommand(
 
         var parts = ownerProject.Split('/', StringSplitOptions.RemoveEmptyEntries);
         return parts.Length >= 2 ? (parts[0], parts[1]) : (string.Empty, string.Empty);
+    }
+
+    /// <summary>
+    /// Default job-targeting labels sent at registration (Phase 3, docs/remote-runner-targets-plan.md,
+    /// work item 6 -- registration used to send <c>Array.Empty&lt;string&gt;()</c> unconditionally, which
+    /// meant a runner could never be targeted by label). Duplicated from
+    /// AgenticsRunnerStartCommand.BuildDefaultRunnerLabels rather than extracted into a shared utility,
+    /// matching this codebase's existing pattern of small per-command helpers (see the duplicated
+    /// server-URL-resolution logic just above) over shared utility classes for two call sites.
+    /// </summary>
+    private static string[] BuildDefaultRunnerLabels()
+    {
+        var os = OperatingSystem.IsWindows() ? "windows"
+            : OperatingSystem.IsMacOS() ? "macos"
+            : OperatingSystem.IsLinux() ? "linux"
+            : "unknown";
+        return new[] { "self-hosted", os };
     }
 
     private class RegisterRunnerResponse

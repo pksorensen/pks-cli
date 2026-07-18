@@ -301,6 +301,11 @@ services.AddSingleton<IVsCodeExtensionService, VsCodeExtensionService>();
 services.AddSingleton<IDevcontainerSpawnerService, DevcontainerSpawnerService>();
 services.AddSingleton<IConfigurationHashService, ConfigurationHashService>();
 
+// Honest-capabilities probe (docs/remote-runner-targets-plan.md Phase 1): wraps
+// CheckDockerAvailabilityAsync with a 60s memo so `agentics runner start` can advertise
+// (and re-probe) real spawn capability instead of claiming devcontainer jobs it can't run.
+services.AddSingleton<PKS.Infrastructure.Services.Runner.IRunnerExecutionCapabilityProbe, PKS.Infrastructure.Services.Runner.RunnerExecutionCapabilityProbe>();
+
 // Register Docker client (Docker.DotNet)
 services.AddSingleton<Docker.DotNet.IDockerClient>(sp =>
 {
@@ -434,6 +439,7 @@ services.AddSingleton<ICoolifyLookupService, CoolifyLookupService>();
 services.AddSingleton<ICoolifyApiService, CoolifyApiService>();
 services.AddSingleton<IRunnerConfigurationService, RunnerConfigurationService>();
 services.AddSingleton<IAgenticsRunnerConfigurationService, AgenticsRunnerConfigurationService>();
+services.AddSingleton<IAgenticsRunnerSshHandoffService, AgenticsRunnerSshHandoffService>();
 services.AddSingleton<PKS.Infrastructure.Services.Agentics.IAgenticsAuthService, PKS.Infrastructure.Services.Agentics.AgenticsAuthService>();
 services.AddSingleton<PKS.Infrastructure.Services.Agentics.IAgenticsAuthConfigurationService, PKS.Infrastructure.Services.Agentics.AgenticsAuthConfigurationService>();
 services.AddSingleton<IFirecrackerRunnerConfigurationService, FirecrackerRunnerConfigurationService>();
@@ -441,6 +447,7 @@ services.AddSingleton<IFirecrackerService, FirecrackerService>();
 services.AddSingleton<FirecrackerNetworkManager>();
 services.AddSingleton<IGitHubActionsService, GitHubActionsService>();
 services.AddSingleton<IProcessRunner, ProcessRunner>();
+services.AddSingleton<IInteractiveProcessLauncher, InteractiveProcessLauncher>();
 services.AddSingleton<IRunnerContainerService, RunnerContainerService>();
 services.AddSingleton<INamedContainerPool, NamedContainerPool>();
 services.AddSingleton<IRunnerDaemonService, RunnerDaemonService>();
@@ -631,6 +638,22 @@ app.Configure(config =>
                 .WithExample(new[] { "agentics", "runner", "cleanup" })
                 .WithExample(new[] { "agentics", "runner", "cleanup", "--dry-run" })
                 .WithExample(new[] { "agentics", "runner", "cleanup", "--all" });
+
+            runner.AddCommand<AgenticsRunnerSshStatusCommand>("status")
+                .WithDescription("Show the remote tmux session status for a project handed off to an SSH target")
+                .WithExample(new[] { "agentics", "runner", "status", "hetzner" });
+
+            runner.AddCommand<AgenticsRunnerSshLogsCommand>("logs")
+                .WithDescription("Show the full remote tmux pane output for a project handed off to an SSH target")
+                .WithExample(new[] { "agentics", "runner", "logs", "hetzner" });
+
+            runner.AddCommand<AgenticsRunnerSshStopCommand>("stop")
+                .WithDescription("Stop the remote tmux session for a project handed off to an SSH target")
+                .WithExample(new[] { "agentics", "runner", "stop", "hetzner" });
+
+            runner.AddCommand<AgenticsRunnerClaudeLoginCommand>("claude-login")
+                .WithDescription("Interactively log in to Claude Code on an SSH target, populating its pks-claude-* credentials volume")
+                .WithExample(new[] { "agentics", "runner", "claude-login", "hetzner" });
         });
 
         agentics.AddBranch<AgenticsSettings>("task", task =>

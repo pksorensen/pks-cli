@@ -607,4 +607,29 @@ public static class ServiceMockFactory
 
         return mock;
     }
+
+    /// <summary>
+    /// Creates a mock ISshCommandRunner with default successful behavior (empty stdout, exit code 0,
+    /// connectivity true). Callers that need specific command output (e.g. the readiness probe or
+    /// the tmux launch/capture-pane/kill-session commands used by the SSH runner handoff) should
+    /// override <c>RunAsync</c> on the returned mock for the specific command text they care about.
+    /// </summary>
+    public static Mock<PKS.Infrastructure.Services.ISshCommandRunner> CreateSshCommandRunner()
+    {
+        var mock = new Mock<PKS.Infrastructure.Services.ISshCommandRunner>();
+
+        mock.Setup(x => x.RunAsync(It.IsAny<RemoteHostConfig>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PKS.Infrastructure.Services.SshCommandResult { ExitCode = 0, StdOut = "", StdErr = "" });
+
+        mock.Setup(x => x.ScpAsync(It.IsAny<RemoteHostConfig>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PKS.Infrastructure.Services.SshCommandResult { ExitCode = 0, StdOut = "", StdErr = "" });
+
+        mock.Setup(x => x.TestConnectivityAsync(It.IsAny<RemoteHostConfig>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        mock.Setup(x => x.RunWithOutputAsync(It.IsAny<RemoteHostConfig>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Action<string>?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PKS.Infrastructure.Services.SshCommandResult { ExitCode = 0, StdOut = "", StdErr = "" });
+
+        return mock;
+    }
 }
