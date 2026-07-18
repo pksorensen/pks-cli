@@ -68,12 +68,29 @@ public static class UsagePanelParser
     private static readonly Regex PercentLine = new(@"(?<pct>\d{1,3})%\s+used", RegexOptions.Compiled);
     private static readonly Regex ResetLine = new(@"^\s*Resets\s+(?<when>.+?)\s*\(UTC\)\s*$", RegexOptions.Compiled);
 
+    // The `:mm` is OPTIONAL. Claude Code omits the minutes for an on-the-hour reset, so a
+    // real panel reads "Resets 4pm (UTC)" / "Resets Jul 20, 4am (UTC)" rather than "4:00pm".
+    // Requiring the colon made every block fail to resolve, TryParse return empty, and the
+    // tmux driver poll until its 60s budget expired — surfacing as the misleading
+    // "Timed out capturing /usage from Claude Code inside tmux."
     private static readonly Regex TimeOnly = new(
-        @"^(?<h>\d{1,2}):(?<m>\d{2})(?<ap>am|pm)$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        @"^(?<h>\d{1,2})(?::(?<m>\d{2}))?(?<ap>am|pm)$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex MonthDayTime = new(
-        @"^(?<mon>[A-Za-z]{3}) (?<day>\d{1,2}), (?<h>\d{1,2}):(?<m>\d{2})(?<ap>am|pm)$",
+        @"^(?<mon>[A-Za-z]{3}) (?<day>\d{1,2}), (?<h>\d{1,2})(?::(?<m>\d{2}))?(?<ap>am|pm)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// Minutes from a reset-time match. The `m` group is optional — Claude Code omits it for
+    /// an on-the-hour reset ("4pm"), in which case minutes are zero.
+    /// </summary>
+    private static int Minutes(Match m)
+    {
+        var g = m.Groups["m"];
+        return g.Success && g.Value.Length > 0
+            ? int.Parse(g.Value, CultureInfo.InvariantCulture)
+            : 0;
+    }
 
     /// <summary>
     /// Parse the raw captured `/usage` pane into an ordered list of blocks. An empty list
@@ -179,7 +196,7 @@ public static class UsagePanelParser
             }
 
             var h = int.Parse(m.Groups["h"].Value, CultureInfo.InvariantCulture);
-            var min = int.Parse(m.Groups["m"].Value, CultureInfo.InvariantCulture);
+            var min = Minutes(m);
             var ap = m.Groups["ap"].Value;
             var h24 = To24h(h, ap);
 
@@ -207,7 +224,7 @@ public static class UsagePanelParser
 
             var day = int.Parse(m.Groups["day"].Value, CultureInfo.InvariantCulture);
             var h = int.Parse(m.Groups["h"].Value, CultureInfo.InvariantCulture);
-            var min = int.Parse(m.Groups["m"].Value, CultureInfo.InvariantCulture);
+            var min = Minutes(m);
             var ap = m.Groups["ap"].Value;
             var h24 = To24h(h, ap);
 

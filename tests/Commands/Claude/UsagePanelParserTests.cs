@@ -314,4 +314,75 @@ public class UsagePanelParserTests
 
         entry.ResetsInSeconds.Should().Be(0);
     }
+
+    // ------------------------------------------------------------------
+    // On-the-hour reset times (regression)
+    //
+    // Claude Code omits the minutes when a limit resets exactly on the hour, so a real
+    // panel reads "Resets 4pm (UTC)" / "Resets Jul 20, 4am (UTC)". The reset-time regexes
+    // originally required a mandatory ":mm", so every block failed to resolve, TryParse
+    // returned empty, and UsageTmuxDriver polled until its 60s budget expired — reported
+    // to the user as "Timed out capturing /usage from Claude Code inside tmux."
+    // Fixture captured live from Claude Code v2.1.214.
+    // ------------------------------------------------------------------
+
+    private static readonly DateTimeOffset OnTheHourNow = new(2026, 7, 18, 13, 30, 0, TimeSpan.Zero);
+
+    private static string LoadOnTheHourFixture()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "fixtures", "Claude", "usage-panel-capture-onthehour.txt");
+        File.Exists(path).Should().BeTrue($"the fixture should have been copied to {path}");
+        return File.ReadAllText(path);
+    }
+
+    [Fact]
+    public void TryParse_OnTheHourResets_ReturnsAllThreeBlocks()
+    {
+        var blocks = UsagePanelParser.TryParse(LoadOnTheHourFixture(), OnTheHourNow);
+
+        blocks.Should().HaveCount(3, "a minutes-less reset time must still parse");
+    }
+
+    [Fact]
+    public void TryParse_OnTheHourResets_SessionBlock_ResolvesToTopOfHour()
+    {
+        var blocks = UsagePanelParser.TryParse(LoadOnTheHourFixture(), OnTheHourNow);
+
+        var session = blocks.Single(b => b.Kind == LimitKind.Session);
+        session.Model.Should().BeNull();
+        session.UsedPct.Should().Be(58);
+        // "Resets 4pm (UTC)" with now = 13:30 UTC -> the same day at 16:00.
+        session.ResetsAt.Should().Be(new DateTimeOffset(2026, 7, 18, 16, 0, 0, TimeSpan.Zero));
+    }
+
+    [Fact]
+    public void TryParse_OnTheHourResets_WeeklyBlocks_ResolveToTopOfHour()
+    {
+        var blocks = UsagePanelParser.TryParse(LoadOnTheHourFixture(), OnTheHourNow);
+
+        var weekAll = blocks.Single(b => b.Kind == LimitKind.Week && b.Model == null);
+        weekAll.UsedPct.Should().Be(60);
+        weekAll.ResetsAt.Should().Be(new DateTimeOffset(2026, 7, 20, 4, 0, 0, TimeSpan.Zero));
+
+        var weekModel = blocks.Single(b => b.Kind == LimitKind.Week && b.Model != null);
+        weekModel.Model.Should().Be("Fable");
+        weekModel.UsedPct.Should().Be(69);
+        weekModel.ResetsAt.Should().Be(new DateTimeOffset(2026, 7, 20, 4, 0, 0, TimeSpan.Zero));
+    }
+
+    [Theory]
+    [InlineData("4pm", 16, 0)]
+    [InlineData("4:30pm", 16, 30)]
+    [InlineData("12am", 0, 0)]
+    [InlineData("12pm", 12, 0)]
+    public void TryParse_SessionResetVariants_AllResolve(string when, int expectedHour, int expectedMinute)
+    {
+        var pane = $"   Current session\n   ####   7% used\n   Resets {when} (UTC)\n";
+        var now = new DateTimeOffset(2026, 7, 18, 0, 0, 0, TimeSpan.Zero).AddMinutes(-1);
+
+        var session = UsagePanelParser.TryParse(pane, now).Single(b => b.Kind == LimitKind.Session);
+
+        session.ResetsAt.Hour.Should().Be(expectedHour);
+        session.ResetsAt.Minute.Should().Be(expectedMinute);
+    }
 }

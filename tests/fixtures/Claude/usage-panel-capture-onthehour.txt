@@ -1,0 +1,200 @@
+
+╭─── Claude Code v2.1.214 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                                                                                                        │
+│                 Welcome back Poul!                 │ Ask Claude to create a new app or clone a repository                                                                                            │
+│                                                    │ ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│                       ▐▛███▜▌                      │ What's new                                                                                                                                      │
+│                      ▝▜█████▛▘                     │ Fixed single-segment `dir/**` allow rules like `Edit(src/**)` auto-approving writes to nested `dir/` directories anywhere in the tree instead … │
+│                        ▘▘ ▝▝                       │ Fixed a permission-check bypass affecting commands run in Windows PowerShell 5.1 sessions                                                       │
+│      Fable 5 with high effort · Claude Max ·       │ Fixed Bash permission checks to fail closed on file-descriptor redirect forms that bash parses differently than the permission analyzer         │
+│      poul@kjeldager.com's Organization             │ /release-notes for more                                                                                                                         │
+│              /tmp/pks-usage-diag-j0zT              │                                                                                                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Settings  Status   Config   Usage   Stats
+
+   Session
+
+   Total cost:            $0.0000
+   Total duration (API):  0s
+   Total duration (wall): 31s
+   Total code changes:    0 lines added, 0 lines removed
+   Usage:                 0 input, 0 output, 0 cache read, 0 cache write
+
+   Current session
+   ████████████████████████████▉                      58% used
+   Resets 4pm (UTC)
+
+   Current week (all models)
+   ██████████████████████████████                     60% used
+   Resets Jul 20, 4am (UTC)
+   +50% weekly limits promo through Jul 19 · clau.de/cc-july-promo
+
+   Current week (Fable)
+   ██████████████████████████████████▌                69% used
+   Resets Jul 20, 4am (UTC)
+
+   What's contributing to your limits usage?
+   Approximate, based on local sessions on this machine — does not include other devices or claude.ai
+
+   Last 24h · these are independent characteristics of your usage, not a breakdown
+
+   88% of your usage came from subagent-heavy sessions
+    Each subagent runs its own requests. Be deliberate about spawning them — and
+    consider configuring a cheaper model for simpler subagents.
+
+   59% of your usage was while 4+ sessions ran in parallel
+    All sessions share one limit. If you don't need them all at once, queueing uses
+    it more evenly.
+
+   52% of your usage was at >150k context
+    Longer sessions are more expensive even when cached. /compact mid-task, /clear
+    when switching to new tasks.
+
+   38% of your usage came from sessions active for 8+ hours
+    These are often background/loop sessions. Continuous usage can add up quickly
+    so make sure it is intentional.
+
+   32% of your usage came from subagents under "workflow-subagent"
+    If this runs frequently, consider configuring its subagents with a cheaper
+    model or tightening their prompts.
+
+   Skills                  % of usage
+   /run                            2%
+   /browser-use                    1%
+
+   Subagents               % of usage
+   workflow-subagent              32%
+   deep-research                  10%
+   Explore                         2%
+   general-purpose                 1%
+
+   MCP servers             % of usage
+   aspire                          4%
+
+   d to day · w to week
+
+   Usage credits
+   Usage credits are off · /usage-credits to turn them on
+
+   Esc to cancel
