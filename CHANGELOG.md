@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.20.1](https://github.com/pksorensen/pks-cli/compare/v6.20.0...v6.20.1) (2026-07-17)
+
+
+### Bug Fixes
+
+* **ci:** authenticate tool-docs publish with GitHub OIDC ([81399f1](https://github.com/pksorensen/pks-cli/commit/81399f10ead4713426cd1f551b6e647bc1fc2f05))
+
 ## [6.20.0](https://github.com/pksorensen/pks-cli/compare/v6.19.0...v6.20.0) (2026-07-16)
 
 
