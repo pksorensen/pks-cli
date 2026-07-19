@@ -1,0 +1,354 @@
+---
+title: "pks configuration and state reference"
+description: "Where pks keeps config, state, and credentials on each OS, the complete environment-variable table, per-provider login flows, global options, and logging."
+tags: [reference, cli, configuration, auth]
+category: infrastructure
+status: stable
+author: Poul Kjeldager
+component: pks
+usage: "pks <command> [options]"
+examples:
+  - command: "pks github status --verbose"
+    description: "Show GitHub authentication state and token scopes"
+  - command: "pks agentics init"
+    description: "Log in to agentics.dk via Keycloak device code"
+  - command: "pks status --debug"
+    description: "Run any command with verbose debug output"
+---
+
+`pks` keeps every piece of durable state in one directory tree under your home folder, plus a small per-repository folder. Nothing is written to a system-wide location, no database is involved, and no state lives in a registry hive or a keychain.
+
+## Synopsis
+
+```text
+pks <command> [options]
+```
+
+The configuration root and its contents:
+
+```text
+~/.pks-cli/
+  settings.json              global key/value config and most OAuth tokens
+  agentics-auth.json         Keycloak tokens from `pks agentics init`
+  actions.json               two-factor action policy
+  runners.json               GitHub runner registrations
+  agentics-runners.json      Agentics runner registrations
+  firecracker-runners.json   Firecracker runner registrations
+  registries.json            container/package registry config
+  coolify.json               Coolify endpoint config
+  claude-marketplace.json    Claude plugin marketplace config
+  ssh-targets.json           named SSH targets
+  rsync-targets.json         named rsync targets
+  vms.json                   VM metadata store
+  models.json                local model registry
+  ado-credentials.json       Azure DevOps git-proxy credentials
+  foundry-token-cache.json   cross-process Foundry token cache
+  certs/                     code-signing certificates (encrypted)
+  ssh-keys/                  pks-held SSH private keys (encrypted)
+  share/                     Agent Share logins (encrypted refresh token)
+  keys/                      generated VM SSH keypairs
+  brain/                     Brain firehose store
+  writing/                   global writing-profile layer
+  models/                    downloaded local models
+  usage-cache/               Claude usage cache
+  agent-skills/              coding-agent skill files
+  firecracker/               Firecracker runner assets
+  vscode/                    VS Code CLI assets for devcontainer spawn
+  logs/                      devcontainer spawn and install logs
+```
+
+## Configuration root
+
+The root is resolved from the current user's profile directory and is hardcoded on every platform. There is no `PKS_HOME`, no `PKS_CONFIG`, and no XDG override for it.
+
+| Platform | Configuration root |
+|---|---|
+| Linux | `$HOME/.pks-cli` |
+| macOS | `$HOME/.pks-cli` |
+| Windows | `C:\Users\<user>\.pks-cli` |
+
+On Windows the root is under `%USERPROFILE%`, not `%APPDATA%`, so it does not follow a roaming profile.
+
+## Global state files
+
+Every path below is relative to the configuration root.
+
+| Path | Contents |
+|---|---|
+| `settings.json` | Global key/value config, plus GitHub, Azure, Azure DevOps, Foundry, Microsoft Graph, Scaleway, Tailscale, Google, and Jira credentials. |
+| `agentics-auth.json` | Keycloak access, refresh, and id token written by `pks agentics init`. |
+| `actions.json` | Which sensitive actions require a TOTP code, written by `pks actions`. |
+| `runners.json` | GitHub Actions runner registrations. |
+| `agentics-runners.json` | Agentics runner registrations and their tokens. |
+| `firecracker-runners.json` | Firecracker microVM runner registrations. |
+| `registries.json` | Registry configuration written by `pks registry init`. |
+| `coolify.json` | Coolify endpoint configuration. |
+| `claude-marketplace.json` | Claude plugin marketplace configuration. |
+| `ssh-targets.json` | Named SSH targets used by `pks ssh`. |
+| `rsync-targets.json` | Named rsync targets used by `pks rsync`. |
+| `vms.json` | VM metadata store used by `pks vm`. |
+| `models.json` and `models/` | Local model registry and the install root for downloaded models. |
+| `ado-credentials.json` | Azure DevOps credentials for the git proxy. |
+| `foundry-token-cache.json` and `.lock` | Cross-process token cache for Azure AI Foundry. |
+| `codex-passthrough-failures.log` | Failure log for the Codex passthrough. |
+| `certs/index.json` and `certs/<id>.pfx` | Code-signing certificates, stored as encrypted blobs. |
+| `.certs-kek` | 32-byte key that unwraps `certs/`. |
+| `ssh-keys/index.json` and `ssh-keys/<id>.key` | pks-held SSH private keys, stored as encrypted blobs. |
+| `.ssh-keys-kek` | 32-byte key that unwraps `ssh-keys/`. |
+| `share/<host>.json` | Agent Share login per host; the refresh token is encrypted. |
+| `.share-kek` | 32-byte key that unwraps `share/`. |
+| `keys/<vmName>` | SSH keypairs generated by `pks vm init`. |
+| `brain/` | Brain firehose store — `index.json`, `prompts.jsonl`, `tools.jsonl`, `files.jsonl`, `errors.jsonl`, and `projects/<slug>/sessions/<id>.json`. |
+| `writing/` | Global writing-profile layer, including `reference/` and `naturalness-patterns.md`. |
+| `usage-cache/manifest.json` | Cache backing `pks claude usage`. |
+| `agent-skills/<name>.md` | Skill files handed to coding agents. |
+| `firecracker/` | Firecracker runner assets. |
+| `vscode/` | VS Code CLI assets used by `pks devcontainer spawn`. |
+| `logs/` | Devcontainer spawn and install logs. |
+| `models/<engine>/` | Per-engine speech-recognition models used by `pks voice transcribe`. |
+
+## Project-local state
+
+These paths live in the repository you run `pks` from, not in your home directory. The `.pks` project folder and the `~/.pks-cli` home folder are separate things, and both are load-bearing.
+
+| Path | Contents |
+|---|---|
+| `<repo>/.pks/` | Project identity and configuration. |
+| `<repo>/.pks/agents/` | Agent framework definitions created by `pks init`. |
+| `<repo>/.pks/writing/` | Per-project writing overrides and the report cache. |
+| `<repo>/.pks/project-info.md` | Project info written by the GitHub integration initializer. |
+| `<repo>/.confluence/config.json` | Confluence workspace configuration. |
+| `$TMPDIR/pks-cli/logs/` | Logs from `pks init` and the devcontainer spawner. |
+
+## Global options
+
+These four flags are parsed against raw arguments before the command parser runs, so they take effect anywhere on the command line.
+
+| Flag | Description |
+|---|---|
+| `--debug` | Sets `PKS_DEBUG=1` for the process, which downstream code reads to enable verbose output. |
+| `--no-logo` | Suppresses the ASCII banner. |
+| `--json` (`-j`) | Detected globally, but only wired to banner suppression for `pks hooks`. Per-command JSON support varies. |
+| `--version` | Prints the version from the assembly informational version. |
+
+`--verbose` is not global. It is a per-command option on the commands that define it, such as `pks github status --verbose`.
+
+### Banner suppression
+
+The banner is suppressed by an allowlist, not by a general rule, so a command that pipes cleanly today is one that appears in that list. Suppression applies to: `pks mcp` in stdio transport, `pks git askpass`, `pks foundry proxy`, `pks ado git-proxy`, `pks claude limits`, `pks claude session-usage`, all `pks hooks` event commands and `pks hooks` with `--json`, `pks writing prompt|accept`, `pks writing naturalness prompt|accept|patterns`, `pks persona prompt|accept|show`, `pks persona list --json`, `pks persona lint --json`, and `pks ssh run|copy`.
+
+## Environment variables
+
+Every variable below is read by the CLI. Variables that pks only writes into child processes are listed separately in "Variables pks sets for child processes".
+
+### Agentics server and runners
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AGENTICS_SERVER` | `agentics.dk` | Agentics server host used by `pks agentics runner register`, `pks agentics runner start`, and `pks firecracker runner start`. |
+| `AGENTIC_SERVER` | `agentics.dk` | Legacy alias, checked after `AGENTICS_SERVER`. |
+| `AGENTICS_CONTAINER_HOST` | `172.17.0.1` on Linux, `host.docker.internal` elsewhere | Host address that job containers use to reach the server. Set it when the Docker bridge uses a custom subnet. |
+| `VIBECAST_BINARY` | (unset) | Explicit vibecast binary path for `pks agentics runner start`. Checked after the command-line flag and before a PATH lookup. |
+| `VIBECAST_KEYBOARD_PIN` | (unset) | Forwarded to the vibecast process the runner spawns. |
+| `GIT_ASKPASS` | (unset) | Accepted as a git credential source by `pks agentics runner start` when no other credentials are available. |
+
+### GitHub Actions context
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GITHUB_ACTIONS` | (unset) | Must equal `true` before the workload-identity token exchange or CI provenance capture is attempted. |
+| `ACTIONS_ID_TOKEN_REQUEST_URL` | (unset) | Token endpoint for the GitHub Actions OIDC exchange. |
+| `ACTIONS_ID_TOKEN_REQUEST_TOKEN` | (unset) | Bearer token for that endpoint. |
+| `GITHUB_REPOSITORY` | (unset) | CI provenance recorded by `pks agentics task submit`. |
+| `GITHUB_RUN_ID` | (unset) | CI provenance recorded by `pks agentics task submit`. |
+| `GITHUB_RUN_ATTEMPT` | (unset) | CI provenance recorded by `pks agentics task submit`. |
+| `GITHUB_JOB` | (unset) | CI provenance recorded by `pks agentics task submit`. |
+| `GITHUB_WORKFLOW` | (unset) | CI provenance recorded by `pks agentics task submit`. |
+| `GITHUB_SHA` | (unset) | CI provenance recorded by `pks agentics task submit`. |
+| `GITHUB_REF_NAME` | (unset) | CI provenance recorded by `pks agentics task submit`. |
+| `GITHUB_ACTOR` | (unset) | CI provenance recorded by `pks agentics task submit`. |
+| `GITHUB_EVENT_NAME` | (unset) | CI provenance recorded by `pks agentics task submit`. |
+| `GITHUB_SERVER_URL` | (unset) | CI provenance recorded by `pks agentics task submit`. |
+
+### AI providers and agent runtimes
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | (unset) | Forwarded to the `claude` process the runner spawns, and satisfies the readiness check for the Anthropic chat provider. |
+| `ANTHROPIC_BASE_URL` | (unset) | Alternate Anthropic endpoint. Localhost values are rebased onto a container-reachable host, and its presence stops pks from injecting its Foundry token shim. |
+| `CLAUDE_CODE_USE_FOUNDRY` | (unset) | Set it to `1` to declare that Foundry is already wired, so `pks claude spawn` skips its local token server. |
+| `AZURE_OPENAI_API_KEY` | (unset) | Key credential for the Azure OpenAI chat provider when the model entry carries none. Entra ID authentication is used when both are absent. |
+| `OPENAI_API_KEY` | (unset) | Readiness check for the OpenAI-compatible provider in `pks exec`, and forwarded by `pks agentics runner start`. |
+| `OPENAI_BASE_URL` | (unset) | OpenAI-compatible endpoint used by `pks exec`. |
+| `GEMINI_API_KEY` | (unset) | Readiness check for the Gemini provider in `pks exec`. |
+| `CHAT_LLM_BACKEND_URL` | (unset) | Chat backend URL for `pks agentics runner start`. The command-line flag wins. |
+| `CHAT_LLM_BACKEND_KEY` | (unset) | Chat backend key for `pks agentics runner start`. |
+| `CHAT_LLM_MODEL` | (unset) | Chat backend model id for `pks agentics runner start`. |
+
+### Telemetry export
+
+Tracing and metrics activate only when an OTLP endpoint is configured. With no endpoint set, no telemetry leaves the process.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | (unset) | OTLP collector endpoint. Setting it turns on tracing and metrics and drives the runner startup diagnostics. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | (unset) | Headers forwarded by the OTLP proxy. |
+| `OTEL_SERVICE_NAME` | (unset) | Service name shown in the runner startup diagnostics. |
+| `OTEL_RESOURCE_ATTRIBUTES` | (unset) | Resource attributes shown in the runner startup diagnostics. |
+
+### pks internals
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PKS_DEBUG` | (unset) | `1` enables verbose debug output in `pks devcontainer spawn` and `pks vm`. Passing `--debug` sets it for the process. |
+| `PKS_USER_ID` | (unset) | Overrides the user id attached to command telemetry. |
+| `PKS_TOKEN` | (unset) | Job token used by `pks sign` to reach the runner credential server. Without it, `pks sign` falls back to the local certificate store. |
+| `PKS_TOKEN_URL` | (unset) | Path to the credential unix socket. The runner sets it to `/var/run/pks-creds/creds.sock`. |
+| `PKS_LIMITS_SINK` | (unset) | Destination for the session-limits report. `pks claude limits` warns and does nothing when it is unset. |
+| `PKS_FFMPEG_BIN` | `ffmpeg` | ffmpeg binary used by `pks tts`. |
+
+### External binaries and host lookups
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PATH` | — | Discovery of `heypoul`, `osslsigncode`, and editor candidates, and part of the system report. |
+| `BROWSER` | `cmd /c start` on Windows, `open` on macOS, `xdg-open` on Linux | Command used to open the authorization URL in every loopback login flow. |
+| `EDITOR` | first of `code`, `nano`, `vim`, `vi` found on `PATH` | Editor opened by `pks writing profile author`. |
+| `OSSLSIGNCODE` | `osslsigncode` on `PATH` | Explicit path to the signing binary used by `pks sign`. |
+| `HEYPOUL_MODEL_DIR_<engine>` | `~/.pks-cli/models/<engine>` when that directory exists | Per-engine model directory for `pks voice transcribe`. pks fills it only when it is unset. |
+| `XDG_CONFIG_HOME` | `~/.config` | Locates the Visual Studio Code user settings on Linux for `pks devcontainer spawn`. This does not move the pks configuration root. |
+
+### Terminal and host environment
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `COLUMNS` | terminal-detected | Chart width in the Azure cost chart, `pks claude stats`, and `pks claude usage`. |
+| `LINES` | terminal-detected | Chart height in the same commands. |
+| `SHELL` | (unset) | Reported in the system information report. |
+| `PROCESSOR_IDENTIFIER` | (unset) | CPU identification on Windows in the system report. |
+| `SUDO_USER` | (unset) | Detects a sudo invocation. The in-container agent path refuses to run under sudo. |
+| `SUDO_UID` | (unset) | Second signal for the same sudo detection. |
+| `USERNAME`, `USER`, `COMPUTERNAME`, `HOSTNAME`, `HOME`, `USERPROFILE` | (unset) | Captured into in-memory session client information. |
+
+> **Note.** The `pks hooks` event commands and the system information report enumerate the entire environment rather than named variables. Treat any secret exported into the shell as visible to those code paths.
+
+### Variables pks sets for child processes
+
+pks exports these into runners, job containers, and spawned tools. It does not read them back.
+
+`PKS_RUNNER`, `PKS_TOKEN_URL`, `PKS_DISCOVERY`, `PKS_CODEX_TOKEN`, `PKS_CODEX_FOUNDRY_API_KEY`, `COOLIFY_APP_FQDN`, `COOLIFY_ENVIRONMENT`, `HEYPOUL_ENDPOINT`, `HEYPOUL_TOKEN`, `HEYPOUL_API_KEY`, `HEYPOUL_LANGUAGE`, and `DOCKER_BUILDKIT`.
+
+## Credential storage
+
+pks stores credentials on the filesystem. There is no operating-system keychain, no Windows data-protection API, and no hardware-backed key. Two tiers exist.
+
+### Tier A — file-encrypted stores
+
+Code-signing certificates, pks-held SSH private keys, and Agent Share refresh tokens are sealed with AES-GCM using a 256-bit key and a 128-bit tag. Each blob is `nonce || tag || ciphertext`. The key-encryption key is a 32-byte random file created on first use and written next to the directory it protects: `.certs-kek`, `.ssh-keys-kek`, and `.share-kek`.
+
+**This is resistance to casual reading, not confidentiality against a local attacker.** The key sits in the same home directory as the ciphertext, with no passphrase and no external key store, so any process running as you can decrypt these files.
+
+On Linux and macOS these files are set to owner-only permissions — 0600 for files, 0700 for directories, best effort. **On Windows every one of those hardening calls is a deliberate no-op**, so the files carry whatever the profile directory grants.
+
+### Tier B — plaintext settings
+
+`settings.json` is the shared key/value store, and most provider credentials land in it as plaintext JSON. It is written with an ordinary file write and does not get the owner-only permission treatment applied to the Tier A stores.
+
+Credential keys written there:
+
+- **`azure.auth.credentials`** — Azure Resource Manager tokens.
+- **`ado.auth.credentials`** — Azure DevOps tokens.
+- **`foundry.auth.credentials`** — Azure AI Foundry tokens.
+- **`fileshare.azure.credentials`** — Azure Files credentials.
+- **`msgraph.auth.token`** and **`msgraph.auth.config`** — Microsoft Graph token and client configuration.
+- **`scaleway.auth.credentials`** — Scaleway access and secret key.
+- **`tailscale.auth.credentials`** — Tailscale credentials.
+- **`google:api_key`** — Google AI API key.
+- **`jira:api_token`** — Atlassian API token.
+- The GitHub token, under a per-user key.
+
+Two non-credential keys share the file: `telemetry.enabled` and `cli.first-time-warning-acknowledged`.
+
+> **Note.** The internal configuration API takes an `encrypt` parameter that does not encrypt. When set, it replaces the value with the literal string `***encrypted***`, discarding the input. Every credential path in the CLI leaves it off.
+
+The store also seeds hardcoded demo defaults at startup — `cluster.endpoint`, `namespace.default`, `registry.url`, `auth.token`, `deploy.replicas`, and `monitoring.enabled`. These are placeholder values, not live configuration, and pks has no Kubernetes deployment feature behind them. There is no top-level `pks config` command; the only registered configuration command is `pks jira config`.
+
+## Authentication flows
+
+Every provider follows the same command shape: `pks <provider> init` starts the login, and `pks <provider> status` reports what is stored. There is no `pks auth` command and no `pks logout`.
+
+| Provider | Command | Flow | Stored in |
+|---|---|---|---|
+| GitHub | `pks github init` | OAuth 2.0 device code against a GitHub App, requesting `repo`, `user:email`, and `write:packages`. Polls every 5 seconds for up to 120 attempts. | `settings.json` |
+| Agentics | `pks agentics init` | OAuth 2.0 device code against Keycloak, realm `agentics`, client `pks-cli`, server default `agentics.dk`. | `agentics-auth.json` |
+| Agent Share | `pks share init` | Authorization code with PKCE on a loopback listener at `http://127.0.0.1:<port>/callback/`, S256 challenge, no client secret, 5-minute timeout. Endpoints come from the issuer's discovery document. | `share/<host>.json`, refresh token encrypted |
+| Azure | `pks azure init` | Authorization code with PKCE on a loopback listener, using the public Azure CLI client id. The tenant is discovered from your email address. | `settings.json` |
+| Azure DevOps | `pks ado init` | Authorization code with PKCE on a loopback listener, using the public Visual Studio client id. | `settings.json` and `ado-credentials.json` |
+| Azure AI Foundry | `pks foundry init` | Authorization code with PKCE on a loopback listener. | `settings.json` and `foundry-token-cache.json` |
+| Microsoft Graph | `pks ms-graph register` | OAuth 2.0 device code. The client id is supplied on the command line. | `settings.json` |
+| Scaleway | `pks scaleway init` | Static access key and secret key. No interactive flow. | `settings.json` |
+| Google AI | `pks google init` | Static API key. | `settings.json` |
+| Jira | `pks jira init` | Basic authentication with an email and API token, a bearer personal access token on Server and Data Center, or an OAuth access token. | `settings.json` |
+| Confluence | `pks confluence init` | Bearer access token, then basic authentication, then a bearer personal access token. | `<repo>/.confluence/config.json` |
+| Tailscale | `pks tailscale init` | Static credentials. | `settings.json` |
+
+Loopback flows print the authorization URL before opening a browser, so they work over SSH. Set `BROWSER` to control which command opens it.
+
+In GitHub Actions, `pks agentics` needs no stored login. Its token resolution runs in order: an explicit `--token`, then the GitHub Actions OIDC exchange, then the stored Keycloak token from `agentics-auth.json` (refreshed in place with a 30-second clock skew when expired), then a stored runner registration token.
+
+Job containers receive a short-lived token over a unix socket credential server rather than a copy of your credentials. `PKS_TOKEN` and `PKS_TOKEN_URL` point `pks sign` at that server.
+
+Sensitive actions can require a TOTP code before they run. `pks authenticator` enrolls the factor and `pks actions` chooses which operations are gated. Before a factor is enrolled, gated actions pass silently.
+
+## Logging and diagnostics
+
+Log levels are fixed at startup and no environment variable changes them. Console logging runs at warning level and above. For `pks mcp` in stdio transport and `pks foundry proxy` the console sink is removed entirely and the level is raised to error, so the protocol stream on stdout stays clean.
+
+`--debug` is the one global verbosity switch. It sets `PKS_DEBUG=1`, which the devcontainer and VM code paths read.
+
+The command telemetry, session data, and interaction services are in-memory only. They hold bounded queues and dictionaries, write nothing to disk, and open no network connection — pks does not send usage data anywhere. `telemetry.enabled` in `settings.json` gates the in-memory collection and is treated as on unless it is explicitly `false`.
+
+Log files that are written:
+
+| Path | Contents |
+|---|---|
+| `~/.pks-cli/logs/` | Devcontainer spawn and install logs. |
+| `~/.pks-cli/codex-passthrough-failures.log` | Codex passthrough failures. |
+| `$TMPDIR/pks-cli/logs/` | `pks init` and devcontainer spawner logs. |
+| Transcription output directory | `transcribe.log` from `pks voice transcribe`. |
+
+Redaction is not general. Only the Jira debug writer redacts basic-authentication parameters and truncates bearer tokens. Treat other debug output as potentially containing secrets before pasting it into an issue.
+
+## Inspecting and resetting state
+
+Read the current state with the per-provider status commands, which report what is stored without printing secrets:
+
+```bash
+pks github status --verbose    # GitHub token and git:push capability
+pks foundry status             # Foundry login and selected model
+pks ado status                 # Azure DevOps organization and login
+pks vm status                  # VM metadata store
+pks authenticator status       # whether a TOTP factor is enrolled
+```
+
+There is no logout command and no reset command. Removing a credential means removing its file or its key. Deleting a whole provider's state is a file operation:
+
+```bash
+rm ~/.pks-cli/agentics-auth.json    # forget the Agentics login
+rm -rf ~/.pks-cli/share             # forget every Agent Share login
+```
+
+Re-running the matching `init` command restores the login.
+
+> **Do not commit.** The `.pks/` folder in a repository is project configuration and is safe to commit. Everything under `~/.pks-cli/` is credential material and must stay out of version control, including the `.certs-kek`, `.ssh-keys-kek`, and `.share-kek` files, which are the keys to the encrypted stores.
+
+Removing `~/.pks-cli` entirely resets the CLI to a first-run state. That also deletes generated VM SSH keypairs, pks-held signing certificates, and the Brain store, none of which can be recovered from the remote side.
+
+## See also
+
+- [pks](/tools/pks) — the command surface and how the families fit together
+- [pks agentics](/tools/pks/agentics) — the Keycloak login and runner registration this page's tokens belong to
+- [pks github](/tools/pks/github) — the device-code login and the runner it authorizes
+- [pks actions](/tools/pks/actions) — choosing which operations require a two-factor code
+- [pks authenticator](/tools/pks/authenticator) — enrolling the TOTP factor that makes the gate live
+- [pks update](/tools/pks/update) — how pks detects its install method and upgrades itself
