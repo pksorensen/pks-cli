@@ -49,6 +49,19 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.21.0](https://github.com/pksorensen/pks-cli/compare/v6.20.1...v6.21.0) (2026-07-19)
+
+
+### Features
+
+* **agentics:** honest runner capabilities, config flow and SSH handoff ([9f2be81](https://github.com/pksorensen/pks-cli/commit/9f2be81e5ad451a6729c405d4611de6be8b92aac))
+* **brain:** add `brain conversation` exporter and project-shared skill init ([30644b5](https://github.com/pksorensen/pks-cli/commit/30644b5bb16bbb8eb3d4f92a68e6140f1aa42f3f))
+
+
+### Bug Fixes
+
+* **claude:** parse on-the-hour /usage reset times ([dd2b80d](https://github.com/pksorensen/pks-cli/commit/dd2b80dcaef6bcf86caf469d608ee2f61dfc41a0))
+
 ## [6.20.1](https://github.com/pksorensen/pks-cli/compare/v6.20.0...v6.20.1) (2026-07-17)
 
 
