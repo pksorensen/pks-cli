@@ -100,6 +100,7 @@ Getting a coding agent running, wiring it to a model, and connecting it to the A
 | [pks agent](/tools/pks/agent) | Run a one-shot, provider-neutral coding-agent loop, or register the session with Agent Share. |
 | [pks agentics](/tools/pks/agentics) | Log in to agentics.dk, run the self-hosted job runner, and submit assembly-line tasks. |
 | [pks codex](/tools/pks/codex) | Run the upstream Codex CLI against an Azure AI Foundry deployment with no request translation. |
+| [pks opencode](/tools/pks/opencode) | Run OpenCode directly against a Scaleway serverless model — one command, no proxy, no config file. Defaults to GLM 5.2. |
 | [pks mcp](/tools/pks/mcp) | Serve the CLI's own capabilities to a Model Context Protocol client over stdio or HTTP. |
 | [pks hooks](/tools/pks/hooks) | Register `pks` as the handler for Claude Code lifecycle hooks, including a lint gate on stop. |
 | [pks brain](/tools/pks/brain) | Build a personal knowledge base from your Claude Code session history. |

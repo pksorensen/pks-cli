@@ -1058,6 +1058,11 @@ app.Configure(config =>
             .WithExample(["codex", "init", "--model", "gpt-5-codex"]);
     });
 
+    config.AddCommand<PKS.Commands.OpenCode.OpenCodeCommand>("opencode")
+        .WithDescription("Run OpenCode directly on a Scaleway serverless model")
+        .WithExample(["opencode"])
+        .WithExample(["opencode", "--model", "glm-5.2"]);
+
     // Add Azure branch command
     config.AddBranch<PKS.Commands.Azure.AzureSettings>("azure", azure =>
     {
