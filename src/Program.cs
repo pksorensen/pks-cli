@@ -364,6 +364,7 @@ services.AddSingleton<PKS.Infrastructure.Services.ISshExecutor, PKS.Infrastructu
 
 // Scaleway (GPU instances) + cloud-agnostic VM provider abstraction
 services.AddHttpClient<PKS.Infrastructure.Services.IScalewayService, PKS.Infrastructure.Services.ScalewayService>();
+services.AddHttpClient<PKS.Infrastructure.Services.IMoonshotService, PKS.Infrastructure.Services.MoonshotService>();
 
 // Two-factor action guard: gates billable/sensitive ACTIONS behind a TOTP second factor whose
 // seed lives behind the pks user and whose code lives on the human's phone (see Services/Security).
@@ -1059,9 +1060,10 @@ app.Configure(config =>
     });
 
     config.AddCommand<PKS.Commands.OpenCode.OpenCodeCommand>("opencode")
-        .WithDescription("Run OpenCode directly on a Scaleway serverless model")
+        .WithDescription("Run OpenCode on a configured model provider")
         .WithExample(["opencode"])
-        .WithExample(["opencode", "--model", "glm-5.2"]);
+        .WithExample(["opencode", "--model", "glm-5.2"])
+        .WithExample(["opencode", "--model", "kimi-k3"]);
 
     // Add Azure branch command
     config.AddBranch<PKS.Commands.Azure.AzureSettings>("azure", azure =>
@@ -1082,6 +1084,14 @@ app.Configure(config =>
         scaleway.AddCommand<PKS.Commands.Scaleway.ScalewayInitCommand>("init")
             .WithDescription("Authenticate with Scaleway and select a default project and zone")
             .WithExample(new[] { "scaleway", "init" });
+    });
+
+    config.AddBranch<PKS.Commands.Moonshot.MoonshotSettings>("moonshot", moonshot =>
+    {
+        moonshot.SetDescription("Manage Moonshot API authentication");
+        moonshot.AddCommand<PKS.Commands.Moonshot.MoonshotInitCommand>("init")
+            .WithDescription("Register a Moonshot API key")
+            .WithExample(["moonshot", "init"]);
     });
 
     // Add Tailscale branch command

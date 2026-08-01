@@ -6,8 +6,12 @@ namespace PKS.Commands.OpenCode;
 public sealed class OpenCodeSettings : CommandSettings
 {
     [CommandOption("-m|--model")]
-    [Description("Scaleway serverless model id (default: glm-5.2)")]
+    [Description("Model id (default: glm-5.2)")]
     public string Model { get; set; } = "glm-5.2";
+
+    [CommandOption("-p|--provider")]
+    [Description("Provider override; only needed when a model exists on multiple configured providers")]
+    public string? Provider { get; set; }
 
     [CommandArgument(0, "[ARGS]")]
     [Description("Additional arguments passed to the opencode CLI")]

@@ -48,7 +48,7 @@ public sealed class ActionCatalog : IActionCatalog
         new ActionDefinition(ActionIds.VmStop, "Stop VM", "Deallocate / power off a VM", false, "Compute"),
         new ActionDefinition(ActionIds.VmDestroy, "Destroy VM", "Permanently delete a VM and its resources", true, "Compute"),
         new ActionDefinition(ActionIds.VmAutoshutdownWrite, "Change auto-shutdown", "Modify idle/scheduled shutdown policy", false, "Compute"),
-        new ActionDefinition(ActionIds.CloudAuthWrite, "Store cloud credentials", "Store or replace Scaleway/Azure/Foundry credentials", true, "Cloud"),
+        new ActionDefinition(ActionIds.CloudAuthWrite, "Store cloud credentials", "Store or replace Scaleway/Moonshot/Azure/Foundry credentials", true, "Cloud"),
         new ActionDefinition(ActionIds.DevcontainerSpawnRemote, "Spawn remote devcontainer", "Spawn a devcontainer on a remote VM (auto-starts it)", true, "Devcontainer", new[] { ActionIds.VmStart }),
         new ActionDefinition(ActionIds.PksUpdate, "Update pks", "Replace or self-update the pks binary", true, "Control plane"),
         new ActionDefinition(ActionIds.PolicyWrite, "Change 2FA policy", "Change which actions require two-factor", true, "Control plane"),

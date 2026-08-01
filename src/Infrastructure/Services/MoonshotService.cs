@@ -1,0 +1,72 @@
+using System.Net.Http.Headers;
+using System.Text.Json;
+using PKS.Infrastructure.Services.Models;
+
+namespace PKS.Infrastructure.Services;
+
+public interface IMoonshotService
+{
+    Task<bool> IsAuthenticatedAsync();
+    Task<MoonshotStoredCredentials?> GetStoredCredentialsAsync();
+    Task StoreCredentialsAsync(MoonshotStoredCredentials credentials);
+    Task ClearStoredCredentialsAsync();
+    Task<bool> ValidateApiKeyAsync(string apiKey, CancellationToken cancellationToken = default);
+}
+
+public sealed class MoonshotService : IMoonshotService
+{
+    public const string BaseUrl = "https://api.moonshot.ai/v1";
+    private const string StorageKey = "moonshot.auth.credentials";
+    private readonly HttpClient _httpClient;
+    private readonly IConfigurationService _configuration;
+
+    public MoonshotService(HttpClient httpClient, IConfigurationService configuration)
+    {
+        _httpClient = httpClient;
+        _configuration = configuration;
+    }
+
+    public async Task<bool> IsAuthenticatedAsync()
+    {
+        var credentials = await GetStoredCredentialsAsync();
+        return !string.IsNullOrWhiteSpace(credentials?.ApiKey);
+    }
+
+    public async Task<MoonshotStoredCredentials?> GetStoredCredentialsAsync()
+    {
+        var json = await _configuration.GetAsync(StorageKey);
+        if (string.IsNullOrWhiteSpace(json)) return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<MoonshotStoredCredentials>(json);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    public Task StoreCredentialsAsync(MoonshotStoredCredentials credentials) =>
+        _configuration.SetAsync(StorageKey, JsonSerializer.Serialize(credentials), global: true);
+
+    public Task ClearStoredCredentialsAsync() => _configuration.DeleteAsync(StorageKey);
+
+    public async Task<bool> ValidateApiKeyAsync(
+        string apiKey,
+        CancellationToken cancellationToken = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/models");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+
+        try
+        {
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            return response.IsSuccessStatusCode;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+    }
+}
