@@ -23,8 +23,7 @@ public class ConfigurationServiceTests : IDisposable
 
         _testSettingsPath = Path.Combine(_testDirectory, "settings.json");
 
-        // Create a standard configuration service for basic testing
-        _configService = new ConfigurationService();
+        _configService = new ConfigurationService(_testSettingsPath);
     }
 
     public void Dispose()
@@ -164,6 +163,50 @@ public class ConfigurationServiceTests : IDisposable
             Assert.True(allSettings.ContainsKey(kvp.Key));
             Assert.Equal(kvp.Value, allSettings[kvp.Key]);
         }
+    }
+
+    [Fact]
+    public async Task SetAsync_FromStaleInstances_MergesChangesFromDisk()
+    {
+        var first = new ConfigurationService(_testSettingsPath);
+        var staleSecond = new ConfigurationService(_testSettingsPath);
+
+        await first.SetAsync("moonshot.auth.credentials", "moonshot", global: true);
+        await staleSecond.SetAsync("foundry.auth.credentials", "foundry", global: true);
+
+        var persisted = JsonSerializer.Deserialize<Dictionary<string, string>>(
+            await File.ReadAllTextAsync(_testSettingsPath));
+
+        Assert.Equal("moonshot", persisted!["moonshot.auth.credentials"]);
+        Assert.Equal("foundry", persisted["foundry.auth.credentials"]);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_FromStaleInstance_DoesNotRestoreUnrelatedKeys()
+    {
+        var first = new ConfigurationService(_testSettingsPath);
+        var staleSecond = new ConfigurationService(_testSettingsPath);
+
+        await staleSecond.SetAsync("temporary", "remove-me", global: true);
+        await first.SetAsync("moonshot.auth.credentials", "moonshot", global: true);
+        await staleSecond.DeleteAsync("temporary");
+
+        var persisted = JsonSerializer.Deserialize<Dictionary<string, string>>(
+            await File.ReadAllTextAsync(_testSettingsPath));
+
+        Assert.Equal("moonshot", persisted!["moonshot.auth.credentials"]);
+        Assert.False(persisted.ContainsKey("temporary"));
+    }
+
+    [Fact]
+    public async Task SetAsync_PersistsSettingsWithOwnerOnlyPermissions()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        await _configService.SetAsync("moonshot.auth.credentials", "moonshot", global: true);
+
+        var mode = File.GetUnixFileMode(_testSettingsPath);
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, mode);
     }
 
     [Fact]

@@ -54,10 +54,16 @@ public interface IConfigurationService
 public class ConfigurationService : IConfigurationService
 {
     private readonly Dictionary<string, string> _config;
+    private readonly Dictionary<string, string?> _pendingPersistentChanges = new();
     private readonly string _settingsFilePath;
     private readonly object _lockObject = new();
+    private readonly SemaphoreSlim _saveLock = new(1, 1);
 
-    public ConfigurationService()
+    public ConfigurationService() : this(GetDefaultSettingsFilePath())
+    {
+    }
+
+    internal ConfigurationService(string settingsFilePath)
     {
         // Initialize with default values
         _config = new Dictionary<string, string>
@@ -70,10 +76,7 @@ public class ConfigurationService : IConfigurationService
             { "monitoring.enabled", "true" }
         };
 
-        // Set up settings file path
-        var userHomeDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var pksDirectory = Path.Combine(userHomeDirectory, ".pks-cli");
-        _settingsFilePath = Path.Combine(pksDirectory, "settings.json");
+        _settingsFilePath = settingsFilePath;
 
         // Load settings from file if it exists
         LoadSettingsAsync().GetAwaiter().GetResult();
@@ -91,13 +94,19 @@ public class ConfigurationService : IConfigurationService
     public async Task SetAsync(string key, string value, bool global = false, bool encrypt = false)
     {
         await Task.Delay(100);
+        var storedValue = encrypt ? "***encrypted***" : value;
+        var persistent = global || key.StartsWith("cli.");
         lock (_lockObject)
         {
-            _config[key] = encrypt ? "***encrypted***" : value;
+            _config[key] = storedValue;
+            if (persistent)
+            {
+                _pendingPersistentChanges[key] = storedValue;
+            }
         }
 
         // Save to file if this is a persistent setting
-        if (global || key.StartsWith("cli."))
+        if (persistent)
         {
             await SaveSettingsAsync();
         }
@@ -118,6 +127,7 @@ public class ConfigurationService : IConfigurationService
         lock (_lockObject)
         {
             _config.Remove(key);
+            _pendingPersistentChanges[key] = null;
         }
         await SaveSettingsAsync();
     }
@@ -151,6 +161,7 @@ public class ConfigurationService : IConfigurationService
 
     public async Task SaveSettingsAsync()
     {
+        await _saveLock.WaitAsync();
         try
         {
             // Ensure directory exists
@@ -160,10 +171,29 @@ public class ConfigurationService : IConfigurationService
                 Directory.CreateDirectory(directory);
             }
 
-            Dictionary<string, string> configToSave;
+            await using var settingsLock = await AcquireSettingsLockAsync();
+
+            var configToSave = await ReadPersistedSettingsAsync();
+            Dictionary<string, string?> changesToSave;
             lock (_lockObject)
             {
-                configToSave = new Dictionary<string, string>(_config);
+                changesToSave = new Dictionary<string, string?>(_pendingPersistentChanges);
+                if (configToSave == null)
+                {
+                    configToSave = new Dictionary<string, string>(_config);
+                }
+            }
+
+            foreach (var (key, value) in changesToSave)
+            {
+                if (value == null)
+                {
+                    configToSave.Remove(key);
+                }
+                else
+                {
+                    configToSave[key] = value;
+                }
             }
 
             var json = System.Text.Json.JsonSerializer.Serialize(configToSave, new System.Text.Json.JsonSerializerOptions
@@ -171,11 +201,85 @@ public class ConfigurationService : IConfigurationService
                 WriteIndented = true
             });
 
-            await File.WriteAllTextAsync(_settingsFilePath, json);
+            var temporaryPath = $"{_settingsFilePath}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
+            try
+            {
+                await File.WriteAllTextAsync(temporaryPath, json);
+                SetOwnerOnlyPermissions(temporaryPath);
+                File.Move(temporaryPath, _settingsFilePath, overwrite: true);
+                SetOwnerOnlyPermissions(_settingsFilePath);
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+            }
+
+            lock (_lockObject)
+            {
+                foreach (var (key, value) in configToSave)
+                {
+                    _config[key] = value;
+                }
+
+                foreach (var (key, savedValue) in changesToSave)
+                {
+                    if (_pendingPersistentChanges.TryGetValue(key, out var pendingValue) &&
+                        pendingValue == savedValue)
+                    {
+                        _pendingPersistentChanges.Remove(key);
+                    }
+                }
+            }
         }
         catch
         {
             // Gracefully handle file write errors - warning may still display
+        }
+        finally
+        {
+            _saveLock.Release();
+        }
+    }
+
+    private static string GetDefaultSettingsFilePath()
+    {
+        var userHomeDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return Path.Combine(userHomeDirectory, ".pks-cli", "settings.json");
+    }
+
+    private async Task<Dictionary<string, string>?> ReadPersistedSettingsAsync()
+    {
+        if (!File.Exists(_settingsFilePath)) return null;
+
+        var json = await File.ReadAllTextAsync(_settingsFilePath);
+        return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+    }
+
+    private async Task<FileStream> AcquireSettingsLockAsync()
+    {
+        var lockPath = $"{_settingsFilePath}.lock";
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+
+        while (true)
+        {
+            try
+            {
+                var stream = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+                SetOwnerOnlyPermissions(lockPath);
+                return stream;
+            }
+            catch (IOException) when (DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(25);
+            }
+        }
+    }
+
+    private static void SetOwnerOnlyPermissions(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
     }
 
