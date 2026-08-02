@@ -29,7 +29,7 @@ Scaleway has no OAuth flow. Authentication is a static Access Key and Secret Key
 - **A resolved organization and default project.** `init` calls the Scaleway IAM `api-keys/{accessKey}` endpoint to look up the key's organization and default project, then confirms the project against the Account `projects/{projectId}` endpoint.
 - **A default zone for new VMs.** You pick one zone from a fixed list; `pks vm init` uses it unless told otherwise.
 - **A stored, reusable credential.** The key pair persists globally under your user profile, so later `pks vm` commands need no further Scaleway prompts.
-- **A two-factor gate on writes.** Storing or overwriting the credential runs through the `cloud.auth.write` action guard, so an enrolled authenticator is asked to confirm a fresh `init --force`. `pks scaleway init` is currently the only cloud-auth `init` command gated this way — `pks azure init` and `pks foundry init` write credentials with no two-factor confirmation, despite the action's catalog description ("Store or replace Scaleway/Azure/Foundry credentials") suggesting otherwise.
+- **A two-factor gate on writes.** Storing or overwriting the credential runs through the `cloud.auth.write` action guard, so an enrolled authenticator is asked to confirm a fresh `init --force`. `pks moonshot init` is gated the same way — but `pks azure init` and `pks foundry init` write credentials with no two-factor confirmation, despite the action's catalog description ("Store or replace Scaleway/Moonshot/Azure/Foundry credentials") suggesting otherwise.
 
 ## How it fits together
 

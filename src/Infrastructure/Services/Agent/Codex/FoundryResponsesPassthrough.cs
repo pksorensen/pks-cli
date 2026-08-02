@@ -36,6 +36,7 @@ public sealed class FoundryResponsesPassthrough
     private static readonly string PksDir =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".pks-cli");
     private static readonly string FailureLogPath = Path.Combine(PksDir, "codex-passthrough-failures.log");
+    private static readonly string FailedRequestBodyDir = Path.Combine(PksDir, "codex-passthrough-failed-requests");
 
     /// <summary>
     /// The Generic Host defaults to a <see cref="Microsoft.Extensions.FileProviders.PhysicalFileProvider"/>
@@ -107,10 +108,15 @@ public sealed class FoundryResponsesPassthrough
         using var ms = new MemoryStream();
         await ctx.Request.Body.CopyToAsync(ms, ctx.RequestAborted);
         var requestBytes = FilterFoundryIncompatibleAdditionalTools(ms.ToArray(), out var filterSummary);
+        requestBytes = FixLeadingReasoningItem(requestBytes, out var reasoningFixSummary);
         var requestSummary = BuildRequestSummary(requestBytes);
         if (filterSummary is not null)
         {
             await WriteLocalFailureAsync("request.filtered", requestSummary, filterSummary, ctx.RequestAborted);
+        }
+        if (reasoningFixSummary is not null)
+        {
+            await WriteLocalFailureAsync("request.reasoning_fix", requestSummary, reasoningFixSummary, ctx.RequestAborted);
         }
 
         using var upstreamReq = new HttpRequestMessage(HttpMethod.Post, _upstreamUrl)
@@ -155,7 +161,7 @@ public sealed class FoundryResponsesPassthrough
 
         if (IsEventStream(contentType))
         {
-            await RelaySseWithFailureLoggingAsync(ctx, upstream, requestSummary, ctx.RequestAborted);
+            await RelaySseWithFailureLoggingAsync(ctx, upstream, requestSummary, requestBytes, ctx.RequestAborted);
             return;
         }
 
@@ -219,6 +225,63 @@ public sealed class FoundryResponsesPassthrough
         return Encoding.UTF8.GetBytes(root.ToJsonString());
     }
 
+    /// <summary>
+    /// Observed on a live gpt-5.6-sol session: Foundry masked a real request with a generic 400
+    /// (<c>invalid_request_error</c>, "There was an issue with your request...") whose <c>input[0]</c>
+    /// was a <c>reasoning</c> item (opaque <c>encrypted_content</c> from a prior turn) followed by a
+    /// tool-call round trip — the shape Codex's own compaction/resume produces whenever a kept slice
+    /// happens to start on a reasoning item. Bisected replay against the passthrough reproduced this
+    /// reliably for over an hour, isolated down to a 4-item request, and confirmed a placeholder ahead
+    /// of the reasoning item avoided it every time (content-preserving, unlike dropping the item).
+    /// However, a later retest found the *exact same bytes* (including the original 62-item capture)
+    /// now succeed unmodified — so the trigger is not a stable, purely structural rule; it looks like
+    /// a transient Azure-side condition (backend replica/capacity/routing) that has since cleared,
+    /// not something client-side bytes alone determine. This prepend is kept as a cheap, harmless
+    /// hedge (a no-op placeholder ahead of a reasoning item cannot make a request worse) rather than
+    /// a confirmed fix — if the failure recurs, check <see cref="FailureLogPath"/> for its Azure
+    /// correlation headers (already captured on every response.failed) to file a proper support case.
+    /// </summary>
+    internal static byte[] FixLeadingReasoningItem(byte[] requestBytes, out string? summary)
+    {
+        summary = null;
+        JsonObject? root;
+        try
+        {
+            root = JsonNode.Parse(requestBytes) as JsonObject;
+        }
+        catch (JsonException)
+        {
+            return requestBytes;
+        }
+
+        if (root?["input"] is not JsonArray { Count: > 0 } input)
+        {
+            return requestBytes;
+        }
+
+        if (input[0] is not JsonObject first
+            || !string.Equals(first["type"]?.GetValue<string>(), "reasoning", StringComparison.OrdinalIgnoreCase))
+        {
+            return requestBytes;
+        }
+
+        var placeholder = new JsonObject
+        {
+            ["type"] = "message",
+            ["role"] = "assistant",
+            ["content"] = new JsonArray(new JsonObject
+            {
+                ["type"] = "output_text",
+                ["text"] = "",
+            }),
+        };
+        input.Insert(0, placeholder);
+
+        summary = "Prepended a no-op placeholder message ahead of a leading `reasoning` item " +
+                   "(Foundry sol rejects requests whose input[0] is a reasoning item).";
+        return Encoding.UTF8.GetBytes(root.ToJsonString());
+    }
+
     private static bool IsReservedCollaborationTool(JsonObject tool)
     {
         var name = tool["name"]?.GetValue<string>();
@@ -241,8 +304,11 @@ public sealed class FoundryResponsesPassthrough
         HttpContext ctx,
         HttpResponseMessage upstream,
         string requestSummary,
+        byte[] requestBytes,
         CancellationToken ct)
     {
+        var upstreamHeaders = FormatUpstreamHeaders(upstream);
+
         await using var upstreamStream = await upstream.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(upstreamStream, Encoding.UTF8);
         var data = new StringBuilder();
@@ -260,7 +326,7 @@ public sealed class FoundryResponsesPassthrough
             {
                 if (data.Length > 0)
                 {
-                    await LogResponseFailedIfPresentAsync(eventName, data.ToString(), requestSummary, ct);
+                    await LogResponseFailedIfPresentAsync(eventName, data.ToString(), requestSummary, upstreamHeaders, requestBytes, ct);
                     data.Clear();
                 }
 
@@ -283,15 +349,37 @@ public sealed class FoundryResponsesPassthrough
 
         if (data.Length > 0)
         {
-            await LogResponseFailedIfPresentAsync(eventName, data.ToString(), requestSummary, ct);
+            await LogResponseFailedIfPresentAsync(eventName, data.ToString(), requestSummary, upstreamHeaders, requestBytes, ct);
             await ctx.Response.Body.FlushAsync(ct);
         }
+    }
+
+    /// <summary>
+    /// Azure's SDK-facing error body for many backend failure classes is a deliberately generic
+    /// catch-all ("There was an issue with your request..."). The only way to correlate a specific
+    /// failure with Azure-side diagnostics (Log Analytics, a support case) is the correlation
+    /// headers on the HTTP response itself, so capture those verbatim alongside the body.
+    /// </summary>
+    private static string FormatUpstreamHeaders(HttpResponseMessage upstream)
+    {
+        var parts = new List<string>();
+        foreach (var header in upstream.Headers)
+        {
+            parts.Add($"{header.Key}={string.Join(",", header.Value)}");
+        }
+        foreach (var header in upstream.Content.Headers)
+        {
+            parts.Add($"{header.Key}={string.Join(",", header.Value)}");
+        }
+        return parts.Count == 0 ? "<none>" : string.Join(" | ", parts);
     }
 
     private static async Task LogResponseFailedIfPresentAsync(
         string? eventName,
         string payload,
         string requestSummary,
+        string upstreamHeaders,
+        byte[] requestBytes,
         CancellationToken ct)
     {
         if (payload == "[DONE]") return;
@@ -309,12 +397,45 @@ public sealed class FoundryResponsesPassthrough
                 return;
             }
 
+            var responseId = root.TryGetProperty("response", out var responseProp)
+                && responseProp.ValueKind == JsonValueKind.Object
+                && responseProp.TryGetProperty("id", out var idProp)
+                ? idProp.GetString()
+                : null;
+            var requestBodyPath = await PersistFailedRequestBodyAsync(requestBytes, responseId, ct);
+
             var summary = BuildFailureSummary(root);
-            await WriteLocalFailureAsync("response.failed", requestSummary, summary, ct);
+            var details = new StringBuilder()
+                .AppendLine(summary)
+                .AppendLine($"upstream_headers={upstreamHeaders}")
+                .AppendLine($"full_request_body={requestBodyPath ?? "<not saved>"}")
+                .ToString();
+            await WriteLocalFailureAsync("response.failed", requestSummary, details, ct);
         }
         catch (JsonException)
         {
             // Invalid partial/debug SSE payloads are relayed unchanged; they just are not diagnosable here.
+        }
+    }
+
+    /// <summary>
+    /// The in-memory failure log truncates request markers to a short summary for readability.
+    /// On an actual response.failed, persist the exact bytes Codex sent (post `collaboration`-tool
+    /// filtering) so the request can be replayed or bisected to find what Foundry rejected.
+    /// </summary>
+    private static async Task<string?> PersistFailedRequestBodyAsync(byte[] requestBytes, string? responseId, CancellationToken ct)
+    {
+        try
+        {
+            Directory.CreateDirectory(FailedRequestBodyDir);
+            var fileName = $"{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss-fffffff}-{responseId ?? "no-id"}.request.json";
+            var path = Path.Combine(FailedRequestBodyDir, fileName);
+            await File.WriteAllBytesAsync(path, requestBytes, ct);
+            return path;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -478,7 +599,7 @@ public sealed class FoundryResponsesPassthrough
             var entry = new StringBuilder()
                 .AppendLine($"[{DateTimeOffset.UtcNow:O}] {kind}")
                 .AppendLine(requestSummary)
-                .AppendLine(AnthropicProxyUtil.Truncate(details, 8000))
+                .AppendLine(AnthropicProxyUtil.Truncate(details, 12000))
                 .AppendLine()
                 .ToString();
             await File.AppendAllTextAsync(FailureLogPath, entry, ct);

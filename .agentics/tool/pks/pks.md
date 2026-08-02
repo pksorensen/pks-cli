@@ -100,7 +100,7 @@ Getting a coding agent running, wiring it to a model, and connecting it to the A
 | [pks agent](/tools/pks/agent) | Run a one-shot, provider-neutral coding-agent loop, or register the session with Agent Share. |
 | [pks agentics](/tools/pks/agentics) | Log in to agentics.dk, run the self-hosted job runner, and submit assembly-line tasks. |
 | [pks codex](/tools/pks/codex) | Run the upstream Codex CLI against an Azure AI Foundry deployment with no request translation. |
-| [pks opencode](/tools/pks/opencode) | Run OpenCode directly against a Scaleway serverless model — one command, no proxy, no config file. Defaults to GLM 5.2. |
+| [pks opencode](/tools/pks/opencode) | Run OpenCode on a configured model provider — one command, no proxy, no config file. GLM 5.2 on Scaleway by default, Kimi K3 on Moonshot via `--model kimi-k3`. |
 | [pks mcp](/tools/pks/mcp) | Serve the CLI's own capabilities to a Model Context Protocol client over stdio or HTTP. |
 | [pks hooks](/tools/pks/hooks) | Register `pks` as the handler for Claude Code lifecycle hooks, including a lint gate on stop. |
 | [pks brain](/tools/pks/brain) | Build a personal knowledge base from your Claude Code session history. |
@@ -133,6 +133,7 @@ The credential backbone the rest of the tool draws on.
 | [pks azure](/tools/pks/azure) | Sign in to Azure, pick a subscription, and review Cost Management spend and credit balance. |
 | [pks foundry](/tools/pks/foundry) | Authenticate to Azure AI Foundry, select deployments, mint tokens, and run the local token proxy. |
 | [pks google](/tools/pks/google) | Register and validate a Google AI Studio API key for image generation. |
+| [pks moonshot](/tools/pks/moonshot) | Register and validate a Moonshot API key for running Kimi K3 through `pks opencode`. |
 | [pks ms-graph](/tools/pks/ms-graph) | Authenticate to Microsoft Graph through the device-code flow for mailbox access. |
 | [pks authenticator](/tools/pks/authenticator) | Enrol and inspect the local time-based one-time password second factor. |
 | [pks actions](/tools/pks/actions) | Choose which sensitive actions demand that second factor. |
