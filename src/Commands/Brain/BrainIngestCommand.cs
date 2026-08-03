@@ -12,6 +12,10 @@ public class BrainIngestSettings : BrainSettings
     [Description("Match against the encoded project-slug substring (e.g. agentic-live).")]
     public string? Project { get; set; }
 
+    [CommandOption("-s|--source")]
+    [Description("Only ingest one tool: claude, codex or opencode. Default: every installed tool.")]
+    public string? Source { get; set; }
+
     [CommandOption("--since")]
     [Description("Only ingest sessions newer than this. Accepts 7d, 24h, 30m, or an ISO date.")]
     public string? Since { get; set; }
@@ -60,16 +64,24 @@ public class BrainIngestCommand : AsyncCommand<BrainIngestSettings>
             }
         }
 
+        var source = settings.Source?.Trim().ToLowerInvariant();
+        if (source is { Length: > 0 } && source is not ("claude" or "codex" or "opencode"))
+        {
+            AnsiConsole.MarkupLine($"[red]Unknown --source:[/] {source}. Expected claude, codex or opencode.");
+            return 1;
+        }
+
         var options = new IngestOptions
         {
             ProjectFilter = settings.Project,
+            SourceFilter = source,
             SinceUtc = since,
             Limit = settings.Limit,
             Force = settings.Force,
             MaxParallelism = settings.Parallel ?? Environment.ProcessorCount,
         };
 
-        AnsiConsole.MarkupLine($"[grey]Reading from[/] [cyan]{_paths.ClaudeProjectsRoot}[/]");
+        AnsiConsole.MarkupLine($"[grey]Reading from[/] [cyan]{options.SourceFilter ?? "every installed tool"}[/] [grey](see[/] [bold]pks brain sources[/][grey])[/]");
         AnsiConsole.MarkupLine($"[grey]Writing to  [/] [cyan]{_paths.GlobalRoot}[/]");
         if (options.ProjectFilter is not null)
             AnsiConsole.MarkupLine($"[grey]Project filter:[/] {options.ProjectFilter}");

@@ -1,27 +1,31 @@
 using System.Collections.Concurrent;
+using PKS.Infrastructure.Services.Brain.Asf;
 using PKS.Infrastructure.Services.Brain.Models;
 
 namespace PKS.Infrastructure.Services.Brain;
 
 public sealed class BrainIngestPipeline : IBrainIngestPipeline
 {
-    private readonly ISessionDiscoveryService _discovery;
-    private readonly ISessionParser _parser;
+    private readonly IReadOnlyList<IAgentSessionSource> _sources;
+    private readonly ISecretMasker _masker;
+    private readonly AsfSessionProjector _projector;
     private readonly IBrainIndexStore _store;
     private readonly IBrainPathResolver _paths;
     private readonly IPricingService _pricing;
     private readonly IPlanFileIndexer _plans;
 
     public BrainIngestPipeline(
-        ISessionDiscoveryService discovery,
-        ISessionParser parser,
+        IEnumerable<IAgentSessionSource> sources,
+        ISecretMasker masker,
+        AsfSessionProjector projector,
         IBrainIndexStore store,
         IBrainPathResolver paths,
         IPricingService pricing,
         IPlanFileIndexer plans)
     {
-        _discovery = discovery;
-        _parser = parser;
+        _sources = sources.ToList();
+        _masker = masker;
+        _projector = projector;
         _store = store;
         _paths = paths;
         _pricing = pricing;
@@ -35,34 +39,40 @@ public sealed class BrainIngestPipeline : IBrainIngestPipeline
 
         await _store.EnsureGlobalLayoutAsync(ct);
 
-        // 1) Discover and filter
-        var all = _discovery.Enumerate(options.ProjectFilter).ToList();
+        // 1) Discover across every installed tool. A source that isn't installed
+        //    contributes nothing and is not an error — most machines run a subset.
+        var all = new List<(IAgentSessionSource Source, DiscoveredAgentSession Session)>();
+        foreach (var source in _sources)
+        {
+            if (options.SourceFilter is { Length: > 0 } wanted &&
+                !string.Equals(source.Kind, wanted, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!source.IsAvailable) continue;
+
+            foreach (var discovered in source.Discover(options.ProjectFilter))
+                all.Add((source, discovered));
+        }
         progress.Discovered(all.Count);
 
         var ingestLog = await _store.LoadIngestRunLogAsync(ct);
         var cursors = ingestLog.SessionCursors;
 
-        var eligible = new List<DiscoveredSession>(all.Count);
+        var eligible = new List<(IAgentSessionSource Source, DiscoveredAgentSession Session)>(all.Count);
         var skippedByCursor = 0;
-        foreach (var d in all)
+        foreach (var item in all)
         {
-            var info = new FileInfo(d.JsonlPath);
-            if (!info.Exists) continue;
-            if (options.SinceUtc is { } since && info.LastWriteTimeUtc < since) continue;
+            var d = item.Session;
+            if (options.SinceUtc is { } since && d.LastModifiedUtc < since) continue;
 
-            if (!options.Force)
+            if (!options.Force && LookupCursor(cursors, d) is { } cur &&
+                cur.SourcePath == d.SourcePath &&
+                cur.SourceMtimeUtc == d.LastModifiedUtc &&
+                cur.Bytes == d.Bytes)
             {
-                var sessionId = Path.GetFileNameWithoutExtension(d.JsonlPath);
-                if (cursors.TryGetValue(sessionId, out var cur) &&
-                    cur.SourcePath == d.JsonlPath &&
-                    cur.SourceMtimeUtc == info.LastWriteTimeUtc &&
-                    cur.Bytes == info.Length)
-                {
-                    skippedByCursor++;
-                    continue;
-                }
+                skippedByCursor++;
+                continue;
             }
-            eligible.Add(d);
+
+            eligible.Add(item);
         }
         if (options.Limit is { } cap && eligible.Count > cap)
             eligible = eligible.Take(cap).ToList();
@@ -95,12 +105,20 @@ public sealed class BrainIngestPipeline : IBrainIngestPipeline
                 MaxDegreeOfParallelism = Math.Max(1, options.MaxParallelism),
                 CancellationToken = ct,
             },
-            async (d, innerCt) =>
+            async (item, innerCt) =>
             {
-                progress.Started(d.JsonlPath);
+                var (source, d) = item;
+                progress.Started(d.SourcePath);
                 try
                 {
-                    var parsed = await _parser.ParseAsync(d.JsonlPath, d.ProjectSlug, innerCt);
+                    // The ASF stream is the single source of truth: the same events
+                    // that `brain export` uploads are what the local index is built
+                    // from, so the two can never disagree about a day's totals.
+                    var events = new List<AsfEvent>();
+                    await foreach (var e in source.ReadAsync(d, _masker, innerCt))
+                        events.Add(e);
+
+                    var parsed = _projector.Project(d, events);
 
                     // Attribute cost per model
                     double sessionCost = 0;
@@ -141,22 +159,23 @@ public sealed class BrainIngestPipeline : IBrainIngestPipeline
                     foreach (var ev in parsed.PlanEvents) planEventsBag.Add(ev);
                     sessionMatchRefs.Add(parsed.Metadata);
 
-                    cursorWrites[parsed.Metadata.SessionId] = new SessionCursor
+                    cursorWrites[d.CursorKey] = new SessionCursor
                     {
                         SessionId = parsed.Metadata.SessionId,
-                        SourcePath = d.JsonlPath,
-                        SourceMtimeUtc = parsed.Metadata.SourceMtimeUtc,
-                        Bytes = parsed.Metadata.SourceBytes,
+                        SourceKind = d.SourceKind,
+                        SourcePath = d.SourcePath,
+                        SourceMtimeUtc = d.LastModifiedUtc,
+                        Bytes = d.Bytes,
                         LineCount = parsed.Metadata.LineCount,
                     };
                     Interlocked.Increment(ref filesIngested);
-                    progress.Finished(d.JsonlPath, ingested: true, error: false);
+                    progress.Finished(d.SourcePath, ingested: true, error: false);
                 }
                 catch (OperationCanceledException) { throw; }
                 catch
                 {
                     Interlocked.Increment(ref filesFailed);
-                    progress.Finished(d.JsonlPath, ingested: false, error: true);
+                    progress.Finished(d.SourcePath, ingested: false, error: true);
                 }
             });
 
@@ -180,7 +199,14 @@ public sealed class BrainIngestPipeline : IBrainIngestPipeline
         run.FileOpsAppended = filesTotal;
         run.ErrorsAppended = errorsTotal;
 
-        foreach (var (k, v) in cursorWrites) ingestLog.SessionCursors[k] = v;
+        foreach (var (k, v) in cursorWrites)
+        {
+            // Drop the pre-multi-source key for the same session, so a Claude
+            // session ingested before this change doesn't keep a stale duplicate
+            // cursor that would make the log grow by one entry per session.
+            if (v.SourceKind == AsfSource.Claude) ingestLog.SessionCursors.Remove(v.SessionId);
+            ingestLog.SessionCursors[k] = v;
+        }
         ingestLog.Runs.Add(run);
         // Keep only the last 50 runs in the log to stop it growing without bound.
         if (ingestLog.Runs.Count > 50)
@@ -212,4 +238,17 @@ public sealed class BrainIngestPipeline : IBrainIngestPipeline
         return run;
     }
 
+    /// Cursors are keyed by "&lt;source&gt;:&lt;native id&gt;". Logs written before the
+    /// multi-source work used the bare session id, so a miss falls back to that
+    /// key for Claude — otherwise the first run after upgrading would re-ingest
+    /// every session ever seen.
+    private static SessionCursor? LookupCursor(
+        IReadOnlyDictionary<string, SessionCursor> cursors,
+        DiscoveredAgentSession d)
+    {
+        if (cursors.TryGetValue(d.CursorKey, out var cursor)) return cursor;
+        if (d.SourceKind != AsfSource.Claude) return null;
+
+        return cursors.TryGetValue(d.NativeSessionId, out var legacy) ? legacy : null;
+    }
 }

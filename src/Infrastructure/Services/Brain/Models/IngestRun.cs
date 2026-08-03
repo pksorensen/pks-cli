@@ -39,4 +39,11 @@ public sealed class SessionCursor
     public DateTime SourceMtimeUtc { get; set; }
     public long LineCount { get; set; }
     public long Bytes { get; set; }
+
+    /// claude | codex | opencode. Defaults to claude so cursor files written before
+    /// the multi-source work keep resolving to the source that produced them.
+    /// The dictionary is keyed by DiscoveredAgentSession.CursorKey
+    /// ("&lt;source&gt;:&lt;native id&gt;"), so the three sources advance independently and
+    /// two tools cannot collide on a shared session id.
+    public string SourceKind { get; set; } = "claude";
 }

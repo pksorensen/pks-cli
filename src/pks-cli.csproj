@@ -44,6 +44,12 @@
     <PackageReference Include="SharpZipLib" Version="1.4.2"/>
     <PackageReference Include="Spectre.Console" Version="0.47.0"/>
     <PackageReference Include="Spectre.Console.Cli" Version="0.47.0"/>
+    <!-- opencode stores its sessions in SQLite; the brain reads that DB read-only.
+         The explicit bundle pin lifts the transitive SQLitePCLRaw 2.1.11 that
+         Microsoft.Data.Sqlite 10.0.10 brings in, which carries NU1903
+         (GHSA-2m69-gcr7-jv3q). -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10"/>
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5"/>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0"/>
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0"/>
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.0"/>

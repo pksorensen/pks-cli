@@ -2,15 +2,11 @@ using PKS.Infrastructure.Services.Brain.Models;
 
 namespace PKS.Infrastructure.Services.Brain;
 
-/// Deterministic streaming parser for a single Claude session JSONL file.
-/// Ports the canonical filter logic from src/apps/www-site/src/lib/sync-parser.ts:62-213
-/// to C#. No AI, no token spend. One pass per file; tool_use ↔ tool_result
-/// matching is done in-memory per session.
-public interface ISessionParser
-{
-    Task<ParsedSession> ParseAsync(string filePath, string projectSlug, CancellationToken ct = default);
-}
-
+/// One session reduced to the rows the local brain index is built from.
+///
+/// Produced by <see cref="AsfSessionProjector"/> from an ASF event stream, so the
+/// filter logic that used to live in a Claude-only parser (ported originally from
+/// src/apps/www-site/src/lib/sync-parser.ts) now runs once for all three tools.
 public sealed class ParsedSession
 {
     public required SessionMetadata Metadata { get; init; }

@@ -18,6 +18,38 @@ public interface IBrainPathResolver
     /// Root of Claude Code's plan files (~/.claude/plans/).
     string ClaudePlansRoot { get; }
 
+    /// Root of Codex's rollout storage (~/.codex/sessions/), laid out as
+    /// &lt;yyyy&gt;/&lt;mm&gt;/&lt;dd&gt;/rollout-*.jsonl. Codex never prunes this — there is no
+    /// retention key in its config schema — so everything since install is here.
+    string CodexSessionsRoot { get; }
+
+    /// Where the Codex TUI moves deleted threads (~/.codex/archived_sessions/).
+    /// Still on disk, still worth backing up.
+    string CodexArchivedSessionsRoot { get; }
+
+    /// opencode's SQLite store (~/.local/share/opencode/opencode.db), honoring
+    /// XDG_DATA_HOME. Always opened read-only.
+    string OpenCodeDbPath { get; }
+
+    /// opencode's spill directory (~/.local/share/opencode/tool-output/). Tool
+    /// outputs over 2000 lines / 50 KB land here, and opencode's hourly
+    /// `tool-output-cleanup` job deletes anything older than a hardcoded 7 days.
+    /// This is the whole reason the backup job runs daily. The directory does not
+    /// exist until the first spill; its absence is not an error.
+    string OpenCodeToolOutputRoot { get; }
+
+    /// Root of the ASF export tree (~/.pks-cli/brain/export/).
+    string ExportRoot { get; }
+
+    /// Directory holding sealed chunks for a day (…/export/chunks/&lt;yyyy&gt;/&lt;mm&gt;/&lt;dd&gt;/).
+    string ExportChunkDir(DateOnly day);
+
+    /// Content-addressed blob path (…/export/blobs/&lt;sha[0:2]&gt;/&lt;sha&gt;.zst).
+    string ExportBlobPath(string sha);
+
+    /// The export manifest (…/export/manifest.json).
+    string ExportManifestPath { get; }
+
     /// Global raw layer root (~/.pks-cli/brain/).
     string GlobalRoot { get; }
 

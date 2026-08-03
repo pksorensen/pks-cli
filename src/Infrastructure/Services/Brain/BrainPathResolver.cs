@@ -28,7 +28,53 @@ public sealed class BrainPathResolver : IBrainPathResolver
 
     public string ClaudePlansRoot => Path.Combine(_home, ".claude", "plans");
 
+    public string CodexSessionsRoot => Path.Combine(_home, ".codex", "sessions");
+
+    public string CodexArchivedSessionsRoot => Path.Combine(_home, ".codex", "archived_sessions");
+
+    /// XDG_DATA_HOME wins when set, as opencode itself honors it; otherwise
+    /// ~/.local/share. On Windows opencode uses %APPDATA%.
+    private string OpenCodeDataRoot
+    {
+        get
+        {
+            var xdg = Environment.GetEnvironmentVariable("XDG_DATA_HOME");
+            if (!string.IsNullOrWhiteSpace(xdg)) return Path.Combine(xdg, "opencode");
+
+            if (OperatingSystem.IsWindows())
+            {
+                var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                if (!string.IsNullOrWhiteSpace(appData)) return Path.Combine(appData, "opencode");
+            }
+
+            return Path.Combine(_home, ".local", "share", "opencode");
+        }
+    }
+
+    public string OpenCodeDbPath => Path.Combine(OpenCodeDataRoot, "opencode.db");
+
+    public string OpenCodeToolOutputRoot => Path.Combine(OpenCodeDataRoot, "tool-output");
+
     public string GlobalRoot => Path.Combine(_home, ".pks-cli", "brain");
+
+    public string ExportRoot => Path.Combine(GlobalRoot, "export");
+
+    public string ExportChunkDir(DateOnly day) => Path.Combine(
+        ExportRoot,
+        "chunks",
+        day.Year.ToString("D4"),
+        day.Month.ToString("D2"),
+        day.Day.ToString("D2"));
+
+    public string ExportBlobPath(string sha)
+    {
+        if (string.IsNullOrWhiteSpace(sha) || sha.Length < 2)
+            throw new ArgumentException("sha required", nameof(sha));
+
+        return Path.Combine(ExportRoot, "blobs", sha[..2], sha + ".zst");
+    }
+
+    public string ExportManifestPath => Path.Combine(ExportRoot, "manifest.json");
 
     public string GlobalProjectDir(string slug) =>
         Path.Combine(GlobalRoot, "projects", slug);

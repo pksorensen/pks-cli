@@ -193,7 +193,16 @@ services.AddSingleton<PKS.Infrastructure.Services.Claude.IClaudeMarketplaceFetch
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainPathResolver, PKS.Infrastructure.Services.Brain.BrainPathResolver>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainIndexStore, PKS.Infrastructure.Services.Brain.BrainIndexStore>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.ISessionDiscoveryService, PKS.Infrastructure.Services.Brain.SessionDiscoveryService>();
-services.AddSingleton<PKS.Infrastructure.Services.Brain.ISessionParser, PKS.Infrastructure.Services.Brain.SessionParser>();
+// ASF sources — one per coding tool, all normalized to the same event stream.
+// Spec: docs/specs/asf/ in the agentic-live-www workspace.
+services.AddSingleton<PKS.Infrastructure.Services.Brain.Asf.IAgentSessionSource, PKS.Infrastructure.Services.Brain.Asf.ClaudeAsfSource>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.Asf.IAgentSessionSource, PKS.Infrastructure.Services.Brain.Asf.CodexAsfSource>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.Asf.IAgentSessionSource, PKS.Infrastructure.Services.Brain.Asf.OpenCodeAsfSource>();
+// Masking runs on the way in, before anything is hashed or written, so a secret
+// never reaches the local firehoses either — not just the uploads.
+services.AddSingleton<PKS.Infrastructure.Services.Brain.Asf.ISecretMasker>(
+    _ => PKS.Infrastructure.Services.Brain.Asf.SecretMasker.ForProject(Directory.GetCurrentDirectory()));
+services.AddSingleton<PKS.Infrastructure.Services.Brain.AsfSessionProjector>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainConversationExporter, PKS.Infrastructure.Services.Brain.BrainConversationExporter>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IPricingService, PKS.Infrastructure.Services.Brain.PricingService>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IPlanFileIndexer, PKS.Infrastructure.Services.Brain.PlanFileIndexer>();
@@ -1513,6 +1522,12 @@ app.Configure(config =>
         brain.AddCommand<PKS.Commands.Brain.BrainStatusCommand>("status")
             .WithDescription("Show what the brain knows so far (projects, sessions, prompts, tools, errors)")
             .WithExample(["brain", "status"]);
+
+        brain.AddCommand<PKS.Commands.Brain.BrainSourcesCommand>("sources")
+            .WithDescription("Show which coding tools the brain can read on this machine (claude, codex, opencode)")
+            .WithExample(["brain", "sources"])
+            .WithExample(["brain", "sources", "--verify"])
+            .WithExample(["brain", "sources", "--source", "opencode"]);
 
         brain.AddCommand<PKS.Commands.Brain.BrainSearchCommand>("search")
             .WithDescription("Grep across the brain firehoses (prompts, tools, files, errors) and extracts")

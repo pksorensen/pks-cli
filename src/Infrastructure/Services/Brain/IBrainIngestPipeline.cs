@@ -12,6 +12,9 @@ public sealed class IngestOptions
     /// Match against the encoded project-slug substring. Null = every project.
     public string? ProjectFilter { get; init; }
 
+    /// claude | codex | opencode. Null = every installed tool.
+    public string? SourceFilter { get; init; }
+
     /// Only ingest sessions whose source file mtime is newer than this.
     public DateTime? SinceUtc { get; init; }
 
