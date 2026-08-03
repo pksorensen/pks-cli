@@ -208,6 +208,12 @@ services.AddSingleton<PKS.Infrastructure.Services.Brain.IPricingService, PKS.Inf
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IPlanFileIndexer, PKS.Infrastructure.Services.Brain.PlanFileIndexer>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainIngestPipeline, PKS.Infrastructure.Services.Brain.BrainIngestPipeline>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainExportService, PKS.Infrastructure.Services.Brain.BrainExportService>();
+// Upload path. The token resolver deliberately bypasses the GitHub-OIDC step in
+// IAgenticsAuthService — the brain API would read an OIDC bearer as an unknown
+// upload token — so CI sets PKS_BRAIN_TOKEN instead.
+services.AddHttpClient<PKS.Infrastructure.Services.Brain.IBrainPushService, PKS.Infrastructure.Services.Brain.BrainPushService>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainTokenResolver, PKS.Infrastructure.Services.Brain.BrainTokenResolver>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainDaemonService, PKS.Infrastructure.Services.Brain.BrainDaemonService>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainSkillReader, PKS.Infrastructure.Services.Brain.BrainSkillReader>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IFirehoseReader, PKS.Infrastructure.Services.Brain.FirehoseReader>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainExtractContextBuilder, PKS.Infrastructure.Services.Brain.BrainExtractContextBuilder>();
@@ -1535,6 +1541,28 @@ app.Configure(config =>
             .WithExample(["brain", "export"])
             .WithExample(["brain", "export", "--level", "all", "--since", "7d"])
             .WithExample(["brain", "export", "--level", "prompts", "--source", "opencode"]);
+
+        brain.AddCommand<PKS.Commands.Brain.BrainPushCommand>("push")
+            .WithDescription("Send the sealed chunks (and, at level all, the raw blob backup) to your agentics.dk profile")
+            .WithExample(["brain", "push"])
+            .WithExample(["brain", "push", "--dry-run"])
+            .WithExample(["brain", "push", "--endpoint", "https://agentics.dk", "--level", "all"]);
+
+        brain.AddBranch("daemon", daemon =>
+        {
+            daemon.SetDescription("The daily backup job (ingest → export → push). opencode deletes spilled tool output after 7 days.");
+            daemon.AddCommand<PKS.Commands.Brain.BrainDaemonInstallCommand>("install")
+                .WithDescription("Schedule the daily backup (systemd user timer, launchd, cron or Task Scheduler)")
+                .WithExample(["brain", "daemon", "install"])
+                .WithExample(["brain", "daemon", "install", "--level", "all", "--at", "04:15"])
+                .WithExample(["brain", "daemon", "install", "--dry-run"]);
+            daemon.AddCommand<PKS.Commands.Brain.BrainDaemonStatusCommand>("status")
+                .WithDescription("Show whether the job is scheduled, when it last ran, and what is still waiting to be pushed")
+                .WithExample(["brain", "daemon", "status"]);
+            daemon.AddCommand<PKS.Commands.Brain.BrainDaemonUninstallCommand>("uninstall")
+                .WithDescription("Remove the scheduled job. Exported and pushed data is untouched.")
+                .WithExample(["brain", "daemon", "uninstall"]);
+        });
 
         brain.AddCommand<PKS.Commands.Brain.BrainSearchCommand>("search")
             .WithDescription("Grep across the brain firehoses (prompts, tools, files, errors) and extracts")

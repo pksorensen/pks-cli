@@ -19,6 +19,11 @@ public interface IBrainExportService
 
     /// Reads the export manifest, creating an empty one if this is the first run.
     Task<ExportManifest> LoadManifestAsync(CancellationToken ct = default);
+
+    /// Writes the manifest back atomically. `brain push` owns the upload stamps
+    /// on it, which is why persisting is part of the contract rather than an
+    /// export-internal detail.
+    Task SaveManifestAsync(ExportManifest manifest, CancellationToken ct = default);
 }
 
 public sealed class ExportOptions

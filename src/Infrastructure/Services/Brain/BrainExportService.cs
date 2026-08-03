@@ -493,6 +493,9 @@ public sealed class BrainExportService : IBrainExportService
         }
     }
 
+    public Task SaveManifestAsync(ExportManifest manifest, CancellationToken ct = default) =>
+        WriteManifestAsync(manifest, ct);
+
     private async Task WriteManifestAsync(ExportManifest manifest, CancellationToken ct)
     {
         var path = _paths.ExportManifestPath;
