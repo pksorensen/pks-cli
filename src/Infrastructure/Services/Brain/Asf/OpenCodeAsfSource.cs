@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -357,6 +358,99 @@ public sealed class OpenCodeAsfSource : IAgentSessionSource
 
     /// Read-only, and explicitly non-mutating: opencode may be running right now,
     /// and a stray write or a recovered WAL would corrupt a live session.
+    /// opencode has no per-session file to copy — one 38 MB database holds every
+    /// session — so the backup is synthesized: an NDJSON dump of the session row
+    /// followed by every (message, part) row, in the same deterministic order the
+    /// parser reads them.
+    ///
+    /// The rows go out **verbatim and unmasked**. That is deliberate and it is why
+    /// blobs upload only at `--level all`: a blob exists to reconstruct what the
+    /// parser threw away, and a pre-masked blob cannot do that. Everything that
+    /// leaves at a lower level is masked ASF.
+    public long? WriteRawBackup(DiscoveredAgentSession session, Stream destination)
+    {
+        var dbPath = session.SourcePath.Split('#')[0];
+        if (!File.Exists(dbPath)) return null;
+
+        using var conn = OpenReadOnly(dbPath);
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            """
+            SELECT p.id, p.message_id, p.time_created, p.data, m.data
+            FROM part p
+            JOIN message m ON m.id = p.message_id
+            WHERE p.session_id = $id
+            ORDER BY p.time_created, p.id
+            """;
+        cmd.Parameters.AddWithValue("$id", session.NativeSessionId);
+
+        // No `using` on the writer: it must not close the caller's stream, which is
+        // the hashing/compressing stack the export service wrapped around the file.
+        var writer = new StreamWriter(destination, new UTF8Encoding(false), leaveOpen: true);
+        var written = 0L;
+
+        void WriteLine(string line)
+        {
+            writer.Write(line);
+            writer.Write('\n');
+            written += Encoding.UTF8.GetByteCount(line) + 1;
+        }
+
+        using (var sessionCmd = conn.CreateCommand())
+        {
+            sessionCmd.CommandText =
+                """
+                SELECT id, directory, version, agent, model, cost,
+                       time_created, time_updated, time_archived
+                FROM session WHERE id = $id
+                """;
+            sessionCmd.Parameters.AddWithValue("$id", session.NativeSessionId);
+
+            using var sessionReader = sessionCmd.ExecuteReader();
+            if (!sessionReader.Read())
+            {
+                writer.Flush();
+
+                return null;
+            }
+
+            WriteLine(CanonicalJson.Serialize(new JsonObject
+            {
+                ["table"] = "session",
+                ["id"] = sessionReader.GetString(0),
+                ["directory"] = sessionReader.IsDBNull(1) ? null : sessionReader.GetString(1),
+                ["version"] = sessionReader.IsDBNull(2) ? null : sessionReader.GetString(2),
+                ["agent"] = sessionReader.IsDBNull(3) ? null : sessionReader.GetString(3),
+                ["model"] = sessionReader.IsDBNull(4) ? null : sessionReader.GetString(4),
+                ["cost"] = sessionReader.IsDBNull(5) ? null : sessionReader.GetDouble(5),
+                ["time_created"] = sessionReader.IsDBNull(6) ? null : sessionReader.GetInt64(6),
+                ["time_updated"] = sessionReader.IsDBNull(7) ? null : sessionReader.GetInt64(7),
+                ["time_archived"] = sessionReader.IsDBNull(8) ? null : sessionReader.GetInt64(8),
+            }));
+        }
+
+        using (var reader = cmd.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                WriteLine(CanonicalJson.Serialize(new JsonObject
+                {
+                    ["table"] = "part",
+                    ["id"] = reader.GetString(0),
+                    ["message_id"] = reader.IsDBNull(1) ? null : reader.GetString(1),
+                    ["time_created"] = reader.IsDBNull(2) ? null : reader.GetInt64(2),
+                    ["data"] = reader.IsDBNull(3) ? null : reader.GetString(3),
+                    ["message"] = reader.IsDBNull(4) ? null : reader.GetString(4),
+                }));
+            }
+        }
+
+        writer.Flush();
+
+        return written;
+    }
+
     private static SqliteConnection OpenReadOnly(string path)
     {
         var conn = new SqliteConnection(new SqliteConnectionStringBuilder

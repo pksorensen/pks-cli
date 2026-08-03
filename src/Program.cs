@@ -207,6 +207,7 @@ services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainConversationExport
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IPricingService, PKS.Infrastructure.Services.Brain.PricingService>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IPlanFileIndexer, PKS.Infrastructure.Services.Brain.PlanFileIndexer>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainIngestPipeline, PKS.Infrastructure.Services.Brain.BrainIngestPipeline>();
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainExportService, PKS.Infrastructure.Services.Brain.BrainExportService>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainSkillReader, PKS.Infrastructure.Services.Brain.BrainSkillReader>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IFirehoseReader, PKS.Infrastructure.Services.Brain.FirehoseReader>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainExtractContextBuilder, PKS.Infrastructure.Services.Brain.BrainExtractContextBuilder>();
@@ -1528,6 +1529,12 @@ app.Configure(config =>
             .WithExample(["brain", "sources"])
             .WithExample(["brain", "sources", "--verify"])
             .WithExample(["brain", "sources", "--source", "opencode"]);
+
+        brain.AddCommand<PKS.Commands.Brain.BrainExportCommand>("export")
+            .WithDescription("Seal the session history into hash-addressed chunks + a raw blob backup, ready to push")
+            .WithExample(["brain", "export"])
+            .WithExample(["brain", "export", "--level", "all", "--since", "7d"])
+            .WithExample(["brain", "export", "--level", "prompts", "--source", "opencode"]);
 
         brain.AddCommand<PKS.Commands.Brain.BrainSearchCommand>("search")
             .WithDescription("Grep across the brain firehoses (prompts, tools, files, errors) and extracts")

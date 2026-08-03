@@ -31,6 +31,18 @@ public interface IAgentSessionSource
         DiscoveredAgentSession session,
         ISecretMasker masker,
         CancellationToken ct = default);
+
+    /// Writes the session's raw, unparsed form for the blob backup, and returns
+    /// the bytes written. Null means "this session has no raw form worth keeping".
+    ///
+    /// This is the escape hatch from our own parser: ASF is lossy by design, and
+    /// when a future version learns to read something we discard today, the blob
+    /// is what makes re-deriving it possible. File-backed sources copy the file;
+    /// opencode synthesizes a per-session dump, because its rows live in a shared
+    /// database that would otherwise be copied once per session.
+    ///
+    /// Spec: docs/specs/asf/05-blob-backup.md.
+    long? WriteRawBackup(DiscoveredAgentSession session, Stream destination);
 }
 
 /// A session found on disk, before parsing.
@@ -206,6 +218,19 @@ internal static class SourceReadHelpers
         {
             return null;
         }
+    }
+
+    /// Raw backup for the two file-backed sources: the transcript verbatim.
+    /// Returns null when the file has gone since discovery, which is normal —
+    /// `claude --resume` rewrites and Codex compaction replaces files mid-run.
+    internal static long? CopyBackingFile(DiscoveredAgentSession session, Stream destination)
+    {
+        if (session.BackingFile is not { Length: > 0 } path || !File.Exists(path)) return null;
+
+        using var input = File.OpenRead(path);
+        input.CopyTo(destination);
+
+        return input.Length;
     }
 
     /// Counts added/removed lines in a unified diff.

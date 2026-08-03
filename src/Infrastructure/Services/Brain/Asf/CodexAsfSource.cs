@@ -62,6 +62,9 @@ public sealed class CodexAsfSource : IAgentSessionSource
         }
     }
 
+    public long? WriteRawBackup(DiscoveredAgentSession session, Stream destination) =>
+        SourceReadHelpers.CopyBackingFile(session, destination);
+
     public async IAsyncEnumerable<AsfEvent> ReadAsync(
         DiscoveredAgentSession session,
         ISecretMasker masker,
