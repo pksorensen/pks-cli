@@ -88,18 +88,17 @@ runs:
         fi
 
         # Build the full payload
-        PAYLOAD=$(jq -n \
+        PAYLOAD=$(printf '%s' "$FILES_JSON" | jq -c \
           --arg component "$COMPONENT" \
           --arg version "$VERSION" \
-          --argjson files "$FILES_JSON" \
-          '{component: $component, version: $version, files: $files}')
+          '{component: $component, version: $version, files: .}')
 
         # POST to the API (trusted publishing: OIDC repo + component must match a product)
-        HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
+        HTTP_RESPONSE=$(printf '%s' "$PAYLOAD" | curl -s -w "\n%{http_code}" \
           -X POST \
           -H "Authorization: Bearer ${OIDC}" \
           -H "Content-Type: application/json" \
-          -d "$PAYLOAD" \
+          --data-binary @- \
           "${SERVER}/api/tools/docs")
 
         HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -1)

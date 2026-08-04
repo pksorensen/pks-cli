@@ -20,6 +20,32 @@ examples:
 
 The default model is **GLM 5.2** (`glm-5.2`) on Scaleway. Run `pks opencode` with no arguments and you are in. Pass `--model kimi-k3` and you are on **Kimi K3** via Moonshot instead — same command, no extra flags.
 
+## Run pks your way
+
+Use an installed `pks` command, run the NuGet tool directly with .NET 10, or run the npm package without installing it globally:
+
+```commandtabs
+{
+  "tabs": [
+    {
+      "label": "pks",
+      "command": "dotnet tool install --global pks-cli\npks scaleway init\npks opencode --model glm-5.2",
+      "hint": "Installs the permanent pks command as a .NET global tool"
+    },
+    {
+      "label": "dnx",
+      "command": "dotnet dnx pks-cli --yes -- scaleway init\ndotnet dnx pks-cli --yes -- opencode --model glm-5.2",
+      "hint": "Runs directly from NuGet · requires .NET 10"
+    },
+    {
+      "label": "npx",
+      "command": "npx @pks-cli/cli scaleway init\nnpx @pks-cli/cli opencode --model glm-5.2",
+      "hint": "Runs directly from npm · requires Node.js"
+    }
+  ]
+}
+```
+
 ## The model picks the provider
 
 You never tell `pks opencode` where a model lives. pks keeps a small provider catalog, and the model id resolves it:
