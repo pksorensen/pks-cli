@@ -49,6 +49,19 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.22.0](https://github.com/pksorensen/pks-cli/compare/v6.21.0...v6.22.0) (2026-08-04)
+
+
+### Features
+
+* **opencode:** add Moonshot provider resolution ([57d0e98](https://github.com/pksorensen/pks-cli/commit/57d0e98c80c902ee8abfd879611516cbc2560666))
+* **opencode:** launch Scaleway serverless models ([34fb545](https://github.com/pksorensen/pks-cli/commit/34fb545f308add519ab7eeee24412fe9a55ef1b6))
+
+
+### Bug Fixes
+
+* **config:** preserve concurrent credential writes ([0d8f094](https://github.com/pksorensen/pks-cli/commit/0d8f0942a4b585fb746eae83e66946ccc50cb0d0))
+
 ## [6.21.0](https://github.com/pksorensen/pks-cli/compare/v6.20.1...v6.21.0) (2026-07-19)
 
 
