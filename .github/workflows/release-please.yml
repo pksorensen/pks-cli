@@ -98,23 +98,23 @@ jobs:
             --no-restore \
             -p:PackageVersion=${{ steps.version.outputs.preview }}
 
+      - name: Log in to NuGet.org
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: pksorensen
+
       - name: Publish preview to NuGet.org
-        env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
-          if [ -n "$NUGET_API_KEY" ]; then
-            for package in packages/*.nupkg; do
-              if [ -f "$package" ]; then
-                echo "Publishing preview $(basename $package)..."
-                dotnet nuget push "$package" \
-                  --api-key "$NUGET_API_KEY" \
-                  --source https://api.nuget.org/v3/index.json \
-                  --skip-duplicate
-              fi
-            done
-          else
-            echo "NUGET_API_KEY not set, skipping preview publish"
-          fi
+          for package in packages/*.nupkg; do
+            if [ -f "$package" ]; then
+              echo "Publishing preview $(basename $package)..."
+              dotnet nuget push "$package" \
+                --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
+                --source https://api.nuget.org/v3/index.json \
+                --skip-duplicate
+            fi
+          done
 
   # ============================================================
   # CLI Release: Build, pack, and publish NuGet package
@@ -173,23 +173,23 @@ jobs:
             -p:FileVersion=${{ steps.version.outputs.numeric }} \
             -p:InformationalVersion=${{ steps.version.outputs.version }}
 
+      - name: Log in to NuGet.org
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: pksorensen
+
       - name: Publish to NuGet.org
-        env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
-          if [ -n "$NUGET_API_KEY" ]; then
-            for package in packages/*.nupkg; do
-              if [ -f "$package" ]; then
-                echo "Publishing $(basename $package)..."
-                dotnet nuget push "$package" \
-                  --api-key "$NUGET_API_KEY" \
-                  --source https://api.nuget.org/v3/index.json \
-                  --skip-duplicate
-              fi
-            done
-          else
-            echo "NUGET_API_KEY not set, skipping NuGet publish"
-          fi
+          for package in packages/*.nupkg; do
+            if [ -f "$package" ]; then
+              echo "Publishing $(basename $package)..."
+              dotnet nuget push "$package" \
+                --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
+                --source https://api.nuget.org/v3/index.json \
+                --skip-duplicate
+            fi
+          done
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
@@ -467,24 +467,25 @@ jobs:
             -p:InformationalVersion=${{ steps.version.outputs.version }} \
             -p:PackageId=${{ matrix.package_id }}
 
+      - name: Log in to NuGet.org
+        if: matrix.released == 'true'
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: pksorensen
+
       - name: Publish to NuGet.org
         if: matrix.released == 'true'
-        env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
-          if [ -n "$NUGET_API_KEY" ]; then
-            for package in packages/*.nupkg; do
-              if [ -f "$package" ]; then
-                echo "Publishing $(basename $package)..."
-                dotnet nuget push "$package" \
-                  --api-key "$NUGET_API_KEY" \
-                  --source https://api.nuget.org/v3/index.json \
-                  --skip-duplicate
-              fi
-            done
-          else
-            echo "NUGET_API_KEY not set, skipping NuGet publish"
-          fi
+          for package in packages/*.nupkg; do
+            if [ -f "$package" ]; then
+              echo "Publishing $(basename $package)..."
+              dotnet nuget push "$package" \
+                --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
+                --source https://api.nuget.org/v3/index.json \
+                --skip-duplicate
+            fi
+          done
 
       - name: Upload package artifact
         if: matrix.released == 'true'
