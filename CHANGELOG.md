@@ -49,6 +49,21 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.23.0](https://github.com/pksorensen/pks-cli/compare/v6.22.0...v6.23.0) (2026-08-06)
+
+
+### Features
+
+* **brain:** push sealed chunks to a receiver and run it daily ([f9a53e9](https://github.com/pksorensen/pks-cli/commit/f9a53e9d33241be3c3afa0ec27cb27a142c01ea5))
+* **brain:** read Claude, Codex and opencode through one ASF pipeline ([7c94ae4](https://github.com/pksorensen/pks-cli/commit/7c94ae4886d2f76921426fd7aa2aaf3719a0f5a3))
+* **brain:** seal sessions into hash-addressed chunks and blobs ([1aa2e62](https://github.com/pksorensen/pks-cli/commit/1aa2e621bef46ed29bb5827ac7f776d7f0ee46a6))
+* **storage:** delete files behind a scoped, single-use consent grant ([d184095](https://github.com/pksorensen/pks-cli/commit/d184095d1dc5de404a735bcc63cf81292410f1ec))
+
+
+### Bug Fixes
+
+* **storage:** keep long syncs alive and resumable ([f7e57a2](https://github.com/pksorensen/pks-cli/commit/f7e57a25b4995ab26ee4b098a47b318f6d7f5548))
+
 ## [6.22.0](https://github.com/pksorensen/pks-cli/compare/v6.21.0...v6.22.0) (2026-08-04)
 
 
