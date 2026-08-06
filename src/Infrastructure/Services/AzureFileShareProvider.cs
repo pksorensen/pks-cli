@@ -314,6 +314,107 @@ public class AzureFileShareProvider : IFileShareProvider
         return result;
     }
 
+    public async Task<IReadOnlyList<StorageFileRef>> EnumerateFilesAsync(
+        string accountName, string resourceName, string path, bool recursive, CancellationToken ct = default)
+    {
+        var found = new List<StorageFileRef>();
+
+        var shareClient = CreateShareClient(accountName, resourceName);
+        var normalized = path.Trim('/');
+
+        // A path that names a single file resolves to exactly that file.
+        if (!string.IsNullOrEmpty(normalized))
+        {
+            var fileClient = shareClient.GetRootDirectoryClient().GetFileClient(normalized);
+            try
+            {
+                if (await fileClient.ExistsAsync(ct))
+                {
+                    var props = await fileClient.GetPropertiesAsync(cancellationToken: ct);
+                    found.Add(new StorageFileRef(normalized, props.Value.ContentLength));
+                    return found;
+                }
+            }
+            catch (Azure.RequestFailedException)
+            {
+                // Not addressable as a file; fall through and treat it as a directory.
+            }
+        }
+
+        var dirClient = string.IsNullOrEmpty(normalized)
+            ? shareClient.GetRootDirectoryClient()
+            : shareClient.GetDirectoryClient(normalized);
+
+        await CollectAsync(dirClient, normalized, found, recursive, ct);
+        return found;
+    }
+
+    private static async Task CollectAsync(
+        Azure.Storage.Files.Shares.ShareDirectoryClient dir,
+        string relBase,
+        List<StorageFileRef> into,
+        bool recursive,
+        CancellationToken ct)
+    {
+        await foreach (var item in dir.GetFilesAndDirectoriesAsync(cancellationToken: ct))
+        {
+            var rel = string.IsNullOrEmpty(relBase) ? item.Name : $"{relBase}/{item.Name}";
+            if (item.IsDirectory)
+            {
+                if (recursive)
+                    await CollectAsync(dir.GetSubdirectoryClient(item.Name), rel, into, true, ct);
+            }
+            else
+            {
+                into.Add(new StorageFileRef(rel, item.FileSize ?? 0));
+            }
+        }
+    }
+
+    public async Task<StorageDeleteResult> DeleteFilesAsync(
+        string accountName, string resourceName, IReadOnlyList<string> paths, CancellationToken ct = default)
+    {
+        var result = new StorageDeleteResult();
+
+        var shareClient = CreateShareClient(accountName, resourceName);
+        var root = shareClient.GetRootDirectoryClient();
+
+        foreach (var path in paths)
+        {
+            ct.ThrowIfCancellationRequested();
+            var rel = path.Trim('/');
+            try
+            {
+                var fileClient = root.GetFileClient(rel);
+                var size = 0L;
+                try
+                {
+                    var props = await fileClient.GetPropertiesAsync(cancellationToken: ct);
+                    size = props.Value.ContentLength;
+                }
+                catch (Azure.RequestFailedException) { /* size is best-effort */ }
+
+                var deleted = await fileClient.DeleteIfExistsAsync(cancellationToken: ct);
+                if (deleted.Value)
+                {
+                    result.FilesDeleted++;
+                    result.BytesDeleted += size;
+                }
+                else
+                {
+                    result.Errors.Add($"Not found: {rel}");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to delete {File}", rel);
+                result.Errors.Add($"Delete failed: {rel} — {ex.Message}");
+            }
+        }
+
+        return result;
+    }
+
     /// <summary>
     /// Share client carrying a self-renewing OAuth bearer plus the backup request-intent Azure Files
     /// demands. Every share client goes through here so no code path can pin a token again.

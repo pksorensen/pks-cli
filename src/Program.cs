@@ -392,6 +392,10 @@ services.AddSingleton<PKS.Infrastructure.Services.Security.IActionPolicyStore>(s
 services.AddSingleton<PKS.Infrastructure.Services.Security.ITotpSeedStore>(_ =>
     new PKS.Infrastructure.Services.Security.TotpSeedStore());
 services.AddSingleton<PKS.Infrastructure.Services.Security.ISecondFactor, PKS.Infrastructure.Services.Security.TotpSecondFactor>();
+// Out-of-band approval for resource-scoped actions (`pks consent`): the route an agent without a
+// TTY or a phone must take, and the only one that can bind approval to a specific target set.
+services.AddSingleton<PKS.Infrastructure.Services.Security.IConsentStore>(_ =>
+    new PKS.Infrastructure.Services.Security.ConsentStore());
 services.AddSingleton<PKS.Infrastructure.Services.Security.IActionGuard, PKS.Infrastructure.Services.Security.ActionGuard>();
 
 // Self-update (`pks update --self`): install-method detection + channel/version discovery.
@@ -1210,6 +1214,39 @@ app.Configure(config =>
             .WithExample(["storage", "ls"])
             .WithExample(["storage", "ls", "/users", "--count"])
             .WithExample(["storage", "ls", "--json"]);
+
+        storage.AddCommand<StorageRmCommand>("rm")
+            .WithDescription("Delete files from a share (permanent; requires approval)")
+            .WithExample(["storage", "rm", "reports/old.csv"])
+            .WithExample(["storage", "rm", "tmp/", "--recursive", "--dry-run"]);
+    });
+
+    // Out-of-band approval for resource-scoped actions. The gated command files the request; a
+    // human resolves it here, from a terminal the agent's sudo path can't reach.
+    config.AddBranch<PKS.Commands.Consent.ConsentSettings>("consent", consent =>
+    {
+        consent.SetDescription("Approve or deny scoped requests for sensitive actions");
+
+        consent.AddCommand<PKS.Commands.Consent.ConsentListCommand>("list")
+            .WithDescription("List consent requests awaiting a decision")
+            .WithExample(["consent", "list"])
+            .WithExample(["consent", "list", "--all", "--json"]);
+
+        consent.AddCommand<PKS.Commands.Consent.ConsentShowCommand>("show")
+            .WithDescription("Show a request, including every target it would touch")
+            .WithExample(["consent", "show", "a1b2c3d4"]);
+
+        consent.AddCommand<PKS.Commands.Consent.ConsentApproveCommand>("approve")
+            .WithDescription("Approve a request (interactive; second factor when enrolled)")
+            .WithExample(["consent", "approve", "a1b2c3d4"]);
+
+        consent.AddCommand<PKS.Commands.Consent.ConsentDenyCommand>("deny")
+            .WithDescription("Deny a request")
+            .WithExample(["consent", "deny", "a1b2c3d4", "--reason", "wrong share"]);
+
+        consent.AddCommand<PKS.Commands.Consent.ConsentRequestCommand>("request")
+            .WithDescription("File a consent request and print its id")
+            .WithExample(["consent", "request", "storage.delete", "--resource", "azure-fileshare:acct/share", "--target", "reports/old.csv"]);
     });
 
     // Add Application Insights branch command

@@ -54,7 +54,7 @@ pks actions
 You'll see a checkbox list of every gateable action. Toggle the ones you want to require a code, press Enter, and (once a factor is enrolled) confirm the resulting policy change with a TOTP code.
 
 ## The action catalog
-The catalog currently lists 13 gateable actions across 5 categories: Compute, Cloud, Devcontainer, Control plane, and Access. Most default to **required**; `vm.stop` and `vm.autoshutdown.write` default to **off**, since stopping a VM isn't destructive.
+The catalog currently lists 14 gateable actions across 6 categories: Compute, Cloud, Devcontainer, Control plane, Access, and Storage. Most default to **required**; `vm.stop` and `vm.autoshutdown.write` default to **off**, since stopping a VM isn't destructive.
 
 | Action id | Default |
 |---|---|
@@ -71,8 +71,11 @@ The catalog currently lists 13 gateable actions across 5 categories: Compute, Cl
 | `ssh.connect` | required |
 | `cert.write` | required |
 | `runner.credential.forward` | required |
+| `storage.delete` | required, fail-closed |
 
 These defaults apply automatically to any action missing from `actions.json` — including a freshly reset or corrupted file (see [Troubleshooting](#troubleshooting)).
+
+> **Fail-closed actions.** `storage.delete` is marked fail-closed, which changes what "no authenticator enrolled" means for it. Every other action is waved through when nothing is enrolled — two-factor is opt-in, so an un-enrolled pks behaves as it always did. A fail-closed action instead falls back to an out-of-band consent request that a human resolves with [`pks consent approve`](/tools/pks/consent). Deleting files is irreversible, so silently permitting it because the gate isn't set up yet would be the wrong trade. Toggling the action off in `pks actions` still disables the gate entirely.
 
 > **Note.** `devcontainer.spawn.remote` satisfies `vm.start` for the rest of the same CLI invocation once approved — approving one remote devcontainer spawn also clears the VM-start gate for that run. This composition is not persisted; it resets on the next invocation.
 
@@ -83,7 +86,7 @@ These defaults apply automatically to any action missing from `actions.json` —
 
 ## Troubleshooting
 
-**My toggle has no effect on anything.** No TOTP authenticator is enrolled yet. `IActionGuard.RequireAsync` treats every action as satisfied (trust-on-first-use) until one exists. Run `pks authenticator init`, then re-run `pks actions` to confirm the box is still checked.
+**My toggle has no effect on anything.** No TOTP authenticator is enrolled yet. `IActionGuard.RequireAsync` treats every action as satisfied (trust-on-first-use) until one exists — except fail-closed actions such as `storage.delete`, which route to [`pks consent`](/tools/pks/consent) instead. Run `pks authenticator init`, then re-run `pks actions` to confirm the box is still checked.
 
 **Saving asks for a code I can't provide, and I lose my edits.** A failed or cancelled `policy.write` challenge discards the entire batch of changes and exits `1`. Re-run `pks actions`, have your authenticator app ready, and confirm the code before it expires.
 
@@ -98,3 +101,5 @@ These defaults apply automatically to any action missing from `actions.json` —
 - [pks ssh](/tools/pks/ssh) — the `ssh connect` command gated by `ssh.connect`
 - [pks cert](/tools/pks/cert) — the certificate commands gated by `cert.write`
 - [pks devcontainer](/tools/pks/devcontainer) — remote spawn, gated by `devcontainer.spawn.remote`
+- [pks consent](/tools/pks/consent) — out-of-band approval for resource-scoped and fail-closed actions
+- [pks storage](/tools/pks/storage) — `storage rm`, gated by `storage.delete`

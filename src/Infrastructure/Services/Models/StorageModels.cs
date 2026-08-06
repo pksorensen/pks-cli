@@ -75,3 +75,14 @@ public class StorageListResult
     public List<StorageListItem> Items { get; set; } = new();
     public bool Truncated { get; set; }
 }
+
+/// <summary>A single file resolved inside a share, addressed by its share-relative path.</summary>
+public record StorageFileRef(string Path, long SizeBytes);
+
+public class StorageDeleteResult
+{
+    public int FilesDeleted { get; set; }
+    public long BytesDeleted { get; set; }
+    public List<string> Errors { get; set; } = new();
+    public bool Success => Errors.Count == 0;
+}

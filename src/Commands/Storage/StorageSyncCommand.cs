@@ -76,6 +76,17 @@ public class StorageSyncCommand : Command<StorageSyncCommand.Settings>
 
     private async Task<int> ExecuteAsync(Settings settings)
     {
+        // --delete has never done anything: the provider has no orphan detection and the summary's
+        // "Files deleted" row was always 0. Failing here beats letting a caller believe a mirror
+        // ran. Deletion is a separate, consent-gated command.
+        if (settings.Delete)
+        {
+            _console.MarkupLine("[red]--delete is not implemented.[/]");
+            _console.MarkupLine("[dim]Sync never removed orphaned files; the flag silently did nothing.[/]");
+            _console.MarkupLine("[dim]Delete explicitly instead: [bold]pks storage rm <path> --recursive[/] (requires approval).[/]");
+            return 1;
+        }
+
         var authenticated = (await _registry.GetAuthenticatedProvidersAsync()).ToList();
 
         if (authenticated.Count == 0)

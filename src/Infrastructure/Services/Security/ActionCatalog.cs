@@ -16,17 +16,24 @@ public static class ActionIds
     public const string SshConnect = "ssh.connect";
     public const string CertWrite = "cert.write";
     public const string RunnerCredentialForward = "runner.credential.forward";
+    public const string StorageDelete = "storage.delete";
 }
 
 /// <param name="DefaultRequired">Whether two-factor is required for this action out of the box.</param>
 /// <param name="Satisfies">Actions implicitly satisfied when this one is approved (composition).</param>
+/// <param name="FailClosed">
+/// When true, an un-enrolled second factor does NOT wave the action through: approval falls back
+/// to an out-of-band <c>pks consent approve</c>. Set for irreversible actions where the opt-in
+/// fail-open default would be the wrong trade.
+/// </param>
 public sealed record ActionDefinition(
     string Id,
     string DisplayName,
     string Description,
     bool DefaultRequired,
     string Category,
-    IReadOnlyList<string>? Satisfies = null);
+    IReadOnlyList<string>? Satisfies = null,
+    bool FailClosed = false);
 
 public interface IActionCatalog
 {
@@ -56,6 +63,7 @@ public sealed class ActionCatalog : IActionCatalog
         new ActionDefinition(ActionIds.SshConnect, "Open SSH session", "Connect to a registered SSH host using a pks-held key", true, "Access"),
         new ActionDefinition(ActionIds.CertWrite, "Create/replace signing cert", "Create or replace a pks-held code-signing certificate", true, "Control plane"),
         new ActionDefinition(ActionIds.RunnerCredentialForward, "Forward credential to SSH target", "Copy a local credential (GitHub token, Foundry credentials) to a remote SSH target's config, 0600", true, "Access"),
+        new ActionDefinition(ActionIds.StorageDelete, "Delete storage files", "Permanently delete files from a storage share (no recycle bin)", true, "Storage", null, FailClosed: true),
     };
 
     public IReadOnlyList<ActionDefinition> All => Defs;
