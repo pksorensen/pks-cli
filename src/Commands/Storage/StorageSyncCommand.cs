@@ -45,12 +45,16 @@ public class StorageSyncCommand : Command<StorageSyncCommand.Settings>
         public bool DryRun { get; set; }
 
         [CommandOption("--delete")]
-        [Description("Delete orphaned files at the destination (requires interactive confirmation)")]
+        [Description("NOT IMPLEMENTED — use 'pks storage rm' to delete files")]
         public bool Delete { get; set; }
 
         [CommandOption("--verify-checksum")]
         [Description("Verify file integrity using MD5 checksums")]
         public bool VerifyChecksum { get; set; }
+
+        [CommandOption("--force")]
+        [Description("Re-download every file, including ones already present locally at the same size")]
+        public bool Force { get; set; }
 
         [CommandOption("--parallel")]
         [Description("Maximum parallel file transfers (default: 4)")]
@@ -193,6 +197,7 @@ public class StorageSyncCommand : Command<StorageSyncCommand.Settings>
             DryRun = settings.DryRun,
             Delete = settings.Delete,
             VerifyChecksum = settings.VerifyChecksum,
+            Force = settings.Force,
             MaxParallelism = settings.MaxParallelism,
             Include = settings.Include,
             Exclude = settings.Exclude
@@ -257,6 +262,8 @@ public class StorageSyncCommand : Command<StorageSyncCommand.Settings>
             summary.AddRow("Files uploaded", syncResult.FilesUploaded.ToString());
         if (settings.Delete)
             summary.AddRow("Files deleted", syncResult.FilesDeleted.ToString());
+        if (syncResult.FilesUpToDate > 0)
+            summary.AddRow("Already up to date", syncResult.FilesUpToDate.ToString());
         summary.AddRow("Files skipped", syncResult.FilesSkipped.ToString());
         summary.AddRow("Bytes transferred", $"{syncResult.BytesTransferred:N0}");
         if (syncResult.Errors.Count > 0)

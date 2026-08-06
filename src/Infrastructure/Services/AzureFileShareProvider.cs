@@ -232,8 +232,8 @@ public class AzureFileShareProvider : IFileShareProvider
             return result;
         }
 
-        var storageToken = await GetAccessTokenAsync(_config.StorageScope, ct);
-        if (string.IsNullOrEmpty(storageToken))
+        // Fail fast on a dead refresh token rather than deep inside the transfer loop.
+        if (string.IsNullOrEmpty(await GetAccessTokenAsync(_config.StorageScope, ct)))
         {
             result.Errors.Add("Failed to obtain storage access token.");
             return result;
@@ -241,13 +241,7 @@ public class AzureFileShareProvider : IFileShareProvider
 
         try
         {
-            var credential = new BearerTokenCredential(storageToken);
-            var shareOptions = new Azure.Storage.Files.Shares.ShareClientOptions();
-            shareOptions.AddPolicy(new FileRequestIntentPolicy(), HttpPipelinePosition.PerCall);
-            var shareClient = new Azure.Storage.Files.Shares.ShareClient(
-                new Uri($"https://{request.AccountName}.file.core.windows.net/{request.ResourceName}"),
-                credential,
-                shareOptions);
+            var shareClient = CreateShareClient(request.AccountName, request.ResourceName);
 
             if (request.Direction is SyncDirection.Download or SyncDirection.Bidirectional)
                 await DownloadParallelAsync(shareClient.GetRootDirectoryClient(), request, result, progress, ct);
@@ -274,19 +268,9 @@ public class AzureFileShareProvider : IFileShareProvider
             Path = request.Path
         };
 
-        var storageToken = await GetAccessTokenAsync(_config.StorageScope, ct);
-        if (string.IsNullOrEmpty(storageToken))
-            return result;
-
         try
         {
-            var credential = new BearerTokenCredential(storageToken);
-            var shareOptions = new Azure.Storage.Files.Shares.ShareClientOptions();
-            shareOptions.AddPolicy(new FileRequestIntentPolicy(), HttpPipelinePosition.PerCall);
-            var shareClient = new Azure.Storage.Files.Shares.ShareClient(
-                new Uri($"https://{accountName}.file.core.windows.net/{resourceName}"),
-                credential,
-                shareOptions);
+            var shareClient = CreateShareClient(accountName, resourceName);
 
             var normalizedPath = request.Path.Trim('/');
             var dirClient = string.IsNullOrEmpty(normalizedPath)
@@ -330,6 +314,20 @@ public class AzureFileShareProvider : IFileShareProvider
         return result;
     }
 
+    /// <summary>
+    /// Share client carrying a self-renewing OAuth bearer plus the backup request-intent Azure Files
+    /// demands. Every share client goes through here so no code path can pin a token again.
+    /// </summary>
+    private Azure.Storage.Files.Shares.ShareClient CreateShareClient(string accountName, string resourceName)
+    {
+        var options = new Azure.Storage.Files.Shares.ShareClientOptions();
+        options.AddPolicy(new FileRequestIntentPolicy(), HttpPipelinePosition.PerCall);
+        return new Azure.Storage.Files.Shares.ShareClient(
+            new Uri($"https://{accountName}.file.core.windows.net/{resourceName}"),
+            new RefreshingTokenCredential(token => AcquireTokenAsync(_config.StorageScope, token)),
+            options);
+    }
+
     private static async Task<int> CountItemsAsync(
         Azure.Storage.Files.Shares.ShareDirectoryClient dir, CancellationToken ct)
     {
@@ -342,6 +340,13 @@ public class AzureFileShareProvider : IFileShareProvider
     // ── Internal ARM helpers ────────────────────────────────────────────────
 
     public async Task<string?> GetAccessTokenAsync(string scope, CancellationToken ct = default)
+        => (await AcquireTokenAsync(scope, ct))?.Token;
+
+    /// <summary>
+    /// Exchange the stored refresh token for an access token, keeping the expiry the STS reported.
+    /// Callers that hold a client open for a long time need that expiry to renew in time.
+    /// </summary>
+    private async Task<(string Token, DateTimeOffset ExpiresOn)?> AcquireTokenAsync(string scope, CancellationToken ct = default)
     {
         var credentials = await GetStoredCredentialsAsync();
         if (credentials == null || string.IsNullOrEmpty(credentials.RefreshToken))
@@ -385,7 +390,12 @@ public class AzureFileShareProvider : IFileShareProvider
             credentials.LastRefreshedAt = DateTime.UtcNow;
             await _configurationService.SetAsync(StorageKey, JsonSerializer.Serialize(credentials), global: true);
 
-            return tokenResponse.AccessToken;
+            // Trust expires_in when the STS sends it; an hour is AAD's default for this grant.
+            var lifetime = tokenResponse.ExpiresIn > 0
+                ? TimeSpan.FromSeconds(tokenResponse.ExpiresIn)
+                : TimeSpan.FromHours(1);
+
+            return (tokenResponse.AccessToken, DateTimeOffset.UtcNow + lifetime);
         }
         catch (Exception ex)
         {
@@ -668,6 +678,7 @@ public class AzureFileShareProvider : IFileShareProvider
 
         var discovered = 0;
         var skipped = 0;
+        var upToDate = 0;
         var downloaded = 0;
         var bytesTransferred = 0L;
         var errors = new System.Collections.Concurrent.ConcurrentBag<string>();
@@ -677,10 +688,17 @@ public class AzureFileShareProvider : IFileShareProvider
 
         progress(new SyncProgressUpdate(0, 0, "Discovering..."));
 
+        // Ask for timestamps in the listing so up-to-date files can be recognised without a
+        // per-file GetProperties round-trip.
+        var listOptions = new Azure.Storage.Files.Shares.Models.ShareDirectoryGetFilesAndDirectoriesOptions
+        {
+            Traits = Azure.Storage.Files.Shares.Models.ShareFileTraits.Timestamps
+        };
+
         // Producer: enumerate remote files and push to channel (filtered)
         async Task ProduceAsync(Azure.Storage.Files.Shares.ShareDirectoryClient dir, string localDir, string relBase)
         {
-            await foreach (var item in dir.GetFilesAndDirectoriesAsync(cancellationToken: ct))
+            await foreach (var item in dir.GetFilesAndDirectoriesAsync(listOptions, ct))
             {
                 var rel = relBase.Length == 0 ? item.Name : $"{relBase}/{item.Name}";
                 if (item.IsDirectory)
@@ -696,9 +714,16 @@ public class AzureFileShareProvider : IFileShareProvider
                         Interlocked.Increment(ref skipped);
                         continue;
                     }
+
+                    var localPath = Path.Combine(localDir, item.Name);
+                    if (!request.Force && IsLocalCopyCurrent(localPath, item.FileSize, item.Properties?.LastModified))
+                    {
+                        Interlocked.Increment(ref upToDate);
+                        continue;
+                    }
+
                     Interlocked.Increment(ref discovered);
-                    await channel.Writer.WriteAsync(
-                        (dir.GetFileClient(item.Name), Path.Combine(localDir, item.Name), rel), ct);
+                    await channel.Writer.WriteAsync((dir.GetFileClient(item.Name), localPath, rel), ct);
                 }
             }
         }
@@ -722,17 +747,26 @@ public class AzureFileShareProvider : IFileShareProvider
                     continue;
                 }
 
+                // Download beside the target and rename into place, so an interrupted run can never
+                // leave a right-sized-but-truncated file that the next run would treat as complete.
+                var tempPath = localPath + ".pks-part";
                 try
                 {
                     var dl = await client.DownloadAsync(cancellationToken: ct);
-                    await using var fs = File.OpenWrite(localPath);
-                    await dl.Value.Content.CopyToAsync(fs, ct);
+                    await using (var fs = new FileStream(
+                        tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                    {
+                        await dl.Value.Content.CopyToAsync(fs, ct);
+                    }
+
+                    File.Move(tempPath, localPath, overwrite: true);
                     var done = Interlocked.Increment(ref downloaded);
                     Interlocked.Add(ref bytesTransferred, dl.Value.ContentLength);
                     progress(new SyncProgressUpdate(done, Volatile.Read(ref discovered), rel));
                 }
                 catch (Exception ex)
                 {
+                    TryDelete(tempPath);
                     _logger.LogError(ex, "Failed to download {File}", rel);
                     errors.Add($"Download failed: {rel} — {ex.Message}");
                 }
@@ -742,8 +776,37 @@ public class AzureFileShareProvider : IFileShareProvider
         await Task.WhenAll(new[] { producer }.Concat(consumers));
         result.FilesDownloaded = downloaded;
         result.FilesSkipped += skipped;
+        result.FilesUpToDate += upToDate;
         result.BytesTransferred += bytesTransferred;
         result.Errors.AddRange(errors);
+    }
+
+    /// <summary>
+    /// Decides whether an existing local file can stand in for the remote one, so an interrupted
+    /// sync resumes instead of starting over. Size is the primary signal — the listing always
+    /// carries it — and the remote timestamp is used as a tiebreaker when the service returns one:
+    /// a remote file modified after the local copy was written is re-fetched even at equal size.
+    /// </summary>
+    internal static bool IsLocalCopyCurrent(string localPath, long? remoteSize, DateTimeOffset? remoteModified)
+    {
+        if (remoteSize is not { } size)
+            return false;
+
+        var local = new FileInfo(localPath);
+        if (!local.Exists || local.Length != size)
+            return false;
+
+        // Two seconds of slack: filesystems and the service do not agree on timestamp resolution,
+        // and the local mtime is stamped when the download finished, not when the blob changed.
+        if (remoteModified is { } modified && modified > local.LastWriteTimeUtc.AddSeconds(2))
+            return false;
+
+        return true;
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { File.Delete(path); } catch { /* best effort — a stray .pks-part is harmless */ }
     }
 
     private static Matcher? BuildMatcher(string[] include, string[] exclude)
@@ -834,16 +897,54 @@ public class AzureFileShareProvider : IFileShareProvider
 
     // ── Token credential wrapper for Azure.Storage.Files.Shares SDK ────────
 
-    private sealed class BearerTokenCredential : Azure.Core.TokenCredential
+    /// <summary>
+    /// Mints storage tokens on demand from the stored refresh token, reporting the token's REAL
+    /// expiry so the SDK's bearer policy can refresh before it lapses.
+    /// </summary>
+    /// <remarks>
+    /// The previous implementation captured one token string and reported <c>UtcNow.AddHours(1)</c>
+    /// on every call. That expiry is recomputed each time it is asked, so the SDK's cache never saw
+    /// a token approaching expiry and never refreshed — any operation still running when the real
+    /// token lapsed (an hour in, mid-way through a large sync) died with 401/403. Reporting the
+    /// truth is the whole fix; <c>BearerTokenAuthenticationPolicy</c> does the rest.
+    /// </remarks>
+    private sealed class RefreshingTokenCredential : Azure.Core.TokenCredential
     {
-        private readonly string _token;
+        private readonly Func<CancellationToken, Task<(string Token, DateTimeOffset ExpiresOn)?>> _acquire;
+        private readonly SemaphoreSlim _lock = new(1, 1);
+        private Azure.Core.AccessToken _cached;
 
-        public BearerTokenCredential(string token) => _token = token;
+        /// <summary>Renew this far ahead of expiry, covering clock skew and an in-flight request.</summary>
+        private static readonly TimeSpan RenewBefore = TimeSpan.FromMinutes(5);
+
+        public RefreshingTokenCredential(Func<CancellationToken, Task<(string, DateTimeOffset)?>> acquire)
+            => _acquire = acquire;
 
         public override Azure.Core.AccessToken GetToken(Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
-            => new Azure.Core.AccessToken(_token, DateTimeOffset.UtcNow.AddHours(1));
+            => GetTokenAsync(requestContext, cancellationToken).AsTask().GetAwaiter().GetResult();
 
-        public override ValueTask<Azure.Core.AccessToken> GetTokenAsync(Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
-            => new(new Azure.Core.AccessToken(_token, DateTimeOffset.UtcNow.AddHours(1)));
+        public override async ValueTask<Azure.Core.AccessToken> GetTokenAsync(
+            Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
+        {
+            if (IsFresh(_cached)) return _cached;
+
+            await _lock.WaitAsync(cancellationToken);
+            try
+            {
+                // Another caller may have renewed while we waited — parallel downloads all miss at once.
+                if (IsFresh(_cached)) return _cached;
+
+                var acquired = await _acquire(cancellationToken)
+                    ?? throw new InvalidOperationException(
+                        "Could not refresh the storage access token. Run 'pks fileshare init' to sign in again.");
+
+                _cached = new Azure.Core.AccessToken(acquired.Token, acquired.ExpiresOn);
+                return _cached;
+            }
+            finally { _lock.Release(); }
+        }
+
+        private static bool IsFresh(Azure.Core.AccessToken token)
+            => !string.IsNullOrEmpty(token.Token) && token.ExpiresOn - RenewBefore > DateTimeOffset.UtcNow;
     }
 }

@@ -21,6 +21,13 @@ public class StorageSyncRequest
     public bool DryRun { get; set; }
     public bool Delete { get; set; }
     public bool VerifyChecksum { get; set; }
+
+    /// <summary>
+    /// Re-transfer every matching file even when the local copy already matches the remote one.
+    /// Without this, download resumes: a file whose local size and timestamp still match is left alone.
+    /// </summary>
+    public bool Force { get; set; }
+
     public int MaxParallelism { get; set; } = 4;
     public string[] Include { get; set; } = [];
     public string[] Exclude { get; set; } = [];
@@ -32,6 +39,10 @@ public class SyncResult
     public int FilesUploaded { get; set; }
     public int FilesDeleted { get; set; }
     public int FilesSkipped { get; set; }
+
+    /// <summary>Files left alone because the local copy already matched the remote one.</summary>
+    public int FilesUpToDate { get; set; }
+
     public long BytesTransferred { get; set; }
     public List<string> Errors { get; set; } = new();
     public bool Success => Errors.Count == 0;
