@@ -106,7 +106,13 @@ public class BrainPushServiceTests : TestBase
         return (new BrainPushService(new HttpClient(server), export, paths), server);
     }
 
-    private static PushOptions Options(bool force = false, bool dryRun = false, string? level = null, bool blobs = true) =>
+    private static PushOptions Options(
+        bool force = false,
+        bool dryRun = false,
+        string? level = null,
+        bool blobs = true,
+        TimeSpan wait = default,
+        TimeSpan? poll = null) =>
         new()
         {
             Endpoint = Endpoint,
@@ -115,6 +121,8 @@ public class BrainPushServiceTests : TestBase
             DryRun = dryRun,
             LevelFilter = level,
             IncludeBlobs = blobs,
+            WaitForProjection = wait,
+            ProjectionPollInterval = poll ?? TimeSpan.Zero,
             RetryBaseDelay = TimeSpan.Zero,
         };
 
@@ -130,7 +138,9 @@ public class BrainPushServiceTests : TestBase
 
         run.ChunksUploaded.Should().Be(2);
         run.BlobsUploaded.Should().Be(1);
-        run.Accepted.Should().Be(201, "the fake server counts the events the chunks declared");
+        run.QueuedEvents.Should().Be(201, "the commit reports what the manifest said the chunks hold");
+        run.Queued.Should().Be(2);
+        run.Projection.Should().BeNull("nobody asked to wait for the fold");
         run.Failures.Should().BeEmpty();
         server.Commits.Should().Be(1);
 
@@ -138,6 +148,40 @@ public class BrainPushServiceTests : TestBase
         manifest.Chunks.Should().OnlyContain(c => c.UploadedAt != null && c.SyncId != null);
         manifest.Blobs.Should().OnlyContain(b => b.UploadedAt != null);
         manifest.Endpoint.Should().Be(Endpoint);
+    }
+
+    [Fact]
+    public async Task Waits_for_the_receiver_to_fold_what_it_was_sent()
+    {
+        var (paths, export) = await SeedAsync();
+        var (push, server) = PushServiceFor(paths, export);
+
+        var run = await push.RunAsync(
+            Options(wait: TimeSpan.FromSeconds(30), poll: TimeSpan.Zero), NullPushProgress.Instance);
+
+        // Two chunks queued, one folded per poll: the client must keep asking
+        // rather than take the first answer, which is the whole point of --wait.
+        server.ProjectionPolls.Should().Be(2);
+        run.Projection!.Done.Should().BeTrue();
+        run.Projection.Events.Should().Be(201);
+        run.Projection.ServerMasked.Should().Be(3, "a client-side masking miss is the receiver's to report");
+    }
+
+    [Fact]
+    public async Task Gives_up_waiting_without_failing_the_push()
+    {
+        var (paths, export) = await SeedAsync();
+        var (push, server) = PushServiceFor(paths, export);
+
+        // A deadline shorter than the poll interval: exactly one look, then out.
+        var run = await push.RunAsync(
+            Options(wait: TimeSpan.FromMilliseconds(1), poll: TimeSpan.FromSeconds(30)),
+            NullPushProgress.Instance);
+
+        server.ProjectionPolls.Should().Be(1);
+        run.Projection!.Done.Should().BeFalse();
+        // The bytes are stored either way — a slow fold is not a failed push.
+        run.Failures.Should().BeEmpty();
     }
 
     [Fact]
@@ -336,6 +380,9 @@ public class BrainPushServiceTests : TestBase
             new(StringComparer.Ordinal);
 
         private int _sync;
+        private int _pending;
+
+        public int ProjectionPolls;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
@@ -346,6 +393,8 @@ public class BrainPushServiceTests : TestBase
                 return await SyncAsync(request, ct);
             if (url.EndsWith("/api/brain/v1/sync/commit", StringComparison.Ordinal))
                 return await CommitAsync(request, ct);
+            if (url.EndsWith("/api/brain/v1/projection", StringComparison.Ordinal))
+                return Projection();
 
             return await PutAsync(request, url, ct);
         }
@@ -412,15 +461,37 @@ public class BrainPushServiceTests : TestBase
 
             _ = blobs;
 
+            _pending += chunks.Count;
+
             return Json(HttpStatusCode.OK, new JsonObject
             {
-                ["accepted"] = chunks.Sum(c => c.Events),
-                ["enriched"] = 0,
+                ["queued"] = chunks.Count,
                 ["duplicate"] = 0,
-                ["rejected"] = 0,
-                ["masked"] = 0,
+                ["queuedEvents"] = chunks.Sum(c => c.Events),
+                ["pending"] = _pending,
                 ["days"] = new JsonArray(new JsonNode[] { JsonValue.Create("2026-08-01")! }),
                 ["storageBytes"] = 4096,
+                ["runId"] = "run_test",
+            });
+        }
+
+        /// The fold, as seen from outside: one chunk folded per poll, so a test
+        /// can watch a client wait for it rather than mock the waiting away.
+        private HttpResponseMessage Projection()
+        {
+            ProjectionPolls++;
+            var folded = Math.Min(_pending, ProjectionPolls);
+
+            return Json(HttpStatusCode.OK, new JsonObject
+            {
+                ["logLines"] = _pending,
+                ["projected"] = folded,
+                ["pending"] = _pending - folded,
+                ["dirty"] = 0,
+                ["done"] = folded >= _pending,
+                ["events"] = 201,
+                ["storageBytes"] = 4096,
+                ["serverMasked"] = 3,
             });
         }
 

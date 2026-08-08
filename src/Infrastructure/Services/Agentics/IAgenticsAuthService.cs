@@ -23,4 +23,15 @@ public interface IAgenticsAuthService
     /// <param name="owner">Owner slug for runner-token fallback lookup.</param>
     /// <param name="project">Project slug for runner-token fallback lookup.</param>
     Task<string?> GetTokenAsync(string audience, string? explicitToken, string owner, string project);
+
+    /// <summary>
+    /// Redeems the stored refresh token even when the access token still looks
+    /// valid locally, and saves the result. Returns null when there is nothing
+    /// to refresh or the provider refused.
+    ///
+    /// Needed because "locally valid" and "the server accepts it" are different
+    /// claims: after a 401 the only useful move is a new token, and
+    /// <see cref="GetTokenAsync"/> would hand back the rejected one.
+    /// </summary>
+    Task<string?> ForceRefreshAsync(CancellationToken ct = default);
 }

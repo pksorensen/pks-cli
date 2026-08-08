@@ -193,11 +193,17 @@ services.AddSingleton<PKS.Infrastructure.Services.Claude.IClaudeMarketplaceFetch
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainPathResolver, PKS.Infrastructure.Services.Brain.BrainPathResolver>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainIndexStore, PKS.Infrastructure.Services.Brain.BrainIndexStore>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.ISessionDiscoveryService, PKS.Infrastructure.Services.Brain.SessionDiscoveryService>();
+// Session directories that are not this machine's own — rescued docker volumes.
+// Registered before the sources because all three of them read it.
+services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainRootRegistry, PKS.Infrastructure.Services.Brain.BrainRootRegistry>();
 // ASF sources — one per coding tool, all normalized to the same event stream.
 // Spec: docs/specs/asf/ in the agentic-live-www workspace.
 services.AddSingleton<PKS.Infrastructure.Services.Brain.Asf.IAgentSessionSource, PKS.Infrastructure.Services.Brain.Asf.ClaudeAsfSource>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.Asf.IAgentSessionSource, PKS.Infrastructure.Services.Brain.Asf.CodexAsfSource>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.Asf.IAgentSessionSource, PKS.Infrastructure.Services.Brain.Asf.OpenCodeAsfSource>();
+// Not a fourth source: docker is a *location* a Claude/Codex/opencode store can
+// sit in, not a fourth tool. This only reports what containers left behind.
+services.AddSingleton<PKS.Infrastructure.Services.Brain.Asf.IDockerSessionScanner, PKS.Infrastructure.Services.Brain.Asf.DockerSessionScanner>();
 // Masking runs on the way in, before anything is hashed or written, so a secret
 // never reaches the local firehoses either — not just the uploads.
 services.AddSingleton<PKS.Infrastructure.Services.Brain.Asf.ISecretMasker>(
@@ -211,8 +217,32 @@ services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainExportService, PKS
 // Upload path. The token resolver deliberately bypasses the GitHub-OIDC step in
 // IAgenticsAuthService — the brain API would read an OIDC bearer as an unknown
 // upload token — so CI sets PKS_BRAIN_TOKEN instead.
-services.AddHttpClient<PKS.Infrastructure.Services.Brain.IBrainPushService, PKS.Infrastructure.Services.Brain.BrainPushService>();
+// The 100s default is far too tight for this client: a nightly run PUTs 8 MB
+// sealed chunks and raw blobs, often from a home connection, and the server's
+// commit does a full rollup. A cut-off mid-upload wastes the whole sync.
+services.AddHttpClient<PKS.Infrastructure.Services.Brain.IBrainPushService, PKS.Infrastructure.Services.Brain.BrainPushService>(
+    c => c.Timeout = TimeSpan.FromMinutes(10));
+// The way back. Shares the token resolver and the retry policy with push; the
+// local half of it needs no credential at all.
+services.AddHttpClient<PKS.Infrastructure.Services.Brain.IBrainRestoreService, PKS.Infrastructure.Services.Brain.BrainRestoreService>(
+    c => c.Timeout = TimeSpan.FromMinutes(10));
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainTokenResolver, PKS.Infrastructure.Services.Brain.BrainTokenResolver>();
+// Talking to a receiver that is not agentics.dk: find the API from the host's
+// platform index, find its authorization server from RFC 9728 metadata, log in
+// with the device grant, and keep the result per issuer rather than in the
+// single-account slot `pks agentics init` owns.
+services.AddHttpClient<PKS.Infrastructure.Services.Discovery.IAgenticPlatformDiscovery, PKS.Infrastructure.Services.Discovery.AgenticPlatformDiscovery>(
+    c => c.Timeout = TimeSpan.FromSeconds(10));
+services.AddHttpClient<PKS.Infrastructure.Services.Oidc.IOidcDiscovery, PKS.Infrastructure.Services.Oidc.OidcDiscovery>(
+    c => c.Timeout = TimeSpan.FromSeconds(10));
+// No short timeout here: the device grant polls until the user finishes in the
+// browser, and cutting that off at ten seconds would fail every real login.
+services.AddHttpClient<PKS.Infrastructure.Services.Oidc.IDeviceCodeLogin, PKS.Infrastructure.Services.Oidc.DeviceCodeLogin>();
+// The browser fallback. Keycloak resolves a CIMD client_id at the authorization
+// endpoint only, so a receiver that knows us through our metadata document
+// cannot be logged into with the device grant at all.
+services.AddHttpClient<PKS.Infrastructure.Services.Oidc.ILoopbackAuthCodeLogin, PKS.Infrastructure.Services.Oidc.LoopbackAuthCodeLogin>();
+services.AddSingleton<PKS.Infrastructure.Services.Oidc.IIssuerCredentialStore, PKS.Infrastructure.Services.Oidc.IssuerCredentialStore>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainDaemonService, PKS.Infrastructure.Services.Brain.BrainDaemonService>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainSkillReader, PKS.Infrastructure.Services.Brain.BrainSkillReader>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IFirehoseReader, PKS.Infrastructure.Services.Brain.FirehoseReader>();
@@ -1584,6 +1614,22 @@ app.Configure(config =>
             .WithExample(["brain", "push"])
             .WithExample(["brain", "push", "--dry-run"])
             .WithExample(["brain", "push", "--endpoint", "https://agentics.dk", "--level", "all"]);
+
+        brain.AddCommand<PKS.Commands.Brain.BrainRestoreCommand>("restore")
+            .WithDescription("Bring the raw session files back — from the local blob store, or from your profile with --from-remote")
+            .WithExample(["brain", "restore", "--dry-run"])
+            .WithExample(["brain", "restore", "--from-remote", "--since", "30d"])
+            .WithExample(["brain", "restore", "--kind", "opencode-tool-output", "--in-place"]);
+
+        brain.AddBranch("docker", docker =>
+        {
+            docker.SetDescription("Agent sessions left behind in docker volumes — invisible to every host-path scan");
+            docker.AddCommand<PKS.Commands.Brain.BrainDockerBackupCommand>("backup")
+                .WithDescription("Copy the session data out of agent config volumes onto disk before a prune takes it")
+                .WithExample(["brain", "docker", "backup", "--dry-run"])
+                .WithExample(["brain", "docker", "backup", "--out", "/mnt/bulk/brain-volumes"])
+                .WithExample(["brain", "docker", "backup", "--all", "--volume", "claude-code-config"]);
+        });
 
         brain.AddBranch("daemon", daemon =>
         {

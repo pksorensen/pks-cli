@@ -62,6 +62,16 @@ public sealed record DiscoveredAgentSession(
     DateTime LastModifiedUtc,
     long Bytes)
 {
+    /// Where this copy was read from, when that is not the tool's own directory
+    /// on this machine: `docker:&lt;volume name&gt;` for a rescued container volume.
+    /// Copied onto every event as <see cref="AsfEvent.Origin"/>.
+    ///
+    /// Not a positional parameter, and not part of <see cref="CursorKey"/>: a
+    /// session is the same session wherever the bytes were found, and keying the
+    /// cursor by origin is precisely how the same history would get ingested
+    /// twice.
+    public string? Origin { get; init; }
+
     /// Cursor key: unique across sources, stable across runs.
     public string CursorKey => $"{SourceKind}:{NativeSessionId}";
 

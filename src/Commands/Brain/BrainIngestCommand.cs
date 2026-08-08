@@ -124,6 +124,9 @@ public class BrainIngestCommand : AsyncCommand<BrainIngestSettings>
         t.AddRow("[grey]Files scanned[/]",      run.FilesScanned.ToString("N0"));
         t.AddRow("[grey]Files ingested[/]",     run.FilesIngested.ToString("N0"));
         t.AddRow("[grey]Skipped (up-to-date)[/]", run.FilesSkippedUpToDate.ToString("N0"));
+        if (run.DuplicateCopiesSkipped > 0)
+            t.AddRow("[grey]Duplicate copies[/]",
+                $"{run.DuplicateCopiesSkipped:N0}  [grey](same session found in more than one place)[/]");
         t.AddRow("[grey]Files failed[/]",       run.FilesFailed.ToString("N0"));
         t.AddRow("[grey]Prompts appended[/]",   run.PromptsAppended.ToString("N0"));
         t.AddRow("[grey]Tool calls appended[/]", run.ToolCallsAppended.ToString("N0"));

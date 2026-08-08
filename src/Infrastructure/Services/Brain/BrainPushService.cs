@@ -35,6 +35,7 @@ public sealed class BrainPushService(
     public async Task<PushRun> RunAsync(PushOptions options, IPushProgress progress, CancellationToken ct = default)
     {
         var endpoint = NormalizeEndpoint(options.Endpoint);
+        var apiBase = ResolveApiBase(endpoint, options);
         var run = new PushRun { Endpoint = endpoint, StartedAtUtc = DateTime.UtcNow };
         var manifest = await export.LoadManifestAsync(ct);
 
@@ -76,21 +77,65 @@ public sealed class BrainPushService(
             var batchChunks = Take(chunkQueue, options.BatchSize);
             var batchBlobs = Take(blobQueue, options.BlobBatchSize);
 
-            await PushBatchAsync(endpoint, machine, batchChunks, batchBlobs, options, progress, run, ct);
+            await PushBatchAsync(apiBase, machine, batchChunks, batchBlobs, options, progress, run, ct);
             manifest.UpdatedAt = DateTimeOffset.UtcNow;
             manifest.Endpoint = endpoint;
             await export.SaveManifestAsync(manifest, ct);
         }
+
+        if (options.WaitForProjection > TimeSpan.Zero)
+            run.Projection = await WaitForProjectionAsync(apiBase, options, progress, run, ct);
 
         run.FinishedAtUtc = DateTime.UtcNow;
 
         return run;
     }
 
+    /// Polls until the receiver has folded everything it holds, or the deadline
+    /// passes. A timeout is not a failure and never fails the push: the bytes are
+    /// stored, and the fold will finish on the receiver's own schedule whether we
+    /// are watching or not.
+    private async Task<ProjectionStatus?> WaitForProjectionAsync(
+        string apiBase,
+        PushOptions options,
+        IPushProgress progress,
+        PushRun run,
+        CancellationToken ct)
+    {
+        var deadline = DateTime.UtcNow + options.WaitForProjection;
+        ProjectionStatus? last = null;
+
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            try
+            {
+                var response = await SendAsync(
+                    () => new HttpRequestMessage(HttpMethod.Get, $"{apiBase}/projection"), options, ct);
+                last = await ReadAsync<ProjectionStatus>(response, ct);
+            }
+            catch (BrainPushException ex)
+            {
+                // A receiver that predates this endpoint, or a transient failure
+                // after the data is already stored. Neither is worth failing on.
+                run.Failures.Add($"projection: {ex.Code} — {ex.Message}");
+
+                return last;
+            }
+
+            progress.Projecting(last);
+
+            if (last.Done || DateTime.UtcNow + options.ProjectionPollInterval > deadline) return last;
+
+            await Task.Delay(options.ProjectionPollInterval, ct);
+        }
+    }
+
     // ── One batch: sync → upload the missing → commit ─────────────────────────
 
     private async Task PushBatchAsync(
-        string endpoint,
+        string apiBase,
         string machine,
         List<PendingChunk> chunks,
         List<PendingBlob> blobs,
@@ -104,11 +149,23 @@ public sealed class BrainPushService(
         // only repeat the second's outcome.
         for (var attempt = 0; attempt < 2 && (chunks.Count > 0 || blobs.Count > 0); attempt++)
         {
-            var sync = await OpenSyncAsync(endpoint, machine, chunks, blobs, options, ct);
+            var sync = await OpenSyncAsync(apiBase, machine, chunks, blobs, options, ct);
             run.Syncs++;
             progress.SyncOpened(sync.SyncId, sync.MissingChunks.Count, sync.MissingBlobs.Count);
-            run.ChunksKnown += chunks.Count - sync.MissingChunks.Count;
-            run.BlobsKnown += blobs.Count - sync.MissingBlobs.Count;
+            // Only on the first attempt. A retry re-offers chunks this batch
+            // already uploaded, and the server now answers "already have it" for
+            // every one of them — counting that would report the same chunk as
+            // both uploaded and already-there, and push the totals past what was
+            // offered.
+            if (attempt == 0)
+            {
+                run.ChunksKnown += chunks.Count - sync.MissingChunks.Count;
+                run.BlobsKnown += blobs.Count - sync.MissingBlobs.Count;
+                // The bulk of a re-push settles right here, before a single byte
+                // moves: progress that only tracked uploads would sit at zero
+                // through the fastest part of the run.
+                progress.Advanced(Snapshot(run));
+            }
 
             var missingChunks = sync.MissingChunks.ToHashSet(StringComparer.Ordinal);
             var missingBlobs = sync.MissingBlobs.ToHashSet(StringComparer.Ordinal);
@@ -117,7 +174,7 @@ public sealed class BrainPushService(
             foreach (var pending in chunks.Where(c => missingChunks.Contains(c.Chunk.ChunkHash)))
             {
                 ct.ThrowIfCancellationRequested();
-                if (!await UploadAsync("chunk", endpoint, sync.SyncId, pending.Chunk.ChunkHash, pending.Path,
+                if (!await UploadAsync("chunk", apiBase, sync.SyncId, pending.Chunk.ChunkHash, pending.Path,
                         options, progress, run, ct))
                 {
                     dropped.Add(pending.Chunk.ChunkHash);
@@ -127,7 +184,7 @@ public sealed class BrainPushService(
             foreach (var pending in blobs.Where(b => missingBlobs.Contains(b.Blob.Sha)))
             {
                 ct.ThrowIfCancellationRequested();
-                if (!await UploadAsync("blob", endpoint, sync.SyncId, pending.Blob.Sha, pending.Path,
+                if (!await UploadAsync("blob", apiBase, sync.SyncId, pending.Blob.Sha, pending.Path,
                         options, progress, run, ct))
                 {
                     dropped.Add(pending.Blob.Sha);
@@ -140,15 +197,18 @@ public sealed class BrainPushService(
                 // session can never commit. Drop them and open a clean one; the
                 // chunks that did upload are already stored and come back as
                 // known, so the retry costs a round trip, not a re-upload.
+                run.ChunksDropped += chunks.Count(c => dropped.Contains(c.Chunk.ChunkHash));
+                run.BlobsDropped += blobs.Count(b => dropped.Contains(b.Blob.Sha));
                 chunks = chunks.Where(c => !dropped.Contains(c.Chunk.ChunkHash)).ToList();
                 blobs = blobs.Where(b => !dropped.Contains(b.Blob.Sha)).ToList();
+                progress.Advanced(Snapshot(run));
                 continue;
             }
 
             CommitResult result;
             try
             {
-                result = await CommitAsync(endpoint, sync.SyncId, options, ct);
+                result = await CommitAsync(apiBase, sync.SyncId, options, ct);
             }
             catch (BrainPushException ex) when (ex.Code is "sync_expired" or "chunks_missing" && attempt == 0)
             {
@@ -157,11 +217,13 @@ public sealed class BrainPushService(
             }
 
             progress.Committed(result);
-            run.Accepted += result.Accepted;
-            run.Enriched += result.Enriched;
-            run.Duplicate += result.Duplicate;
-            run.Rejected += result.Rejected;
-            run.Masked += result.Masked;
+            run.Queued += result.Queued;
+            run.QueuedDuplicate += result.Duplicate;
+            run.QueuedEvents += result.QueuedEvents;
+            // Not accumulated: `pending` is the receiver's whole backlog, so the
+            // last commit's answer is the current one. Summing it would count the
+            // same unfolded chunks once per batch.
+            run.Pending = result.Pending;
             run.StorageBytes = result.StorageBytes;
             foreach (var day in result.Days) run.Days.Add(day);
 
@@ -174,7 +236,7 @@ public sealed class BrainPushService(
     }
 
     private async Task<SyncResponse> OpenSyncAsync(
-        string endpoint,
+        string apiBase,
         string machine,
         List<PendingChunk> chunks,
         List<PendingBlob> blobs,
@@ -205,11 +267,13 @@ public sealed class BrainPushService(
                 Kind = b.Blob.Kind,
                 Src = b.Blob.Src,
                 Bytes = b.Blob.Bytes,
+                Origin = b.Blob.Origin,
+                CapturedAt = b.Blob.CapturedAt.ToString("O"),
             }).ToList(),
         };
 
         var response = await SendAsync(
-            () => new HttpRequestMessage(HttpMethod.Post, $"{endpoint}/api/brain/v1/sync")
+            () => new HttpRequestMessage(HttpMethod.Post, $"{apiBase}/sync")
             {
                 Content = JsonContent.Create(body, options: Json),
             },
@@ -218,10 +282,10 @@ public sealed class BrainPushService(
         return await ReadAsync<SyncResponse>(response, ct);
     }
 
-    private async Task<CommitResult> CommitAsync(string endpoint, string syncId, PushOptions options, CancellationToken ct)
+    private async Task<CommitResult> CommitAsync(string apiBase, string syncId, PushOptions options, CancellationToken ct)
     {
         var response = await SendAsync(
-            () => new HttpRequestMessage(HttpMethod.Post, $"{endpoint}/api/brain/v1/sync/commit")
+            () => new HttpRequestMessage(HttpMethod.Post, $"{apiBase}/sync/commit")
             {
                 Content = JsonContent.Create(new { syncId }, options: Json),
             },
@@ -235,7 +299,7 @@ public sealed class BrainPushService(
     /// credential would just repeat the refusal.
     private async Task<bool> UploadAsync(
         string kind,
-        string endpoint,
+        string apiBase,
         string syncId,
         string hash,
         string path,
@@ -264,7 +328,7 @@ public sealed class BrainPushService(
             response = await SendAsync(
                 () =>
                 {
-                    var request = new HttpRequestMessage(HttpMethod.Put, $"{endpoint}/api/brain/v1/{kind}/{hash}")
+                    var request = new HttpRequestMessage(HttpMethod.Put, $"{apiBase}/{kind}/{hash}")
                     {
                         // Re-opened per attempt: a retried request cannot reuse a
                         // stream the failed one already drained.
@@ -303,9 +367,20 @@ public sealed class BrainPushService(
             else { run.BlobsUploaded++; run.BlobBytesUploaded += bytes; }
         }
         progress.Uploaded(kind, hash, duplicate);
+        progress.Advanced(Snapshot(run));
 
         return true;
     }
+
+    /// Chunks and blobs that are no longer in question, either way. Files that
+    /// were already gone when the batch was selected are deliberately absent:
+    /// they never counted towards `ChunksConsidered` either.
+    private static PushProgressSnapshot Snapshot(PushRun run) => new(
+        ChunksSettled: run.ChunksKnown + run.ChunksUploaded + run.ChunksDropped,
+        ChunksTotal: run.ChunksConsidered,
+        BlobsSettled: run.BlobsKnown + run.BlobsUploaded + run.BlobsDropped,
+        BlobsTotal: run.BlobsConsidered,
+        BytesUploaded: run.BytesUploaded + run.BlobBytesUploaded);
 
     // ── Transport ────────────────────────────────────────────────────────────
 
@@ -319,6 +394,7 @@ public sealed class BrainPushService(
         CancellationToken ct)
     {
         var delay = options.RetryBaseDelay;
+        var reauthenticated = false;
 
         for (var attempt = 1; ; attempt++)
         {
@@ -342,6 +418,28 @@ public sealed class BrainPushService(
             if (response.IsSuccessStatusCode) return response;
 
             var status = (int)response.StatusCode;
+
+            // A 401 halfway through a long push means the access token aged out,
+            // not that the account is wrong. Swap in a fresh one and repeat the
+            // request — once. A second 401 is a real rejection, and retrying it
+            // would only hammer the login endpoint.
+            if (status == 401 && !reauthenticated && options.Reauthenticate is { } reauth)
+            {
+                reauthenticated = true;
+                response.Dispose();
+                var fresh = await reauth(ct);
+                if (fresh is { Length: > 0 })
+                {
+                    http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", fresh);
+                    attempt--; // the expired credential should not cost a retry budget
+
+                    continue;
+                }
+
+                throw new BrainPushException(401, "unauthorized",
+                    "The credential expired and could not be renewed. Run `pks agentics init` again.");
+            }
+
             var retryable = status >= 500 || status == 429;
             if (retryable && attempt < options.MaxAttempts)
             {
@@ -365,6 +463,7 @@ public sealed class BrainPushService(
     {
         var status = (int)response.StatusCode;
         string code = "http_" + status, message = response.ReasonPhrase ?? "Request failed.";
+        long? quotaBytes = null, quotaUsedBytes = null;
         try
         {
             var body = await response.Content.ReadAsStringAsync(ct);
@@ -373,6 +472,8 @@ public sealed class BrainPushService(
                 var error = JsonSerializer.Deserialize<ErrorBody>(body, Json);
                 if (!string.IsNullOrEmpty(error?.Code)) code = error.Code;
                 if (!string.IsNullOrEmpty(error?.Message)) message = error.Message;
+                quotaBytes = error?.QuotaBytes;
+                quotaUsedBytes = error?.QuotaUsedBytes;
             }
         }
         catch (JsonException)
@@ -384,7 +485,11 @@ public sealed class BrainPushService(
             response.Dispose();
         }
 
-        return new BrainPushException(status, code, message);
+        return new BrainPushException(status, code, message)
+        {
+            QuotaBytes = quotaBytes,
+            QuotaUsedBytes = quotaUsedBytes,
+        };
     }
 
     private static async Task<T> ReadAsync<T>(HttpResponseMessage response, CancellationToken ct)
@@ -418,6 +523,13 @@ public sealed class BrainPushService(
                 continue;
             }
 
+            if (TooLarge(chunk.Bytes, options.MaxChunkBytes))
+            {
+                run.Failures.Add(
+                    $"chunk {Short(chunk.ChunkHash)}: {chunk.Bytes} bytes exceeds the receiver's {options.MaxChunkBytes}-byte limit");
+                continue;
+            }
+
             selected.Add(new PendingChunk(chunk, full));
         }
 
@@ -448,6 +560,13 @@ public sealed class BrainPushService(
                 continue;
             }
 
+            if (TooLarge(blob.StoredBytes, options.MaxBlobBytes))
+            {
+                run.Failures.Add(
+                    $"blob {Short(blob.Sha)}: {blob.StoredBytes} bytes exceeds the receiver's {options.MaxBlobBytes}-byte limit");
+                continue;
+            }
+
             selected.Add(new PendingBlob(blob, path));
         }
 
@@ -455,6 +574,18 @@ public sealed class BrainPushService(
     }
 
     // ── Small helpers ────────────────────────────────────────────────────────
+
+    /// A limit of zero means the receiver never told us one, which is not the
+    /// same as "no bytes allowed".
+    private static bool TooLarge(long bytes, long limit) => limit > 0 && bytes > limit;
+
+    /// Discovery wins; the conventional mount is the fallback. A discovered base
+    /// was already checked to be same-origin with the server the user named, so
+    /// there is nothing left to validate here.
+    private static string ResolveApiBase(string endpoint, PushOptions options)
+        => options.ApiBase is { Length: > 0 } discovered
+            ? discovered.TrimEnd('/')
+            : endpoint + PushOptions.ConventionalApiPath;
 
     public static string NormalizeEndpoint(string? endpoint)
     {
@@ -497,6 +628,11 @@ public sealed class BrainPushService(
     {
         [JsonPropertyName("code")] public string? Code { get; set; }
         [JsonPropertyName("message")] public string? Message { get; set; }
+
+        /// Present on `quota_exceeded`. The ceiling is per user, so "full" on its
+        /// own does not tell you which number you hit.
+        [JsonPropertyName("quotaBytes")] public long? QuotaBytes { get; set; }
+        [JsonPropertyName("quotaUsedBytes")] public long? QuotaUsedBytes { get; set; }
     }
 
     private sealed class SyncRequest
@@ -529,5 +665,13 @@ public sealed class BrainPushService(
         [JsonPropertyName("kind")] public string Kind { get; set; } = "";
         [JsonPropertyName("src")] public string? Src { get; set; }
         [JsonPropertyName("bytes")] public long Bytes { get; set; }
+
+        /// Basename and capture time travel with the blob because the receiver
+        /// stores content-addressed bytes and nothing else. Without them a
+        /// restore onto a fresh machine could prove a sha exists but not that it
+        /// is last Tuesday's opencode tool output — and the machine that knew is
+        /// the one being restored.
+        [JsonPropertyName("origin")] public string? Origin { get; set; }
+        [JsonPropertyName("capturedAt")] public string? CapturedAt { get; set; }
     }
 }

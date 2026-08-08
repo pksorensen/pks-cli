@@ -24,6 +24,12 @@ public sealed class IngestRun
     public int FilesSkippedUpToDate { get; set; }
     public int FilesFailed { get; set; }
 
+    /// Extra copies of an already-discovered session, dropped before reading —
+    /// the same history present both on the host and in a rescued docker volume.
+    /// Reported rather than merely counted: the firehoses are append-only, so this
+    /// number is how many duplicated prompt/tool rows did *not* get written.
+    public int DuplicateCopiesSkipped { get; set; }
+
     public long PromptsAppended { get; set; }
     public long ToolCallsAppended { get; set; }
     public long FileOpsAppended { get; set; }

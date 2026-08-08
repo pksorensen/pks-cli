@@ -60,6 +60,14 @@ public sealed class BrainExportService : IBrainExportService
             foreach (var session in source.Discover(options.ProjectFilter))
                 discovered.Add((source, session));
         }
+
+        // Two copies of one session share a CursorKey, so exporting both would
+        // write the same events into two chunks and then have the second copy
+        // overwrite the first's cursor — leaving the manifest describing a session
+        // that was exported from a path it no longer refers to. One copy, chosen
+        // deterministically, keeps the chunk hashes reproducible too.
+        discovered = AgentSessionDedupe.OnePerSession(discovered, out var duplicateCopies);
+        run.DuplicateCopiesSkipped = duplicateCopies;
         discovered.Sort((a, b) => string.CompareOrdinal(a.Session.CursorKey, b.Session.CursorKey));
         run.SessionsScanned = discovered.Count;
         progress.Discovered(discovered.Count);
@@ -209,7 +217,7 @@ public sealed class BrainExportService : IBrainExportService
 
             if (options.IncludeBlobs)
             {
-                var blob = ArchiveSessionBlob(source, session, options, manifest, run);
+                var blob = ArchiveSessionBlob(source, session, options, manifest, run, progress);
                 if (blob is not null)
                 {
                     record.BlobSha = blob;
@@ -222,9 +230,16 @@ public sealed class BrainExportService : IBrainExportService
 
         foreach (var writer in writers.Values) SealWriter(writer);
 
+        // ── the raw-source backlog ────────────────────────────────────────────
+        // Announced even when empty: "0 to archive" is information, and a caller
+        // that only hears about non-empty passes cannot tell a finished phase
+        // from one that never started.
+        progress.ArchivingBacklog(blobOnly.Count);
         foreach (var (source, session) in blobOnly)
         {
-            var blob = ArchiveSessionBlob(source, session, options, manifest, run);
+            ct.ThrowIfCancellationRequested();
+
+            var blob = ArchiveSessionBlob(source, session, options, manifest, run, progress);
             if (blob is not null && manifest.Cursors.TryGetValue(session.CursorKey, out var cursor))
             {
                 cursor.BlobSha = blob;
@@ -233,6 +248,7 @@ public sealed class BrainExportService : IBrainExportService
         }
 
         // ── the 7-day rescue ──────────────────────────────────────────────────
+        progress.Finishing();
         if (options.IncludeBlobs)
         {
             ArchiveOpenCodeSpills(manifest, run);
@@ -255,16 +271,21 @@ public sealed class BrainExportService : IBrainExportService
         DiscoveredAgentSession session,
         ExportOptions options,
         ExportManifest manifest,
-        ExportRun run)
+        ExportRun run,
+        IExportProgress progress)
     {
         // A session still being written is archived on the next run instead. See
-        // ExportOptions.BlobQuietPeriod for why.
+        // ExportOptions.BlobQuietPeriod for why. Deliberately before the progress
+        // callback: a deferral is not work, and reporting it as work in progress
+        // would make the display lie about what the disk is doing.
         if (DateTime.UtcNow - session.LastModifiedUtc < options.BlobQuietPeriod)
         {
             run.BlobsDeferred++;
 
             return null;
         }
+
+        progress.ArchivingBlob(session.CursorKey, session.Bytes);
 
         var kind = source.Kind switch
         {
@@ -295,6 +316,13 @@ public sealed class BrainExportService : IBrainExportService
             run.Failures.Add($"blob {session.CursorKey}: {ex.Message}");
 
             return null;
+        }
+        finally
+        {
+            // Paired with ArchivingBlob on every path, failures included: a
+            // counter that only advances on success turns one unreadable file
+            // into a bar that never reaches the end.
+            progress.BlobArchived(session.CursorKey);
         }
     }
 

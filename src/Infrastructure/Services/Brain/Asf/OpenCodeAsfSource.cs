@@ -22,12 +22,17 @@ namespace PKS.Infrastructure.Services.Brain.Asf;
 public sealed class OpenCodeAsfSource : IAgentSessionSource
 {
     private readonly IBrainPathResolver _paths;
+    private readonly IBrainRootRegistry? _roots;
 
-    public OpenCodeAsfSource(IBrainPathResolver paths) => _paths = paths;
+    public OpenCodeAsfSource(IBrainPathResolver paths, IBrainRootRegistry? roots = null)
+    {
+        _paths = paths;
+        _roots = roots;
+    }
 
     public string Kind => AsfSource.OpenCode;
 
-    public bool IsAvailable => File.Exists(_paths.OpenCodeDbPath);
+    public bool IsAvailable => Databases().Any();
 
     public string Location => _paths.OpenCodeDbPath;
 
@@ -45,9 +50,39 @@ public sealed class OpenCodeAsfSource : IAgentSessionSource
 
     public IEnumerable<DiscoveredAgentSession> Discover(string? projectFilter = null)
     {
-        if (!File.Exists(_paths.OpenCodeDbPath)) yield break;
+        foreach (var (db, origin) in Databases())
+        {
+            foreach (var session in DiscoverIn(db, origin, projectFilter))
+                yield return session;
+        }
+    }
 
-        using var conn = OpenReadOnly(_paths.OpenCodeDbPath);
+    /// The host database, then one per registered rescued volume that has one.
+    private IEnumerable<(string Db, string? Origin)> Databases()
+    {
+        if (File.Exists(_paths.OpenCodeDbPath)) yield return (_paths.OpenCodeDbPath, null);
+
+        foreach (var root in _roots?.Usable() ?? [])
+        {
+            foreach (var candidate in new[]
+                     {
+                         Path.Combine(root.Path, "opencode.db"),
+                         Path.Combine(root.Path, "share", "opencode", "opencode.db"),
+                         Path.Combine(root.Path, ".local", "share", "opencode", "opencode.db"),
+                     })
+            {
+                if (!File.Exists(candidate)) continue;
+
+                yield return (candidate, root.Origin);
+
+                break;
+            }
+        }
+    }
+
+    private IEnumerable<DiscoveredAgentSession> DiscoverIn(string dbPath, string? origin, string? projectFilter)
+    {
+        using var conn = OpenReadOnly(dbPath);
         using var cmd = conn.CreateCommand();
         cmd.CommandText =
             """
@@ -85,11 +120,14 @@ public sealed class OpenCodeAsfSource : IAgentSessionSource
                 // DiscoveredAgentSession.BackingFile is null for these — the blob
                 // backup synthesizes a per-session dump instead of copying a 38 MB
                 // database once per session.
-                $"{_paths.OpenCodeDbPath}#{sessionId}",
+                $"{dbPath}#{sessionId}",
                 updated > 0
                     ? DateTimeOffset.FromUnixTimeMilliseconds(updated).UtcDateTime
-                    : File.GetLastWriteTimeUtc(_paths.OpenCodeDbPath),
-                bytes);
+                    : File.GetLastWriteTimeUtc(dbPath),
+                bytes)
+            {
+                Origin = origin,
+            };
         }
     }
 
@@ -106,7 +144,7 @@ public sealed class OpenCodeAsfSource : IAgentSessionSource
         if (row is null) yield break;
 
         var builder = new AsfEventBuilder(
-            masker, Kind, row.Version, session.NativeSessionId, session.ProjectRoot);
+            masker, Kind, row.Version, session.NativeSessionId, session.ProjectRoot, session.Origin);
 
         var created = DateTimeOffset.FromUnixTimeMilliseconds(row.TimeCreated);
         var start = builder.Begin(AsfKind.SessionStart, created);

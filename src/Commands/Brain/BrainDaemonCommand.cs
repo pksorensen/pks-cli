@@ -22,6 +22,10 @@ public sealed class BrainDaemonInstallSettings : BrainSettings
     [Description("Local time of day to run, HH:MM. Default 03:30.")]
     public string? At { get; set; }
 
+    [CommandOption("-t|--token <TOKEN>")]
+    [Description("Upload token to bake into the job. A scheduler sees neither your shell nor your profile, so without this the nightly push has no credential.")]
+    public string? Token { get; set; }
+
     [CommandOption("--exe <PATH>")]
     [Description("The pks executable the job should call. Defaults to the running one, which is wrong when pks is launched through a wrapper.")]
     public string? Exe { get; set; }
@@ -80,6 +84,7 @@ public sealed class BrainDaemonInstallCommand(IBrainDaemonService daemon) : Asyn
             At = at,
             IncludeIngest = !settings.NoIngest,
             ExecutablePath = settings.Exe,
+            Token = settings.Token?.Trim(),
             Force = settings.Force,
         };
 
@@ -95,7 +100,13 @@ public sealed class BrainDaemonInstallCommand(IBrainDaemonService daemon) : Asyn
 
         if (settings.DryRun)
         {
-            AnsiConsole.Write(new Panel(Markup.Escape(plan.ScriptBody.TrimEnd()))
+            // Never print the token, not even back to the person who just typed
+            // it: dry-run output is what ends up pasted into an issue.
+            var scriptBody = options.Token is { Length: > 0 } t
+                ? plan.ScriptBody.Replace(t, "bkt_…")
+                : plan.ScriptBody;
+
+            AnsiConsole.Write(new Panel(Markup.Escape(scriptBody.TrimEnd()))
                 .Header(Markup.Escape(plan.ScriptPath)).BorderColor(Color.Grey));
             foreach (var (path, body) in plan.Units)
             {
@@ -147,6 +158,13 @@ public sealed class BrainDaemonInstallCommand(IBrainDaemonService daemon) : Asyn
         }
 
         AnsiConsole.MarkupLine("[green]Installed.[/] Check it with [bold]pks brain daemon status[/].");
+        if (options.Token is null or { Length: 0 })
+        {
+            AnsiConsole.MarkupLine(
+                "[grey]No [/][bold]--token[/][grey]: the job will fall back to the credentials from [/][bold]pks agentics init[/][grey], "
+                + "which a scheduler can only read if they are still valid at 03:30. Mint an upload token on your profile "
+                + "and re-run with [/][bold]--token[/][grey] if the pushes start failing.[/]");
+        }
         if (level != AsfLevel.Full)
         {
             AnsiConsole.MarkupLine(

@@ -352,7 +352,13 @@ public class ClaudeAsfSourceGoldenTests : AsfSourceGoldenTestBase
 [Trait("Speed", "Fast")]
 public class CodexAsfSourceGoldenTests : AsfSourceGoldenTestBase
 {
+    /// The thread the fixture rollout belongs to. Resuming it would write a second
+    /// rollout carrying this same value — which is why it is not the identity.
     private const string SessionId = "cx-1";
+
+    /// The fixture rollout's own `payload.id` — one per file, and the identity.
+    private const string RolloutId = "rollout-1";
+
     private const string ProjectRoot = "/workspaces/test-fixture";
 
     private static readonly string[] Lines =
@@ -515,22 +521,24 @@ public class CodexAsfSourceGoldenTests : AsfSourceGoldenTestBase
     }
 
     [Fact]
-    public async Task Discover_prefers_the_rollouts_own_session_id_over_the_filename()
+    public async Task Discover_prefers_the_rollouts_own_id_over_the_filename()
     {
         var home = CreateTempDirectory();
         var day = Path.Combine(home, ".codex", "sessions", "2026", "01", "01");
         Directory.CreateDirectory(day);
-        // Deliberately a filename that does not match the session_id inside: a copied
-        // or renamed rollout must not mint a second session.
+        // Deliberately a filename that does not match the id inside: a copied or
+        // renamed rollout must not mint a second session.
         await File.WriteAllTextAsync(
             Path.Combine(day, "rollout-renamed-by-hand.jsonl"), string.Join('\n', Lines) + "\n");
 
         var found = new CodexAsfSource(new BrainPathResolver(home)).Discover().ToList();
 
         found.Should().ContainSingle();
-        found[0].NativeSessionId.Should().Be(SessionId);
+        // `payload.id`, not `payload.session_id` — the latter names the thread, and
+        // every resumed run of that thread repeats it while holding new turns.
+        found[0].NativeSessionId.Should().Be(RolloutId);
         found[0].ProjectRoot.Should().Be(ProjectRoot);
-        found[0].CursorKey.Should().Be("codex:cx-1");
+        found[0].CursorKey.Should().Be("codex:rollout-1");
     }
 }
 

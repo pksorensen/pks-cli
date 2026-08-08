@@ -36,6 +36,14 @@ public sealed class DaemonOptions
     /// Path to the pks executable the job should call. Defaults to this process.
     public string? ExecutablePath { get; init; }
 
+    /// Upload token to bake into the generated script as `PKS_BRAIN_TOKEN`.
+    ///
+    /// A scheduled job inherits neither your login shell nor your profile, so a
+    /// token you exported by hand is invisible to it and every nightly run 401s.
+    /// When this is set the script carries the token itself and is written
+    /// owner-only.
+    public string? Token { get; init; }
+
     public bool Force { get; init; }
 }
 

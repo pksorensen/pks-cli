@@ -37,9 +37,15 @@ public static class AsfEventId
     }
 
     /// sha256 over the canonical JSON of the fully-masked, unredacted event with
-    /// `id`, `level` and `serverMasked` removed. `level` is excluded precisely so
-    /// the id is level-independent; `serverMasked` is a receiver annotation that
-    /// must not change identity.
+    /// `id`, `level`, `origin` and `serverMasked` removed. `level` is excluded
+    /// precisely so the id is level-independent; `serverMasked` is a receiver
+    /// annotation that must not change identity; `origin` records which *copy* of
+    /// a session was read, and two copies of one session are one event.
+    ///
+    /// Anything added to <see cref="AsfEvent"/> that describes the reading rather
+    /// than the session belongs on this list. Forgetting it is how a session
+    /// rescued from a docker volume ends up counted twice next to the same
+    /// session read from the host.
     public static string ContentHash(AsfEvent fullEvent)
     {
         var node = System.Text.Json.JsonSerializer.SerializeToNode(fullEvent, CanonicalJson.SerializerOptions)
@@ -48,6 +54,7 @@ public static class AsfEventId
 
         node.Remove("id");
         node.Remove("level");
+        node.Remove("origin");
         node.Remove("serverMasked");
 
         return CanonicalJson.Sha256Hex(node);

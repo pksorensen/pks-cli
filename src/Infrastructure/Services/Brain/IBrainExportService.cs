@@ -78,6 +78,11 @@ public sealed class ExportRun
     public int SessionsSkipped { get; set; }
     public int SessionsFailed { get; set; }
 
+    /// Extra copies of an already-discovered session, dropped before export —
+    /// typically the same session present both on the host and in a rescued
+    /// docker volume. See AgentSessionDedupe.
+    public int DuplicateCopiesSkipped { get; set; }
+
     public long EventsWritten { get; set; }
 
     /// Events the cursor had already exported at this level or higher. The number
@@ -114,6 +119,24 @@ public interface IExportProgress
     void Filtered(int eligible, int skipped);
     void Finished(string sessionKey, long eventsWritten, bool failed);
     void Sealing(ChunkManifest chunk);
+
+    /// Before a raw source file is read into the blob store. `bytes` is the size
+    /// of the source: without it, a 600 MB transcript looks exactly like a 6 KB
+    /// one that hung.
+    void ArchivingBlob(string sessionKey, long bytes);
+
+    /// After that write, whether or not it stored anything new.
+    void BlobArchived(string sessionKey);
+
+    /// The catch-up pass over sessions whose events shipped on an earlier run but
+    /// whose raw bytes never did. On a first `--level all` run this is the
+    /// longest phase of the export by an order of magnitude — and it used to run
+    /// entirely off-screen, after the only progress bar had reached 100%.
+    void ArchivingBacklog(int sessions);
+
+    /// Spill rescue and prune. Bounded work, but it too runs after the last bar
+    /// fills, so it needs to say so rather than look like a stall.
+    void Finishing();
 }
 
 public sealed class NullExportProgress : IExportProgress
@@ -123,6 +146,10 @@ public sealed class NullExportProgress : IExportProgress
     public void Filtered(int eligible, int skipped) { }
     public void Finished(string sessionKey, long eventsWritten, bool failed) { }
     public void Sealing(ChunkManifest chunk) { }
+    public void ArchivingBlob(string sessionKey, long bytes) { }
+    public void BlobArchived(string sessionKey) { }
+    public void ArchivingBacklog(int sessions) { }
+    public void Finishing() { }
 }
 
 /// `~/.pks-cli/brain/export/manifest.json` — the authority on what has been

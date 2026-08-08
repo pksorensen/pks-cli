@@ -16,26 +16,77 @@ namespace PKS.Infrastructure.Services.Brain.Asf;
 public sealed class CodexAsfSource : IAgentSessionSource
 {
     private readonly IBrainPathResolver _paths;
+    private readonly IBrainRootRegistry? _roots;
 
-    public CodexAsfSource(IBrainPathResolver paths) => _paths = paths;
+    public CodexAsfSource(IBrainPathResolver paths, IBrainRootRegistry? roots = null)
+    {
+        _paths = paths;
+        _roots = roots;
+    }
 
     public string Kind => AsfSource.Codex;
 
-    public bool IsAvailable =>
-        Directory.Exists(_paths.CodexSessionsRoot) || Directory.Exists(_paths.CodexArchivedSessionsRoot);
+    public bool IsAvailable => Roots().Any();
 
     public string Location => _paths.CodexSessionsRoot;
 
     public IEnumerable<DiscoveredAgentSession> Discover(string? projectFilter = null)
     {
+        foreach (var (root, origin, rolloutNamesOnly) in Roots())
+        {
+            foreach (var session in DiscoverIn(root, origin, rolloutNamesOnly, projectFilter))
+                yield return session;
+        }
+    }
+
+    /// <returns>
+    /// The host's two Codex directories, then the same two under every registered
+    /// rescued volume.
+    /// </returns>
+    private IEnumerable<(string Dir, string? Origin, bool RolloutNamesOnly)> Roots()
+    {
         foreach (var root in new[] { _paths.CodexSessionsRoot, _paths.CodexArchivedSessionsRoot })
         {
-            if (!Directory.Exists(root)) continue;
+            if (Directory.Exists(root)) yield return (root, null, false);
+        }
 
+        foreach (var root in _roots?.Usable() ?? [])
+        {
+            foreach (var sub in new[]
+                     {
+                         "sessions",
+                         "archived_sessions",
+                         Path.Combine(".codex", "sessions"),
+                         Path.Combine(".codex", "archived_sessions"),
+                     })
+            {
+                var dir = Path.Combine(root.Path, sub);
+                if (Directory.Exists(dir)) yield return (dir, root.Origin, true);
+            }
+        }
+    }
+
+    private IEnumerable<DiscoveredAgentSession> DiscoverIn(
+        string root,
+        string? origin,
+        bool rolloutNamesOnly,
+        string? projectFilter)
+    {
+        {
             foreach (var file in Directory
                 .EnumerateFiles(root, "*.jsonl", SearchOption.AllDirectories)
                 .OrderBy(f => f, StringComparer.Ordinal))
             {
+                // Every Claude config volume also has a `sessions/` directory, and
+                // it is Claude's, not Codex's. The loop below yields a session even
+                // when the `session_meta` peek finds nothing — filename fallback,
+                // slug `-unknown` — so without this guard a rescued Claude volume
+                // would ingest its own files a second time, as codex sessions, with
+                // different ids. On the host the directory is unambiguous, so the
+                // guard applies only to rescued roots.
+                if (rolloutNamesOnly &&
+                    !Path.GetFileName(file).StartsWith("rollout-", StringComparison.Ordinal)) continue;
+
                 var meta = SourceReadHelpers.PeekFirstObject(
                     file,
                     o => SourceReadHelpers.Str(o["type"]) == "session_meta");
@@ -51,13 +102,25 @@ public sealed class CodexAsfSource : IAgentSessionSource
                 try { info = new FileInfo(file); }
                 catch (IOException) { continue; }
 
-                // A rollout's own session_id is authoritative — the filename repeats
-                // it, but a copied or renamed file would otherwise mint a new session.
-                var sessionId = SourceReadHelpers.Str(payload?["session_id"])
+                // `payload.id` is the rollout's own identity and is what the
+                // filename repeats, so a copied or renamed file still resolves to
+                // the same session.
+                //
+                // Not `session_id`, which newer Codex also writes: that names the
+                // *thread*, and resuming a thread starts a new rollout file that
+                // carries the old session_id while containing entirely new turns.
+                // Three files here share one session_id; keying on it made two of
+                // them look like duplicates of the third and dropped 1.1 MB of real
+                // history. Same thread, different runs — not copies.
+                var sessionId = SourceReadHelpers.Str(payload?["id"])
+                    ?? SourceReadHelpers.Str(payload?["session_id"])
                     ?? Path.GetFileNameWithoutExtension(file);
 
                 yield return new DiscoveredAgentSession(
-                    Kind, sessionId, slug, cwd, file, info.LastWriteTimeUtc, info.Length);
+                    Kind, sessionId, slug, cwd, file, info.LastWriteTimeUtc, info.Length)
+                {
+                    Origin = origin,
+                };
             }
         }
     }
@@ -96,7 +159,8 @@ public sealed class CodexAsfSource : IAgentSessionSource
                     Kind,
                     SourceReadHelpers.Str(payload?["cli_version"]),
                     session.NativeSessionId,
-                    session.ProjectRoot);
+                    session.ProjectRoot,
+                    session.Origin);
 
                 var start = builder.Begin(AsfKind.SessionStart, ts);
                 var cwd = SourceReadHelpers.Str(payload?["cwd"]);

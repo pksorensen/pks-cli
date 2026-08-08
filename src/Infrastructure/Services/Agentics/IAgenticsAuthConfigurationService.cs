@@ -26,6 +26,24 @@ public class AgenticsAuthCredentials
     /// <summary>Realm the token was issued by, e.g. "agentics".</summary>
     public string Realm { get; set; } = "agentics";
 
+    /// <summary>
+    /// Keycloak realm base URL the token came from, e.g.
+    /// "https://keycloak.agentics.dk/realms/agentics". Absent on credentials
+    /// written before this field existed — read it through
+    /// <see cref="IssuerOrConvention"/>, never directly.
+    /// </summary>
+    public string? Issuer { get; set; }
+
+    /// <summary>
+    /// The issuer to talk to, falling back to the subdomain convention that
+    /// holds for agentics.dk. Self-hosted and local instances store an explicit
+    /// <see cref="Issuer"/> because the convention does not describe them.
+    /// </summary>
+    public string IssuerOrConvention()
+        => string.IsNullOrEmpty(Issuer)
+            ? $"https://keycloak.{Server.TrimEnd('/')}/realms/{Realm}"
+            : Issuer.TrimEnd('/');
+
     /// <summary>OAuth client_id the token was issued to.</summary>
     public string ClientId { get; set; } = "pks-cli";
 

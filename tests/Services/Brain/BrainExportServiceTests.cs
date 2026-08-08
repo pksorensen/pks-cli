@@ -440,6 +440,117 @@ public class BrainExportServiceTests : TestBase
         fourth.BlobsPruned.Should().Be(0);
     }
 
+    // ── what the run reports while it is running ──────────────────────────────
+
+    /// Records the phase callbacks in order. The display is built on these, and a
+    /// phase that does work without announcing it is indistinguishable from a
+    /// hang — which is exactly how the raw-source backlog behaved before it
+    /// reported anything.
+    private sealed class RecordingProgress : IExportProgress
+    {
+        public List<string> Calls { get; } = new();
+        public int BacklogSessions { get; private set; } = -1;
+        public List<long> ArchivedBytes { get; } = new();
+
+        public void Discovered(int sessions) => Calls.Add($"discovered:{sessions}");
+        public void Filtered(int eligible, int skipped) => Calls.Add($"filtered:{eligible}/{skipped}");
+        public void Finished(string sessionKey, long eventsWritten, bool failed) => Calls.Add("finished");
+        public void Sealing(ChunkManifest chunk) => Calls.Add("sealing");
+
+        public void ArchivingBlob(string sessionKey, long bytes)
+        {
+            Calls.Add("archiving-blob");
+            ArchivedBytes.Add(bytes);
+        }
+
+        public void BlobArchived(string sessionKey) => Calls.Add("blob-archived");
+
+        public void ArchivingBacklog(int sessions)
+        {
+            Calls.Add($"backlog:{sessions}");
+            BacklogSessions = sessions;
+        }
+
+        public void Finishing() => Calls.Add("finishing");
+    }
+
+    private static async Task<(ExportRun Run, RecordingProgress Progress)> ExportRecordingAsync(
+        string home, bool blobs = true)
+    {
+        var progress = new RecordingProgress();
+        var run = await ServiceFor(new BrainPathResolver(home)).RunAsync(
+            new ExportOptions
+            {
+                Level = AsfLevel.Full,
+                IncludeBlobs = blobs,
+                BlobQuietPeriod = TimeSpan.FromHours(6),
+                BlobSupersededGrace = TimeSpan.FromDays(7),
+            },
+            progress);
+
+        return (run, progress);
+    }
+
+    [Fact]
+    public async Task Every_phase_reports_itself_even_when_it_has_nothing_to_do()
+    {
+        var home = NewHome();
+        var (_, progress) = await ExportRecordingAsync(home);
+
+        // Announced at zero as well: a caller that only hears about non-empty
+        // passes cannot tell a finished phase from one that never started.
+        progress.BacklogSessions.Should().Be(0);
+        progress.Calls.Should().Contain("finishing");
+        progress.Calls.IndexOf("backlog:0").Should().BeLessThan(progress.Calls.IndexOf("finishing"),
+            "the backlog pass runs before the spill rescue and the prune");
+    }
+
+    [Fact]
+    public async Task The_raw_source_backlog_is_announced_and_counted()
+    {
+        var home = NewHome();
+
+        // Events shipped, bytes did not — the state a `--no-blobs` run leaves
+        // behind, and the reason a later `--level all` run spends minutes in a
+        // phase that used to draw nothing at all.
+        await ExportAsync(home, level: AsfLevel.Full, blobs: false);
+
+        var (run, progress) = await ExportRecordingAsync(home);
+
+        run.SessionsSkipped.Should().Be(1, "the events were already exported");
+        run.BlobsAdded.Should().Be(1, "but the raw source had never been archived");
+        progress.BacklogSessions.Should().Be(1);
+
+        // The pair brackets the work, and the size is what makes a slow session
+        // legible rather than suspicious.
+        progress.Calls.Should().ContainInOrder("backlog:1", "archiving-blob", "blob-archived", "finishing");
+        progress.ArchivedBytes.Single().Should().Be(new FileInfo(TranscriptPath(home)).Length);
+    }
+
+    [Fact]
+    public async Task A_deferred_blob_is_not_reported_as_work()
+    {
+        var home = CreateTempDirectory();
+        WriteTranscript(home, Lines);
+        File.SetLastWriteTimeUtc(TranscriptPath(home), DateTime.UtcNow);
+
+        var progress = new RecordingProgress();
+        var run = await ServiceFor(new BrainPathResolver(home)).RunAsync(
+            new ExportOptions
+            {
+                Level = AsfLevel.Full,
+                IncludeBlobs = true,
+
+                // Still being written: archived on the next run instead.
+                BlobQuietPeriod = TimeSpan.FromHours(6),
+            },
+            progress);
+
+        run.BlobsDeferred.Should().Be(1);
+        progress.Calls.Should().NotContain("archiving-blob",
+            "a deferral is not work — reporting it would make the display lie about what the disk is doing");
+    }
+
     private static string Sha256OfFile(string path)
     {
         using var sha = System.Security.Cryptography.SHA256.Create();

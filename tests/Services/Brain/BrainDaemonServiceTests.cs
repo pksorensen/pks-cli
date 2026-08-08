@@ -26,13 +26,14 @@ namespace PKS.CLI.Tests.Services.Brain;
 [Trait("Speed", "Fast")]
 public class BrainDaemonServiceTests : TestBase
 {
-    private static DaemonOptions Options(string level = AsfLevel.Full, bool ingest = true) => new()
+    private static DaemonOptions Options(string level = AsfLevel.Full, bool ingest = true, string? token = null) => new()
     {
         Level = level,
         Endpoint = "https://agentics.dk",
         At = new TimeOnly(3, 30),
         IncludeIngest = ingest,
         ExecutablePath = "/usr/local/bin/pks",
+        Token = token,
     };
 
     // ── the script ────────────────────────────────────────────────────────────
@@ -75,6 +76,34 @@ public class BrainDaemonServiceTests : TestBase
         script.Should().NotContain("brain ingest");
         script.Should().Contain("brain export");
         script.Should().Contain("brain push");
+    }
+
+    // A scheduler starts the script from an empty environment: no login shell,
+    // no ~/.profile, no exported PKS_BRAIN_TOKEN. The token has to be *in* the
+    // script or every nightly push 401s.
+    [Fact]
+    public void A_token_is_carried_by_the_script_itself()
+    {
+        var script = BrainDaemonService.BuildShellScript("pks", Options(token: "bkt_abc123"), "/l");
+
+        script.Should().Contain("export PKS_BRAIN_TOKEN='bkt_abc123'");
+        script.IndexOf("export PKS_BRAIN_TOKEN", StringComparison.Ordinal)
+            .Should().BeLessThan(script.IndexOf("brain push", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_script_without_a_token_stays_free_of_the_variable()
+    {
+        BrainDaemonService.BuildShellScript("pks", Options(), "/l").Should().NotContain("PKS_BRAIN_TOKEN");
+        BrainDaemonService.BuildWindowsScript("pks.exe", Options(), @"C:\l").Should().NotContain("PKS_BRAIN_TOKEN");
+    }
+
+    [Fact]
+    public void The_windows_script_sets_the_token_as_an_environment_variable()
+    {
+        var script = BrainDaemonService.BuildWindowsScript(@"C:\tools\pks.exe", Options(token: "bkt_abc123"), @"C:\logs\b.log");
+
+        script.Should().Contain("set PKS_BRAIN_TOKEN=bkt_abc123\r\n");
     }
 
     [Fact]
@@ -179,6 +208,25 @@ public class BrainDaemonServiceTests : TestBase
         written.Should().Contain("/usr/bin/backup-something-else", "someone else's cron entries are not ours to delete");
         written.Should().Contain(BrainDaemonService.CronMarker);
         written.Should().Contain("30 3 * * *");
+    }
+
+    // A script holding an upload token is a secret file. The default umask leaves
+    // it 0644 — readable by every other account on a shared build box.
+    [Fact]
+    public async Task A_script_carrying_a_token_is_written_owner_only()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        var (paths, _) = Paths();
+        var runner = new FakeProcessRunner();
+        runner.Reply("crontab", "-l", new ProcessResult(0, "", ""));
+        var daemon = new BrainDaemonService(paths, runner);
+
+        using var _scope = new PathScope(fakeCommands: new[] { "crontab" }, clearUserSystemd: true);
+        await daemon.InstallAsync(Options(token: "bkt_secret"));
+
+        var mode = File.GetUnixFileMode(Path.Combine(paths.GlobalRoot, "daemon", "brain-daily.sh"));
+        mode.Should().Be(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }
 
     // ── status ────────────────────────────────────────────────────────────────

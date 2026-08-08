@@ -143,6 +143,20 @@ public sealed class AsfEvent
     [JsonPropertyName("reasoningTokens")] public long? ReasoningTokens { get; set; }
     [JsonPropertyName("costUsd")] public double? CostUsd { get; set; }
 
+    // ---- provenance -------------------------------------------------------
+
+    /// Where this copy of the session was read from, when that was somewhere
+    /// other than the tool's own directory on this machine —
+    /// `docker:&lt;volume name&gt;` for a session rescued out of a container volume.
+    /// Absent means the ordinary host path.
+    ///
+    /// **Excluded from the id hash** (see AsfEventId), and that exclusion is the
+    /// whole point: the same session recovered from two volumes, or present both
+    /// on the host and in a volume, must collapse to one event rather than
+    /// double-counting. Origin says where a copy came from; it is not part of
+    /// what the event *is*.
+    [JsonPropertyName("origin")] public string? Origin { get; set; }
+
     // ---- server-side annotation -------------------------------------------
 
     /// Set by the receiving server when its masker caught something the client

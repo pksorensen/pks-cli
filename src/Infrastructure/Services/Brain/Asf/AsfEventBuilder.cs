@@ -21,20 +21,29 @@ public sealed class AsfEventBuilder
     private readonly string _srcVersion;
     private readonly string _session;
     private readonly string _project;
+    private readonly string? _origin;
     private int _seq;
 
+    /// <param name="origin">
+    /// Where this copy of the session was read from, when that is not the tool's
+    /// own directory on this machine — `docker:&lt;volume&gt;` for a rescued volume.
+    /// Stamped on every event and deliberately excluded from the id hash, so the
+    /// same session found in two places still produces one set of ids.
+    /// </param>
     public AsfEventBuilder(
         ISecretMasker masker,
         string src,
         string? srcVersion,
         string nativeSessionId,
-        string projectRoot)
+        string projectRoot,
+        string? origin = null)
     {
         _masker = masker;
         _src = src;
         _srcVersion = srcVersion ?? "unknown";
         _session = AsfEventId.SessionHandle(src, nativeSessionId);
         _project = AsfEventId.ProjectHandle(projectRoot);
+        _origin = origin;
     }
 
     /// The hashed session handle, for cursors and manifests.
@@ -62,6 +71,7 @@ public sealed class AsfEventBuilder
         Project = _project,
         Kind = kind,
         Level = AsfLevel.Full,
+        Origin = _origin,
     };
 
     /// Masks `text` and fills Text/TextLen/TextHash. Hashing after masking is

@@ -63,11 +63,24 @@ public class AgenticsAuthService(
         return registration?.Token;
     }
 
+    public async Task<string?> ForceRefreshAsync(CancellationToken ct = default)
+    {
+        var creds = await authConfig.LoadAsync();
+        if (creds is null || string.IsNullOrEmpty(creds.RefreshToken)) return null;
+
+        var refreshed = await TryRefreshAsync(creds);
+        if (refreshed is null) return null;
+
+        await authConfig.SaveAsync(refreshed);
+
+        return refreshed.AccessToken;
+    }
+
     private static async Task<AgenticsAuthCredentials?> TryRefreshAsync(AgenticsAuthCredentials creds)
     {
         try
         {
-            var keycloakBase = $"https://keycloak.{creds.Server.TrimEnd('/')}/realms/{creds.Realm}";
+            var keycloakBase = creds.IssuerOrConvention();
             using var http = new HttpClient();
             var form = new FormUrlEncodedContent(new[]
             {
@@ -83,6 +96,7 @@ public class AgenticsAuthService(
             return new AgenticsAuthCredentials
             {
                 Server = creds.Server,
+                Issuer = creds.Issuer,
                 Realm = creds.Realm,
                 ClientId = creds.ClientId,
                 AccessToken = tok.AccessToken,

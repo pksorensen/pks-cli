@@ -51,6 +51,12 @@ public sealed class BrainIngestPipeline : IBrainIngestPipeline
             foreach (var discovered in source.Discover(options.ProjectFilter))
                 all.Add((source, discovered));
         }
+
+        // One copy per session, before anything is read. The firehoses below are
+        // APPENDED to, not replaced, so ingesting the host copy and a rescued
+        // docker copy of the same session would write every prompt twice and there
+        // is no later stage that would notice. See AgentSessionDedupe.
+        all = AgentSessionDedupe.OnePerSession(all, out var duplicateCopies);
         progress.Discovered(all.Count);
 
         var ingestLog = await _store.LoadIngestRunLogAsync(ct);
@@ -88,6 +94,7 @@ public sealed class BrainIngestPipeline : IBrainIngestPipeline
             FinishedAtUtc = startedAt,
             FilesScanned = all.Count,
             FilesSkippedUpToDate = skippedByCursor,
+            DuplicateCopiesSkipped = duplicateCopies,
         };
 
         var planEventsBag = new ConcurrentBag<PlanEvent>();

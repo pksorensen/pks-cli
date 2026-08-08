@@ -15,21 +15,70 @@ namespace PKS.Infrastructure.Services.Brain.Asf;
 /// year is the recommended setting. Nothing here deletes anything.
 public sealed class ClaudeAsfSource : IAgentSessionSource
 {
-    private readonly IBrainPathResolver _paths;
+    /// The Workflow tool's run ledger. Shares the tree with transcripts but is not
+    /// one — see the skip in <see cref="DiscoverIn"/>.
+    private const string JournalFileName = "journal.jsonl";
 
-    public ClaudeAsfSource(IBrainPathResolver paths) => _paths = paths;
+    private readonly IBrainPathResolver _paths;
+    private readonly IBrainRootRegistry? _roots;
+
+    public ClaudeAsfSource(IBrainPathResolver paths, IBrainRootRegistry? roots = null)
+    {
+        _paths = paths;
+        _roots = roots;
+    }
 
     public string Kind => AsfSource.Claude;
 
-    public bool IsAvailable => Directory.Exists(_paths.ClaudeProjectsRoot);
+    /// True when Claude is installed here *or* a rescued copy of someone's Claude
+    /// home is registered. A machine that only ever ran Claude inside containers
+    /// has no `~/.claude` at all, and skipping the source there would make the
+    /// rescued volumes permanently invisible.
+    public bool IsAvailable => Roots().Any();
 
     public string Location => _paths.ClaudeProjectsRoot;
 
     public IEnumerable<DiscoveredAgentSession> Discover(string? projectFilter = null)
     {
-        var root = _paths.ClaudeProjectsRoot;
-        if (!Directory.Exists(root)) yield break;
+        foreach (var (root, origin) in Roots())
+        {
+            foreach (var session in DiscoverIn(root, origin, projectFilter))
+                yield return session;
+        }
+    }
 
+    /// The host's own projects directory, then one per registered rescued volume.
+    private IEnumerable<(string Dir, string? Origin)> Roots()
+    {
+        var home = _paths.ClaudeProjectsRoot;
+        if (Directory.Exists(home)) yield return (home, null);
+
+        foreach (var root in _roots?.Usable() ?? [])
+        {
+            if (ProjectsDirIn(root.Path) is { } dir) yield return (dir, root.Origin);
+        }
+    }
+
+    /// A rescued volume is a copy of the container's Claude home, so its
+    /// transcripts sit at `&lt;volume&gt;/projects`. The two dotted variants cover a
+    /// backup taken one level up — of `$HOME` rather than of `~/.claude`.
+    private static string? ProjectsDirIn(string root)
+    {
+        foreach (var candidate in new[]
+                 {
+                     Path.Combine(root, "projects"),
+                     Path.Combine(root, ".claude", "projects"),
+                     Path.Combine(root, ".config", "claude", "projects"),
+                 })
+        {
+            if (Directory.Exists(candidate)) return candidate;
+        }
+
+        return null;
+    }
+
+    private IEnumerable<DiscoveredAgentSession> DiscoverIn(string root, string? origin, string? projectFilter)
+    {
         foreach (var projectDir in Directory.EnumerateDirectories(root).OrderBy(d => d, StringComparer.Ordinal))
         {
             var slug = Path.GetFileName(projectDir);
@@ -47,6 +96,15 @@ public sealed class ClaudeAsfSource : IAgentSessionSource
                 .EnumerateFiles(projectDir, "*.jsonl", SearchOption.AllDirectories)
                 .OrderBy(f => f, StringComparer.Ordinal))
             {
+                // Not every .jsonl under a project directory is a transcript.
+                // The Workflow tool writes a ledger at
+                // <session>/subagents/workflows/wf_*/journal.jsonl whose lines are
+                // {"type":"started","key":…,"agentId":…} — no cwd, no message. There
+                // are 249 of them on this machine and the session id derived below
+                // is the bare basename, so every one of them would claim the same
+                // identity and they would overwrite each other's cursor.
+                if (JournalFileName.Equals(Path.GetFileName(file), StringComparison.Ordinal)) continue;
+
                 FileInfo info;
                 try { info = new FileInfo(file); }
                 catch (IOException) { continue; }
@@ -54,6 +112,12 @@ public sealed class ClaudeAsfSource : IAgentSessionSource
                 var cwd = SourceReadHelpers.Str(
                     SourceReadHelpers.PeekFirstObject(file, o => o["cwd"] is not null)?["cwd"]);
 
+                // `cwd` is taken as written, including a container's own
+                // `/workspaces/repo`. Remapping it to the host checkout was
+                // considered and rejected: the mapping is guesswork, and a wrong
+                // guess silently merges two different repositories under one
+                // project handle. Origin is the honest way to tell the copies
+                // apart afterwards.
                 yield return new DiscoveredAgentSession(
                     Kind,
                     Path.GetFileNameWithoutExtension(file),
@@ -61,7 +125,10 @@ public sealed class ClaudeAsfSource : IAgentSessionSource
                     _paths.Normalize(cwd) ?? decoded,
                     file,
                     info.LastWriteTimeUtc,
-                    info.Length);
+                    info.Length)
+                {
+                    Origin = origin,
+                };
             }
         }
     }
@@ -105,7 +172,8 @@ public sealed class ClaudeAsfSource : IAgentSessionSource
                     ?? SourceReadHelpers.Str(obj["session_id"])
                     ?? session.NativeSessionId;
                 builder = new AsfEventBuilder(
-                    masker, Kind, SourceReadHelpers.Str(obj["version"]), nativeId, session.ProjectRoot);
+                    masker, Kind, SourceReadHelpers.Str(obj["version"]), nativeId, session.ProjectRoot,
+                    session.Origin);
 
                 var start = builder.Begin(AsfKind.SessionStart, ts);
                 builder.SetContext(start, SourceReadHelpers.Str(obj["cwd"]), SourceReadHelpers.Str(obj["gitBranch"]));

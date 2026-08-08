@@ -1,9 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Net.Http.Json;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using PKS.Infrastructure.Services.Agentics;
+using PKS.Infrastructure.Services.Oidc;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -19,16 +17,22 @@ namespace PKS.Commands.Agentics;
 /// </summary>
 public class AgenticsInitCommand : AgenticsCommand<AgenticsInitCommand.Settings>
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
-
     private readonly IAgenticsAuthConfigurationService _authConfig;
     private readonly IAnsiConsole _console;
+    private readonly IOidcDiscovery _discovery;
+    private readonly IDeviceCodeLogin _deviceLogin;
 
-    public AgenticsInitCommand(IAgenticsAuthConfigurationService authConfig, IAnsiConsole console)
+    public AgenticsInitCommand(
+        IAgenticsAuthConfigurationService authConfig,
+        IAnsiConsole console,
+        IOidcDiscovery discovery,
+        IDeviceCodeLogin deviceLogin)
         : base(console)
     {
         _authConfig = authConfig;
         _console = console;
+        _discovery = discovery;
+        _deviceLogin = deviceLogin;
     }
 
     public class Settings : AgenticsSettings
@@ -37,13 +41,18 @@ public class AgenticsInitCommand : AgenticsCommand<AgenticsInitCommand.Settings>
         [Description("Agentics server host (default: agentics.dk)")]
         public string Server { get; set; } = "agentics.dk";
 
+        [CommandOption("--keycloak <URL>")]
+        [Description("Keycloak base URL. Default: https://keycloak.<server>. Needed when the "
+                   + "identity provider does not sit on that subdomain — self-hosted and local dev.")]
+        public string? Keycloak { get; set; }
+
         [CommandOption("--realm <REALM>")]
         [Description("Keycloak realm (default: agentics)")]
         public string Realm { get; set; } = "agentics";
 
         [CommandOption("--client-id <ID>")]
-        [Description("OAuth client_id (default: pks-cli)")]
-        public string ClientId { get; set; } = "pks-cli";
+        [Description("OAuth client_id (default: agentics-cli)")]
+        public string ClientId { get; set; } = "agentics-cli";
 
         [CommandOption("--no-browser")]
         [Description("Don't try to open a browser; just print the verification URL")]
@@ -57,105 +66,47 @@ public class AgenticsInitCommand : AgenticsCommand<AgenticsInitCommand.Settings>
     {
         DisplayBanner("Login");
 
-        var keycloakBase = ResolveKeycloakBase(settings.Server, settings.Realm);
-        var deviceUrl = $"{keycloakBase}/protocol/openid-connect/auth/device";
-        var tokenUrl = $"{keycloakBase}/protocol/openid-connect/token";
+        var keycloakBase = ResolveKeycloakBase(settings.Keycloak ?? settings.Server, settings.Realm);
 
-        // 1. Initiate the device flow.
-        DeviceCodeResponse? device = null;
-        string? initError = null;
-        await _console.Status().Spinner(Spinner.Known.Dots).StartAsync("Requesting device code...", async _ =>
+        // Ask the issuer where its endpoints are before assuming Keycloak's
+        // layout. The convention below is right for our realm and wrong for
+        // anything else, and a self-hosted server that answers discovery should
+        // not need `--keycloak` to be a Keycloak at all.
+        var endpoints = await _discovery.EndpointsAsync(keycloakBase)
+                        ?? KeycloakConvention(keycloakBase);
+
+        OidcLoginResult result = default!;
+        await _console.Status().Spinner(Spinner.Known.Dots).StartAsync("Requesting device code...", async ctx =>
         {
-            try
-            {
-                using var http = new HttpClient();
-                var form = new FormUrlEncodedContent(new[]
+            result = await _deviceLogin.LoginAsync(new DeviceLoginRequest(
+                endpoints,
+                settings.ClientId,
+                "openid offline_access",
+                // No `resource`: this credential is the CLI's general-purpose
+                // login, not a token bound to one API.
+                null,
+                prompt =>
                 {
-                    new KeyValuePair<string, string>("client_id", settings.ClientId),
-                    new KeyValuePair<string, string>("scope", "openid offline_access"),
-                });
-                using var resp = await http.PostAsync(deviceUrl, form);
-                if (!resp.IsSuccessStatusCode)
-                {
-                    initError = $"Server returned {(int)resp.StatusCode}: {await resp.Content.ReadAsStringAsync()}";
-                    return;
-                }
-                device = await resp.Content.ReadFromJsonAsync<DeviceCodeResponse>(JsonOptions);
-            }
-            catch (Exception ex) { initError = ex.Message; }
+                    // Spectre renders console writes above the running spinner,
+                    // so the panel stays visible while polling continues.
+                    _console.WriteLine();
+                    _console.Write(new Panel(
+                            $"Visit:  [cyan]{Markup.Escape(prompt.BestUri)}[/]\n" +
+                            $"Code:   [bold yellow]{Markup.Escape(prompt.UserCode)}[/]")
+                        .Header("[bold]Authorize PKS CLI[/]")
+                        .BorderStyle(Style.Parse("cyan"))
+                        .Padding(1, 1));
+                    _console.WriteLine();
+
+                    if (!settings.NoBrowser && prompt.BestUri.Length > 0) TryOpenBrowser(prompt.BestUri);
+                    ctx.Status("Waiting for authorization...");
+                }));
         });
 
-        if (initError != null || device == null)
+        if (!result.Ok)
         {
-            DisplayError($"Failed to start device login: {initError ?? "no response"}");
-            return 1;
-        }
+            DisplayError($"Login failed: {result.Error ?? "no access token"}");
 
-        // 2. Show the user the code + verification URL, optionally open browser.
-        _console.WriteLine();
-        var verificationUri = device.VerificationUriComplete ?? device.VerificationUri ?? "";
-        var panel = new Panel(
-            $"Visit:  [cyan]{verificationUri}[/]\n" +
-            $"Code:   [bold yellow]{device.UserCode}[/]")
-            .Header("[bold]Authorize PKS CLI[/]")
-            .BorderStyle(Style.Parse("cyan"))
-            .Padding(1, 1);
-        _console.Write(panel);
-        _console.WriteLine();
-
-        if (!settings.NoBrowser && !string.IsNullOrEmpty(verificationUri))
-        {
-            TryOpenBrowser(verificationUri);
-        }
-
-        // 3. Poll for the token.
-        var interval = TimeSpan.FromSeconds(Math.Max(5, device.Interval));
-        var deadline = DateTime.UtcNow.AddSeconds(Math.Max(60, device.ExpiresIn));
-        TokenResponse? token = null;
-
-        await _console.Status().Spinner(Spinner.Known.Dots).StartAsync("Waiting for authorization...", async _ =>
-        {
-            using var http = new HttpClient();
-            while (DateTime.UtcNow < deadline)
-            {
-                await Task.Delay(interval);
-                var form = new FormUrlEncodedContent(new[]
-                {
-                    new KeyValuePair<string, string>("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-                    new KeyValuePair<string, string>("device_code", device.DeviceCode!),
-                    new KeyValuePair<string, string>("client_id", settings.ClientId),
-                });
-                using var resp = await http.PostAsync(tokenUrl, form);
-                var body = await resp.Content.ReadAsStringAsync();
-                if (resp.IsSuccessStatusCode)
-                {
-                    token = JsonSerializer.Deserialize<TokenResponse>(body, JsonOptions);
-                    return;
-                }
-
-                // RFC 8628 status codes: authorization_pending = keep polling.
-                // slow_down = keep polling but add 5 s.
-                try
-                {
-                    var err = JsonSerializer.Deserialize<TokenErrorResponse>(body, JsonOptions);
-                    if (err?.Error == "authorization_pending") continue;
-                    if (err?.Error == "slow_down") { interval += TimeSpan.FromSeconds(5); continue; }
-                    if (err?.Error == "expired_token" || err?.Error == "access_denied")
-                    {
-                        return; // token stays null → handled below
-                    }
-                }
-                catch
-                {
-                    // Non-JSON error body — bail.
-                    return;
-                }
-            }
-        });
-
-        if (token == null || string.IsNullOrEmpty(token.AccessToken))
-        {
-            DisplayError("Authorization not completed before the device code expired.");
             return 1;
         }
 
@@ -163,12 +114,17 @@ public class AgenticsInitCommand : AgenticsCommand<AgenticsInitCommand.Settings>
         await _authConfig.SaveAsync(new AgenticsAuthCredentials
         {
             Server = settings.Server,
+            // Recorded so refresh does not have to re-derive it. The
+            // keycloak.<server> convention holds for agentics.dk and nowhere
+            // else; a self-hosted instance that passed --keycloak would silently
+            // lose its refresh path without this.
+            Issuer = endpoints.Issuer,
             Realm = settings.Realm,
             ClientId = settings.ClientId,
-            AccessToken = token.AccessToken,
-            RefreshToken = token.RefreshToken,
-            IdToken = token.IdToken,
-            ExpiresAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + token.ExpiresIn,
+            AccessToken = result.AccessToken!,
+            RefreshToken = result.RefreshToken,
+            IdToken = result.IdToken,
+            ExpiresAt = result.ExpiresAtUnix,
         });
 
         _console.WriteLine();
@@ -188,6 +144,15 @@ public class AgenticsInitCommand : AgenticsCommand<AgenticsInitCommand.Settings>
         return $"{host.TrimEnd('/')}/realms/{realm}";
     }
 
+    /// What Keycloak's paths are, for an issuer that serves no discovery
+    /// document. Our own dev realm has answered `/.well-known/openid-configuration`
+    /// all along, so this is the fallback for someone else's install.
+    private static OidcEndpoints KeycloakConvention(string issuer) => new(
+        issuer,
+        $"{issuer}/protocol/openid-connect/token",
+        $"{issuer}/protocol/openid-connect/auth/device",
+        $"{issuer}/protocol/openid-connect/auth");
+
     private static void TryOpenBrowser(string url)
     {
         try
@@ -200,32 +165,5 @@ public class AgenticsInitCommand : AgenticsCommand<AgenticsInitCommand.Settings>
                 Process.Start("xdg-open", url);
         }
         catch { /* user can copy/paste from the panel */ }
-    }
-
-    // ─── DTOs ───────────────────────────────────────────────────────────────
-
-    private class DeviceCodeResponse
-    {
-        [JsonPropertyName("device_code")] public string? DeviceCode { get; set; }
-        [JsonPropertyName("user_code")] public string? UserCode { get; set; }
-        [JsonPropertyName("verification_uri")] public string? VerificationUri { get; set; }
-        [JsonPropertyName("verification_uri_complete")] public string? VerificationUriComplete { get; set; }
-        [JsonPropertyName("expires_in")] public int ExpiresIn { get; set; }
-        [JsonPropertyName("interval")] public int Interval { get; set; } = 5;
-    }
-
-    private class TokenResponse
-    {
-        [JsonPropertyName("access_token")] public string AccessToken { get; set; } = "";
-        [JsonPropertyName("refresh_token")] public string? RefreshToken { get; set; }
-        [JsonPropertyName("id_token")] public string? IdToken { get; set; }
-        [JsonPropertyName("expires_in")] public int ExpiresIn { get; set; }
-        [JsonPropertyName("token_type")] public string? TokenType { get; set; }
-    }
-
-    private class TokenErrorResponse
-    {
-        [JsonPropertyName("error")] public string? Error { get; set; }
-        [JsonPropertyName("error_description")] public string? ErrorDescription { get; set; }
     }
 }

@@ -147,6 +147,9 @@ public sealed class BrainExportCommand : AsyncCommand<BrainExportSettings>
         t.AddRow("[grey]Sessions scanned[/]", run.SessionsScanned.ToString("N0"));
         t.AddRow("[grey]Sessions exported[/]", run.SessionsExported.ToString("N0"));
         t.AddRow("[grey]Skipped (up-to-date)[/]", run.SessionsSkipped.ToString("N0"));
+        if (run.DuplicateCopiesSkipped > 0)
+            t.AddRow("[grey]Duplicate copies[/]",
+                $"{run.DuplicateCopiesSkipped:N0}  [grey](same session found in more than one place)[/]");
         if (run.SessionsFailed > 0)
             t.AddRow("[grey]Sessions failed[/]", $"[red]{run.SessionsFailed:N0}[/]");
         t.AddRow("[grey]Events written[/]", run.EventsWritten.ToString("N0"));
@@ -232,13 +235,25 @@ public sealed class BrainExportCommand : AsyncCommand<BrainExportSettings>
         _ => $"{bytes / (1024.0 * 1024 * 1024):0.##} GB",
     };
 
+    /// One bar per phase, because the export has three and only the first used to
+    /// be drawn. A first `--level all` run spends minutes archiving raw sources
+    /// after the event pass is done; with a single bar that time was
+    /// indistinguishable from a hang, sitting at 100% under the label of the last
+    /// chunk it sealed.
     private sealed class SpectreExportProgress : IExportProgress
     {
         private readonly ProgressContext _ctx;
         private ProgressTask? _task;
+        private ProgressTask? _backlog;
         private int _completed;
+        private int _archived;
 
         public SpectreExportProgress(ProgressContext ctx) => _ctx = ctx;
+
+        /// The bar the current phase advances. Blobs archived inside the session
+        /// loop belong to their session's unit and must not advance anything;
+        /// once the backlog pass starts, its own bar owns them.
+        private ProgressTask? Active => _backlog ?? _task;
 
         public void Discovered(int sessions) =>
             _task = _ctx.AddTask("[cyan]Exporting sessions[/]", maxValue: Math.Max(1, sessions));
@@ -262,5 +277,48 @@ public sealed class BrainExportCommand : AsyncCommand<BrainExportSettings>
                 _task.Description =
                     $"[cyan]Exporting[/] [grey]— sealed {chunk.Src}-{chunk.Level}-{chunk.Ordinal:D2} ({chunk.Events:N0} events)[/]";
         }
+
+        public void ArchivingBlob(string sessionKey, long bytes)
+        {
+            var task = Active;
+            if (task is null) return;
+
+            var label = _backlog is null ? "Exporting" : "Archiving raw sources";
+            task.Description = $"[cyan]{label}[/] [grey]— {Markup.Escape(Shorten(sessionKey))} ({FormatBytes(bytes)})[/]";
+        }
+
+        public void BlobArchived(string sessionKey)
+        {
+            if (_backlog is null) return;
+
+            _archived++;
+            _backlog.Value = _archived;
+        }
+
+        public void ArchivingBacklog(int sessions)
+        {
+            // Fill the event bar before opening the next one: a bar left at 97%
+            // for the rest of the run reads as abandoned work.
+            if (_task is not null) _task.Value = _task.MaxValue;
+            if (sessions == 0) return;
+
+            _backlog = _ctx.AddTask(
+                $"[cyan]Archiving raw sources[/] [grey]({sessions:N0} session(s) whose events shipped earlier)[/]",
+                maxValue: sessions);
+        }
+
+        public void Finishing()
+        {
+            if (_backlog is not null) _backlog.Value = _backlog.MaxValue;
+            if (_task is not null) _task.Value = _task.MaxValue;
+
+            _ctx.AddTask("[cyan]Rescuing opencode spills, pruning superseded blobs[/]", maxValue: 1)
+                .Increment(1);
+        }
+
+        /// Cursor keys are `src:/long/absolute/path`. The tail is what identifies
+        /// the session to a human; the head is the same for thousands of them.
+        private static string Shorten(string cursorKey) =>
+            cursorKey.Length <= 48 ? cursorKey : "…" + cursorKey[^47..];
     }
 }
