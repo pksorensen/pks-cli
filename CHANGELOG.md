@@ -49,6 +49,18 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.24.0](https://github.com/pksorensen/pks-cli/compare/v6.23.0...v6.24.0) (2026-08-08)
+
+
+### Features
+
+* **brain:** device login, docker-volume rescue and resumable push ([c934187](https://github.com/pksorensen/pks-cli/commit/c93418755cedacfcc989b61921f956a202198d20))
+
+
+### Bug Fixes
+
+* **codex:** retry transparently before first output in the Foundry passthrough ([51c3710](https://github.com/pksorensen/pks-cli/commit/51c3710f0791964020bd4f431ec60642454cacdb))
+
 ## [6.23.0](https://github.com/pksorensen/pks-cli/compare/v6.22.0...v6.23.0) (2026-08-06)
 
 
