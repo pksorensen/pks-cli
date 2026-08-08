@@ -5,6 +5,8 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -27,6 +29,14 @@ namespace PKS.Infrastructure.Services.Agent.Codex;
 public sealed class FoundryResponsesPassthrough
 {
     internal const long MaxRequestBodySize = 256L * 1024 * 1024;
+    internal const int DefaultTransparentRetries = 4;
+    internal const int DefaultRetryBaseDelayMs = 2_000;
+    internal const int DefaultRetryMaxDelayMs = 30_000;
+    internal const int MaxBufferedSseBytes = 4 * 1024 * 1024;
+    internal const bool DefaultBufferFullResponse = true;
+    internal const bool DefaultCacheBustOnServerError = true;
+    internal const int DefaultCacheBustAfterErrors = 2;
+    internal const int DefaultCacheBustMaxRotations = 3;
 
     private readonly FoundryStoredCredentials _creds;
     private readonly IAzureFoundryAuthService _authService;
@@ -37,6 +47,18 @@ public sealed class FoundryResponsesPassthrough
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".pks-cli");
     private static readonly string FailureLogPath = Path.Combine(PksDir, "codex-passthrough-failures.log");
     private static readonly string FailedRequestBodyDir = Path.Combine(PksDir, "codex-passthrough-failed-requests");
+    private static readonly string AttemptLogPath = Path.Combine(PksDir, "codex-passthrough-attempts.jsonl");
+    private static readonly SemaphoreSlim AttemptLogLock = new(1, 1);
+
+    private readonly int _transparentRetries;
+    private readonly int _retryBaseDelayMs;
+    private readonly int _retryMaxDelayMs;
+    private readonly bool _bufferFullResponse;
+    private readonly bool _cacheBustOnServerError;
+    private readonly int _cacheBustAfterErrors;
+    private readonly int _cacheBustMaxRotations;
+    private readonly object _cacheKeyRecoveryLock = new();
+    private readonly Dictionary<string, CacheKeyOverride> _cacheKeyOverrides = new(StringComparer.Ordinal);
 
     /// <summary>
     /// The Generic Host defaults to a <see cref="Microsoft.Extensions.FileProviders.PhysicalFileProvider"/>
@@ -65,6 +87,16 @@ public sealed class FoundryResponsesPassthrough
         _proxyToken = proxyToken;
         Port = port;
         _upstreamUrl = FoundryResponsesEndpoint.BuildResponsesUrl(creds.SelectedResourceEndpoint);
+        _transparentRetries = ReadBoundedIntEnvironment("PKS_CODEX_PROXY_RETRIES", DefaultTransparentRetries, 0, 10);
+        _retryBaseDelayMs = ReadBoundedIntEnvironment("PKS_CODEX_PROXY_RETRY_BASE_MS", DefaultRetryBaseDelayMs, 250, 60_000);
+        _retryMaxDelayMs = ReadBoundedIntEnvironment("PKS_CODEX_PROXY_RETRY_MAX_MS", DefaultRetryMaxDelayMs, 1_000, 120_000);
+        _bufferFullResponse = ReadBooleanEnvironment("PKS_CODEX_PROXY_BUFFER_FULL_RESPONSE", DefaultBufferFullResponse);
+        _cacheBustOnServerError = ReadBooleanEnvironment(
+            "PKS_CODEX_PROXY_CACHE_BUST_ON_SERVER_ERROR", DefaultCacheBustOnServerError);
+        _cacheBustAfterErrors = ReadBoundedIntEnvironment(
+            "PKS_CODEX_PROXY_CACHE_BUST_AFTER_ERRORS", DefaultCacheBustAfterErrors, 1, 10);
+        _cacheBustMaxRotations = ReadBoundedIntEnvironment(
+            "PKS_CODEX_PROXY_CACHE_BUST_MAX_ROTATIONS", DefaultCacheBustMaxRotations, 1, 10);
     }
 
     public async Task StartAsync(CancellationToken ct = default)
@@ -119,60 +151,191 @@ public sealed class FoundryResponsesPassthrough
             await WriteLocalFailureAsync("request.reasoning_fix", requestSummary, reasoningFixSummary, ctx.RequestAborted);
         }
 
-        using var upstreamReq = new HttpRequestMessage(HttpMethod.Post, _upstreamUrl)
-        {
-            Content = new ByteArrayContent(requestBytes),
-        };
-        upstreamReq.Content.Headers.TryAddWithoutValidation("Content-Type", "application/json");
-        try
-        {
-            await FoundryResponsesEndpoint.ApplyUpstreamAuthAsync(
-                upstreamReq, _creds, _authService, _foundryScope, ctx.RequestAborted, forceBearer: true);
-        }
-        catch (Exception ex)
-        {
-            await WriteLocalFailureAsync("auth", requestSummary, ex.ToString(), ctx.RequestAborted);
-            ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            await ctx.Response.WriteAsync(
-                "Could not obtain Foundry access token. Run `pks foundry init` or `pks foundry select` and retry.",
-                ctx.RequestAborted);
-            return;
-        }
-
         var client = factory.CreateClient("codex-passthrough");
-        using var upstream = await client.SendAsync(
-            upstreamReq, HttpCompletionOption.ResponseHeadersRead, ctx.RequestAborted);
+        var requestHash = Convert.ToHexString(SHA256.HashData(requestBytes)).ToLowerInvariant()[..16];
+        var responseConfigured = false;
+        var originalCacheKey = GetPromptCacheKey(requestBytes);
+        var activeCacheKey = originalCacheKey;
+        var attemptRequestBytes = requestBytes;
+        var consecutiveServerErrors = 0;
+        var cacheBustsThisRequest = 0;
 
-        if (!upstream.IsSuccessStatusCode)
+        if (_cacheBustOnServerError && originalCacheKey is not null
+            && TryGetCacheKeyOverride(originalCacheKey, out var existingOverride))
         {
-            await WriteLocalFailureAsync(
-                "http",
-                requestSummary,
-                $"HTTP {(int)upstream.StatusCode}: {await upstream.Content.ReadAsStringAsync(ctx.RequestAborted)}",
-                ctx.RequestAborted);
-            await AnthropicProxyUtil.RelayUpstreamErrorAsync(ctx, upstream);
-            return;
+            activeCacheKey = existingOverride.Replacement;
+            attemptRequestBytes = ReplacePromptCacheKey(requestBytes, activeCacheKey);
         }
 
+        for (var attempt = 0; attempt <= _transparentRetries; attempt++)
+        {
+            var cacheKeyForAttempt = activeCacheKey;
+            var cacheKeyWasOverridden = originalCacheKey is not null
+                && !string.Equals(cacheKeyForAttempt, originalCacheKey, StringComparison.Ordinal);
+            using var upstreamReq = new HttpRequestMessage(HttpMethod.Post, _upstreamUrl)
+            {
+                Content = new ByteArrayContent(attemptRequestBytes),
+            };
+            upstreamReq.Content.Headers.TryAddWithoutValidation("Content-Type", "application/json");
+            try
+            {
+                await FoundryResponsesEndpoint.ApplyUpstreamAuthAsync(
+                    upstreamReq, _creds, _authService, _foundryScope, ctx.RequestAborted, forceBearer: true);
+            }
+            catch (Exception ex)
+            {
+                await WriteLocalFailureAsync("auth", requestSummary, ex.ToString(), ctx.RequestAborted);
+                if (!responseConfigured)
+                {
+                    ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                    await ctx.Response.WriteAsync(
+                        "Could not obtain Foundry access token. Run `pks foundry init` or `pks foundry select` and retry.",
+                        ctx.RequestAborted);
+                }
+                return;
+            }
+
+            var stopwatch = Stopwatch.StartNew();
+            using var upstream = await client.SendAsync(
+                upstreamReq, HttpCompletionOption.ResponseHeadersRead, ctx.RequestAborted);
+
+            if (!upstream.IsSuccessStatusCode)
+            {
+                var body = await upstream.Content.ReadAsStringAsync(ctx.RequestAborted);
+                await WriteLocalFailureAsync("http", requestSummary, $"HTTP {(int)upstream.StatusCode}: {body}", ctx.RequestAborted);
+                await WriteAttemptTelemetryAsync(requestHash, attempt, _transparentRetries + 1, "http_error",
+                    stopwatch.ElapsedMilliseconds, upstream, null, null, false, 0, 0, null, ctx.RequestAborted);
+                if (!responseConfigured)
+                    await AnthropicProxyUtil.RelayUpstreamErrorAsync(ctx, upstream);
+                return;
+            }
+
+            var contentType = upstream.Content.Headers.ContentType?.ToString();
+            if (!IsEventStream(contentType))
+            {
+                if (!responseConfigured)
+                {
+                    ConfigureDownstreamResponse(ctx, upstream, contentType);
+                    responseConfigured = true;
+                }
+                await RelayRawResponseAsync(ctx, upstream, ctx.RequestAborted);
+                await WriteAttemptTelemetryAsync(requestHash, attempt, _transparentRetries + 1, "non_sse_completed",
+                    stopwatch.ElapsedMilliseconds, upstream, null, null, true, 0, 0, null, ctx.RequestAborted);
+                return;
+            }
+
+            if (!responseConfigured)
+            {
+                ConfigureDownstreamResponse(ctx, upstream, contentType);
+                responseConfigured = true;
+            }
+
+            var result = await RelaySseAttemptAsync(
+                ctx, upstream, requestSummary, attemptRequestBytes, persistFailedBody: attempt == 0,
+                _bufferFullResponse, ctx.RequestAborted);
+            stopwatch.Stop();
+            if (result.RetryableBeforeCommit)
+            {
+                consecutiveServerErrors = CountsTowardPromptCacheRecovery(
+                        result.RetryableBeforeCommit, result.TerminalEventType, result.ErrorCode)
+                    ? consecutiveServerErrors + 1
+                    : 0;
+            }
+
+            if (result.RetryableBeforeCommit && attempt < _transparentRetries)
+            {
+                var serverErrorsOnCacheKey = consecutiveServerErrors;
+                var cacheBustTriggered = false;
+                var cacheBustLimitReached = false;
+                string? nextCacheKeyHash = null;
+
+                if (ShouldBustPromptCache(
+                        _cacheBustOnServerError,
+                        originalCacheKey is not null,
+                        consecutiveServerErrors,
+                        _cacheBustAfterErrors,
+                        cacheBustsThisRequest))
+                {
+                    if (TryRotateCacheKey(originalCacheKey!, out var rotated))
+                    {
+                        activeCacheKey = rotated.Replacement;
+                        attemptRequestBytes = ReplacePromptCacheKey(requestBytes, activeCacheKey);
+                        cacheBustsThisRequest++;
+                        consecutiveServerErrors = 0;
+                        cacheBustTriggered = true;
+                        nextCacheKeyHash = HashCacheKey(activeCacheKey);
+                        await WriteLocalFailureAsync(
+                            "cache.bust",
+                            requestSummary,
+                            $"Rotated prompt cache key after {_cacheBustAfterErrors} consecutive cache-eligible response.failed events. " +
+                            $"old_hash={HashCacheKey(cacheKeyForAttempt)} new_hash={nextCacheKeyHash} " +
+                            $"rotation={rotated.Rotations}/{_cacheBustMaxRotations}",
+                            ctx.RequestAborted);
+                    }
+                    else
+                    {
+                        cacheBustLimitReached = true;
+                    }
+                }
+
+                var delay = CalculateRetryDelay(attempt + 1, _retryBaseDelayMs, _retryMaxDelayMs, Random.Shared.NextDouble());
+                var retryOutcome = cacheBustTriggered ? "response_failed_cache_busting" : "response_failed_retrying";
+                var cacheDiagnostics = new CacheAttemptDiagnostics(
+                    CacheKeyHash: HashCacheKey(cacheKeyForAttempt),
+                    CacheKeyOverridden: cacheKeyWasOverridden,
+                    ConsecutiveServerErrors: serverErrorsOnCacheKey,
+                    CacheBustTriggered: cacheBustTriggered,
+                    NextCacheKeyHash: nextCacheKeyHash,
+                    CacheBustsThisRequest: cacheBustsThisRequest,
+                    CacheBustLimitReached: cacheBustLimitReached);
+                await WriteAttemptTelemetryAsync(requestHash, attempt, _transparentRetries + 1, retryOutcome,
+                    stopwatch.ElapsedMilliseconds, upstream, result.ResponseId, result.ErrorCode, false,
+                    result.EventCount, result.BufferedBytes, delay.TotalMilliseconds, ctx.RequestAborted, result,
+                    cacheDiagnostics);
+                await ctx.Response.WriteAsync($": pks-foundry retry {attempt + 1}/{_transparentRetries} in {(int)delay.TotalMilliseconds}ms\n\n", ctx.RequestAborted);
+                await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
+                await Task.Delay(delay, ctx.RequestAborted);
+                continue;
+            }
+
+            if (result.BufferedPayload.Length > 0)
+            {
+                await ctx.Response.WriteAsync(result.BufferedPayload, ctx.RequestAborted);
+                await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
+            }
+
+            var outcome = result.RetryableBeforeCommit ? "response_failed_exhausted" : result.Outcome;
+            var finalCacheDiagnostics = new CacheAttemptDiagnostics(
+                CacheKeyHash: HashCacheKey(cacheKeyForAttempt),
+                CacheKeyOverridden: cacheKeyWasOverridden,
+                ConsecutiveServerErrors: consecutiveServerErrors,
+                CacheBustTriggered: false,
+                NextCacheKeyHash: null,
+                CacheBustsThisRequest: cacheBustsThisRequest,
+                CacheBustLimitReached: false);
+            await WriteAttemptTelemetryAsync(requestHash, attempt, _transparentRetries + 1, outcome,
+                stopwatch.ElapsedMilliseconds, upstream, result.ResponseId, result.ErrorCode, result.OutputCommitted,
+                result.EventCount, result.BufferedBytes, null, ctx.RequestAborted, result, finalCacheDiagnostics);
+            return;
+        }
+    }
+
+    private static void ConfigureDownstreamResponse(HttpContext ctx, HttpResponseMessage upstream, string? contentType)
+    {
         ctx.Response.StatusCode = (int)upstream.StatusCode;
-        var contentType = upstream.Content.Headers.ContentType?.ToString();
         if (!string.IsNullOrEmpty(contentType)) ctx.Response.ContentType = contentType;
         ctx.Response.Headers["Cache-Control"] = "no-cache";
+    }
 
-        if (IsEventStream(contentType))
-        {
-            await RelaySseWithFailureLoggingAsync(ctx, upstream, requestSummary, requestBytes, ctx.RequestAborted);
-            return;
-        }
-
-        // Raw byte copy with per-chunk flush so non-SSE responses stream incrementally back to codex.
-        await using var upstreamStream = await upstream.Content.ReadAsStreamAsync(ctx.RequestAborted);
+    private static async Task RelayRawResponseAsync(HttpContext ctx, HttpResponseMessage upstream, CancellationToken ct)
+    {
+        await using var upstreamStream = await upstream.Content.ReadAsStreamAsync(ct);
         var buffer = new byte[8192];
         int read;
-        while ((read = await upstreamStream.ReadAsync(buffer, ctx.RequestAborted)) > 0)
+        while ((read = await upstreamStream.ReadAsync(buffer, ct)) > 0)
         {
-            await ctx.Response.Body.WriteAsync(buffer.AsMemory(0, read), ctx.RequestAborted);
-            await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
+            await ctx.Response.Body.WriteAsync(buffer.AsMemory(0, read), ct);
+            await ctx.Response.Body.FlushAsync(ct);
         }
     }
 
@@ -300,59 +463,413 @@ public sealed class FoundryResponsesPassthrough
                && contentType.Contains("text/event-stream", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static async Task RelaySseWithFailureLoggingAsync(
+    private static async Task<SseAttemptResult> RelaySseAttemptAsync(
         HttpContext ctx,
         HttpResponseMessage upstream,
         string requestSummary,
         byte[] requestBytes,
+        bool persistFailedBody,
+        bool bufferFullResponse,
         CancellationToken ct)
     {
         var upstreamHeaders = FormatUpstreamHeaders(upstream);
-
         await using var upstreamStream = await upstream.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(upstreamStream, Encoding.UTF8);
-        var data = new StringBuilder();
-        string? eventName = null;
+        var buffered = new StringBuilder();
+        var outputCommitted = false;
+        var eventCount = 0;
+        var streamStopwatch = Stopwatch.StartNew();
+        var eventTypeCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var recentEventTypes = new Queue<string>();
+        long receivedSseBytes = 0;
+        long forwardedSseBytes = 0;
+        long? firstEventAfterMs = null;
+        string? commitEventType = null;
+        string? commitReason = null;
+        int? commitEventIndex = null;
+        long? commitAfterMs = null;
+        string? terminalEventType = null;
+        string? responseId = null;
+        string? errorCode = null;
+        string? errorMessage = null;
 
         while (!ct.IsCancellationRequested)
         {
+            var frame = await ReadSseFrameAsync(reader, ct);
+            if (frame is null) break;
+            eventCount++;
+            var analysis = AnalyzeSseEvent(frame.EventName, frame.Data);
+            var eventType = analysis.EventType ?? "<unknown>";
+            var frameBytes = Encoding.UTF8.GetByteCount(frame.Raw);
+            receivedSseBytes += frameBytes;
+            firstEventAfterMs ??= streamStopwatch.ElapsedMilliseconds;
+            eventTypeCounts[eventType] = eventTypeCounts.GetValueOrDefault(eventType) + 1;
+            recentEventTypes.Enqueue(eventType);
+            if (recentEventTypes.Count > 12) recentEventTypes.Dequeue();
+            responseId ??= analysis.ResponseId;
+            errorCode ??= analysis.ErrorCode;
+            errorMessage ??= analysis.ErrorMessage;
+
+            if (!outputCommitted)
+            {
+                if (buffered.Length + frame.Raw.Length <= MaxBufferedSseBytes)
+                {
+                    buffered.Append(frame.Raw);
+                }
+                else
+                {
+                    // Preserve streaming and bound memory. Once any attempt bytes are visible to
+                    // Codex, a transparent retry could duplicate response/tool ids and is disabled.
+                    outputCommitted = true;
+                    commitEventType = eventType;
+                    commitReason = "buffer_limit";
+                    commitEventIndex = eventCount;
+                    commitAfterMs = streamStopwatch.ElapsedMilliseconds;
+                    var bufferedPayload = buffered.ToString();
+                    forwardedSseBytes += Encoding.UTF8.GetByteCount(bufferedPayload) + frameBytes;
+                    await ctx.Response.WriteAsync(bufferedPayload, ct);
+                    buffered.Clear();
+                    await ctx.Response.WriteAsync(frame.Raw, ct);
+                    await ctx.Response.Body.FlushAsync(ct);
+                }
+            }
+            else
+            {
+                forwardedSseBytes += frameBytes;
+                await ctx.Response.WriteAsync(frame.Raw, ct);
+                await ctx.Response.Body.FlushAsync(ct);
+            }
+
+            if (!outputCommitted && ShouldCommitSseEvent(analysis, bufferFullResponse))
+            {
+                outputCommitted = true;
+                commitEventType = eventType;
+                commitReason = "semantic_delta";
+                commitEventIndex = eventCount;
+                commitAfterMs = streamStopwatch.ElapsedMilliseconds;
+                var bufferedPayload = buffered.ToString();
+                forwardedSseBytes += Encoding.UTF8.GetByteCount(bufferedPayload);
+                await ctx.Response.WriteAsync(bufferedPayload, ct);
+                buffered.Clear();
+                await ctx.Response.Body.FlushAsync(ct);
+            }
+
+            if (analysis.IsFailure)
+            {
+                terminalEventType = eventType;
+                await LogResponseFailedIfPresentAsync(
+                    frame.EventName, frame.Data, requestSummary, upstreamHeaders, requestBytes, persistFailedBody, ct);
+                return new SseAttemptResult(
+                    RetryableBeforeCommit: !outputCommitted && analysis.IsRetryableFailure,
+                    OutputCommitted: outputCommitted,
+                    Outcome: outputCommitted ? "response_failed_after_commit" : "response_failed",
+                    BufferedPayload: outputCommitted ? "" : buffered.ToString(),
+                    BufferedBytes: Encoding.UTF8.GetByteCount(buffered.ToString()),
+                    EventCount: eventCount,
+                    ResponseId: responseId,
+                    ErrorCode: errorCode,
+                    ErrorMessage: errorMessage,
+                    FirstEventAfterMs: firstEventAfterMs,
+                    CommitEventType: commitEventType,
+                    CommitReason: commitReason,
+                    CommitEventIndex: commitEventIndex,
+                    CommitAfterMs: commitAfterMs,
+                    TerminalEventType: terminalEventType,
+                    StreamEndedAfterMs: streamStopwatch.ElapsedMilliseconds,
+                    ReceivedSseBytes: receivedSseBytes,
+                    ForwardedSseBytes: forwardedSseBytes,
+                    EventTypeCounts: eventTypeCounts,
+                    RecentEventTypes: recentEventTypes.ToArray(),
+                    BufferedFullResponse: bufferFullResponse);
+            }
+
+            if (analysis.IsCompleted)
+            {
+                terminalEventType = eventType;
+                if (!outputCommitted)
+                {
+                    outputCommitted = true;
+                    commitEventType = eventType;
+                    commitReason = bufferFullResponse ? "completed_response" : "terminal_event";
+                    commitEventIndex = eventCount;
+                    commitAfterMs = streamStopwatch.ElapsedMilliseconds;
+                    var bufferedPayload = buffered.ToString();
+                    forwardedSseBytes += Encoding.UTF8.GetByteCount(bufferedPayload);
+                    await ctx.Response.WriteAsync(bufferedPayload, ct);
+                    buffered.Clear();
+                    await ctx.Response.Body.FlushAsync(ct);
+                }
+                return new SseAttemptResult(false, outputCommitted, "response_completed", "", 0,
+                    eventCount, responseId, errorCode, errorMessage, firstEventAfterMs, commitEventType,
+                    commitReason, commitEventIndex, commitAfterMs, terminalEventType,
+                    streamStopwatch.ElapsedMilliseconds, receivedSseBytes, forwardedSseBytes,
+                    eventTypeCounts, recentEventTypes.ToArray(), bufferFullResponse);
+            }
+        }
+
+        // A clean SSE response has a response.completed/failed terminal event. EOF before either
+        // is safe to replay only while no semantic output has escaped the gate.
+        return new SseAttemptResult(
+            RetryableBeforeCommit: !outputCommitted,
+            OutputCommitted: outputCommitted,
+            Outcome: outputCommitted ? "stream_disconnected_after_commit" : "stream_disconnected",
+            BufferedPayload: outputCommitted ? "" : buffered.ToString(),
+            BufferedBytes: Encoding.UTF8.GetByteCount(buffered.ToString()),
+            EventCount: eventCount,
+            ResponseId: responseId,
+            ErrorCode: errorCode,
+            ErrorMessage: errorMessage,
+            FirstEventAfterMs: firstEventAfterMs,
+            CommitEventType: commitEventType,
+            CommitReason: commitReason,
+            CommitEventIndex: commitEventIndex,
+            CommitAfterMs: commitAfterMs,
+            TerminalEventType: terminalEventType,
+            StreamEndedAfterMs: streamStopwatch.ElapsedMilliseconds,
+            ReceivedSseBytes: receivedSseBytes,
+            ForwardedSseBytes: forwardedSseBytes,
+            EventTypeCounts: eventTypeCounts,
+            RecentEventTypes: recentEventTypes.ToArray(),
+            BufferedFullResponse: bufferFullResponse);
+    }
+
+    private static async Task<SseFrame?> ReadSseFrameAsync(StreamReader reader, CancellationToken ct)
+    {
+        var raw = new StringBuilder();
+        var data = new StringBuilder();
+        string? eventName = null;
+        var readAny = false;
+
+        while (true)
+        {
             var line = await reader.ReadLineAsync(ct);
             if (line is null) break;
-
-            await ctx.Response.WriteAsync(line, ct);
-            await ctx.Response.WriteAsync("\n", ct);
-
-            if (line.Length == 0)
-            {
-                if (data.Length > 0)
-                {
-                    await LogResponseFailedIfPresentAsync(eventName, data.ToString(), requestSummary, upstreamHeaders, requestBytes, ct);
-                    data.Clear();
-                }
-
-                eventName = null;
-                await ctx.Response.Body.FlushAsync(ct);
-                continue;
-            }
+            readAny = true;
+            raw.Append(line).Append('\n');
+            if (line.Length == 0) break;
 
             if (line.StartsWith("event:", StringComparison.Ordinal))
-            {
                 eventName = line.Length > 6 && line[6] == ' ' ? line[7..] : line[6..];
-            }
             else if (line.StartsWith("data:", StringComparison.Ordinal))
             {
-                var chunk = line.Length > 5 && line[5] == ' ' ? line[6..] : line[5..];
                 if (data.Length > 0) data.Append('\n');
-                data.Append(chunk);
+                data.Append(line.Length > 5 && line[5] == ' ' ? line[6..] : line[5..]);
             }
         }
 
-        if (data.Length > 0)
+        return readAny ? new SseFrame(raw.ToString(), eventName, data.ToString()) : null;
+    }
+
+    internal static SseEventAnalysis AnalyzeSseEvent(string? eventName, string payload)
+    {
+        if (payload == "[DONE]")
+            return new SseEventAnalysis(false, false, false, false, eventName ?? "[DONE]", null, null, null);
+        try
         {
-            await LogResponseFailedIfPresentAsync(eventName, data.ToString(), requestSummary, upstreamHeaders, requestBytes, ct);
-            await ctx.Response.Body.FlushAsync(ct);
+            using var doc = JsonDocument.Parse(payload);
+            var root = doc.RootElement;
+            var payloadType = root.TryGetProperty("type", out var typeProp) ? typeProp.GetString() : null;
+            var type = eventName ?? payloadType;
+            var isFailure = string.Equals(type, "response.failed", StringComparison.Ordinal)
+                            || string.Equals(payloadType, "response.failed", StringComparison.Ordinal);
+            var isCompleted = string.Equals(type, "response.completed", StringComparison.Ordinal)
+                              || string.Equals(payloadType, "response.completed", StringComparison.Ordinal);
+            var commitsOutput = type?.EndsWith(".delta", StringComparison.Ordinal) == true;
+
+            string? responseId = null;
+            string? errorCode = null;
+            string? errorMessage = null;
+            if (root.TryGetProperty("response", out var response) && response.ValueKind == JsonValueKind.Object)
+            {
+                if (response.TryGetProperty("id", out var idProp)) responseId = idProp.GetString();
+                if (response.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.Object)
+                {
+                    if (error.TryGetProperty("code", out var codeProp)) errorCode = codeProp.GetString();
+                    if (error.TryGetProperty("message", out var messageProp))
+                        errorMessage = AnthropicProxyUtil.Truncate(messageProp.GetString() ?? "", 500);
+                }
+            }
+
+            var retryableFailure = isFailure && (errorCode is null
+                || errorCode is "unknown" or "server_error" or "no_capacity" or "rate_limit_exceeded");
+            return new SseEventAnalysis(isFailure, retryableFailure, isCompleted, commitsOutput, type,
+                responseId, errorCode, errorMessage);
+        }
+        catch (JsonException)
+        {
+            return new SseEventAnalysis(false, false, false, false, eventName, null, null, null);
         }
     }
+
+    internal static TimeSpan CalculateRetryDelay(int retryNumber, int baseDelayMs, int maxDelayMs, double jitterSample)
+    {
+        var exponent = Math.Max(0, retryNumber - 1);
+        var exponential = Math.Min(maxDelayMs, baseDelayMs * Math.Pow(2, exponent));
+        var boundedJitter = Math.Clamp(jitterSample, 0, 1) * 0.25;
+        return TimeSpan.FromMilliseconds(Math.Min(maxDelayMs, exponential * (1 + boundedJitter)));
+    }
+
+    internal static bool ShouldCommitSseEvent(SseEventAnalysis analysis, bool bufferFullResponse)
+    {
+        return !bufferFullResponse && analysis.CommitsOutput;
+    }
+
+    internal static bool CountsTowardPromptCacheRecovery(
+        bool retryableBeforeCommit,
+        string? terminalEventType,
+        string? errorCode)
+    {
+        // A poisoned Foundry prompt-cache entry has been observed with both an explicit
+        // server_error and a null error object. Restrict cache rotation to terminal
+        // response.failed events so an ordinary transport EOF or rate limit does not
+        // unnecessarily discard an otherwise healthy cache identity.
+        return retryableBeforeCommit
+               && string.Equals(terminalEventType, "response.failed", StringComparison.Ordinal)
+               && errorCode is null or "unknown" or "server_error";
+    }
+
+    internal static bool ShouldBustPromptCache(
+        bool enabled,
+        bool hasCacheKey,
+        int consecutiveServerErrors,
+        int threshold,
+        int cacheBustsThisRequest)
+    {
+        return enabled
+               && hasCacheKey
+               && consecutiveServerErrors >= threshold
+               && cacheBustsThisRequest == 0;
+    }
+
+    private static int ReadBoundedIntEnvironment(string name, int fallback, int min, int max)
+    {
+        return int.TryParse(Environment.GetEnvironmentVariable(name), out var value)
+            ? Math.Clamp(value, min, max)
+            : fallback;
+    }
+
+    internal static bool ReadBooleanEnvironment(string name, bool fallback)
+    {
+        var value = Environment.GetEnvironmentVariable(name);
+        if (bool.TryParse(value, out var parsed)) return parsed;
+        return value switch
+        {
+            "1" => true,
+            "0" => false,
+            _ => fallback,
+        };
+    }
+
+    internal static string? GetPromptCacheKey(byte[] requestBytes)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(requestBytes);
+            return document.RootElement.TryGetProperty("prompt_cache_key", out var value)
+                && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    internal static byte[] ReplacePromptCacheKey(byte[] requestBytes, string replacement)
+    {
+        try
+        {
+            if (JsonNode.Parse(requestBytes) is not JsonObject root) return requestBytes;
+            root["prompt_cache_key"] = replacement;
+            return Encoding.UTF8.GetBytes(root.ToJsonString());
+        }
+        catch (JsonException)
+        {
+            return requestBytes;
+        }
+    }
+
+    internal static string? HashCacheKey(string? cacheKey)
+    {
+        return cacheKey is null
+            ? null
+            : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(cacheKey))).ToLowerInvariant()[..12];
+    }
+
+    private bool TryGetCacheKeyOverride(string original, out CacheKeyOverride cacheOverride)
+    {
+        lock (_cacheKeyRecoveryLock)
+        {
+            return _cacheKeyOverrides.TryGetValue(original, out cacheOverride!);
+        }
+    }
+
+    private bool TryRotateCacheKey(string original, out CacheKeyOverride cacheOverride)
+    {
+        lock (_cacheKeyRecoveryLock)
+        {
+            var rotations = _cacheKeyOverrides.TryGetValue(original, out var current)
+                ? current.Rotations
+                : 0;
+            if (rotations >= _cacheBustMaxRotations)
+            {
+                cacheOverride = current!;
+                return false;
+            }
+
+            var replacement = $"pks-recovery-{HashCacheKey(original)}-{Guid.NewGuid():N}";
+            cacheOverride = new CacheKeyOverride(replacement, rotations + 1);
+            _cacheKeyOverrides[original] = cacheOverride;
+            return true;
+        }
+    }
+
+    internal readonly record struct SseEventAnalysis(
+        bool IsFailure,
+        bool IsRetryableFailure,
+        bool IsCompleted,
+        bool CommitsOutput,
+        string? EventType,
+        string? ResponseId,
+        string? ErrorCode,
+        string? ErrorMessage);
+
+    private sealed record SseFrame(string Raw, string? EventName, string Data);
+
+    private sealed record CacheKeyOverride(string Replacement, int Rotations);
+
+    private sealed record CacheAttemptDiagnostics(
+        string? CacheKeyHash,
+        bool CacheKeyOverridden,
+        int ConsecutiveServerErrors,
+        bool CacheBustTriggered,
+        string? NextCacheKeyHash,
+        int CacheBustsThisRequest,
+        bool CacheBustLimitReached);
+
+    private sealed record SseAttemptResult(
+        bool RetryableBeforeCommit,
+        bool OutputCommitted,
+        string Outcome,
+        string BufferedPayload,
+        int BufferedBytes,
+        int EventCount,
+        string? ResponseId,
+        string? ErrorCode,
+        string? ErrorMessage,
+        long? FirstEventAfterMs,
+        string? CommitEventType,
+        string? CommitReason,
+        int? CommitEventIndex,
+        long? CommitAfterMs,
+        string? TerminalEventType,
+        long StreamEndedAfterMs,
+        long ReceivedSseBytes,
+        long ForwardedSseBytes,
+        IReadOnlyDictionary<string, int> EventTypeCounts,
+        IReadOnlyList<string> RecentEventTypes,
+        bool BufferedFullResponse);
 
     /// <summary>
     /// Azure's SDK-facing error body for many backend failure classes is a deliberately generic
@@ -380,6 +897,7 @@ public sealed class FoundryResponsesPassthrough
         string requestSummary,
         string upstreamHeaders,
         byte[] requestBytes,
+        bool persistRequestBody,
         CancellationToken ct)
     {
         if (payload == "[DONE]") return;
@@ -402,13 +920,15 @@ public sealed class FoundryResponsesPassthrough
                 && responseProp.TryGetProperty("id", out var idProp)
                 ? idProp.GetString()
                 : null;
-            var requestBodyPath = await PersistFailedRequestBodyAsync(requestBytes, responseId, ct);
+            var requestBodyPath = persistRequestBody
+                ? await PersistFailedRequestBodyAsync(requestBytes, responseId, ct)
+                : null;
 
             var summary = BuildFailureSummary(root);
             var details = new StringBuilder()
                 .AppendLine(summary)
                 .AppendLine($"upstream_headers={upstreamHeaders}")
-                .AppendLine($"full_request_body={requestBodyPath ?? "<not saved>"}")
+                .AppendLine($"full_request_body={requestBodyPath ?? (persistRequestBody ? "<not saved>" : "<duplicate retry not saved>")}")
                 .ToString();
             await WriteLocalFailureAsync("response.failed", requestSummary, details, ct);
         }
@@ -608,6 +1128,84 @@ public sealed class FoundryResponsesPassthrough
         {
             // Diagnostics should never break the proxy response path.
         }
+    }
+
+    private static async Task WriteAttemptTelemetryAsync(
+        string requestHash,
+        int zeroBasedAttempt,
+        int maxAttempts,
+        string outcome,
+        long durationMs,
+        HttpResponseMessage upstream,
+        string? responseId,
+        string? errorCode,
+        bool outputCommitted,
+        int eventCount,
+        int bufferedBytes,
+        double? retryDelayMs,
+        CancellationToken ct,
+        SseAttemptResult? sse = null,
+        CacheAttemptDiagnostics? cache = null)
+    {
+        try
+        {
+            var record = new
+            {
+                timestamp = DateTimeOffset.UtcNow,
+                request_hash = requestHash,
+                attempt = zeroBasedAttempt + 1,
+                max_attempts = maxAttempts,
+                outcome,
+                duration_ms = durationMs,
+                http_status = (int)upstream.StatusCode,
+                response_id = responseId,
+                error_code = errorCode,
+                error_message = sse?.ErrorMessage,
+                output_committed = outputCommitted,
+                buffer_full_response = sse?.BufferedFullResponse,
+                event_count = eventCount,
+                buffered_bytes = bufferedBytes,
+                first_event_after_ms = sse?.FirstEventAfterMs,
+                commit_event_type = sse?.CommitEventType,
+                commit_reason = sse?.CommitReason,
+                commit_event_index = sse?.CommitEventIndex,
+                commit_after_ms = sse?.CommitAfterMs,
+                terminal_event_type = sse?.TerminalEventType,
+                stream_ended_after_ms = sse?.StreamEndedAfterMs,
+                received_sse_bytes = sse?.ReceivedSseBytes,
+                forwarded_sse_bytes = sse?.ForwardedSseBytes,
+                event_type_counts = sse?.EventTypeCounts,
+                recent_event_types = sse?.RecentEventTypes,
+                prompt_cache_key_hash = cache?.CacheKeyHash,
+                cache_key_overridden = cache?.CacheKeyOverridden,
+                consecutive_server_errors = cache?.ConsecutiveServerErrors,
+                cache_bust_triggered = cache?.CacheBustTriggered,
+                next_cache_key_hash = cache?.NextCacheKeyHash,
+                cache_busts_this_request = cache?.CacheBustsThisRequest,
+                cache_bust_limit_reached = cache?.CacheBustLimitReached,
+                retry_delay_ms = retryDelayMs is null ? null : (long?)Math.Round(retryDelayMs.Value),
+                azure_request_id = GetHeader(upstream, "X-Request-ID") ?? GetHeader(upstream, "apim-request-id"),
+                served_model = GetHeader(upstream, "x-ms-served-model"),
+                region = GetHeader(upstream, "x-ms-region"),
+                remaining_requests = GetHeader(upstream, "x-ratelimit-remaining-requests"),
+                remaining_tokens = GetHeader(upstream, "x-ratelimit-remaining-tokens"),
+            };
+            var line = JsonSerializer.Serialize(record) + Environment.NewLine;
+            Directory.CreateDirectory(PksDir);
+            await AttemptLogLock.WaitAsync(ct);
+            try { await File.AppendAllTextAsync(AttemptLogPath, line, ct); }
+            finally { AttemptLogLock.Release(); }
+        }
+        catch
+        {
+            // Attempt telemetry is diagnostic only and must not affect the response path.
+        }
+    }
+
+    private static string? GetHeader(HttpResponseMessage response, string name)
+    {
+        if (response.Headers.TryGetValues(name, out var values)) return values.FirstOrDefault();
+        return response.Content.Headers.TryGetValues(name, out values) ? values.FirstOrDefault() : null;
     }
 
     public async Task StopAsync()

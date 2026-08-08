@@ -32,6 +32,8 @@ public class CodexConfigTests
         CountOccurrences(result, CodexCliConfig.BeginMarker).Should().Be(1);
         result.Should().Contain("[model_providers.pks-foundry]");
         result.Should().Contain("127.0.0.1:8788/openai/v1");
+        result.Should().Contain("request_max_retries = 4");
+        result.Should().Contain("stream_max_retries = 3");
     }
 
     [Fact]
@@ -195,6 +197,220 @@ public class CodexConfigTests
 
         options.Limits.MaxRequestBodySize.Should().Be(256L * 1024 * 1024);
         options.Limits.MaxRequestBodySize.Should().BeGreaterThan(30_000_000);
+    }
+
+    [Fact]
+    public void AnalyzeSseEvent_NullErrorFailure_IsRetryableBeforeOutput()
+    {
+        var payload = """
+        {"type":"response.failed","response":{"id":"resp_123","status":"failed","error":null}}
+        """;
+
+        var result = FoundryResponsesPassthrough.AnalyzeSseEvent("response.failed", payload);
+
+        result.IsFailure.Should().BeTrue();
+        result.IsRetryableFailure.Should().BeTrue();
+        result.CommitsOutput.Should().BeFalse();
+        result.ResponseId.Should().Be("resp_123");
+        result.EventType.Should().Be("response.failed");
+    }
+
+    [Fact]
+    public void AnalyzeSseEvent_InvalidRequestFailure_IsNotRetried()
+    {
+        var payload = """
+        {"type":"response.failed","response":{"id":"resp_123","status":"failed","error":{"code":"invalid_request_error","message":"bad input"}}}
+        """;
+
+        var result = FoundryResponsesPassthrough.AnalyzeSseEvent("response.failed", payload);
+
+        result.IsFailure.Should().BeTrue();
+        result.IsRetryableFailure.Should().BeFalse();
+        result.ErrorCode.Should().Be("invalid_request_error");
+        result.ErrorMessage.Should().Be("bad input");
+    }
+
+    [Fact]
+    public void AnalyzeSseEvent_ReasoningItem_DoesNotCommitAttempt()
+    {
+        var payload = """
+        {"type":"response.output_item.added","item":{"id":"rs_123","type":"reasoning","content":[]}}
+        """;
+
+        var result = FoundryResponsesPassthrough.AnalyzeSseEvent("response.output_item.added", payload);
+
+        result.CommitsOutput.Should().BeFalse();
+        result.IsFailure.Should().BeFalse();
+    }
+
+    [Fact]
+    public void AnalyzeSseEvent_UnknownModelFailure_IsRetryable()
+    {
+        var payload = """
+        {"type":"response.failed","response":{"id":"resp_123","error":{"code":"unknown","message":"invalid content"}}}
+        """;
+
+        var result = FoundryResponsesPassthrough.AnalyzeSseEvent("response.failed", payload);
+
+        result.IsRetryableFailure.Should().BeTrue();
+        result.ErrorCode.Should().Be("unknown");
+    }
+
+    [Theory]
+    [InlineData("response.output_text.delta")]
+    [InlineData("response.custom_tool_call_input.delta")]
+    public void AnalyzeSseEvent_OutputDelta_CommitsAttempt(string eventType)
+    {
+        var payload = $$"""{"type":"{{eventType}}","delta":"x"}""";
+
+        var result = FoundryResponsesPassthrough.AnalyzeSseEvent(eventType, payload);
+
+        result.CommitsOutput.Should().BeTrue();
+        result.IsFailure.Should().BeFalse();
+        result.EventType.Should().Be(eventType);
+    }
+
+    [Fact]
+    public void AnalyzeSseEvent_PayloadTypeIsCapturedWhenEventHeaderIsMissing()
+    {
+        const string payload = """{"type":"response.reasoning_summary_text.delta","delta":"x"}""";
+
+        var result = FoundryResponsesPassthrough.AnalyzeSseEvent(null, payload);
+
+        result.EventType.Should().Be("response.reasoning_summary_text.delta");
+        result.CommitsOutput.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ShouldCommitSseEvent_FullResponseBufferingDefersSemanticOutput()
+    {
+        const string payload = """{"type":"response.custom_tool_call_input.delta","delta":"x"}""";
+        var analysis = FoundryResponsesPassthrough.AnalyzeSseEvent(
+            "response.custom_tool_call_input.delta", payload);
+
+        FoundryResponsesPassthrough.ShouldCommitSseEvent(analysis, bufferFullResponse: true)
+            .Should().BeFalse();
+        FoundryResponsesPassthrough.ShouldCommitSseEvent(analysis, bufferFullResponse: false)
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public void FullResponseBuffering_IsEnabledByDefault()
+    {
+        FoundryResponsesPassthrough.DefaultBufferFullResponse.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(true, true, 1, 2, 0, false)]
+    [InlineData(true, true, 2, 2, 0, true)]
+    [InlineData(false, true, 2, 2, 0, false)]
+    [InlineData(true, false, 2, 2, 0, false)]
+    [InlineData(true, true, 2, 2, 1, false)]
+    public void ShouldBustPromptCache_RequiresThresholdAndAllowsOneRotationPerRequest(
+        bool enabled,
+        bool hasCacheKey,
+        int errors,
+        int threshold,
+        int rotations,
+        bool expected)
+    {
+        FoundryResponsesPassthrough.ShouldBustPromptCache(
+                enabled, hasCacheKey, errors, threshold, rotations)
+            .Should().Be(expected);
+    }
+
+    [Fact]
+    public void NullErrorResponseFailed_TriggersPromptCacheRecoveryAfterThreshold()
+    {
+        const string payload =
+            """{"type":"response.failed","response":{"id":"resp_123","status":"failed","error":null}}""";
+        var failure = FoundryResponsesPassthrough.AnalyzeSseEvent("response.failed", payload);
+
+        var consecutiveCacheFailures = 0;
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            if (FoundryResponsesPassthrough.CountsTowardPromptCacheRecovery(
+                    failure.IsRetryableFailure, failure.EventType, failure.ErrorCode))
+            {
+                consecutiveCacheFailures++;
+            }
+        }
+
+        consecutiveCacheFailures.Should().Be(2);
+        FoundryResponsesPassthrough.ShouldBustPromptCache(
+                enabled: true,
+                hasCacheKey: true,
+                consecutiveCacheFailures,
+                threshold: 2,
+                cacheBustsThisRequest: 0)
+            .Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(true, "response.failed", null, true)]
+    [InlineData(true, "response.failed", "server_error", true)]
+    [InlineData(true, "response.failed", "unknown", true)]
+    [InlineData(true, null, null, false)]
+    [InlineData(false, "response.failed", null, false)]
+    [InlineData(true, "response.failed", "rate_limit_exceeded", false)]
+    public void CountsTowardPromptCacheRecovery_OnlyCountsCacheLikeResponseFailures(
+        bool retryable,
+        string? terminalEventType,
+        string? errorCode,
+        bool expected)
+    {
+        FoundryResponsesPassthrough.CountsTowardPromptCacheRecovery(
+                retryable, terminalEventType, errorCode)
+            .Should().Be(expected);
+    }
+
+    [Fact]
+    public void ReplacePromptCacheKey_ChangesOnlyCacheIdentity()
+    {
+        var original = Encoding.UTF8.GetBytes(
+            """{"model":"gpt-5.6-sol","prompt_cache_key":"old-session","input":[{"type":"message"}]}""");
+
+        var replaced = FoundryResponsesPassthrough.ReplacePromptCacheKey(original, "new-session");
+        using var document = JsonDocument.Parse(replaced);
+
+        document.RootElement.GetProperty("model").GetString().Should().Be("gpt-5.6-sol");
+        document.RootElement.GetProperty("prompt_cache_key").GetString().Should().Be("new-session");
+        document.RootElement.GetProperty("input").GetArrayLength().Should().Be(1);
+        FoundryResponsesPassthrough.GetPromptCacheKey(replaced).Should().Be("new-session");
+        FoundryResponsesPassthrough.HashCacheKey("new-session").Should().HaveLength(12);
+    }
+
+    [Fact]
+    public void PromptCacheRecovery_DefaultsAreBounded()
+    {
+        FoundryResponsesPassthrough.DefaultCacheBustOnServerError.Should().BeTrue();
+        FoundryResponsesPassthrough.DefaultCacheBustAfterErrors.Should().Be(2);
+        FoundryResponsesPassthrough.DefaultCacheBustMaxRotations.Should().Be(3);
+    }
+
+    [Fact]
+    public void AnalyzeSseEvent_Completed_IsTerminalButDoesNotRequireRetry()
+    {
+        var payload = """{"type":"response.completed","response":{"id":"resp_ok","status":"completed"}}""";
+
+        var result = FoundryResponsesPassthrough.AnalyzeSseEvent("response.completed", payload);
+
+        result.IsCompleted.Should().BeTrue();
+        result.IsFailure.Should().BeFalse();
+        result.ResponseId.Should().Be("resp_ok");
+    }
+
+    [Theory]
+    [InlineData(1, 2000)]
+    [InlineData(2, 4000)]
+    [InlineData(3, 8000)]
+    [InlineData(4, 16000)]
+    [InlineData(5, 30000)]
+    public void CalculateRetryDelay_IsExponentialAndCapped(int retryNumber, int expectedMs)
+    {
+        var delay = FoundryResponsesPassthrough.CalculateRetryDelay(retryNumber, 2_000, 30_000, jitterSample: 0);
+
+        delay.TotalMilliseconds.Should().Be(expectedMs);
     }
 
     private static int CountOccurrences(string haystack, string needle)

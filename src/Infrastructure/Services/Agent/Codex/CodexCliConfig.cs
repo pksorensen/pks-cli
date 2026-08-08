@@ -74,7 +74,11 @@ $@"# Native Codex provider routed through the pks loopback passthrough, which in
 name = ""PKS Foundry (Codex)""
 base_url = ""http://127.0.0.1:{port}/openai/v1""
 env_key = ""PKS_CODEX_TOKEN""
-wire_api = ""responses""";
+wire_api = ""responses""
+# The loopback proxy already performs up to four transparent, pre-output retries. Keep a
+# small Codex-side fallback without multiplying a persistent failure into dozens of calls.
+request_max_retries = 4
+stream_max_retries = 3";
 
     public static string BuildOpenAiV1BaseUrl(string endpoint)
     {
