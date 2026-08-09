@@ -29,6 +29,8 @@ public class RunnerDaemonService : IRunnerDaemonService
     private readonly Dictionary<string, DateTime> _lastPollTimes = new();
     private readonly List<Task<RunnerJobState>> _runningTasks = new();
     private readonly HashSet<long> _dispatchedJobIds = new();
+    private readonly Dictionary<long, string> _lastRunSummaries = new();
+    private readonly HashSet<string> _reportedRunnerSwaps = new();
     private readonly object _lock = new();
     private int _consecutiveAuthFailures;
 
@@ -331,6 +333,11 @@ public class RunnerDaemonService : IRunnerDaemonService
                 continue;
             }
 
+            // One line per run, and only when the picture actually changed. The old code logged
+            // every queued job on every poll, which reprinted the same line every 30 seconds and
+            // pushed everything else out of the 12-entry activity window.
+            ReportRunState(repoKey, run, jobs);
+
             var queuedJobs = jobs.Where(j =>
                 string.Equals(j.Status, "queued", StringComparison.OrdinalIgnoreCase)).ToList();
 
@@ -338,8 +345,6 @@ public class RunnerDaemonService : IRunnerDaemonService
             {
                 if (_shutdownRequested)
                     break;
-
-                OnStatusChanged($"Job {job.Id} for run {run.Id}: name={job.Name}, environment={job.Environment ?? "(none)"}, labels=[{string.Join(",", job.Labels)}]");
 
                 // Skip if already dispatched
                 lock (_lock)
@@ -378,6 +383,106 @@ public class RunnerDaemonService : IRunnerDaemonService
                 await DispatchJob(dispatchInfo, accessToken, cancellationToken);
             }
         }
+    }
+
+    /// <summary>
+    /// Emits one activity line per run describing every job in it — but only when that description
+    /// changed since the last poll, so a run that sits still stays silent instead of reprinting.
+    /// Also reconciles which job GitHub actually gave each of our JIT runners.
+    /// </summary>
+    private void ReportRunState(string repoKey, QueuedWorkflowRun run, List<WorkflowJob> jobs)
+    {
+        if (jobs.Count == 0)
+            return;
+
+        ReconcileRunnerAssignments(repoKey, jobs);
+
+        var parts = jobs.Select(j =>
+        {
+            var age = j.StartedAt.HasValue
+                ? $" {FormatAge(DateTime.UtcNow - j.StartedAt.Value.ToUniversalTime())}"
+                : "";
+            var state = string.Equals(j.Status, "completed", StringComparison.OrdinalIgnoreCase)
+                ? j.Conclusion ?? "completed"
+                : j.Status;
+            var on = string.IsNullOrEmpty(j.RunnerName) ? "" : $" on {j.RunnerName}";
+            var env = string.IsNullOrEmpty(j.Environment) ? "" : $" env={j.Environment}";
+            return $"{j.Name} {state}{age}{on}{env}";
+        });
+
+        var summary = $"{repoKey} #{run.Id}: {string.Join(" | ", parts)}";
+
+        lock (_lock)
+        {
+            if (_lastRunSummaries.TryGetValue(run.Id, out var previous) && previous == summary)
+                return;
+
+            // Bounded: a daemon that runs for weeks must not accumulate a summary per run forever.
+            if (_lastRunSummaries.Count > 200)
+                _lastRunSummaries.Clear();
+
+            _lastRunSummaries[run.Id] = summary;
+        }
+
+        OnStatusChanged(summary);
+    }
+
+    /// <summary>
+    /// A JIT runner is not bound to the job it was generated for: GitHub hands it the first queued
+    /// job whose labels are a subset of the runner's. When that happens the daemon was tracking the
+    /// wrong job and left the real one marked as dispatched, so it starved. Detect the swap, retarget
+    /// the tracked state, and release the job that never got a runner so it can be dispatched again.
+    /// </summary>
+    private void ReconcileRunnerAssignments(string repoKey, List<WorkflowJob> jobs)
+    {
+        foreach (var job in jobs)
+        {
+            if (string.IsNullOrEmpty(job.RunnerName))
+                continue;
+
+            string? note = null;
+
+            lock (_lock)
+            {
+                var tracked = _activeJobs.FirstOrDefault(a =>
+                    string.Equals(a.RunnerName, job.RunnerName, StringComparison.OrdinalIgnoreCase));
+
+                if (tracked == null || tracked.WorkflowJobId == job.Id)
+                    continue;
+
+                var strandedJobId = tracked.WorkflowJobId;
+                var strandedName = tracked.WorkflowJobName;
+
+                tracked.WorkflowJobId = job.Id;
+                tracked.WorkflowJobName = job.Name;
+
+                // The job we thought this runner would take never got one — let it be dispatched again.
+                if (strandedJobId.HasValue)
+                    _dispatchedJobIds.Remove(strandedJobId.Value);
+                _dispatchedJobIds.Add(job.Id);
+
+                if (_reportedRunnerSwaps.Add(job.RunnerName))
+                {
+                    note = $"{repoKey}: GitHub gave runner {job.RunnerName} to '{job.Name}', " +
+                           $"not '{strandedName}' — requeuing '{strandedName}' for a new runner";
+                }
+            }
+
+            if (note != null)
+            {
+                _logger.LogInformation("{Note}", note);
+                OnStatusChanged(note);
+            }
+        }
+    }
+
+    private static string FormatAge(TimeSpan age)
+    {
+        if (age < TimeSpan.Zero)
+            age = TimeSpan.Zero;
+        return age.TotalHours >= 1
+            ? $"{(int)age.TotalHours}h{age.Minutes:D2}m"
+            : $"{(int)age.TotalMinutes}m";
     }
 
     /// <summary>
@@ -465,6 +570,8 @@ public class RunnerDaemonService : IRunnerDaemonService
                 Registration = registration,
                 RunId = run.Id,
                 WorkflowJobId = job.Id,
+                WorkflowJobName = job.Name,
+                RunnerName = runnerName,
                 ContainerName = dispatchInfo.ContainerName,
                 Branch = run.HeadBranch,
                 StartedAt = DateTime.UtcNow,
@@ -479,7 +586,9 @@ public class RunnerDaemonService : IRunnerDaemonService
 
             // Raise JobStarted event
             JobStarted?.Invoke(this, jobState);
-            OnStatusChanged($"Job started for run {run.Id} on {repoKey}{containerLabel}");
+            OnStatusChanged(
+                $"Dispatched runner {runnerName} for '{job.Name}' " +
+                $"({repoKey} #{run.Id}, labels=[{string.Join(",", labels)}]{containerLabel})");
 
             // Fire-and-forget with tracking
             var task = ExecuteAndTrackJob(
@@ -521,29 +630,43 @@ public class RunnerDaemonService : IRunnerDaemonService
                 result = await _containerService.ExecuteJobAsync(
                     dispatchInfo.Registration, run.Id, run.HeadBranch,
                     accessToken, encodedJitConfig,
-                    progress => OnStatusChanged($"Run {run.Id}: {progress}"),
+                    progress =>
+                    {
+                        jobState.Detail = progress;
+                        OnStatusChanged($"Run {run.Id} '{jobState.WorkflowJobName}': {progress}");
+                    },
                     cancellationToken,
                     credentialSocketPath: _credentialSocketPath,
                     environment: job.Environment,
                     lookupBranch: run.GetCoolifyLookupBranch());
             }
 
-            jobState.Status = result.Status;
             jobState.ContainerId = result.ContainerId;
             jobState.ClonePath = result.ClonePath;
+            jobState.Detail = null;
+
+            // The container exiting cleanly only means the runner process shut down — the job itself
+            // may still have failed on GitHub. Ask GitHub for the conclusion before counting it.
+            var (finalStatus, conclusionNote) = await ResolveFinalStatusAsync(
+                dispatchInfo.Registration, run.Id, jobState, result.Status, cancellationToken);
+
+            jobState.Status = finalStatus;
 
             lock (_lock)
             {
                 _activeJobs.Remove(jobState);
                 _dispatchedJobIds.Remove(job.Id);
-                if (result.Status == RunnerJobStatus.Failed)
+                if (jobState.WorkflowJobId.HasValue)
+                    _dispatchedJobIds.Remove(jobState.WorkflowJobId.Value);
+                if (finalStatus == RunnerJobStatus.Failed)
                     _totalJobsFailed++;
                 else
                     _totalJobsCompleted++;
             }
 
             JobCompleted?.Invoke(this, jobState);
-            OnStatusChanged($"Job completed for run {run.Id}: {result.Status}");
+            OnStatusChanged(
+                $"Run {run.Id} '{jobState.WorkflowJobName}' finished: {finalStatus}{conclusionNote}");
 
             // Clean up token store entries for completed job
             _coolifyTokenStore?.Remove(job.Id.ToString());
@@ -559,16 +682,57 @@ public class RunnerDaemonService : IRunnerDaemonService
             {
                 _activeJobs.Remove(jobState);
                 _dispatchedJobIds.Remove(job.Id);
+                if (jobState.WorkflowJobId.HasValue)
+                    _dispatchedJobIds.Remove(jobState.WorkflowJobId.Value);
                 _totalJobsFailed++;
             }
 
             JobCompleted?.Invoke(this, jobState);
-            OnStatusChanged($"Job failed for run {run.Id}: {ex.Message}");
+            OnStatusChanged($"Run {run.Id} '{jobState.WorkflowJobName}' failed: {ex.Message}");
 
             // Clean up token store entries for failed job
             _coolifyTokenStore?.Remove(job.Id.ToString());
 
             return jobState;
+        }
+    }
+
+    /// <summary>
+    /// Asks GitHub what the job actually concluded. The container exit code only tells us the runner
+    /// process shut down, so a red job on GitHub used to be counted as Done. Falls back to the
+    /// container result when GitHub has not settled the job yet or the API call fails.
+    /// </summary>
+    private async Task<(RunnerJobStatus Status, string Note)> ResolveFinalStatusAsync(
+        RunnerRegistration registration,
+        long runId,
+        RunnerJobState jobState,
+        RunnerJobStatus containerStatus,
+        CancellationToken cancellationToken)
+    {
+        if (!jobState.WorkflowJobId.HasValue)
+            return (containerStatus, "");
+
+        try
+        {
+            var jobs = await _actionsService.GetJobsForRunAsync(
+                registration.Owner, registration.Repository, runId, cancellationToken);
+
+            var job = jobs.FirstOrDefault(j => j.Id == jobState.WorkflowJobId.Value);
+            if (job == null || string.IsNullOrEmpty(job.Conclusion))
+                return (containerStatus, "");
+
+            var status = job.Conclusion.ToLowerInvariant() switch
+            {
+                "failure" or "timed_out" or "startup_failure" => RunnerJobStatus.Failed,
+                _ => RunnerJobStatus.Completed
+            };
+
+            return (status, $" (GitHub: {job.Conclusion})");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not read GitHub conclusion for job {JobId}", jobState.WorkflowJobId);
+            return (containerStatus, "");
         }
     }
 

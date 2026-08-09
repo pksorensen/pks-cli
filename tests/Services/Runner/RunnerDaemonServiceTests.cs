@@ -206,8 +206,10 @@ public class RunnerDaemonServiceTests : IDisposable
 
         await _service.RunAsync(cts.Token);
 
+        // Once to find the queued jobs, and again after the container exits to read the job's
+        // conclusion from GitHub rather than trusting the runner process exit code.
         _mockActionsService.Verify(a => a.GetJobsForRunAsync(
-            "testowner", "testrepo", 12345L, It.IsAny<CancellationToken>()), Times.Once);
+            "testowner", "testrepo", 12345L, It.IsAny<CancellationToken>()), Times.AtLeastOnce);
 
         _mockActionsService.Verify(a => a.GenerateJitConfigAsync(
             "testowner", "testrepo",
@@ -940,6 +942,173 @@ public class RunnerDaemonServiceTests : IDisposable
         // Polling should have resumed after the successful refresh
         pollCount.Should().BeGreaterThanOrEqualTo(5);
         _mockApiClient.Verify(a => a.SetAuthenticationToken("ghp_new_token"), Times.AtLeastOnce);
+    }
+
+    #endregion
+
+    #region Activity reporting
+
+    [Fact]
+    public async Task RunAsync_WhenRunStateUnchanged_ReportsItOnlyOnce()
+    {
+        var cts = new CancellationTokenSource();
+        var run = new QueuedWorkflowRun { Id = 12345, Name = "CI Build", Status = "queued", HeadBranch = "main" };
+        var pollCount = 0;
+
+        _mockActionsService
+            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
+            .Returns(() =>
+            {
+                pollCount++;
+                if (pollCount >= 3) cts.Cancel();
+                return Task.FromResult(new List<QueuedWorkflowRun> { run });
+            });
+
+        // Already running elsewhere, so nothing gets dispatched and the state never changes.
+        _mockActionsService
+            .Setup(a => a.GetJobsForRunAsync("testowner", "testrepo", 12345L, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<WorkflowJob>
+            {
+                new()
+                {
+                    Id = 99001, RunId = 12345, Name = "build-push", Status = "in_progress",
+                    Labels = new List<string> { "devcontainer-runner" }, RunnerName = "other-runner"
+                }
+            });
+
+        var runLines = new List<string>();
+        _service.StatusChanged += (_, msg) => { if (msg.Contains("#12345:")) runLines.Add(msg); };
+
+        await _service.RunAsync(cts.Token);
+
+        pollCount.Should().BeGreaterThanOrEqualTo(3);
+        runLines.Should().ContainSingle("an unchanged run must not reprint on every poll");
+        runLines[0].Should().Contain("build-push").And.Contain("in_progress");
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenGitHubConcludesFailure_CountsJobAsFailed()
+    {
+        var cts = new CancellationTokenSource();
+        var run = new QueuedWorkflowRun { Id = 12345, Name = "CI Build", Status = "queued", HeadBranch = "main" };
+
+        var job = new WorkflowJob
+        {
+            Id = 99001, RunId = 12345, Name = "build-push", Status = "queued",
+            Labels = new List<string> { "devcontainer-runner" }
+        };
+
+        _mockActionsService
+            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<QueuedWorkflowRun> { run });
+
+        _mockActionsService
+            .Setup(a => a.GetJobsForRunAsync("testowner", "testrepo", 12345L, It.IsAny<CancellationToken>()))
+            .Returns(() => Task.FromResult(new List<WorkflowJob> { job }));
+
+        _mockActionsService
+            .Setup(a => a.GenerateJitConfigAsync(
+                "testowner", "testrepo", It.IsAny<string>(), It.IsAny<string[]>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitHubJitRunnerConfig { RunnerId = 1, EncodedJitConfig = "jit-config" })
+            .Callback(() => cts.Cancel());
+
+        // The runner process exits cleanly, but the job itself went red on GitHub.
+        _mockContainerService
+            .Setup(c => c.ExecuteJobAsync(
+                It.IsAny<RunnerRegistration>(), run.Id, run.HeadBranch,
+                "ghp_test123", "jit-config",
+                It.IsAny<Action<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(() =>
+            {
+                job.Status = "completed";
+                job.Conclusion = "failure";
+                return new RunnerJobState { RunId = run.Id, Status = RunnerJobStatus.Completed };
+            });
+
+        await _service.RunAsync(cts.Token);
+
+        var status = _service.GetStatus();
+        status.TotalJobsFailed.Should().Be(1, "the GitHub conclusion decides, not the container exit code");
+        status.TotalJobsCompleted.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenGitHubGivesRunnerAnotherJob_RequeuesTheStrandedJob()
+    {
+        var cts = new CancellationTokenSource();
+        var run = new QueuedWorkflowRun { Id = 12345, Name = "CI Build", Status = "queued", HeadBranch = "main" };
+
+        // Two parallel jobs with identical labels — GitHub may hand our runner either one.
+        var deploy = new WorkflowJob
+        {
+            Id = 99001, RunId = 12345, Name = "deploy-production", Status = "queued",
+            Labels = new List<string> { "devcontainer-runner" }
+        };
+        var build = new WorkflowJob
+        {
+            Id = 99002, RunId = 12345, Name = "build-push", Status = "queued",
+            Labels = new List<string> { "devcontainer-runner" }
+        };
+
+        var pollCount = 0;
+        _mockActionsService
+            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
+            .Returns(() =>
+            {
+                pollCount++;
+                if (pollCount >= 4) cts.Cancel();
+                return Task.FromResult(new List<QueuedWorkflowRun> { run });
+            });
+
+        _mockActionsService
+            .Setup(a => a.GetJobsForRunAsync("testowner", "testrepo", 12345L, It.IsAny<CancellationToken>()))
+            .Returns(() => Task.FromResult(new List<WorkflowJob> { deploy, build }));
+
+        var generatedRunnerNames = new List<string>();
+        _mockActionsService
+            .Setup(a => a.GenerateJitConfigAsync(
+                "testowner", "testrepo", It.IsAny<string>(), It.IsAny<string[]>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitHubJitRunnerConfig { RunnerId = 1, EncodedJitConfig = "jit-config" })
+            .Callback((string _, string _, string name, string[] _, CancellationToken _) =>
+            {
+                generatedRunnerNames.Add(name);
+
+                // GitHub hands the first runner to build-push, not to the job it was named after.
+                if (generatedRunnerNames.Count == 1)
+                {
+                    build.Status = "in_progress";
+                    build.RunnerName = name;
+                }
+            });
+
+        // Keep the container busy so the daemon can poll while the job "runs".
+        _mockContainerService
+            .Setup(c => c.ExecuteJobAsync(
+                It.IsAny<RunnerRegistration>(), run.Id, run.HeadBranch,
+                "ghp_test123", "jit-config",
+                It.IsAny<Action<string>?>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Returns(async (RunnerRegistration _, long runId, string? _, string _, string _,
+                            Action<string>? _, CancellationToken ct, string? _, string? _, string? _) =>
+            {
+                try { await Task.Delay(TimeSpan.FromSeconds(30), ct); } catch (OperationCanceledException) { }
+                return new RunnerJobState { RunId = runId, Status = RunnerJobStatus.Completed };
+            });
+
+        var notices = new List<string>();
+        _service.StatusChanged += (_, msg) => { if (msg.Contains("GitHub gave runner")) notices.Add(msg); };
+
+        await _service.RunAsync(cts.Token);
+
+        notices.Should().ContainSingle("the swap is reported once, not on every poll");
+        notices[0].Should().Contain("build-push").And.Contain("deploy-production");
+
+        // deploy-production was released, so a second runner was generated for it.
+        generatedRunnerNames.Should().HaveCountGreaterThanOrEqualTo(2,
+            "the stranded job must get its own runner instead of waiting for the first one to finish");
     }
 
     #endregion

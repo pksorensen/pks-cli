@@ -43,6 +43,12 @@ public class RunnerJobState
     public long RunId { get; set; }
     public string Branch { get; set; } = string.Empty;
     public long? WorkflowJobId { get; set; }
+    /// <summary>Name of the workflow job we dispatched a runner for (display only).</summary>
+    public string WorkflowJobName { get; set; } = string.Empty;
+    /// <summary>The JIT runner name we generated, so polls can tell which job it actually got.</summary>
+    public string? RunnerName { get; set; }
+    /// <summary>Last progress message from the container, shown in the live status table.</summary>
+    public string? Detail { get; set; }
     public string? ContainerName { get; set; }
     public string ContainerId { get; set; } = string.Empty;
     public string ClonePath { get; set; } = string.Empty;
@@ -195,6 +201,12 @@ public class WorkflowJob
     public string? Environment { get; set; }
     public string HtmlUrl { get; set; } = string.Empty;
     public DateTime? StartedAt { get; set; }
+    /// <summary>
+    /// The runner GitHub actually handed this job to. A JIT runner is not bound to the job it
+    /// was generated for — GitHub gives it the first queued job whose labels are a subset of the
+    /// runner's — so this is the only way to see which of our runners is running which job.
+    /// </summary>
+    public string? RunnerName { get; set; }
 }
 
 /// <summary>

@@ -215,7 +215,7 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
                 firstRegistration.Id,
                 msg =>
                 {
-                    try { File.AppendAllText(logPath, $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}] [cred-server] {msg}\n"); } catch { }
+                    AppendLog(logPath, $"[cred-server] {msg}");
                 },
                 _jobTokenService,
                 _coolifyTokenStore,
@@ -241,16 +241,7 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
                         recentEvents.RemoveAt(0);
                 }
 
-                // Append to log file
-                try
-                {
-                    File.AppendAllText(logPath,
-                        $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}] {message}\n");
-                }
-                catch
-                {
-                    // Don't let log writing crash the daemon
-                }
+                AppendLog(logPath, message);
             }
 
             // 5. Wire up daemon events
@@ -274,12 +265,7 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
                 // Skip noisy polling messages in the event log, keep them in the file only
                 if (message.StartsWith("Polled "))
                 {
-                    try
-                    {
-                        File.AppendAllText(logPath,
-                            $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}] {message}\n");
-                    }
-                    catch { }
+                    AppendLog(logPath, message);
                     return;
                 }
 
@@ -353,6 +339,37 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
         }
     }
 
+    private static readonly object LogFileLock = new();
+    private const long MaxLogBytes = 16 * 1024 * 1024;
+
+    /// <summary>
+    /// Appends one timestamped line to the daemon log, rotating at 16 MB. Without this the log grows
+    /// without bound — 24 registrations polling every 30 s had produced a 131 MB file.
+    /// </summary>
+    private static void AppendLog(string logPath, string message)
+    {
+        try
+        {
+            lock (LogFileLock)
+            {
+                var info = new FileInfo(logPath);
+                if (info.Exists && info.Length > MaxLogBytes)
+                {
+                    var rotated = logPath + ".1";
+                    if (File.Exists(rotated))
+                        File.Delete(rotated);
+                    File.Move(logPath, rotated);
+                }
+
+                File.AppendAllText(logPath, $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}] {message}\n");
+            }
+        }
+        catch
+        {
+            // Don't let log writing crash the daemon
+        }
+    }
+
     private static Table BuildStatusTable(
         RunnerDaemonStatus status,
         List<(DateTime Time, string Message, string Color)> recentEvents,
@@ -392,9 +409,16 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
                     _ => "white"
                 };
 
+                var elapsed = (DateTime.UtcNow - job.StartedAt).ToString(@"hh\:mm\:ss");
+                var jobName = string.IsNullOrEmpty(job.WorkflowJobName) ? "(unknown job)" : job.WorkflowJobName;
+                var detail = string.IsNullOrEmpty(job.Detail) ? "" : $" — {job.Detail}";
+
                 table.AddRow(
-                    $"[{statusColor}]{job.Status}[/]",
-                    $"{job.Registration.Owner}/{job.Registration.Repository} #{job.RunId}");
+                    $"[{statusColor}]{job.Status}[/] [dim]{elapsed}[/]",
+                    $"{job.Registration.Owner}/{job.Registration.Repository} #{job.RunId} [bold]{jobName.EscapeMarkup()}[/]{detail.EscapeMarkup()}");
+
+                if (!string.IsNullOrEmpty(job.RunnerName))
+                    table.AddRow("", $"[dim]{job.RunnerName.EscapeMarkup()}[/]");
             }
         }
 
