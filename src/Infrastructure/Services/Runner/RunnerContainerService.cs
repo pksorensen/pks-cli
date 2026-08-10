@@ -11,7 +11,18 @@ namespace PKS.Infrastructure.Services.Runner;
 /// </summary>
 public class RunnerContainerService : IRunnerContainerService
 {
-    private const string RunnerInstallPath = "/tmp/actions-runner";
+    // The runner does not just unpack itself here — it does ALL of its work here:
+    // the repo clone, the submodules, the package install, the build tree. So this
+    // directory has to be on real disk, and in a devcontainer /tmp is not: it is a
+    // tmpfs, i.e. host RAM, deliberately capped (agentic-live-www caps it at 8 GB).
+    // Runs there died mid-`npm ci` with "No space left on device" while the box
+    // itself had hundreds of gigabytes free. The container's home directory is on
+    // the container filesystem, which is where a build tree belongs.
+    private const string RunnerDirName = ".agentics";
+
+    // Only if the container cannot tell us where home is. Keeps a job running the
+    // way it always did rather than failing it outright over a resolve.
+    private const string RunnerRootFallback = "/tmp";
 
     // Resolves the latest GitHub Actions runner release at install time so we
     // don't have to bump a hardcoded version every time GitHub deprecates one.
@@ -31,6 +42,51 @@ public class RunnerContainerService : IRunnerContainerService
 
     private static string BuildRunnerInstallDockerArgs(string containerId, string targetPath)
         => $"exec {containerId} bash -c \"echo {RunnerInstallScriptBase64} | base64 -d | bash -s {targetPath}\"";
+
+    /// <summary>
+    /// Where runners live inside <paramref name="containerId"/>: the home directory of
+    /// whatever user that container actually runs as, asked of the container instead of
+    /// assumed. Every devcontainer base image picks its own user — node, vscode, root,
+    /// or something a project invented — so hardcoding one is how this breaks silently
+    /// on the next repo. `$HOME` is evaluated by the container's own shell, which is the
+    /// only place the answer exists.
+    /// </summary>
+    private async Task<string> ResolveRunnerRootAsync(
+        string containerId,
+        Action<string>? onProgress,
+        CancellationToken cancellationToken)
+    {
+        string? home = null;
+
+        try
+        {
+            var result = await _processRunner.RunAsync(
+                "docker", $"exec {containerId} sh -c \"printf %s $HOME\"", null, cancellationToken);
+
+            if (result.ExitCode == 0)
+                home = result.StandardOutput?.Trim();
+        }
+        catch (Exception ex)
+        {
+            // Never let the resolve be the thing that fails a job — fall back below.
+            _logger.LogWarning(ex, "Failed to resolve $HOME in container {ContainerId}", containerId);
+        }
+
+        // A home directory is an absolute path. Anything else — empty, an error
+        // message, a shell that did not expand it — means we did not get an answer.
+        if (string.IsNullOrWhiteSpace(home) || !home.StartsWith('/'))
+        {
+            _logger.LogWarning(
+                "Could not resolve the home directory of container {ContainerId}; installing the runner under {Fallback}",
+                containerId, RunnerRootFallback);
+            onProgress?.Invoke(
+                $"Could not resolve the container's home directory — installing the runner under {RunnerRootFallback}");
+
+            return RunnerRootFallback;
+        }
+
+        return $"{home.TrimEnd('/')}/{RunnerDirName}";
+    }
 
     private readonly IProcessRunner _processRunner;
     private readonly ICoolifyLookupService _coolifyLookup;
@@ -269,7 +325,9 @@ public class RunnerContainerService : IRunnerContainerService
             onProgress?.Invoke("Installing latest GitHub Actions runner in container...");
             _logger.LogInformation("Installing runner in container {ContainerId}", containerId);
 
-            var installArgs = BuildRunnerInstallDockerArgs(containerId, RunnerInstallPath);
+            var runnerInstallPath = $"{await ResolveRunnerRootAsync(containerId, onProgress, cancellationToken)}/actions-runner";
+
+            var installArgs = BuildRunnerInstallDockerArgs(containerId, runnerInstallPath);
             var installResult = await _processRunner.RunAsync("docker", installArgs, null, cancellationToken);
 
             if (installResult.ExitCode != 0)
@@ -290,14 +348,14 @@ public class RunnerContainerService : IRunnerContainerService
             _logger.LogInformation("Starting runner in container {ContainerId} for run {RunId}", containerId, runId);
 
             // Write the JIT config to a file inside the container to avoid shell escaping issues
-            var writeConfigArgs = $"exec {containerId} bash -c \"echo '{encodedJitConfig}' > {RunnerInstallPath}/.jitconfig\"";
+            var writeConfigArgs = $"exec {containerId} bash -c \"echo '{encodedJitConfig}' > {runnerInstallPath}/.jitconfig\"";
             await _processRunner.RunAsync("docker", writeConfigArgs, null, cancellationToken);
 
             // Run the runner with RUNNER_ALLOW_RUNASROOT and per-job PKS_TOKEN
             var envFlags = "-e RUNNER_ALLOW_RUNASROOT=1";
             if (!string.IsNullOrEmpty(pksToken))
                 envFlags += $" -e PKS_TOKEN={pksToken} -e PKS_TOKEN_URL=/var/run/pks-creds/creds.sock";
-            var runArgs = $"exec -w {RunnerInstallPath} {envFlags} {containerId} bash -c \"./run.sh --jitconfig $(cat .jitconfig) 2>&1\"";
+            var runArgs = $"exec -w {runnerInstallPath} {envFlags} {containerId} bash -c \"./run.sh --jitconfig $(cat .jitconfig) 2>&1\"";
             var runResult = await _processRunner.RunAsync("docker", runArgs, null, cancellationToken);
 
             // Always log the runner output for debugging
@@ -415,7 +473,8 @@ public class RunnerContainerService : IRunnerContainerService
             Status = RunnerJobStatus.Running
         };
 
-        var runnerPath = $"/tmp/actions-runner-{jobId}";
+        var runnerRoot = await ResolveRunnerRootAsync(containerId, onProgress, cancellationToken);
+        var runnerPath = $"{runnerRoot}/actions-runner-{jobId}";
 
         try
         {

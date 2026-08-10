@@ -601,6 +601,13 @@ public class RunnerContainerServiceTests : IDisposable
             .Callback<string, string, string?, CancellationToken>((cmd, args, wd, ct) => capturedArgs.Add(args))
             .ReturnsAsync(new ProcessResult(0, "Runner.Listener completed", ""));
 
+        // The container answers what user it runs as. This one is a node image;
+        // the point of asking is that the next one might not be.
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.Is<string>(a => a.Contains("$HOME")), null, It.IsAny<CancellationToken>()))
+            .Callback<string, string, string?, CancellationToken>((cmd, args, wd, ct) => capturedArgs.Add(args))
+            .ReturnsAsync(new ProcessResult(0, "/home/node", ""));
+
         long jobId = 42;
 
         // Act
@@ -614,8 +621,73 @@ public class RunnerContainerServiceTests : IDisposable
             containerName: "my-container",
             encodedJitConfig: "encoded_jit");
 
-        // Assert - the runner install path should contain the jobId
+        // Assert - the runner works under the container user's home, not the RAM-backed /tmp
+        capturedArgs.Should().Contain(a => a.Contains($"/home/node/.agentics/actions-runner-{jobId}"));
+        capturedArgs.Should().NotContain(a => a.Contains($"/tmp/actions-runner-{jobId}"));
+    }
+
+    [Fact]
+    public async Task ExecuteJobInExistingContainerAsync_UsesTheContainersOwnUserNotAHardcodedOne()
+    {
+        // Arrange - a devcontainer that runs as root, which plenty of base images do
+        var capturedArgs = new List<string>();
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.IsAny<string>(), null, It.IsAny<CancellationToken>()))
+            .Callback<string, string, string?, CancellationToken>((cmd, args, wd, ct) => capturedArgs.Add(args))
+            .ReturnsAsync(new ProcessResult(0, "Runner.Listener completed", ""));
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.Is<string>(a => a.Contains("$HOME")), null, It.IsAny<CancellationToken>()))
+            .Callback<string, string, string?, CancellationToken>((cmd, args, wd, ct) => capturedArgs.Add(args))
+            .ReturnsAsync(new ProcessResult(0, "/root\n", ""));
+
+        long jobId = 43;
+
+        // Act
+        await _service.ExecuteJobInExistingContainerAsync(
+            _testRegistration,
+            runId: 100,
+            jobId: jobId,
+            branch: "main",
+            containerId: "container-xyz",
+            clonePath: "/workspace/repo",
+            containerName: "my-container",
+            encodedJitConfig: "encoded_jit");
+
+        // Assert
+        capturedArgs.Should().Contain(a => a.Contains($"/root/.agentics/actions-runner-{jobId}"));
+    }
+
+    [Fact]
+    public async Task ExecuteJobInExistingContainerAsync_WhenHomeCannotBeResolved_FallsBackToTmp()
+    {
+        // Arrange - the container gives us nothing usable for $HOME
+        var capturedArgs = new List<string>();
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.IsAny<string>(), null, It.IsAny<CancellationToken>()))
+            .Callback<string, string, string?, CancellationToken>((cmd, args, wd, ct) => capturedArgs.Add(args))
+            .ReturnsAsync(new ProcessResult(0, "Runner.Listener completed", ""));
+
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.Is<string>(a => a.Contains("$HOME")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(1, "", "no such container"));
+
+        long jobId = 44;
+
+        // Act
+        var result = await _service.ExecuteJobInExistingContainerAsync(
+            _testRegistration,
+            runId: 100,
+            jobId: jobId,
+            branch: "main",
+            containerId: "container-xyz",
+            clonePath: "/workspace/repo",
+            containerName: "my-container",
+            encodedJitConfig: "encoded_jit");
+
+        // Assert - the job still runs, the way it always did, rather than failing over a resolve
         capturedArgs.Should().Contain(a => a.Contains($"/tmp/actions-runner-{jobId}"));
+        result.Status.Should().Be(RunnerJobStatus.Completed);
     }
 
     [Fact]
@@ -652,6 +724,10 @@ public class RunnerContainerServiceTests : IDisposable
             .Setup(r => r.RunAsync("docker", It.IsAny<string>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProcessResult(0, "Runner.Listener completed", ""));
 
+        _mockProcessRunner
+            .Setup(r => r.RunAsync("docker", It.Is<string>(a => a.Contains("$HOME")), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessResult(0, "/home/node", ""));
+
         // Act
         await _service.ExecuteJobInExistingContainerAsync(
             _testRegistration,
@@ -665,7 +741,7 @@ public class RunnerContainerServiceTests : IDisposable
 
         // Assert - docker exec rm -rf for the runner directory SHOULD be called
         _mockProcessRunner.Verify(
-            r => r.RunAsync("docker", It.Is<string>(a => a.Contains($"rm -rf /tmp/actions-runner-{jobId}")), null, It.IsAny<CancellationToken>()),
+            r => r.RunAsync("docker", It.Is<string>(a => a.Contains($"rm -rf /home/node/.agentics/actions-runner-{jobId}")), null, It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
