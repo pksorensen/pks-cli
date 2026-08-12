@@ -33,6 +33,8 @@ using PKS.Commands.Confluence;
 using PKS.Commands.Registry;
 using PKS.Commands.Google;
 using PKS.Commands.AppInsights;
+using PKS.Commands.Kusto;
+using PKS.Commands.LogAnalytics;
 using PKS.Commands.Otel;
 using PKS.Commands.Image;
 using PKS.Commands.Promptwall;
@@ -119,6 +121,12 @@ var isPipeablePersona = commandArgs.Length >= 3
         || (commandArgs[2].Equals("list", StringComparison.OrdinalIgnoreCase) && commandArgs.Contains("--json"))
         || (commandArgs[2].Equals("lint", StringComparison.OrdinalIgnoreCase) && commandArgs.Contains("--json")));
 if (isPipeablePersona) noLogo = true;
+
+// `pks kusto` exists to be piped into `jq`/a CSV reader by a debugging agent — its stdout is
+// the query result and nothing else, in every --format. Suppress the banner like `claude limits`.
+var isKusto = commandArgs.Length >= 2
+    && commandArgs[1].Equals("kusto", StringComparison.OrdinalIgnoreCase);
+if (isKusto) noLogo = true;
 
 // `pks ssh run/copy` stream remote stdout/stderr and forward stdin (tar|ssh-style) — the banner
 // would corrupt piped data, so suppress it like the other pipeable commands.
@@ -515,6 +523,13 @@ services.AddSingleton<ITemplatePackagingService, TemplatePackagingService>();
 services.AddSingleton<IAppInsightsConfigService, AppInsightsConfigService>();
 services.AddHttpClient<IAppInsightsHttpAdapter, DefaultAppInsightsHttpAdapter>();
 services.AddSingleton<IAppInsightsQueryService, AppInsightsQueryService>();
+
+// Register Log Analytics (KQL) services. Kusto queries can legitimately run for
+// minutes, so this client gets more than HttpClient's 100s default.
+services.AddSingleton<ILogAnalyticsConfigService, LogAnalyticsConfigService>();
+services.AddHttpClient<ILogAnalyticsHttpAdapter, DefaultLogAnalyticsHttpAdapter>(
+    c => c.Timeout = TimeSpan.FromMinutes(5));
+services.AddSingleton<ILogAnalyticsQueryService, LogAnalyticsQueryService>();
 
 // Register Google AI service
 services.AddHttpClient<IGoogleAiService, GoogleAiService>();
@@ -1323,6 +1338,31 @@ app.Configure(config =>
             .WithExample(new[] { "otel", "spans", "--operation-id", "abc123" })
             .WithExample(new[] { "otel", "spans", "--operation-id", "abc123", "--format", "Json" });
     });
+
+    // Add Log Analytics branch command
+    config.AddBranch<LogAnalyticsSettings>("loganalytics", la =>
+    {
+        la.SetDescription("Manage the Log Analytics workspace used for KQL queries");
+
+        la.AddCommand<LogAnalyticsInitCommand>("init")
+            .WithDescription("Discover and configure a Log Analytics workspace")
+            .WithExample(new[] { "loganalytics", "init" })
+            .WithExample(new[] { "loganalytics", "init", "--subscription", "<sub-id>", "--workspace", "law-prod" })
+            .WithExample(new[] { "loganalytics", "init", "--workspace", "<workspace-guid>" })
+            .WithExample(new[] { "loganalytics", "init", "--force" });
+
+        la.AddCommand<LogAnalyticsStatusCommand>("status")
+            .WithDescription("Show Log Analytics configuration and connection status")
+            .WithExample(new[] { "loganalytics", "status" });
+    });
+
+    // Raw KQL against the configured Log Analytics workspace
+    config.AddCommand<KustoCommand>("kusto")
+        .WithDescription("Run a KQL query against the configured Log Analytics workspace")
+        .WithExample(new[] { "kusto", "AppTraces | take 20" })
+        .WithExample(new[] { "kusto", "AppExceptions | summarize count() by ProblemId", "--since", "24h" })
+        .WithExample(new[] { "kusto", "--file", "query.kql", "--format", "Json" })
+        .WithExample(new[] { "kusto", "Heartbeat | take 5", "--workspace", "<workspace-guid>" });
 
     // Add Google AI branch command
     config.AddBranch("google", google =>

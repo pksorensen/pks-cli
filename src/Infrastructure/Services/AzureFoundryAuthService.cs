@@ -20,6 +20,7 @@ public interface IAzureFoundryAuthService
     Task<List<AzureSubscription>> ListSubscriptionsAsync(string accessToken, CancellationToken cancellationToken = default);
     Task<List<CognitiveServicesAccount>> ListFoundryResourcesAsync(string accessToken, string subscriptionId, CancellationToken cancellationToken = default);
     Task<List<AppInsightsComponent>> ListAppInsightsResourcesAsync(string accessToken, string subscriptionId, CancellationToken cancellationToken = default);
+    Task<List<LogAnalyticsWorkspace>> ListLogAnalyticsWorkspacesAsync(string accessToken, string subscriptionId, CancellationToken cancellationToken = default);
     Task<List<FoundryDeployment>> ListDeploymentsAsync(string accessToken, string subscriptionId, string resourceGroup, string accountName, CancellationToken cancellationToken = default);
     Task<bool> IsAuthenticatedAsync();
     Task<FoundryStoredCredentials?> GetStoredCredentialsAsync();
@@ -276,6 +277,20 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
 
         var result = JsonSerializer.Deserialize<AppInsightsComponentListResponse>(content);
         return result?.Value ?? new List<AppInsightsComponent>();
+    }
+
+    public async Task<List<LogAnalyticsWorkspace>> ListLogAnalyticsWorkspacesAsync(string accessToken, string subscriptionId, CancellationToken cancellationToken = default)
+    {
+        var url = $"https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.OperationalInsights/workspaces?api-version=2022-10-01";
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+
+        var response = await _httpClient.SendAsync(request, cancellationToken);
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var result = JsonSerializer.Deserialize<LogAnalyticsWorkspaceListResponse>(content);
+        return result?.Value ?? new List<LogAnalyticsWorkspace>();
     }
 
     public async Task<List<FoundryDeployment>> ListDeploymentsAsync(string accessToken, string subscriptionId, string resourceGroup, string accountName, CancellationToken cancellationToken = default)
