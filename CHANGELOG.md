@@ -49,6 +49,19 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [6.25.0](https://github.com/pksorensen/pks-cli/compare/v6.24.0...v6.25.0) (2026-08-12)
+
+
+### Features
+
+* **loganalytics:** query a Log Analytics workspace with raw KQL ([7e2b317](https://github.com/pksorensen/pks-cli/commit/7e2b31740f4b7b4dcf9d64b3739b9a7b8d7f38a5))
+
+
+### Bug Fixes
+
+* **runner:** show what the daemon is actually doing, and stop starving jobs ([08d9702](https://github.com/pksorensen/pks-cli/commit/08d970237334338f2ceffacd0be6e7baa1cfb206))
+* **runner:** work under the container user's home, not the RAM-backed /tmp ([e652daa](https://github.com/pksorensen/pks-cli/commit/e652daa9ec6feb06e747a7d0297ccb949dc0ec1d))
+
 ## [6.24.0](https://github.com/pksorensen/pks-cli/compare/v6.23.0...v6.24.0) (2026-08-08)
 
 
