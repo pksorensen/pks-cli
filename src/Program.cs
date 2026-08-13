@@ -172,6 +172,16 @@ services.AddSingleton<PKS.Infrastructure.Services.Logging.ICommandLoggingWrapper
 
 // Register infrastructure services
 services.AddSingleton<IKubernetesService, KubernetesService>();
+// Encrypted credential storage. ISecretStore is the write-only surface (exists / fingerprint /
+// set / delete) and is safe anywhere; ISecretResolver hands out plaintext and is restricted to the
+// services that actually authenticate with it — see SecretResolverGateTests.
+services.AddSingleton<PKS.Infrastructure.Services.Security.SecretStore>();
+services.AddSingleton<PKS.Infrastructure.Services.Security.ISecretStore>(sp =>
+    sp.GetRequiredService<PKS.Infrastructure.Services.Security.SecretStore>());
+services.AddSingleton<PKS.Infrastructure.Services.Security.ISecretResolver>(sp =>
+    sp.GetRequiredService<PKS.Infrastructure.Services.Security.SecretStore>());
+services.AddSingleton<PKS.Infrastructure.Services.Security.ISecretSeedingService,
+    PKS.Infrastructure.Services.Security.SecretSeedingService>();
 services.AddSingleton<IConfigurationService, ConfigurationService>();
 services.AddSingleton<IDeploymentService, DeploymentService>();
 services.AddSingleton<IHooksService, HooksService>();
@@ -853,6 +863,27 @@ app.Configure(config =>
         tools.AddCommand<PKS.Commands.Tools.ToolsPublishCommand>("publish")
             .WithDescription("Generate and write tools-registry Markdown for commands tagged with [ToolRegistryExport]")
             .WithExample(["tools", "publish"]);
+    });
+
+    config.AddBranch<PKS.Commands.Secrets.SecretsSettings>("secrets", secrets =>
+    {
+        secrets.SetDescription("Inspect stored credentials — presence only, never values");
+
+        secrets.AddCommand<PKS.Commands.Secrets.SecretsListCommand>("list")
+            .WithDescription("List stored credentials with write time and fingerprint")
+            .WithExample(["secrets", "list"]);
+
+        secrets.AddCommand<PKS.Commands.Secrets.SecretsStatusCommand>("status")
+            .WithDescription("Show whether a credential is stored under a key, and its fingerprint")
+            .WithExample(["secrets", "status", "github.auth.token"]);
+
+        secrets.AddCommand<PKS.Commands.Secrets.SecretsDeleteCommand>("delete")
+            .WithDescription("Remove a stored credential (re-run the relevant login to restore it)")
+            .WithExample(["secrets", "delete", "github.auth.token"]);
+
+        secrets.AddCommand<PKS.Commands.Secrets.SecretsSeedHomeCommand>("seed-home")
+            .WithDescription("Copy one stored credential into another HOME's pks store")
+            .WithExample(["secrets", "seed-home", "foundry.auth.credentials", "--home", "/tmp/runner-home"]);
     });
 
     config.AddBranch<PKS.Commands.Ssh.SshSettings>("ssh", ssh =>

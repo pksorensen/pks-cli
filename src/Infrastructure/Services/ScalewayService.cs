@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services;
 
@@ -50,10 +51,13 @@ public class ScalewayService : IScalewayService
         PropertyNameCaseInsensitive = true
     };
 
-    public ScalewayService(HttpClient httpClient, IConfigurationService config)
+    private readonly ISecretResolver _secrets;
+
+    public ScalewayService(HttpClient httpClient, IConfigurationService config, ISecretResolver? secrets = null)
     {
         _httpClient = httpClient;
         _config = config;
+        _secrets = secrets ?? new SecretStore();
     }
 
     // ---------------------------------------------------------------- credentials
@@ -66,7 +70,7 @@ public class ScalewayService : IScalewayService
 
     public async Task<ScalewayStoredCredentials?> GetStoredCredentialsAsync()
     {
-        var json = await _config.GetAsync(StorageKey);
+        var json = await _secrets.RevealAsync(StorageKey);
         if (string.IsNullOrEmpty(json)) return null;
         try { return JsonSerializer.Deserialize<ScalewayStoredCredentials>(json); }
         catch (JsonException) { return null; }

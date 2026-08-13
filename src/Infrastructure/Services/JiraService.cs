@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services;
 
@@ -29,6 +30,7 @@ public class JiraService : IJiraService
 
     private readonly HttpClient _httpClient;
     private readonly IConfigurationService _configurationService;
+    private readonly ISecretResolver _secrets;
     private readonly ILogger<JiraService> _logger;
 
     /// <summary>Cached acceptance criteria custom field ID (e.g. "customfield_10035")</summary>
@@ -45,11 +47,13 @@ public class JiraService : IJiraService
     public JiraService(
         HttpClient httpClient,
         IConfigurationService configurationService,
-        ILogger<JiraService> logger)
+        ILogger<JiraService> logger,
+        ISecretResolver? secrets = null)
     {
         _httpClient = httpClient;
         _configurationService = configurationService;
         _logger = logger;
+        _secrets = secrets ?? new SecretStore();
     }
 
     public async Task<bool> IsAuthenticatedAsync()
@@ -58,7 +62,7 @@ public class JiraService : IJiraService
         if (string.IsNullOrEmpty(baseUrl))
             return false;
 
-        var token = await _configurationService.GetAsync(KeyApiToken);
+        var token = await _secrets.RevealAsync(KeyApiToken);
         var authMethod = await _configurationService.GetAsync(KeyAuthMethod);
 
         // If we have a base URL and an auth method was stored, consider authenticated
@@ -98,9 +102,9 @@ public class JiraService : IJiraService
                 BaseUrl = baseUrl,
                 Email = await _configurationService.GetAsync(KeyEmail) ?? string.Empty,
                 Username = await _configurationService.GetAsync(KeyUsername) ?? string.Empty,
-                ApiToken = await _configurationService.GetAsync(KeyApiToken) ?? string.Empty,
-                AccessToken = await _configurationService.GetAsync(KeyAccessToken) ?? string.Empty,
-                RefreshToken = await _configurationService.GetAsync(KeyRefreshToken) ?? string.Empty,
+                ApiToken = await _secrets.RevealAsync(KeyApiToken) ?? string.Empty,
+                AccessToken = await _secrets.RevealAsync(KeyAccessToken) ?? string.Empty,
+                RefreshToken = await _secrets.RevealAsync(KeyRefreshToken) ?? string.Empty,
                 CloudId = await _configurationService.GetAsync(KeyCloudId) ?? string.Empty,
                 CreatedAt = DateTime.TryParse(createdAtStr, out var created) ? created : DateTime.MinValue,
                 LastRefreshedAt = DateTime.TryParse(lastRefreshedStr, out var refreshed) ? refreshed : DateTime.MinValue

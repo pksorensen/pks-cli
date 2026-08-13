@@ -1,3 +1,5 @@
+using PKS.Infrastructure.Services.Security;
+
 namespace PKS.Infrastructure;
 
 public interface IKubernetesService
@@ -39,16 +41,43 @@ public class KubernetesService : IKubernetesService
     private int replicas = 3; // Simulated current replica count
 }
 
+/// <summary>
+/// Ordinary, non-sensitive configuration for pks.
+///
+/// This interface is deliberately unable to produce a credential. Keys that
+/// <see cref="SecretKeys.IsSecret"/> classifies as secret are routed to the encrypted
+/// <see cref="ISecretStore"/> on write and are <em>invisible</em> to <see cref="GetAsync"/> and
+/// <see cref="GetAllAsync"/> — there is no flag, no override and no "just this once". That is what
+/// makes a config dump (a command, an MCP tool, a support bundle, a stray <c>cat</c>) harmless.
+///
+/// To find out whether a credential is present, use <see cref="HasSecretAsync"/> or
+/// <see cref="DescribeSecretAsync"/>. To actually use one, take an <see cref="ISecretResolver"/> —
+/// which the build gate forbids in the command and MCP layers.
+/// </summary>
 public interface IConfigurationService
 {
+    /// <summary>The value for a non-secret key. Always null for secret-classified keys.</summary>
     Task<string?> GetAsync(string key);
+
+    /// <summary>Stores a value. Secret-classified keys (and anything written with
+    /// <paramref name="encrypt"/>) go to the encrypted secret store instead of settings.json.</summary>
     Task SetAsync(string key, string value, bool global = false, bool encrypt = false);
+
+    /// <summary>All non-secret settings. Never contains credential material.</summary>
     Task<Dictionary<string, string>> GetAllAsync();
+
     Task DeleteAsync(string key);
     Task LoadSettingsAsync();
     Task SaveSettingsAsync();
     Task<bool> IsFirstTimeWarningAcknowledgedAsync();
     Task SetFirstTimeWarningAcknowledgedAsync();
+
+    /// <summary>Whether a credential is stored under <paramref name="key"/>. Safe to print.</summary>
+    Task<bool> HasSecretAsync(string key);
+
+    /// <summary>Existence, write time and a machine-local fingerprint for a stored credential —
+    /// everything that can be said about it without revealing it.</summary>
+    Task<SecretDescriptor?> DescribeSecretAsync(string key);
 }
 
 public class ConfigurationService : IConfigurationService
@@ -58,33 +87,44 @@ public class ConfigurationService : IConfigurationService
     private readonly string _settingsFilePath;
     private readonly object _lockObject = new();
     private readonly SemaphoreSlim _saveLock = new(1, 1);
+    private readonly ISecretStore _secretStore;
+    private readonly ISecretResolver _secretResolver;
 
-    public ConfigurationService() : this(GetDefaultSettingsFilePath())
+    public ConfigurationService() : this(new SecretStore())
+    {
+    }
+
+    public ConfigurationService(SecretStore secretStore)
+        : this(GetDefaultSettingsFilePath(), secretStore)
     {
     }
 
     internal ConfigurationService(string settingsFilePath)
+        : this(settingsFilePath, new SecretStore(
+            Path.GetDirectoryName(settingsFilePath) ?? Directory.GetCurrentDirectory()))
     {
-        // Initialize with default values
-        _config = new Dictionary<string, string>
-        {
-            { "cluster.endpoint", "https://k8s.production.com" },
-            { "namespace.default", "myapp-production" },
-            { "registry.url", "registry.company.com" },
-            { "auth.token", "***encrypted***" },
-            { "deploy.replicas", "3" },
-            { "monitoring.enabled", "true" }
-        };
+    }
 
+    internal ConfigurationService(string settingsFilePath, SecretStore secretStore)
+    {
+        _config = new Dictionary<string, string>();
         _settingsFilePath = settingsFilePath;
+        _secretStore = secretStore;
+        _secretResolver = secretStore;
 
-        // Load settings from file if it exists
+        // Load settings from file if it exists. This also performs the one-way migration of any
+        // plaintext credentials still sitting in settings.json.
         LoadSettingsAsync().GetAwaiter().GetResult();
     }
 
     public async Task<string?> GetAsync(string key)
     {
         await Task.Delay(50);
+
+        // Secrets are never readable through the configuration surface — not masked, not gated:
+        // absent. Callers that need the value take an ISecretResolver instead.
+        if (SecretKeys.IsSecret(key)) return null;
+
         lock (_lockObject)
         {
             return _config.TryGetValue(key, out var value) ? value : null;
@@ -93,15 +133,23 @@ public class ConfigurationService : IConfigurationService
 
     public async Task SetAsync(string key, string value, bool global = false, bool encrypt = false)
     {
+        if (SecretKeys.IsSecret(key) || encrypt)
+        {
+            // The old behaviour of `encrypt: true` was to persist the literal "***encrypted***",
+            // silently destroying the credential. It now means what it says.
+            await _secretStore.SetAsync(key, value);
+            await ForgetPlaintextAsync(key);
+            return;
+        }
+
         await Task.Delay(100);
-        var storedValue = encrypt ? "***encrypted***" : value;
         var persistent = global || key.StartsWith("cli.");
         lock (_lockObject)
         {
-            _config[key] = storedValue;
+            _config[key] = value;
             if (persistent)
             {
-                _pendingPersistentChanges[key] = storedValue;
+                _pendingPersistentChanges[key] = value;
             }
         }
 
@@ -112,18 +160,46 @@ public class ConfigurationService : IConfigurationService
         }
     }
 
+    public Task<bool> HasSecretAsync(string key) => _secretStore.HasAsync(key);
+
+    public Task<SecretDescriptor?> DescribeSecretAsync(string key) => _secretStore.DescribeAsync(key);
+
+    /// <summary>Drops any lingering plaintext copy of a key from memory and from settings.json.</summary>
+    private async Task ForgetPlaintextAsync(string key)
+    {
+        bool hadPlaintext;
+        lock (_lockObject)
+        {
+            hadPlaintext = _config.Remove(key);
+            if (hadPlaintext) _pendingPersistentChanges[key] = null;
+        }
+
+        if (hadPlaintext) await SaveSettingsAsync();
+    }
+
     public async Task<Dictionary<string, string>> GetAllAsync()
     {
         await Task.Delay(100);
         lock (_lockObject)
         {
-            return new Dictionary<string, string>(_config);
+            // _config should never hold a secret — migration moves them out and SaveSettingsAsync
+            // refuses to write them back. Filtering here too means the one method everything dumps
+            // (status tools, support bundles, `pks config list`) is safe even if that ever slips.
+            return _config
+                .Where(kvp => !SecretKeys.IsSecret(kvp.Key))
+                .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
         }
     }
 
     public async Task DeleteAsync(string key)
     {
         await Task.Delay(50);
+
+        if (SecretKeys.IsSecret(key))
+        {
+            await _secretStore.DeleteAsync(key);
+        }
+
         lock (_lockObject)
         {
             _config.Remove(key);
@@ -136,21 +212,56 @@ public class ConfigurationService : IConfigurationService
     {
         try
         {
-            if (File.Exists(_settingsFilePath))
-            {
-                var json = await File.ReadAllTextAsync(_settingsFilePath);
-                var settings = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+            if (!File.Exists(_settingsFilePath)) return;
 
-                if (settings != null)
+            var json = await File.ReadAllTextAsync(_settingsFilePath);
+            var settings = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+            if (settings == null) return;
+
+            var toRemoveFromSettings = new List<string>();
+
+            foreach (var kvp in settings)
+            {
+                if (SecretKeys.IsLostValue(kvp.Value))
                 {
-                    lock (_lockObject)
+                    // Written by the old `encrypt: true` path, which stored the sentinel instead of
+                    // the value. There is nothing to migrate — the credential is already gone.
+                    toRemoveFromSettings.Add(kvp.Key);
+                    continue;
+                }
+
+                if (SecretKeys.IsSecret(kvp.Key))
+                {
+                    // Migration: an existing plaintext credential moves into the encrypted store the
+                    // first time this build touches the file, so nobody has to re-authenticate
+                    // anything. Runs on every load, which also cleans up after an older pks build
+                    // (or `dotnet dnx pks-cli`) that wrote plaintext back during the rollout window.
+                    if (!string.IsNullOrEmpty(kvp.Value))
                     {
-                        foreach (var kvp in settings)
-                        {
-                            _config[kvp.Key] = kvp.Value;
-                        }
+                        await _secretStore.SetAsync(kvp.Key, kvp.Value);
+                    }
+                    toRemoveFromSettings.Add(kvp.Key);
+                    continue;
+                }
+
+                lock (_lockObject)
+                {
+                    _config[kvp.Key] = kvp.Value;
+                }
+            }
+
+            if (toRemoveFromSettings.Count > 0)
+            {
+                lock (_lockObject)
+                {
+                    foreach (var key in toRemoveFromSettings)
+                    {
+                        _config.Remove(key);
+                        _pendingPersistentChanges[key] = null;
                     }
                 }
+
+                await SaveSettingsAsync();
             }
         }
         catch
@@ -194,6 +305,13 @@ public class ConfigurationService : IConfigurationService
                 {
                     configToSave[key] = value;
                 }
+            }
+
+            // Invariant: settings.json never contains credential material. This also catches
+            // plaintext that an older pks build wrote back into the file after we loaded it.
+            foreach (var key in configToSave.Keys.Where(SecretKeys.IsSecret).ToList())
+            {
+                configToSave.Remove(key);
             }
 
             var json = System.Text.Json.JsonSerializer.Serialize(configToSave, new System.Text.Json.JsonSerializerOptions

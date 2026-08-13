@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services;
 
@@ -37,17 +38,19 @@ public class GoogleAiService : IGoogleAiService
 
     private readonly IConfigurationService _config;
     private readonly HttpClient _http;
+    private readonly ISecretResolver _secrets;
 
-    public GoogleAiService(IConfigurationService config, HttpClient http)
+    public GoogleAiService(IConfigurationService config, HttpClient http, ISecretResolver? secrets = null)
     {
         _config = config;
         _http = http;
+        _secrets = secrets ?? new SecretStore();
     }
 
     public async Task<bool> IsAuthenticatedAsync()
     {
-        var key = await _config.GetAsync(KeyApiKey);
-        return !string.IsNullOrWhiteSpace(key);
+        // Presence, not the value — a status check must not have to touch the key.
+        return await _config.HasSecretAsync(KeyApiKey);
     }
 
     public async Task StoreApiKeyAsync(string apiKey)
@@ -56,7 +59,7 @@ public class GoogleAiService : IGoogleAiService
         await _config.SetAsync(KeyRegisteredAt, DateTime.UtcNow.ToString("O"), global: true);
     }
 
-    public Task<string?> GetApiKeyAsync() => _config.GetAsync(KeyApiKey);
+    public Task<string?> GetApiKeyAsync() => _secrets.RevealAsync(KeyApiKey);
 
     public Task<string?> GetRegisteredAtAsync() => _config.GetAsync(KeyRegisteredAt);
 
@@ -75,7 +78,7 @@ public class GoogleAiService : IGoogleAiService
 
     public async Task<List<GoogleAiModel>> ListImageModelsAsync()
     {
-        var key = await _config.GetAsync(KeyApiKey);
+        var key = await _secrets.RevealAsync(KeyApiKey);
         if (string.IsNullOrWhiteSpace(key))
             return KnownImageModels;
 
@@ -124,7 +127,7 @@ public class GoogleAiService : IGoogleAiService
 
     public async Task<byte[]> GenerateImageAsync(string prompt, string model, string aspectRatio, string? resolution, string? inputImagePath = null)
     {
-        var key = await _config.GetAsync(KeyApiKey);
+        var key = await _secrets.RevealAsync(KeyApiKey);
         if (string.IsNullOrWhiteSpace(key))
             throw new InvalidOperationException("No Google AI API key registered. Run: pks google init");
 

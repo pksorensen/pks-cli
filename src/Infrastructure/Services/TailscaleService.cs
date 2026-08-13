@@ -1,5 +1,6 @@
 using System.Text.Json;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services;
 
@@ -18,8 +19,13 @@ public class TailscaleService : ITailscaleService
 {
     private const string StorageKey = "tailscale.auth.credentials";
     private readonly IConfigurationService _config;
+    private readonly ISecretResolver _secrets;
 
-    public TailscaleService(IConfigurationService config) => _config = config;
+    public TailscaleService(IConfigurationService config, ISecretResolver? secrets = null)
+    {
+        _config = config;
+        _secrets = secrets ?? new SecretStore();
+    }
 
     public async Task<bool> IsAuthenticatedAsync()
     {
@@ -29,7 +35,7 @@ public class TailscaleService : ITailscaleService
 
     public async Task<TailscaleStoredCredentials?> GetStoredCredentialsAsync()
     {
-        var json = await _config.GetAsync(StorageKey);
+        var json = await _secrets.RevealAsync(StorageKey);
         if (string.IsNullOrEmpty(json)) return null;
         try { return JsonSerializer.Deserialize<TailscaleStoredCredentials>(json); }
         catch (JsonException) { return null; }

@@ -9,6 +9,7 @@ using PKS.Infrastructure;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Agent;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 using Xunit;
 
 namespace PKS.CLI.Tests.Infrastructure.Services.Agent.Chat;
@@ -23,15 +24,20 @@ public class AgentChatProviderFactoryModelListTests
 {
     private static AgentChatProviderFactory CreateFactory(
         Dictionary<string, string>? config = null,
-        IAzureFoundryAuthService? foundryAuth = null)
+        IAzureFoundryAuthService? foundryAuth = null,
+        Dictionary<string, string>? secrets = null)
     {
         var store = config ?? new Dictionary<string, string>();
+        var secretStore = secrets ?? new Dictionary<string, string>();
+        var secretsMock = new Mock<ISecretResolver>();
+        secretsMock.Setup(x => x.RevealAsync(It.IsAny<string>()))
+            .ReturnsAsync((string key) => secretStore.TryGetValue(key, out var v) ? v : null);
         var configMock = new Mock<IConfigurationService>();
         configMock.Setup(x => x.GetAsync(It.IsAny<string>()))
             .ReturnsAsync((string key) => store.TryGetValue(key, out var v) ? v : null);
         configMock.Setup(x => x.GetAllAsync())
             .ReturnsAsync(() => new Dictionary<string, string>(store));
-        return new AgentChatProviderFactory(configMock.Object, new HttpClient(), foundryAuth);
+        return new AgentChatProviderFactory(configMock.Object, new HttpClient(), foundryAuth, secretsMock.Object);
     }
 
     private static IAzureFoundryAuthService FoundryWith(string? selectedResourceEndpoint, params string[] enabledModels)
@@ -78,7 +84,9 @@ public class AgentChatProviderFactoryModelListTests
     public async Task ClaudeBuiltIn_WithConfiguredApiKey_Appears()
     {
         using var _ = SetEnv("ANTHROPIC_API_KEY", null);
-        var factory = CreateFactory(new Dictionary<string, string>
+        // An apiKey is credential material, so it does not live in settings any more — it comes back
+        // through ISecretResolver, which is exactly where the factory now looks for it.
+        var factory = CreateFactory(secrets: new Dictionary<string, string>
         {
             ["agent.models.claude-opus-4-7.apiKey"] = "sk-test",
         });
@@ -113,6 +121,8 @@ public class AgentChatProviderFactoryModelListTests
         {
             ["agent.models.my-azure.provider"] = "azure-openai",
             ["agent.models.my-azure.endpoint"] = "https://my.openai.azure.com",
+        }, secrets: new Dictionary<string, string>
+        {
             ["agent.models.my-azure.apiKey"] = "k",
         });
 

@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services;
 
@@ -83,6 +84,7 @@ public class MsGraphAuthenticationService : IMsGraphAuthenticationService
     private readonly HttpClient _httpClient;
     private readonly IConfigurationService _configurationService;
     private readonly ILogger<MsGraphAuthenticationService> _logger;
+    private readonly ISecretResolver _secrets;
     private MsGraphAuthConfig _config;
     private readonly JsonSerializerOptions _jsonOptions;
 
@@ -90,12 +92,14 @@ public class MsGraphAuthenticationService : IMsGraphAuthenticationService
         HttpClient httpClient,
         IConfigurationService configurationService,
         ILogger<MsGraphAuthenticationService> logger,
-        MsGraphAuthConfig? config = null)
+        MsGraphAuthConfig? config = null,
+        ISecretResolver? secrets = null)
     {
         _httpClient = httpClient;
         _configurationService = configurationService;
         _logger = logger;
         _config = config ?? new MsGraphAuthConfig();
+        _secrets = secrets ?? new SecretStore();
 
         _jsonOptions = new JsonSerializerOptions
         {
@@ -398,7 +402,7 @@ public class MsGraphAuthenticationService : IMsGraphAuthenticationService
     {
         try
         {
-            var tokenJson = await _configurationService.GetAsync(TokenStorageKey);
+            var tokenJson = await _secrets.RevealAsync(TokenStorageKey);
 
             if (string.IsNullOrEmpty(tokenJson))
             {

@@ -10,6 +10,7 @@ using Microsoft.Extensions.FileSystemGlobbing;
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services;
 
@@ -19,6 +20,7 @@ public class AzureFileShareProvider : IFileShareProvider
 
     private readonly HttpClient _httpClient;
     private readonly IConfigurationService _configurationService;
+    private readonly ISecretResolver _secrets;
     private readonly ILogger<AzureFileShareProvider> _logger;
     private readonly AzureFileShareAuthConfig _config;
 
@@ -29,12 +31,14 @@ public class AzureFileShareProvider : IFileShareProvider
         HttpClient httpClient,
         IConfigurationService configurationService,
         ILogger<AzureFileShareProvider> logger,
-        AzureFileShareAuthConfig? config = null)
+        AzureFileShareAuthConfig? config = null,
+        ISecretResolver? secrets = null)
     {
         _httpClient = httpClient;
         _configurationService = configurationService;
         _logger = logger;
         _config = config ?? new AzureFileShareAuthConfig();
+        _secrets = secrets ?? new SecretStore();
     }
 
     public async Task<bool> IsAuthenticatedAsync()
@@ -547,7 +551,7 @@ public class AzureFileShareProvider : IFileShareProvider
     {
         try
         {
-            var json = await _configurationService.GetAsync(StorageKey);
+            var json = await _secrets.RevealAsync(StorageKey);
             if (string.IsNullOrEmpty(json))
                 return null;
             return JsonSerializer.Deserialize<FileShareStoredCredentials>(json);

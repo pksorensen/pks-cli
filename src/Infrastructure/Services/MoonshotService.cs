@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services;
 
@@ -20,10 +21,13 @@ public sealed class MoonshotService : IMoonshotService
     private readonly HttpClient _httpClient;
     private readonly IConfigurationService _configuration;
 
-    public MoonshotService(HttpClient httpClient, IConfigurationService configuration)
+    private readonly ISecretResolver _secrets;
+
+    public MoonshotService(HttpClient httpClient, IConfigurationService configuration, ISecretResolver? secrets = null)
     {
         _httpClient = httpClient;
         _configuration = configuration;
+        _secrets = secrets ?? new SecretStore();
     }
 
     public async Task<bool> IsAuthenticatedAsync()
@@ -34,7 +38,7 @@ public sealed class MoonshotService : IMoonshotService
 
     public async Task<MoonshotStoredCredentials?> GetStoredCredentialsAsync()
     {
-        var json = await _configuration.GetAsync(StorageKey);
+        var json = await _secrets.RevealAsync(StorageKey);
         if (string.IsNullOrWhiteSpace(json)) return null;
 
         try

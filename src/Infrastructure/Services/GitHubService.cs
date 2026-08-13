@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services;
 
@@ -12,13 +13,15 @@ public class GitHubService : IGitHubService
     private readonly HttpClient _httpClient;
     private readonly IConfigurationService _configurationService;
     private readonly IGitHubAuthenticationService _authService;
+    private readonly ISecretResolver _secrets;
     private readonly string _baseUrl = "https://api.github.com";
 
-    public GitHubService(HttpClient httpClient, IConfigurationService configurationService, IGitHubAuthenticationService authService)
+    public GitHubService(HttpClient httpClient, IConfigurationService configurationService, IGitHubAuthenticationService authService, ISecretResolver? secrets = null)
     {
         _httpClient = httpClient;
         _configurationService = configurationService;
         _authService = authService;
+        _secrets = secrets ?? new SecretStore();
 
         // Configure HttpClient for GitHub API
         _httpClient.DefaultRequestHeaders.Add("User-Agent", "PKS-CLI/1.0.0");
@@ -427,7 +430,7 @@ public class GitHubService : IGitHubService
 
     private async Task<string?> GetGitHubTokenAsync()
     {
-        var token = await _configurationService.GetAsync("github.token");
+        var token = await _secrets.RevealAsync("github.token");
         if (!string.IsNullOrEmpty(token))
             return token;
 

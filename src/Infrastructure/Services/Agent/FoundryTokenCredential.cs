@@ -179,7 +179,11 @@ public sealed class FoundryTokenCredential : TokenCredential
             // Atomic write so lock-free readers never see a half-written file.
             var tmp = DiskCachePath + "." + Environment.ProcessId + ".tmp";
             File.WriteAllText(tmp, JsonSerializer.Serialize(dt));
+            // This file holds a live bearer token. It was landing at the default 0644 — readable by
+            // every account on the box, and by anything that tars up a home directory.
+            PKS.Infrastructure.Services.Security.SecurityFiles.Restrict(tmp);
             File.Move(tmp, DiskCachePath, overwrite: true);
+            PKS.Infrastructure.Services.Security.SecurityFiles.Restrict(DiskCachePath);
         }
         catch
         {

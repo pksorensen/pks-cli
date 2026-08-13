@@ -1,3 +1,4 @@
+using PKS.Infrastructure.Services.Security;
 using System.Net.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -460,6 +461,11 @@ public class TestConfigurationService : IConfigurationService
         await Task.Delay(1); // Simulate async operation
         _config.Remove(key);
     }
+
+    public Task<bool> HasSecretAsync(string key) => Task.FromResult(_config.ContainsKey(key));
+
+    public Task<SecretDescriptor?> DescribeSecretAsync(string key) => Task.FromResult(
+        _config.ContainsKey(key) ? new SecretDescriptor(key, DateTime.UtcNow, "testfp") : null);
 
     public async Task LoadSettingsAsync()
     {

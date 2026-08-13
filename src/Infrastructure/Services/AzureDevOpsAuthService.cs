@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services;
 
@@ -32,6 +33,7 @@ public class AzureDevOpsAuthService : IAzureDevOpsAuthService
 
     private readonly HttpClient _httpClient;
     private readonly IConfigurationService _configurationService;
+    private readonly ISecretResolver _secrets;
     private readonly ILogger<AzureDevOpsAuthService> _logger;
     private readonly AzureDevOpsAuthConfig _config;
 
@@ -39,12 +41,14 @@ public class AzureDevOpsAuthService : IAzureDevOpsAuthService
         HttpClient httpClient,
         IConfigurationService configurationService,
         ILogger<AzureDevOpsAuthService> logger,
-        AzureDevOpsAuthConfig? config = null)
+        AzureDevOpsAuthConfig? config = null,
+        ISecretResolver? secrets = null)
     {
         _httpClient = httpClient;
         _configurationService = configurationService;
         _logger = logger;
         _config = config ?? new AzureDevOpsAuthConfig();
+        _secrets = secrets ?? new SecretStore();
     }
 
     public async Task<AdoAuthResult> InitiateAsync(string tenantId = "common", string? loginHint = null, CancellationToken cancellationToken = default)
@@ -182,7 +186,7 @@ public class AzureDevOpsAuthService : IAzureDevOpsAuthService
     {
         try
         {
-            var json = await _configurationService.GetAsync(StorageKey);
+            var json = await _secrets.RevealAsync(StorageKey);
             if (string.IsNullOrEmpty(json))
                 return null;
 

@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services;
 
@@ -64,6 +65,7 @@ public class AzureAuthService : IAzureAuthService
 
     private readonly HttpClient _httpClient;
     private readonly IConfigurationService _configurationService;
+    private readonly ISecretResolver _secrets;
     private readonly ILogger<AzureAuthService> _logger;
     private readonly AzureAuthConfig _config;
 
@@ -73,12 +75,14 @@ public class AzureAuthService : IAzureAuthService
         HttpClient httpClient,
         IConfigurationService configurationService,
         ILogger<AzureAuthService> logger,
-        AzureAuthConfig? config = null)
+        AzureAuthConfig? config = null,
+        ISecretResolver? secrets = null)
     {
         _httpClient = httpClient;
         _configurationService = configurationService;
         _logger = logger;
         _config = config ?? new AzureAuthConfig();
+        _secrets = secrets ?? new SecretStore();
     }
 
     public async Task<string?> DiscoverTenantAsync(string email, CancellationToken cancellationToken = default)
@@ -249,7 +253,7 @@ public class AzureAuthService : IAzureAuthService
     {
         try
         {
-            var json = await _configurationService.GetAsync(StorageKey);
+            var json = await _secrets.RevealAsync(StorageKey);
             if (string.IsNullOrEmpty(json))
                 return null;
 

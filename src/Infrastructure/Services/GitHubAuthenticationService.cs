@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services;
 
@@ -89,6 +90,7 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
     private readonly HttpClient _httpClient;
     private readonly IConfigurationService _configurationService;
     private readonly ILogger<GitHubAuthenticationService> _logger;
+    private readonly ISecretResolver _secrets;
     private readonly GitHubAuthConfig _config;
     private readonly JsonSerializerOptions _jsonOptions;
 
@@ -96,12 +98,14 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
         HttpClient httpClient,
         IConfigurationService configurationService,
         ILogger<GitHubAuthenticationService> logger,
-        GitHubAuthConfig? config = null)
+        GitHubAuthConfig? config = null,
+        ISecretResolver? secrets = null)
     {
         _httpClient = httpClient;
         _configurationService = configurationService;
         _logger = logger;
         _config = config ?? new GitHubAuthConfig();
+        _secrets = secrets ?? new SecretStore();
 
         _jsonOptions = new JsonSerializerOptions
         {
@@ -446,7 +450,7 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
         try
         {
             var key = GetTokenStorageKey(associatedUser);
-            var tokenJson = await _configurationService.GetAsync(key);
+            var tokenJson = await _secrets.RevealAsync(key);
 
             if (string.IsNullOrEmpty(tokenJson))
             {

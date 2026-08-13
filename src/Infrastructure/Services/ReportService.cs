@@ -1,5 +1,6 @@
 using System.Text;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services;
 
@@ -13,19 +14,22 @@ public class ReportService : IReportService
     private readonly ITelemetryService _telemetryService;
     private readonly IConfigurationService _configurationService;
     private readonly IGitHubAuthenticationService _authService;
+    private readonly ISecretResolver _secrets;
 
     public ReportService(
         IGitHubService gitHubService,
         ISystemInformationService systemInformationService,
         ITelemetryService telemetryService,
         IConfigurationService configurationService,
-        IGitHubAuthenticationService authService)
+        IGitHubAuthenticationService authService,
+        ISecretResolver? secrets = null)
     {
         _gitHubService = gitHubService;
         _systemInformationService = systemInformationService;
         _telemetryService = telemetryService;
         _configurationService = configurationService;
         _authService = authService;
+        _secrets = secrets ?? new SecretStore();
     }
 
     public async Task<ReportResult> CreateReportAsync(CreateReportRequest request)
@@ -123,7 +127,7 @@ public class ReportService : IReportService
     {
         try
         {
-            var token = await _configurationService.GetAsync("github.token");
+            var token = await _secrets.RevealAsync("github.token");
             if (string.IsNullOrEmpty(token))
             {
                 var stored = await _authService.GetStoredTokenAsync();

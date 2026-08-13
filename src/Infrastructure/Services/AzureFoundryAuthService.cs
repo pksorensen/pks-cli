@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services;
 
@@ -38,6 +39,7 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
 
     private readonly HttpClient _httpClient;
     private readonly IConfigurationService _configurationService;
+    private readonly ISecretResolver _secrets;
     private readonly ILogger<AzureFoundryAuthService> _logger;
     private readonly AzureFoundryAuthConfig _config;
 
@@ -45,12 +47,14 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
         HttpClient httpClient,
         IConfigurationService configurationService,
         ILogger<AzureFoundryAuthService> logger,
-        AzureFoundryAuthConfig? config = null)
+        AzureFoundryAuthConfig? config = null,
+        ISecretResolver? secrets = null)
     {
         _httpClient = httpClient;
         _configurationService = configurationService;
         _logger = logger;
         _config = config ?? new AzureFoundryAuthConfig();
+        _secrets = secrets ?? new SecretStore();
     }
 
     public async Task<string?> DiscoverTenantAsync(string email, CancellationToken cancellationToken = default)
@@ -317,7 +321,7 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
     {
         try
         {
-            var json = await _configurationService.GetAsync(StorageKey);
+            var json = await _secrets.RevealAsync(StorageKey);
             if (string.IsNullOrEmpty(json))
                 return null;
 

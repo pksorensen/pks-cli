@@ -850,9 +850,11 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
     /// Phase 5 work item 3 (docs/remote-runner-targets-plan.md, decision D3): opt-in, per-file
     /// credential forwarding. The GitHub token and Foundry credentials are offered as two separate
     /// consents -- declining one never silently declines the other -- and each raw already-serialized
-    /// value is copied verbatim from this machine's own <c>~/.pks-cli/settings.json</c> rather than
+    /// value is copied verbatim out of this machine's encrypted secret store rather than
     /// re-serialized (the two files use different JSON naming conventions internally; copying the
     /// raw string is the only way to guarantee the remote's own auth services can still parse it).
+    /// This method only ever learns <em>whether</em> a credential exists; the handoff service does
+    /// the decryption and the copy.
     /// Skipped entirely (no prompt at all) when nothing is stored locally to forward, or when the
     /// SSH-handoff/config collaborators weren't injected.
     /// </summary>
@@ -860,9 +862,12 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
     {
         if (_sshHandoffService == null || _configurationService == null) return;
 
-        var githubTokenRaw = await _configurationService.GetAsync("github.auth.token");
-        var foundryCredsRaw = await _configurationService.GetAsync("foundry.auth.credentials");
-        if (string.IsNullOrEmpty(githubTokenRaw) && string.IsNullOrEmpty(foundryCredsRaw)) return;
+        // Presence only. The command never sees either credential -- the handoff service resolves
+        // the plaintext itself, which is what keeps ISecretResolver out of the command layer
+        // (enforced by SecretResolverGateTests).
+        var hasGithubToken = await _sshHandoffService.HasStoredSecretAsync("github.auth.token");
+        var hasFoundryCreds = await _sshHandoffService.HasStoredSecretAsync("foundry.auth.credentials");
+        if (!hasGithubToken && !hasFoundryCreds) return;
 
         _console.WriteLine();
         if (!_console.Confirm(
@@ -879,19 +884,19 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
 
         var factorEnrolled = _totpStore != null && await _totpStore.IsEnrolledAsync();
 
-        if (!string.IsNullOrEmpty(githubTokenRaw))
-            await ForwardOneCredentialAsync(target, "GitHub token", factorEnrolled, "github.auth.token", githubTokenRaw);
+        if (hasGithubToken)
+            await ForwardOneCredentialAsync(target, "GitHub token", factorEnrolled, "github.auth.token");
         else
             _console.MarkupLine("[dim]No GitHub token stored locally -- nothing to forward for git:push.[/]");
 
-        if (!string.IsNullOrEmpty(foundryCredsRaw))
-            await ForwardOneCredentialAsync(target, "Foundry credentials", factorEnrolled, "foundry.auth.credentials", foundryCredsRaw);
+        if (hasFoundryCreds)
+            await ForwardOneCredentialAsync(target, "Foundry credentials", factorEnrolled, "foundry.auth.credentials");
         else
             _console.MarkupLine("[dim]No Foundry credentials stored locally -- nothing to forward for Foundry chat.[/]");
     }
 
     private async Task ForwardOneCredentialAsync(
-        PKS.Infrastructure.Services.SshTarget target, string fileLabel, bool factorEnrolled, string configKey, string configValue)
+        PKS.Infrastructure.Services.SshTarget target, string fileLabel, bool factorEnrolled, string configKey)
     {
         var prompt = PKS.Infrastructure.Services.Runner.CredentialForwardConsent.BuildPrompt(fileLabel, factorEnrolled);
         if (!_console.Confirm(prompt, defaultValue: false))
@@ -912,7 +917,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             }
         }
 
-        var error = await _sshHandoffService!.ForwardConfigValueAsync(target, configKey, configValue);
+        var error = await _sshHandoffService!.ForwardStoredSecretAsync(target, configKey);
         if (error != null)
             _console.MarkupLine($"[red]Failed to forward {fileLabel.EscapeMarkup()}:[/] {error.EscapeMarkup()}");
         else

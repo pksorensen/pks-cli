@@ -79,12 +79,22 @@ public interface IAgenticsRunnerSshHandoffService
     /// (<c>github.auth.token</c> for <see cref="IGitHubAuthenticationService"/>,
     /// <c>foundry.auth.credentials</c> for <c>IAzureFoundryAuthService</c>) so forwarding actually
     /// un-degrades what the remote runner can advertise, rather than landing a decorative copy
-    /// nothing reads. Mirrors the read-merge-write-scp-chmod pattern already used by
+    /// nothing reads. The value is resolved from the local encrypted secret store <em>here</em> and
+    /// never returned to the caller — that is what keeps the command layer out of
+    /// <see cref="ISecretResolver"/> and off the plaintext path entirely. What lands on the remote
+    /// is plaintext in its <c>settings.json</c>, which that machine's own next pks run migrates
+    /// into its encrypted store. Mirrors the read-merge-write-scp-chmod pattern already used by
     /// <c>ShipRegistrationAsync</c> for <c>agentics-runners.json</c>. Returns <c>null</c> on
     /// success, or an error string describing what failed (never throws for ordinary SSH/scp
     /// failures).
     /// </summary>
-    Task<string?> ForwardConfigValueAsync(SshTarget target, string key, string value, CancellationToken ct = default);
+    Task<string?> ForwardStoredSecretAsync(SshTarget target, string key, CancellationToken ct = default);
+
+    /// <summary>
+    /// Whether a credential is stored locally under <paramref name="key"/> — so the caller can skip
+    /// the consent prompt for something it has nothing to send. Answers presence only.
+    /// </summary>
+    Task<bool> HasStoredSecretAsync(string key);
 }
 
 public sealed class AgenticsRunnerSshHandoffService : IAgenticsRunnerSshHandoffService
@@ -104,13 +114,19 @@ public sealed class AgenticsRunnerSshHandoffService : IAgenticsRunnerSshHandoffS
     private readonly ISshCommandRunner _sshRunner;
     private readonly ISshKeyStore _keyStore;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly ISecretResolver _secrets;
+    private readonly ISecretStore _secretStore;
 
     public AgenticsRunnerSshHandoffService(
-        ISshCommandRunner sshRunner, ISshKeyStore keyStore, IHttpClientFactory httpClientFactory)
+        ISshCommandRunner sshRunner, ISshKeyStore keyStore, IHttpClientFactory httpClientFactory,
+        ISecretResolver? secrets = null, ISecretStore? secretStore = null)
     {
         _sshRunner = sshRunner ?? throw new ArgumentNullException(nameof(sshRunner));
         _keyStore = keyStore ?? throw new ArgumentNullException(nameof(keyStore));
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
+        var store = new Lazy<SecretStore>(() => new SecretStore());
+        _secrets = secrets ?? store.Value;
+        _secretStore = secretStore ?? (_secrets as ISecretStore) ?? store.Value;
     }
 
     public string BuildTmuxSessionName(string owner, string project) =>
@@ -308,11 +324,16 @@ public sealed class AgenticsRunnerSshHandoffService : IAgenticsRunnerSshHandoffS
         }
     }
 
-    public async Task<string?> ForwardConfigValueAsync(SshTarget target, string key, string value, CancellationToken ct = default)
+    public Task<bool> HasStoredSecretAsync(string key) => _secretStore.HasAsync(key);
+
+    public async Task<string?> ForwardStoredSecretAsync(SshTarget target, string key, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(key);
-        ArgumentNullException.ThrowIfNull(value);
+
+        var value = await _secrets.RevealAsync(key);
+        if (string.IsNullOrEmpty(value))
+            return $"No credential is stored locally under '{key}'.";
 
         var (hostConfig, materialized) = await target.ToRemoteHostConfigAsync(_keyStore, ct);
         try

@@ -1,3 +1,4 @@
+using PKS.Infrastructure.Services.Security;
 using System.Net.Http;
 using System.Text.Json;
 using FluentAssertions;
@@ -28,6 +29,22 @@ public class AgenticsRunnerSshHandoffServiceTests
 
     private static AgenticsRunnerSshHandoffService MakeService(Mock<ISshCommandRunner> sshRunner) =>
         new AgenticsRunnerSshHandoffService(sshRunner.Object, new Mock<ISshKeyStore>().Object, new Mock<IHttpClientFactory>().Object);
+
+    /// <summary>
+    /// A service whose secret store is a throwaway directory holding exactly one credential. The
+    /// forwarding path resolves the plaintext itself now, so a test has to seed the store rather
+    /// than hand the value in.
+    /// </summary>
+    private static AgenticsRunnerSshHandoffService MakeServiceWithSecret(
+        Mock<ISshCommandRunner> sshRunner, string key, string value)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"pks-handoff-secrets-{Guid.NewGuid():n}");
+        Directory.CreateDirectory(dir);
+        var store = new SecretStore(dir);
+        store.SetAsync(key, value).GetAwaiter().GetResult();
+        return new AgenticsRunnerSshHandoffService(
+            sshRunner.Object, new Mock<ISshKeyStore>().Object, new Mock<IHttpClientFactory>().Object, store, store);
+    }
 
     [Fact]
     [Trait("Category", "Unit")]
@@ -135,12 +152,12 @@ public class AgenticsRunnerSshHandoffServiceTests
     [Fact]
     [Trait("Category", "Unit")]
     [Trait("Speed", "Fast")]
-    public async Task ForwardConfigValueAsync_NoExistingRemoteFile_WritesSingleKey_ReturnsNull()
+    public async Task ForwardStoredSecretAsync_NoExistingRemoteFile_WritesSingleKey_ReturnsNull()
     {
         var sshRunner = MakeForwardingSshRunnerMock(null, out var capturedLocalFile);
-        var service = MakeService(sshRunner);
+        var service = MakeServiceWithSecret(sshRunner, "github.auth.token", "{\"AccessToken\":\"gho_abc\"}");
 
-        var error = await service.ForwardConfigValueAsync(MakeTarget(), "github.auth.token", "{\"AccessToken\":\"gho_abc\"}");
+        var error = await service.ForwardStoredSecretAsync(MakeTarget(), "github.auth.token");
 
         error.Should().BeNull();
         var writtenPath = capturedLocalFile();
@@ -151,7 +168,7 @@ public class AgenticsRunnerSshHandoffServiceTests
     [Fact]
     [Trait("Category", "Unit")]
     [Trait("Speed", "Fast")]
-    public async Task ForwardConfigValueAsync_ExistingRemoteFile_PreservesOtherKeys()
+    public async Task ForwardStoredSecretAsync_ExistingRemoteFile_PreservesOtherKeys()
     {
         var existing = JsonSerializer.Serialize(new Dictionary<string, string> { ["some.other.key"] = "keep-me" });
         string? capturedContent = null;
@@ -171,9 +188,9 @@ public class AgenticsRunnerSshHandoffServiceTests
             .Callback<RemoteHostConfig, string, string, bool, CancellationToken>((_, local, _, _, _) => capturedContent = File.ReadAllText(local))
             .ReturnsAsync(new SshCommandResult { ExitCode = 0 });
 
-        var service = MakeService(sshRunner);
+        var service = MakeServiceWithSecret(sshRunner, "github.auth.token", "gho_new_value");
 
-        var error = await service.ForwardConfigValueAsync(MakeTarget(), "github.auth.token", "gho_new_value");
+        var error = await service.ForwardStoredSecretAsync(MakeTarget(), "github.auth.token");
 
         error.Should().BeNull();
         capturedContent.Should().NotBeNull();
@@ -185,7 +202,7 @@ public class AgenticsRunnerSshHandoffServiceTests
     [Fact]
     [Trait("Category", "Unit")]
     [Trait("Speed", "Fast")]
-    public async Task ForwardConfigValueAsync_ScpFails_ReturnsErrorMessage_DoesNotThrow()
+    public async Task ForwardStoredSecretAsync_ScpFails_ReturnsErrorMessage_DoesNotThrow()
     {
         var sshRunner = new Mock<ISshCommandRunner>();
         sshRunner
@@ -198,9 +215,9 @@ public class AgenticsRunnerSshHandoffServiceTests
             .Setup(x => x.ScpAsync(It.IsAny<RemoteHostConfig>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SshCommandResult { ExitCode = 1, StdErr = "scp: permission denied" });
 
-        var service = MakeService(sshRunner);
+        var service = MakeServiceWithSecret(sshRunner, "github.auth.token", "gho_x");
 
-        var error = await service.ForwardConfigValueAsync(MakeTarget(), "github.auth.token", "gho_x");
+        var error = await service.ForwardStoredSecretAsync(MakeTarget(), "github.auth.token");
 
         error.Should().NotBeNull();
         error.Should().Contain("permission denied");
@@ -209,12 +226,12 @@ public class AgenticsRunnerSshHandoffServiceTests
     [Fact]
     [Trait("Category", "Unit")]
     [Trait("Speed", "Fast")]
-    public async Task ForwardConfigValueAsync_CorruptRemoteFile_StartsFresh_ReturnsNull()
+    public async Task ForwardStoredSecretAsync_CorruptRemoteFile_StartsFresh_ReturnsNull()
     {
         var sshRunner = MakeForwardingSshRunnerMock("{ not valid json", out _);
-        var service = MakeService(sshRunner);
+        var service = MakeServiceWithSecret(sshRunner, "github.auth.token", "gho_x");
 
-        var error = await service.ForwardConfigValueAsync(MakeTarget(), "github.auth.token", "gho_x");
+        var error = await service.ForwardStoredSecretAsync(MakeTarget(), "github.auth.token");
 
         error.Should().BeNull();
     }

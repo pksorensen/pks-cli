@@ -3,6 +3,7 @@ using System.Text.Json;
 using Azure;
 using PKS.Infrastructure;
 using PKS.Infrastructure.Services.Agent.Chat;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services.Agent;
 
@@ -15,15 +16,18 @@ public sealed class AgentChatProviderFactory
     private readonly IConfigurationService _config;
     private readonly HttpClient _httpClient;
     private readonly IAzureFoundryAuthService? _foundryAuth;
+    private readonly ISecretResolver _secrets;
 
     public AgentChatProviderFactory(
         IConfigurationService config,
         HttpClient httpClient,
-        IAzureFoundryAuthService? foundryAuth = null)
+        IAzureFoundryAuthService? foundryAuth = null,
+        ISecretResolver? secrets = null)
     {
         _config = config;
         _httpClient = httpClient;
         _foundryAuth = foundryAuth;
+        _secrets = secrets ?? new SecretStore();
     }
 
     /// <summary>
@@ -188,7 +192,7 @@ public sealed class AgentChatProviderFactory
         var resolvedProvider = provider ?? defaults!.Provider;
         var endpoint = (await _config.GetAsync($"agent.models.{modelId}.endpoint")) ?? defaults?.Endpoint;
         var deployment = (await _config.GetAsync($"agent.models.{modelId}.deployment")) ?? defaults?.Deployment;
-        var apiKey = (await _config.GetAsync($"agent.models.{modelId}.apiKey")) ?? defaults?.ApiKey;
+        var apiKey = (await _secrets.RevealAsync($"agent.models.{modelId}.apiKey")) ?? defaults?.ApiKey;
 
         // Foundry fallback: an azure-openai model with no explicitly configured
         // endpoint resolves to the Foundry-selected resource from `pks foundry init`

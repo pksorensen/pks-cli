@@ -310,6 +310,12 @@ public class StatusToolService
         };
     }
 
+    /// <summary>
+    /// Whole-configuration dump into an agent's context. This is safe only because
+    /// <see cref="IConfigurationService.GetAllAsync"/> cannot return credential material: secrets
+    /// live in the separate encrypted store and are absent from the configuration surface entirely.
+    /// Do not swap this for a source that has not made the same promise.
+    /// </summary>
     private async Task<Dictionary<string, object?>> GetSystemConfigurationAsync()
     {
         var config = await _configurationService.GetAllAsync();
