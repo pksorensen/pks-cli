@@ -339,4 +339,37 @@ public class SecretSeedingServiceTests : IDisposable
         (await new SecretSeedingService(new SecretStore(sourceDir))
             .SeedIntoHomeAsync("foundry.auth.credentials", Path.Combine(_dir, "home"))).Should().BeFalse();
     }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task LegacyPlaintextCredential_IsMigratedThenSeeded()
+    {
+        // The upgrade case, and the one that would silently break the AppHost: the credential is
+        // still sitting in plaintext in settings.json and the encrypted store is empty. Seeding has
+        // to migrate first, or it reports "nothing to seed" for a credential that is right there and
+        // the ALP runner comes up with no Foundry session.
+        var sourceDir = Path.Combine(_dir, "legacy");
+        var targetHome = Path.Combine(_dir, "legacy-runner-home");
+        Directory.CreateDirectory(sourceDir);
+
+        var store = new SecretStore(sourceDir);
+        var settingsPath = Path.Combine(sourceDir, "settings.json");
+        var config = new ConfigurationService(settingsPath, store);
+
+        // Written after the service exists, so this exercises the seeding service's own migration
+        // call rather than the one the constructor happens to do — which is also the real rollout
+        // window, where an older `dotnet dnx pks-cli` writes plaintext back underneath us.
+        await File.WriteAllTextAsync(settingsPath, System.Text.Json.JsonSerializer.Serialize(
+            new Dictionary<string, string> { ["foundry.auth.credentials"] = "{\"RefreshToken\":\"legacy_rt\"}" }));
+
+        (await new SecretSeedingService(store, config)
+            .SeedIntoHomeAsync("foundry.auth.credentials", targetHome)).Should().BeTrue();
+
+        (await new SecretStore(Path.Combine(targetHome, ".pks-cli")).RevealAsync("foundry.auth.credentials"))
+            .Should().Be("{\"RefreshToken\":\"legacy_rt\"}");
+
+        // And the plaintext original is gone from the file that keeps getting dumped into transcripts.
+        (await File.ReadAllTextAsync(settingsPath)).Should().NotContain("legacy_rt");
+    }
 }

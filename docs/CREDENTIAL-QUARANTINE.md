@@ -49,6 +49,12 @@ This runs on *every* load, not once, because `dotnet dnx pks-cli` means an older
 plaintext back during the rollout window. `SaveSettingsAsync` strips secret keys unconditionally as the
 second half of that guard.
 
+Every command that reads the store loads settings first for the same reason. Without it, the first
+`pks secrets list` after an upgrade would print "no credentials stored" while every token still sat in
+plaintext on disk, and `seed-home` would report "nothing to seed" for a credential that was right
+there — leaving the ALP runner without a Foundry session. The store is only the truth *after* the
+sweep has run.
+
 ## Working with it
 
 ```bash

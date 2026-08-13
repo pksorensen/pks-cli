@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using PKS.Infrastructure;
 using PKS.Infrastructure.Services.Security;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -11,6 +12,12 @@ namespace PKS.Commands.Secrets;
 /// when, and whether two machines hold the same value, and there is no command anywhere that prints
 /// the value itself. Losing access to a credential is a re-login, not a lookup: that is the trade the
 /// design makes on purpose.
+///
+/// Every one of them takes <see cref="IConfigurationService"/> and loads settings first. That is not
+/// decoration: the legacy-plaintext migration lives in <c>LoadSettingsAsync</c>, and on a machine
+/// that has just upgraded, the credentials are still in <c>settings.json</c> and the store is empty.
+/// Without that call, the commands whose job is telling the truth about the store would report
+/// "nothing stored" while every token sat in plaintext on disk.
 /// </summary>
 public class SecretsSettings : CommandSettings
 {
@@ -70,15 +77,18 @@ public class SecretsListCommand : AsyncCommand<SecretsSettings>
 {
     private readonly IAnsiConsole _console;
     private readonly ISecretStore _store;
+    private readonly IConfigurationService _config;
 
-    public SecretsListCommand(IAnsiConsole console, ISecretStore store)
+    public SecretsListCommand(IAnsiConsole console, ISecretStore store, IConfigurationService config)
     {
         _console = console;
         _store = store;
+        _config = config;
     }
 
     public override async Task<int> ExecuteAsync(CommandContext context, SecretsSettings settings)
     {
+        await _config.LoadSettingsAsync();
         var secrets = await _store.ListAsync();
 
         if (secrets.Count == 0)
@@ -110,15 +120,18 @@ public class SecretsStatusCommand : AsyncCommand<SecretsKeySettings>
 {
     private readonly IAnsiConsole _console;
     private readonly ISecretStore _store;
+    private readonly IConfigurationService _config;
 
-    public SecretsStatusCommand(IAnsiConsole console, ISecretStore store)
+    public SecretsStatusCommand(IAnsiConsole console, ISecretStore store, IConfigurationService config)
     {
         _console = console;
         _store = store;
+        _config = config;
     }
 
     public override async Task<int> ExecuteAsync(CommandContext context, SecretsKeySettings settings)
     {
+        await _config.LoadSettingsAsync();
         var descriptor = await _store.DescribeAsync(settings.Key);
         if (descriptor is null)
         {
@@ -137,15 +150,21 @@ public class SecretsDeleteCommand : AsyncCommand<SecretsKeySettings>
 {
     private readonly IAnsiConsole _console;
     private readonly ISecretStore _store;
+    private readonly IConfigurationService _config;
 
-    public SecretsDeleteCommand(IAnsiConsole console, ISecretStore store)
+    public SecretsDeleteCommand(IAnsiConsole console, ISecretStore store, IConfigurationService config)
     {
         _console = console;
         _store = store;
+        _config = config;
     }
 
     public override async Task<int> ExecuteAsync(CommandContext context, SecretsKeySettings settings)
     {
+        // Migrate first, so deleting a credential that is still in plaintext actually removes it
+        // rather than reporting "nothing stored" and leaving the copy on disk.
+        await _config.LoadSettingsAsync();
+
         if (await _store.DeleteAsync(settings.Key))
         {
             _console.MarkupLine($"[green]Removed[/] [cyan]{settings.Key.EscapeMarkup()}[/].");

@@ -21,11 +21,25 @@ public interface ISecretSeedingService
 public sealed class SecretSeedingService : ISecretSeedingService
 {
     private readonly ISecretResolver _secrets;
+    private readonly PKS.Infrastructure.IConfigurationService? _migration;
 
-    public SecretSeedingService(ISecretResolver? secrets = null) => _secrets = secrets ?? new SecretStore();
+    /// <param name="migration">
+    /// The configuration service, present only to run the legacy-plaintext sweep before the store is
+    /// read. On a machine that has not yet run a command touching config, the credential still lives
+    /// in <c>settings.json</c> and the store is empty — seeding would report "nothing to seed" for a
+    /// credential that is right there. DI always supplies it; tests that build a store directly pass
+    /// null because no legacy settings.json is in play.
+    /// </param>
+    public SecretSeedingService(ISecretResolver? secrets = null, PKS.Infrastructure.IConfigurationService? migration = null)
+    {
+        _secrets = secrets ?? new SecretStore();
+        _migration = migration;
+    }
 
     public async Task<bool> SeedIntoHomeAsync(string key, string homeDirectory)
     {
+        if (_migration is not null) await _migration.LoadSettingsAsync();
+
         var value = await _secrets.RevealAsync(key);
         if (string.IsNullOrEmpty(value)) return false;
 
