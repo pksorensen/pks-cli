@@ -21,11 +21,18 @@ namespace PKS.Commands.OpenRouter;
 /// will not be an export command. A local script that needs OpenRouter therefore does not get the
 /// key; it gets a loopback URL and a token that dies with this process:
 ///
-///   eval $(pks openrouter proxy)
-///   NEMO_BASE_URL=$OPENROUTER_PROXY_URL NEMO_API_KEY=$OPENROUTER_PROXY_TOKEN python3 run_llm_cleanup.py
+///   export OPENROUTER_PROXY_TOKEN=$(uuidgen) OPENROUTER_PROXY_URL=http://localhost:8787
+///   pks openrouter proxy --port 8787 --token "$OPENROUTER_PROXY_TOKEN" &amp;
+///   NEMO_BASE_URL=$OPENROUTER_PROXY_URL NEMO_API_KEY=$OPENROUTER_PROXY_TOKEN python3 run_cleanup.py
 ///
-/// Same shape as <c>pks foundry proxy</c>. Loopback only, and the token is per-process, so nothing
-/// reusable lands in a shell history, an env file or a scrollback buffer.
+/// The caller supplies port and token because the obvious alternative does not work:
+/// <c>eval $(pks openrouter proxy)</c> — the shape <c>pks foundry proxy</c> documents — hangs. The
+/// export lines are printed and flushed, but command substitution reads the child's stdout to EOF,
+/// and a server that is still serving has not closed it. The exports are still printed for the
+/// interactive case; they are just not capturable that way.
+///
+/// Loopback only, and the token is per-process, so nothing reusable lands in a shell history, an env
+/// file or a scrollback buffer.
 /// </summary>
 [Description("Start a local OpenAI-compatible proxy that signs requests with the stored OpenRouter key")]
 public sealed class OpenRouterProxyCommand : AsyncCommand<OpenRouterProxyCommand.Settings>
@@ -75,9 +82,11 @@ public sealed class OpenRouterProxyCommand : AsyncCommand<OpenRouterProxyCommand
         var proxyToken = settings.Token ?? Guid.NewGuid().ToString("N");
         var upstreamBase = OpenRouterService.BaseUrl.TrimEnd('/');
 
-        // Printed before the server starts so `eval $(pks openrouter proxy)` captures them.
+        // Printed before the server starts, for a human reading the terminal. Not capturable with
+        // command substitution — see the class comment for why, and for the pattern that works.
         Console.WriteLine($"export OPENROUTER_PROXY_URL=http://localhost:{port}");
         Console.WriteLine($"export OPENROUTER_PROXY_TOKEN={proxyToken}");
+        Console.Out.Flush();
 
         var builder = WebApplication.CreateSlimBuilder(Array.Empty<string>());
         builder.WebHost.UseUrls($"http://localhost:{port}");

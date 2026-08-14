@@ -107,9 +107,14 @@ The common version of "I need it somewhere else" is not another machine — it i
 that wants an OpenAI-compatible endpoint. Those get a proxy, not the key:
 
 ```bash
-eval $(pks openrouter proxy)   # exports OPENROUTER_PROXY_URL + OPENROUTER_PROXY_TOKEN
+export OPENROUTER_PROXY_TOKEN=$(uuidgen) OPENROUTER_PROXY_URL=http://localhost:8787
+pks openrouter proxy --port 8787 --token "$OPENROUTER_PROXY_TOKEN" &
 NEMO_BASE_URL=$OPENROUTER_PROXY_URL NEMO_API_KEY=$OPENROUTER_PROXY_TOKEN python3 run_llm_cleanup.py
 ```
+
+The caller picks the port and token on purpose. `eval $(pks … proxy)` — the form
+`FoundryProxyCommand` documents — hangs: the export lines are printed and flushed, but command
+substitution reads to EOF and a server that is still serving has not closed stdout.
 
 The proxy listens on loopback, checks a token generated for this process, and signs the upstream
 request through `SecretSink` — so the real key never enters the script's environment, its argv, the
