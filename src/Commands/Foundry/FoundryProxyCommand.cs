@@ -19,9 +19,13 @@ namespace PKS.Commands.Foundry;
 /// acquires a real Azure AI Foundry bearer token via the stored OAuth2 credentials,
 /// and forwards the request to the real Azure endpoint.
 ///
-/// Usage pattern (bash):
-///   eval $(pks foundry proxy)
-///   # Now FOUNDRY_PROXY_URL and FOUNDRY_PROXY_TOKEN are set in the current shell.
+/// Usage pattern (bash) — the caller picks port and token, because
+/// <c>eval $(pks foundry proxy)</c> (what this comment used to recommend) hangs: command
+/// substitution reads the child's stdout to EOF, and a server that is still serving has not
+/// closed it.
+///
+///   export FOUNDRY_PROXY_TOKEN=$(uuidgen) FOUNDRY_PROXY_URL=http://localhost:8788
+///   pks foundry proxy --port 8788 --token "$FOUNDRY_PROXY_TOKEN" &amp;
 ///   # Point NarrationGenerator or any client at the proxy URL with the proxy token.
 /// </summary>
 [Description("Start a local HTTP proxy that swaps a proxy token for a real Azure AI Foundry bearer token")]
