@@ -140,11 +140,16 @@ public sealed class FoundryResponsesPassthrough
         using var ms = new MemoryStream();
         await ctx.Request.Body.CopyToAsync(ms, ctx.RequestAborted);
         var requestBytes = FilterFoundryIncompatibleAdditionalTools(ms.ToArray(), out var filterSummary);
+        requestBytes = NormalizeEmptyToolDescriptions(requestBytes, out var toolDescriptionSummary);
         requestBytes = FixLeadingReasoningItem(requestBytes, out var reasoningFixSummary);
         var requestSummary = BuildRequestSummary(requestBytes);
         if (filterSummary is not null)
         {
             await WriteLocalFailureAsync("request.filtered", requestSummary, filterSummary, ctx.RequestAborted);
+        }
+        if (toolDescriptionSummary is not null)
+        {
+            await WriteLocalFailureAsync("request.tool_descriptions", requestSummary, toolDescriptionSummary, ctx.RequestAborted);
         }
         if (reasoningFixSummary is not null)
         {
@@ -386,6 +391,104 @@ public sealed class FoundryResponsesPassthrough
 
         summary = $"Removed {removed} `collaboration` additional_tools entr{(removed == 1 ? "y" : "ies")} for Azure AI Foundry compatibility.";
         return Encoding.UTF8.GetBytes(root.ToJsonString());
+    }
+
+    internal static byte[] NormalizeEmptyToolDescriptions(byte[] requestBytes, out string? summary)
+    {
+        summary = null;
+        JsonObject? root;
+        try
+        {
+            root = JsonNode.Parse(requestBytes) as JsonObject;
+        }
+        catch (JsonException)
+        {
+            return requestBytes;
+        }
+
+        if (root is null)
+        {
+            return requestBytes;
+        }
+
+        var fixedCount = NormalizeEmptyToolDescriptions(root);
+        if (fixedCount == 0)
+        {
+            return requestBytes;
+        }
+
+        summary = $"Filled {fixedCount} empty tool description{(fixedCount == 1 ? "" : "s")} for Foundry/OpenAI schema compatibility.";
+        return Encoding.UTF8.GetBytes(root.ToJsonString());
+    }
+
+    private static int NormalizeEmptyToolDescriptions(JsonNode node)
+    {
+        var fixedCount = 0;
+
+        if (node is JsonObject obj)
+        {
+            foreach (var property in obj.ToArray())
+            {
+                if (string.Equals(property.Key, "tools", StringComparison.OrdinalIgnoreCase) &&
+                    property.Value is JsonArray tools)
+                {
+                    fixedCount += NormalizeToolArrayDescriptions(tools);
+                }
+
+                if (property.Value is not null)
+                {
+                    fixedCount += NormalizeEmptyToolDescriptions(property.Value);
+                }
+            }
+        }
+        else if (node is JsonArray array)
+        {
+            foreach (var item in array)
+            {
+                if (item is not null)
+                {
+                    fixedCount += NormalizeEmptyToolDescriptions(item);
+                }
+            }
+        }
+
+        return fixedCount;
+    }
+
+    private static int NormalizeToolArrayDescriptions(JsonArray tools)
+    {
+        var fixedCount = 0;
+        foreach (var toolNode in tools)
+        {
+            if (toolNode is not JsonObject tool)
+            {
+                continue;
+            }
+
+            if (tool["description"] is JsonValue descriptionValue &&
+                descriptionValue.TryGetValue<string>(out var description) &&
+                string.IsNullOrWhiteSpace(description))
+            {
+                tool["description"] = BuildFallbackToolDescription(tool);
+                fixedCount++;
+            }
+        }
+
+        return fixedCount;
+    }
+
+    private static string BuildFallbackToolDescription(JsonObject tool)
+    {
+        var name = tool["name"]?.GetValue<string>();
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            return $"Tool {name}.";
+        }
+
+        var type = tool["type"]?.GetValue<string>();
+        return string.IsNullOrWhiteSpace(type)
+            ? "Tool provided by Codex."
+            : $"Tool {type}.";
     }
 
     /// <summary>
