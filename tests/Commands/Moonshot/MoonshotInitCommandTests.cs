@@ -30,7 +30,7 @@ public class MoonshotInitCommandTests
             It.Is<ActionRequest>(request => request.ActionId == ActionIds.CloudAuthWrite),
             default));
         moonshot.Verify(x => x.StoreCredentialsAsync(
-            It.Is<MoonshotStoredCredentials>(credentials => credentials.ApiKey == "secret-value")));
+            It.Is<MoonshotStoredCredentials>(credentials => credentials.ApiKey == SecretValue.From("secret-value"))));
         console.Output.Should().NotContain("secret-value");
     }
 

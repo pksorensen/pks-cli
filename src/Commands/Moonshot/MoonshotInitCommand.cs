@@ -70,7 +70,7 @@ public sealed class MoonshotInitCommand : AsyncCommand<MoonshotInitCommand.Setti
 
         await _moonshot.StoreCredentialsAsync(new MoonshotStoredCredentials
         {
-            ApiKey = apiKey,
+            ApiKey = SecretValue.From(apiKey),
             CreatedAt = DateTime.UtcNow,
         });
 

@@ -2,6 +2,7 @@ using Xunit;
 using FluentAssertions;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.CLI.Tests.Services;
 
@@ -16,7 +17,7 @@ public class TailscaleServiceTests
     {
         var creds = new TailscaleStoredCredentials
         {
-            AuthKey = "tskey-abc",
+            AuthKey = SecretValue.From("tskey-abc"),
             EnableSsh = true,
             AcceptRoutes = true,
             AdvertiseExitNode = true
@@ -38,7 +39,7 @@ public class TailscaleServiceTests
     {
         var creds = new TailscaleStoredCredentials
         {
-            AuthKey = "tskey-abc",
+            AuthKey = SecretValue.From("tskey-abc"),
             EnableSsh = false,
             AcceptRoutes = false,
             AdvertiseExitNode = false
@@ -57,7 +58,7 @@ public class TailscaleServiceTests
     [Trait("Speed", "Fast")]
     public void BuildUpArgs_IncludesLoginServerWhenSet()
     {
-        var creds = new TailscaleStoredCredentials { AuthKey = "tskey-x", LoginServer = "https://hs.example.com" };
+        var creds = new TailscaleStoredCredentials { AuthKey = SecretValue.From("tskey-x"), LoginServer = "https://hs.example.com" };
         Svc().BuildUpArgs(creds, "vm").Should().Contain("--login-server=https://hs.example.com");
     }
 }

@@ -65,20 +65,22 @@ public class ScalewayService : IScalewayService
     public async Task<bool> IsAuthenticatedAsync()
     {
         var creds = await GetStoredCredentialsAsync();
-        return creds != null && !string.IsNullOrEmpty(creds.SecretKey);
+        return creds != null && creds.SecretKey.HasValue;
     }
 
     public async Task<ScalewayStoredCredentials?> GetStoredCredentialsAsync()
     {
         var json = await _secrets.RevealAsync(StorageKey);
         if (string.IsNullOrEmpty(json)) return null;
-        try { return JsonSerializer.Deserialize<ScalewayStoredCredentials>(json); }
+        try { return JsonSerializer.Deserialize<ScalewayStoredCredentials>(json, SecretJson.Persistence); }
         catch (JsonException) { return null; }
     }
 
     public async Task StoreCredentialsAsync(ScalewayStoredCredentials credentials)
     {
-        var json = JsonSerializer.Serialize(credentials);
+        // Persistence options: with the defaults the secret key would be written as "***" and read
+        // back absent, logging the user out of Scaleway on the next command.
+        var json = JsonSerializer.Serialize(credentials, SecretJson.Persistence);
         await _config.SetAsync(StorageKey, json, global: true);
     }
 
@@ -268,9 +270,9 @@ public class ScalewayService : IScalewayService
     private async Task<string> RequireSecretAsync()
     {
         var creds = await GetStoredCredentialsAsync();
-        if (creds == null || string.IsNullOrEmpty(creds.SecretKey))
+        if (creds == null || !creds.SecretKey.HasValue)
             throw new InvalidOperationException("Not authenticated with Scaleway. Run 'pks scaleway init' first.");
-        return creds.SecretKey;
+        return creds.SecretKey.Reveal()!;
     }
 
     private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, string secretKey, string? body, CancellationToken ct)

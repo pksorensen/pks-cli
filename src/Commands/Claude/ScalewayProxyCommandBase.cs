@@ -14,6 +14,7 @@ using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Agent.Anthropic;
 using Spectre.Console;
 using Spectre.Console.Cli;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Commands.Claude;
 
@@ -80,7 +81,7 @@ public abstract class ScalewayProxyCommandBase : AsyncCommand<ScalewayProxyComma
         }
 
         var creds = await _scaleway.GetStoredCredentialsAsync();
-        if (creds == null || string.IsNullOrEmpty(creds.SecretKey))
+        if (creds == null || !creds.SecretKey.HasValue)
         {
             _console.MarkupLine("[red]No Scaleway secret key configured — run [bold]pks scaleway init[/].[/]");
             return 1;
@@ -131,7 +132,7 @@ public abstract class ScalewayProxyCommandBase : AsyncCommand<ScalewayProxyComma
             {
                 Content = new StringContent(chatBody.ToJsonString(), Encoding.UTF8, "application/json"),
             };
-            upstreamReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            SecretSink.SetBearerToken(upstreamReq, apiKey);
 
             var client = httpClientFactory.CreateClient("scaleway-upstream");
             using var upstream = await client.SendAsync(upstreamReq, HttpCompletionOption.ResponseHeadersRead, ctx.RequestAborted);
@@ -248,7 +249,7 @@ public abstract class ScalewayProxyCommandBase : AsyncCommand<ScalewayProxyComma
     }
 
     /// <summary>Sends a tiny chat call to validate model + auth + endpoint. Returns null on success, else the error text.</summary>
-    private async Task<string?> PreflightAsync(IHttpClientFactory factory, string chatUrl, string model, string apiKey)
+    private async Task<string?> PreflightAsync(IHttpClientFactory factory, string chatUrl, string model, SecretValue apiKey)
     {
         try
         {
@@ -263,7 +264,7 @@ public abstract class ScalewayProxyCommandBase : AsyncCommand<ScalewayProxyComma
             {
                 Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"),
             };
-            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            SecretSink.SetBearerToken(req, apiKey);
 
             var client = factory.CreateClient("scaleway-upstream");
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));

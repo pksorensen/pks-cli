@@ -6,6 +6,7 @@ using PKS.Infrastructure;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using Xunit;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.CLI.Tests.Services;
 
@@ -46,11 +47,11 @@ public class MoonshotServiceTests
         var service = new MoonshotService(new HttpClient(new Handler(_ =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)))), config.Object);
 
-        await service.StoreCredentialsAsync(new MoonshotStoredCredentials { ApiKey = "secret-value" });
+        await service.StoreCredentialsAsync(new MoonshotStoredCredentials { ApiKey = SecretValue.From("secret-value") });
 
         config.Verify(x => x.SetAsync(
             "moonshot.auth.credentials",
-            It.Is<string>(json => JsonSerializer.Deserialize<MoonshotStoredCredentials>(json)!.ApiKey == "secret-value"),
+            It.Is<string>(json => JsonSerializer.Deserialize<MoonshotStoredCredentials>(json, SecretJson.Persistence)!.ApiKey == SecretValue.From("secret-value")),
             true,
             false));
     }

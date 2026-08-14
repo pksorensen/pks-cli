@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Text.Json.Serialization;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services.Models;
 
@@ -11,7 +12,7 @@ namespace PKS.Infrastructure.Services.Models;
 public class ScalewayStoredCredentials
 {
     public string AccessKey { get; set; } = string.Empty;
-    public string SecretKey { get; set; } = string.Empty;
+    public SecretValue SecretKey { get; set; }
     public string OrganizationId { get; set; } = string.Empty;
     public string DefaultProjectId { get; set; } = string.Empty;
     public string DefaultProjectName { get; set; } = string.Empty;

@@ -33,7 +33,7 @@ public sealed class MoonshotService : IMoonshotService
     public async Task<bool> IsAuthenticatedAsync()
     {
         var credentials = await GetStoredCredentialsAsync();
-        return !string.IsNullOrWhiteSpace(credentials?.ApiKey);
+        return credentials?.ApiKey.HasValue == true;
     }
 
     public async Task<MoonshotStoredCredentials?> GetStoredCredentialsAsync()
@@ -43,7 +43,7 @@ public sealed class MoonshotService : IMoonshotService
 
         try
         {
-            return JsonSerializer.Deserialize<MoonshotStoredCredentials>(json);
+            return JsonSerializer.Deserialize<MoonshotStoredCredentials>(json, SecretJson.Persistence);
         }
         catch (JsonException)
         {
@@ -52,7 +52,7 @@ public sealed class MoonshotService : IMoonshotService
     }
 
     public Task StoreCredentialsAsync(MoonshotStoredCredentials credentials) =>
-        _configuration.SetAsync(StorageKey, JsonSerializer.Serialize(credentials), global: true);
+        _configuration.SetAsync(StorageKey, JsonSerializer.Serialize(credentials, SecretJson.Persistence), global: true);
 
     public Task ClearStoredCredentialsAsync() => _configuration.DeleteAsync(StorageKey);
 

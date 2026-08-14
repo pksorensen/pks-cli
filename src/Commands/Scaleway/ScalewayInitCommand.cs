@@ -153,7 +153,7 @@ public class ScalewayInitCommand : Command<ScalewayInitCommand.Settings>
         await _scaleway.StoreCredentialsAsync(new ScalewayStoredCredentials
         {
             AccessKey = accessKey,
-            SecretKey = secretKey,
+            SecretKey = SecretValue.From(secretKey),
             OrganizationId = organizationId,
             DefaultProjectId = selectedProject.Id,
             DefaultProjectName = selectedProject.Name,

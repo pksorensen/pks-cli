@@ -1,3 +1,5 @@
+using PKS.Infrastructure.Services.Security;
+
 namespace PKS.Infrastructure.Services.Models;
 
 /// <summary>
@@ -7,7 +9,7 @@ namespace PKS.Infrastructure.Services.Models;
 /// </summary>
 public class TailscaleStoredCredentials
 {
-    public string AuthKey { get; set; } = string.Empty;
+    public SecretValue AuthKey { get; set; }
     public bool EnableSsh { get; set; } = true;
     public bool AcceptRoutes { get; set; } = true;
     public bool AdvertiseExitNode { get; set; } = true;

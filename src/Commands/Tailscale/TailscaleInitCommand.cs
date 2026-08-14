@@ -3,6 +3,7 @@ using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Commands.Tailscale;
 
@@ -59,7 +60,7 @@ public class TailscaleInitCommand : Command<TailscaleInitCommand.Settings>
 
         await _tailscale.StoreCredentialsAsync(new TailscaleStoredCredentials
         {
-            AuthKey = authKey,
+            AuthKey = SecretValue.From(authKey),
             EnableSsh = enableSsh,
             AcceptRoutes = acceptRoutes,
             AdvertiseExitNode = exitNode,

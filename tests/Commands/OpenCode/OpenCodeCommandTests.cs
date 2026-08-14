@@ -5,6 +5,7 @@ using PKS.Commands.OpenCode;
 using PKS.Infrastructure.Services;
 using Spectre.Console.Testing;
 using Xunit;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.CLI.Tests.Commands.OpenCode;
 
@@ -100,7 +101,7 @@ public class OpenCodeCommandTests
         var startInfo = OpenCodeCommand.BuildStartInfo(
             moonshot,
             "kimi-k3",
-            "secret-value",
+            SecretValue.From("secret-value"),
             ["--continue"]);
 
         startInfo.FileName.Should().Be("opencode");

@@ -5,6 +5,7 @@ using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Agent.Anthropic;
 using Spectre.Console;
 using Spectre.Console.Cli;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Commands.OpenCode;
 
@@ -67,7 +68,7 @@ public sealed class OpenCodeCommand : AsyncCommand<OpenCodeSettings>
 
         var model = NormalizeModel(settings.Model, Providers);
         var apiKey = await GetApiKeyAsync(provider.Id);
-        if (string.IsNullOrWhiteSpace(apiKey))
+        if (!apiKey.HasValue)
         {
             _console.MarkupLine($"[red]No {Markup.Escape(provider.DisplayName)} API key is configured.[/]");
             _console.MarkupLine($"[dim]Run [bold]pks {provider.Id} init[/] first.[/]");
@@ -161,7 +162,7 @@ public sealed class OpenCodeCommand : AsyncCommand<OpenCodeSettings>
     public static ProcessStartInfo BuildStartInfo(
         OpenCodeProvider provider,
         string model,
-        string apiKey,
+        SecretValue apiKey,
         IReadOnlyList<string> nativeArgs)
     {
         var normalizedModel = NormalizeModel(model, Providers);
@@ -174,7 +175,7 @@ public sealed class OpenCodeCommand : AsyncCommand<OpenCodeSettings>
         startInfo.ArgumentList.Add($"{provider.Id}/{normalizedModel}");
         foreach (var argument in nativeArgs) startInfo.ArgumentList.Add(argument);
 
-        startInfo.Environment[provider.ApiKeyEnvironmentVariable] = apiKey;
+        SecretSink.SetEnvironmentVariable(startInfo, provider.ApiKeyEnvironmentVariable, apiKey);
         startInfo.Environment["OPENCODE_CONFIG_CONTENT"] = BuildInlineConfig(provider, normalizedModel);
         return startInfo;
     }
@@ -216,11 +217,11 @@ public sealed class OpenCodeCommand : AsyncCommand<OpenCodeSettings>
         return prefix is null ? value : value[(prefix.Length + 1)..];
     }
 
-    private async Task<string?> GetApiKeyAsync(string providerId) => providerId switch
+    private async Task<SecretValue> GetApiKeyAsync(string providerId) => providerId switch
     {
-        "scaleway" => (await _scaleway.GetStoredCredentialsAsync())?.SecretKey,
-        "moonshot" => (await _moonshot.GetStoredCredentialsAsync())?.ApiKey,
-        _ => null,
+        "scaleway" => (await _scaleway.GetStoredCredentialsAsync())?.SecretKey ?? SecretValue.None,
+        "moonshot" => (await _moonshot.GetStoredCredentialsAsync())?.ApiKey ?? SecretValue.None,
+        _ => SecretValue.None,
     };
 
     private static string? ExtractProviderPrefix(

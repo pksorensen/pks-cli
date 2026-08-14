@@ -12,6 +12,7 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.CLI.Tests.Services;
 
@@ -31,16 +32,27 @@ public class ScalewayServiceTests
     {
         var http = new HttpClient(new MockHttpMessageHandler(handler));
         var config = new Mock<IConfigurationService>();
+        // Persistence options, or the seeded secret key is masked to "***" and every test below
+        // authenticates as nobody.
         var credsJson = JsonSerializer.Serialize(new ScalewayStoredCredentials
         {
             AccessKey = "SCWXXX",
-            SecretKey = SecretKey,
+            SecretKey = SecretValue.From(SecretKey),
             OrganizationId = "org-1",
             DefaultProjectId = "proj-1",
             DefaultZone = "fr-par-2"
-        });
+        }, SecretJson.Persistence);
         config.Setup(x => x.GetAsync("scaleway.auth.credentials")).ReturnsAsync(credsJson);
-        return new ScalewayService(http, config.Object);
+
+        // The resolver has to be faked. Left null, ScalewayService falls back to `new SecretStore()`
+        // — the developer's real ~/.pks-cli — and these tests start asserting against whoever is
+        // logged in, which is how this class came to send a live Scaleway secret key at an
+        // assertion expecting "secret-123".
+        var secrets = new Mock<ISecretResolver>();
+        secrets.Setup(x => x.RevealAsync(It.IsAny<string>()))
+            .Returns((string key) => config.Object.GetAsync(key));
+
+        return new ScalewayService(http, config.Object, secrets.Object);
     }
 
     private static HttpResponseMessage Json(string body) =>
