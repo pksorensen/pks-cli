@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 using PKS.Infrastructure.Services.Runner;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -121,8 +122,8 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
 
                     await _authService.StoreTokenAsync(new PKS.Infrastructure.Services.Models.GitHubStoredToken
                     {
-                        AccessToken = authResult.AccessToken!,
-                        RefreshToken = authResult.RefreshToken,
+                        AccessToken = SecretValue.From(authResult.AccessToken),
+                        RefreshToken = SecretValue.From(authResult.RefreshToken),
                         Scopes = authResult.Scopes,
                         CreatedAt = DateTime.UtcNow,
                         ExpiresAt = authResult.ExpiresAt,

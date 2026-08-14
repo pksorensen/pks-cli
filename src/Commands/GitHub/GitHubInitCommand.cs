@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -80,8 +81,8 @@ public class GitHubInitCommand : Command<GitHubInitCommand.Settings>
             // PAT path — store directly, skip device code and app-install check
             await _authService.StoreTokenAsync(new GitHubStoredToken
             {
-                AccessToken = settings.Token.Trim(),
-                RefreshToken = null,
+                AccessToken = SecretValue.From(settings.Token.Trim()),
+                RefreshToken = SecretValue.None,
                 Scopes = [],
                 CreatedAt = DateTime.UtcNow,
                 ExpiresAt = null,   // PATs don't expire (or user manages rotation)
@@ -187,8 +188,8 @@ public class GitHubInitCommand : Command<GitHubInitCommand.Settings>
 
         await _authService.StoreTokenAsync(new GitHubStoredToken
         {
-            AccessToken = authResult.AccessToken!,
-            RefreshToken = authResult.RefreshToken,
+            AccessToken = SecretValue.From(authResult.AccessToken),
+            RefreshToken = SecretValue.From(authResult.RefreshToken),
             Scopes = authResult.Scopes,
             CreatedAt = DateTime.UtcNow,
             ExpiresAt = authResult.ExpiresAt,
@@ -215,7 +216,7 @@ public class GitHubInitCommand : Command<GitHubInitCommand.Settings>
         }
 
         using var client = _httpClientFactory.CreateClient();
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", stored.AccessToken);
+        SecretSink.SetBearerToken(client, stored.AccessToken);
         client.DefaultRequestHeaders.Add("User-Agent", _config.UserAgent);
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         client.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");

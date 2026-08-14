@@ -3,6 +3,7 @@ using Spectre.Console;
 using Spectre.Console.Cli;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Commands;
 
@@ -295,7 +296,7 @@ public class AuthCommand : Command<AuthCommand.Settings>
         // Store the token
         var storedToken = new GitHubStoredToken
         {
-            AccessToken = settings.Token,
+            AccessToken = SecretValue.From(settings.Token),
             Scopes = validation.Scopes,
             CreatedAt = DateTime.UtcNow,
             IsValid = true,
@@ -336,7 +337,7 @@ public class AuthCommand : Command<AuthCommand.Settings>
             return 1;
         }
 
-        var validation = await _authService.ValidateTokenAsync(storedToken.AccessToken);
+        var validation = await _authService.ValidateStoredTokenAsync(settings.User);
 
         if (validation.IsValid)
         {

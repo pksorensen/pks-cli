@@ -131,7 +131,7 @@ public class ReportService : IReportService
             if (string.IsNullOrEmpty(token))
             {
                 var stored = await _authService.GetStoredTokenAsync();
-                token = stored?.AccessToken;
+                token = stored?.AccessToken.Reveal();
             }
 
             if (string.IsNullOrEmpty(token))

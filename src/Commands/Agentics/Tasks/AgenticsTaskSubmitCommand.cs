@@ -10,6 +10,7 @@ using PKS.Infrastructure.Services.Agentics;
 using PKS.Infrastructure.Services.Runner;
 using Spectre.Console;
 using Spectre.Console.Cli;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Commands.Agentics.Tasks;
 
@@ -269,15 +270,14 @@ public class AgenticsTaskSubmitCommand(
         try
         {
             var storedToken = await githubAuth.GetStoredTokenAsync();
-            if (storedToken?.AccessToken == null)
+            if (storedToken?.AccessToken.HasValue != true)
             {
                 sb.AppendLine("_GitHub token not available — log enrichment skipped._");
                 return;
             }
 
             using var http = new HttpClient();
-            http.DefaultRequestHeaders.Authorization =
-                new AuthenticationHeaderValue("Bearer", storedToken.AccessToken);
+            SecretSink.SetBearerToken(http, storedToken.AccessToken);
             http.DefaultRequestHeaders.Add("User-Agent", "PKS-CLI/1.0");
             http.DefaultRequestHeaders.Add("Accept", "application/vnd.github+json");
 

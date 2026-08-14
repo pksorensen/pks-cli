@@ -435,7 +435,7 @@ public class GitHubService : IGitHubService
             return token;
 
         var stored = await _authService.GetStoredTokenAsync();
-        return stored?.AccessToken;
+        return stored?.AccessToken.Reveal();
     }
 
     private async Task<bool> CheckGitAvailabilityAsync()

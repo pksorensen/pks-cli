@@ -64,7 +64,7 @@ public class GitHubIntegrationTests : IDisposable
             // Store token for auth service
             var storedToken = new GitHubStoredToken
             {
-                AccessToken = _testToken,
+                AccessToken = SecretValue.From(_testToken),
                 IsValid = true,
                 CreatedAt = DateTime.UtcNow,
                 LastValidated = DateTime.UtcNow,

@@ -1,3 +1,5 @@
+using PKS.Infrastructure.Services.Security;
+
 namespace PKS.Infrastructure.Services.Models;
 
 /// <summary>
@@ -408,12 +410,20 @@ public class GitHubAuthConfig
 }
 
 /// <summary>
-/// Stored authentication token with metadata
+/// Stored authentication token with metadata.
+///
+/// This is the persisted credential — the one an agent's <c>cat ~/.pks-cli/settings.json</c> put in a
+/// transcript — so the two token fields are <see cref="SecretValue"/> and cannot be printed,
+/// interpolated or serialized in the clear. The transient OAuth DTOs above
+/// (<see cref="GitHubTokenResponse"/>, <see cref="GitHubDeviceAuthStatus"/>) stay plain strings: they
+/// live for the length of one HTTP exchange inside the auth service and never reach a command.
+/// Persist this type with <c>SecretJson.ForPersistence(...)</c> or the tokens are written as
+/// <c>***</c>.
 /// </summary>
 public class GitHubStoredToken
 {
-    public string AccessToken { get; set; } = string.Empty;
-    public string? RefreshToken { get; set; }
+    public SecretValue AccessToken { get; set; }
+    public SecretValue RefreshToken { get; set; }
     public string[] Scopes { get; set; } = Array.Empty<string>();
     public DateTime CreatedAt { get; set; }
     public DateTime? ExpiresAt { get; set; }

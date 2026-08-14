@@ -48,8 +48,8 @@ public class GitHubStatusCommand : Command<GitHubSettings>
                     .AddColumn("[yellow]Property[/]")
                     .AddColumn("[cyan]Value[/]");
 
-                var tokenType = storedToken.AccessToken.StartsWith("ghp_") ? "PAT (ghp_)" : "OAuth (gho_)";
-                table.AddRow("Type", tokenType);
+                // Classified by the auth service: the token itself never comes back here, only the label.
+                table.AddRow("Type", await _authService.DescribeStoredTokenKindAsync() ?? "unknown");
                 table.AddRow("Scopes", storedToken.Scopes.Count() > 0 ? string.Join(", ", storedToken.Scopes) : "[dim]not set (PAT)[/]");
                 table.AddRow("Created", storedToken.CreatedAt.ToString("yyyy-MM-dd HH:mm UTC"));
                 table.AddRow("Expires", storedToken.ExpiresAt?.ToString("yyyy-MM-dd HH:mm UTC") ?? "Never");

@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services;
 
@@ -46,6 +47,14 @@ public interface IGitHubApiClient
     /// Sets the authentication token for API requests
     /// </summary>
     void SetAuthenticationToken(string accessToken);
+
+    /// <summary>
+    /// Sets the authentication token from a stored credential. This overload exists so the command
+    /// layer can authenticate the client without ever holding the plaintext token — the reveal happens
+    /// here, inside the service. A credential-less value clears the header rather than sending an
+    /// empty one, so "not authenticated" fails as 401 instead of a malformed request.
+    /// </summary>
+    void SetAuthenticationToken(SecretValue accessToken);
 
     /// <summary>
     /// Clears the authentication token
@@ -189,6 +198,16 @@ public class GitHubApiClient : IGitHubApiClient, IDisposable
     {
         _accessToken = accessToken;
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("token", accessToken);
+    }
+
+    public void SetAuthenticationToken(SecretValue accessToken)
+    {
+        if (!accessToken.HasValue)
+        {
+            ClearAuthenticationToken();
+            return;
+        }
+        SetAuthenticationToken(accessToken.Reveal()!);
     }
 
     public void ClearAuthenticationToken()

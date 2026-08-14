@@ -27,7 +27,7 @@ public class GitHubActionsService : IGitHubActionsService
         // 401 it, the daemon would refresh again, and the cycle would never
         // settle.
         var storedToken = await _authService.GetStoredTokenAsync();
-        if (storedToken != null && !string.IsNullOrEmpty(storedToken.AccessToken))
+        if (storedToken != null && storedToken.AccessToken.HasValue)
         {
             _apiClient.SetAuthenticationToken(storedToken.AccessToken);
         }

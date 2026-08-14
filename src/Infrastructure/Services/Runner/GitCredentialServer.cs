@@ -97,10 +97,13 @@ public class GitCredentialServer : IAsyncDisposable
             _onLog?.Invoke($"Credential request received for host: {host}");
 
             var storedToken = await _githubAuth.GetStoredTokenAsync();
-            if (storedToken is { IsValid: true, AccessToken: not null })
+            if (storedToken is { IsValid: true, AccessToken.HasValue: true })
             {
                 _onLog?.Invoke($"Credential served successfully for host: {host}");
-                return Results.Json(new { password = storedToken.AccessToken });
+                // Revealed explicitly: this response *is* the credential handoff to git, and an
+                // anonymous object serialized with default options would quietly ship "***" and leave
+                // every push failing with an authentication error that names the wrong cause.
+                return Results.Json(new { password = storedToken.AccessToken.Reveal() });
             }
 
             _onLog?.Invoke($"Credential unavailable (503) for host: {host}");

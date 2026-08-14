@@ -80,6 +80,23 @@ public interface IGitHubAuthenticationService
     /// Returns the new stored token, or null if refresh failed.
     /// </summary>
     Task<GitHubStoredToken?> RefreshTokenAsync(string? associatedUser = null);
+
+    /// <summary>
+    /// Describes what *kind* of token is stored — a personal access token or one issued by the OAuth
+    /// device flow — without yielding any of it. <c>github status --verbose</c> used to classify by
+    /// doing <c>AccessToken.StartsWith("ghp_")</c> itself; <see cref="SecretValue"/> deliberately has
+    /// no prefix test, because a command that can ask "does it start with X" can recover a credential
+    /// one character at a time. The classification therefore happens here and only the label leaves.
+    /// Null when nothing is stored.
+    /// </summary>
+    Task<string?> DescribeStoredTokenKindAsync(string? associatedUser = null);
+
+    /// <summary>
+    /// Validates the token already in the store, so a command can check "is my login still good?"
+    /// without reading the credential to pass it back in. Reports invalid when nothing is stored.
+    /// </summary>
+    Task<GitHubTokenValidation> ValidateStoredTokenAsync(
+        string? associatedUser = null, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -93,6 +110,7 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
     private readonly ISecretResolver _secrets;
     private readonly GitHubAuthConfig _config;
     private readonly JsonSerializerOptions _jsonOptions;
+    private readonly JsonSerializerOptions _persistenceOptions;
 
     public GitHubAuthenticationService(
         HttpClient httpClient,
@@ -112,6 +130,12 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
             PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         };
+
+        // The stored token is the only thing here that goes to disk, and its two token fields mask
+        // themselves under ordinary options — serializing with _jsonOptions would write "***" and log
+        // every user out on the next save. Derived from _jsonOptions rather than built fresh so the
+        // snake_case names keep matching what is already on disk.
+        _persistenceOptions = SecretJson.ForPersistence(_jsonOptions);
 
         ConfigureHttpClient();
     }
@@ -301,8 +325,8 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
                         // Store token
                         var storedToken = new GitHubStoredToken
                         {
-                            AccessToken = authStatus.AccessToken!,
-                            RefreshToken = authStatus.RefreshToken,
+                            AccessToken = SecretValue.From(authStatus.AccessToken),
+                            RefreshToken = SecretValue.From(authStatus.RefreshToken),
                             Scopes = authStatus.Scopes,
                             CreatedAt = DateTime.UtcNow,
                             ExpiresAt = authStatus.ExpiresAt,
@@ -435,7 +459,7 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
         try
         {
             var key = GetTokenStorageKey(associatedUser);
-            var tokenJson = JsonSerializer.Serialize(token, _jsonOptions);
+            var tokenJson = JsonSerializer.Serialize(token, _persistenceOptions);
             await _configurationService.SetAsync(key, tokenJson, global: true, encrypt: false);
             return true;
         }
@@ -457,12 +481,36 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
                 return null;
             }
 
-            return JsonSerializer.Deserialize<GitHubStoredToken>(tokenJson, _jsonOptions);
+            return JsonSerializer.Deserialize<GitHubStoredToken>(tokenJson, _persistenceOptions);
         }
         catch
         {
             return null;
         }
+    }
+
+    public async Task<string?> DescribeStoredTokenKindAsync(string? associatedUser = null)
+    {
+        var token = (await GetStoredTokenAsync(associatedUser))?.AccessToken;
+        if (token is not { HasValue: true } value) return null;
+        return value.Reveal()!.StartsWith("ghp_", StringComparison.Ordinal) ? "PAT (ghp_)" : "OAuth (gho_)";
+    }
+
+    public async Task<GitHubTokenValidation> ValidateStoredTokenAsync(
+        string? associatedUser = null, CancellationToken cancellationToken = default)
+    {
+        var stored = await GetStoredTokenAsync(associatedUser);
+        if (stored is null || !stored.AccessToken.HasValue)
+        {
+            return new GitHubTokenValidation
+            {
+                IsValid = false,
+                ErrorMessage = "No stored token found.",
+                ValidatedAt = DateTime.UtcNow
+            };
+        }
+
+        return await ValidateTokenAsync(stored.AccessToken.Reveal()!, cancellationToken);
     }
 
     public async Task<bool> ClearStoredTokenAsync(string? associatedUser = null)
@@ -496,7 +544,7 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
         // Validate token if it hasn't been validated recently
         if (storedToken.LastValidated < DateTime.UtcNow.AddHours(-1))
         {
-            var validation = await ValidateTokenAsync(storedToken.AccessToken);
+            var validation = await ValidateTokenAsync(storedToken.AccessToken.Reveal()!);
             if (!validation.IsValid)
             {
                 await ClearStoredTokenAsync(associatedUser);
@@ -515,7 +563,7 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
     public async Task<GitHubStoredToken?> RefreshTokenAsync(string? associatedUser = null)
     {
         var storedToken = await GetStoredTokenAsync(associatedUser);
-        if (storedToken == null || string.IsNullOrEmpty(storedToken.RefreshToken))
+        if (storedToken == null || !storedToken.RefreshToken.HasValue)
         {
             _logger.LogWarning("Cannot refresh token: {Reason}",
                 storedToken == null ? "no stored token found" : "no refresh token available");
@@ -529,7 +577,7 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
             {
                 new KeyValuePair<string, string>("client_id", _config.ClientId),
                 new KeyValuePair<string, string>("grant_type", "refresh_token"),
-                new KeyValuePair<string, string>("refresh_token", storedToken.RefreshToken)
+                new KeyValuePair<string, string>("refresh_token", storedToken.RefreshToken.Reveal()!)
             });
 
             var response = await _httpClient.PostAsync(_config.TokenUrl, requestBody);
@@ -565,8 +613,10 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
 
             var newToken = new GitHubStoredToken
             {
-                AccessToken = tokenResponse.AccessToken,
-                RefreshToken = tokenResponse.RefreshToken ?? storedToken.RefreshToken,
+                AccessToken = SecretValue.From(tokenResponse.AccessToken),
+                RefreshToken = tokenResponse.RefreshToken is null
+                    ? storedToken.RefreshToken
+                    : SecretValue.From(tokenResponse.RefreshToken),
                 Scopes = tokenResponse.Scopes.Length > 0 ? tokenResponse.Scopes : storedToken.Scopes,
                 CreatedAt = DateTime.UtcNow,
                 ExpiresAt = DateTime.UtcNow.AddSeconds(

@@ -297,15 +297,15 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                 _logger.LogInformation("Bootstrap container started: {ContainerId}", bootstrapContainer.ContainerId);
 
                 // Step 6: Populate the volume — either by git-clone or by copying local files
-                if (!string.IsNullOrEmpty(options.GitUrl))
+                if (options.GitUrl.HasValue)
                 {
-                    onProgress?.Invoke($"Cloning {options.GitUrl.Split('@').LastOrDefault() ?? options.GitUrl} into volume...");
+                    onProgress?.Invoke($"Cloning {PKS.Infrastructure.Services.Runner.GitCloneUrl.Redact(options.GitUrl)} into volume...");
                     _logger.LogInformation("Cloning repository into volume {VolumeName}...", volumeName);
                     result.CompletedStep = DevcontainerSpawnStep.GitCloneIntoVolume;
 
                     await CloneIntoVolumeAsync(
                         volumeName,
-                        options.GitUrl,
+                        options.GitUrl.Reveal()!,
                         options.GitBranch,
                         options.ProjectName,
                         onProgress,

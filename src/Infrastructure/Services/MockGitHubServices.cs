@@ -1,5 +1,6 @@
 using System.Net;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services;
 
@@ -115,7 +116,7 @@ public class MockGitHubAuthenticationService : IGitHubAuthenticationService
         var accessToken = GenerateAccessToken();
         var storedToken = new GitHubStoredToken
         {
-            AccessToken = accessToken,
+            AccessToken = SecretValue.From(accessToken),
             Scopes = scopes ?? new[] { "repo", "user:email", "write:packages" },
             CreatedAt = DateTime.UtcNow,
             ExpiresAt = DateTime.UtcNow.AddHours(8),
@@ -190,6 +191,18 @@ public class MockGitHubAuthenticationService : IGitHubAuthenticationService
     {
         return Task.FromResult<GitHubStoredToken?>(null);
     }
+
+    public async Task<GitHubTokenValidation> ValidateStoredTokenAsync(
+        string? associatedUser = null, CancellationToken cancellationToken = default)
+    {
+        var stored = await GetStoredTokenAsync(associatedUser);
+        return stored is null || !stored.AccessToken.HasValue
+            ? new GitHubTokenValidation { IsValid = false, ErrorMessage = "No stored token found.", ValidatedAt = DateTime.UtcNow }
+            : await ValidateTokenAsync(stored.AccessToken.Reveal()!, cancellationToken);
+    }
+
+    public async Task<string?> DescribeStoredTokenKindAsync(string? associatedUser = null)
+        => (await GetStoredTokenAsync(associatedUser))?.AccessToken.HasValue == true ? "PAT (ghp_)" : null;
 
     private static string GenerateUserCode()
     {
@@ -307,6 +320,11 @@ public class MockGitHubApiClient : IGitHubApiClient, IDisposable
     public void SetAuthenticationToken(string accessToken)
     {
         _accessToken = accessToken;
+    }
+
+    public void SetAuthenticationToken(SecretValue accessToken)
+    {
+        _accessToken = accessToken.Reveal();
     }
 
     public void ClearAuthenticationToken()

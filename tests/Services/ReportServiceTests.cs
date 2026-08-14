@@ -4,6 +4,7 @@ using PKS.Infrastructure;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using Xunit;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.CLI.Tests.Services;
 
@@ -112,7 +113,7 @@ public class ReportServiceTests
         _mockConfigurationService.GetAsync("github.token").Returns((string?)null);
         _mockAuthService.GetStoredTokenAsync().Returns(new GitHubStoredToken
         {
-            AccessToken = "gho_device_flow_token",
+            AccessToken = SecretValue.From("gho_device_flow_token"),
             IsValid = true,
             Scopes = new[] { "repo" }
         });

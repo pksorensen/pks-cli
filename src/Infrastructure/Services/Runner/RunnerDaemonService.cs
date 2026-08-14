@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services.Runner;
 
@@ -164,7 +165,7 @@ public class RunnerDaemonService : IRunnerDaemonService
     private async Task PollLoop(
         RunnerConfiguration config,
         List<RunnerRegistration> registrations,
-        string accessToken,
+        SecretValue accessToken,
         CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested && !_shutdownRequested)
@@ -247,7 +248,7 @@ public class RunnerDaemonService : IRunnerDaemonService
                 {
                     // Check if a refresh token even exists — if not, stop the daemon
                     var storedToken = await _authService.GetStoredTokenAsync();
-                    if (storedToken == null || string.IsNullOrEmpty(storedToken.RefreshToken))
+                    if (storedToken == null || !storedToken.RefreshToken.HasValue)
                     {
                         _logger.LogError(
                             "No refresh token available and access token expired. Stopping daemon — " +
@@ -294,7 +295,7 @@ public class RunnerDaemonService : IRunnerDaemonService
     private async Task PollRegistration(
         RunnerRegistration registration,
         RunnerConfiguration config,
-        string accessToken,
+        SecretValue accessToken,
         CancellationToken cancellationToken)
     {
         var repoKey = $"{registration.Owner}/{registration.Repository}";
@@ -492,7 +493,7 @@ public class RunnerDaemonService : IRunnerDaemonService
         RunnerRegistration registration,
         QueuedWorkflowRun run,
         RunnerConfiguration config,
-        string accessToken,
+        SecretValue accessToken,
         CancellationToken cancellationToken)
     {
         // Use a synthetic job ID based on run ID to avoid conflicts
@@ -530,7 +531,7 @@ public class RunnerDaemonService : IRunnerDaemonService
 
     private async Task DispatchJob(
         JobDispatchInfo dispatchInfo,
-        string accessToken,
+        SecretValue accessToken,
         CancellationToken cancellationToken)
     {
         var registration = dispatchInfo.Registration;
@@ -608,7 +609,7 @@ public class RunnerDaemonService : IRunnerDaemonService
 
     private async Task<RunnerJobState> ExecuteAndTrackJob(
         JobDispatchInfo dispatchInfo,
-        string accessToken,
+        SecretValue accessToken,
         string encodedJitConfig,
         RunnerJobState jobState,
         CancellationToken cancellationToken)
@@ -629,7 +630,9 @@ public class RunnerDaemonService : IRunnerDaemonService
             {
                 result = await _containerService.ExecuteJobAsync(
                     dispatchInfo.Registration, run.Id, run.HeadBranch,
-                    accessToken, encodedJitConfig,
+                    // Revealed here because IRunnerContainerService puts the token into the
+                    // container's git credential environment; the daemon itself never holds a string.
+                    accessToken.Reveal()!, encodedJitConfig,
                     progress =>
                     {
                         jobState.Detail = progress;
@@ -738,7 +741,7 @@ public class RunnerDaemonService : IRunnerDaemonService
 
     private async Task<RunnerJobState> ExecuteNamedContainerJob(
         JobDispatchInfo dispatchInfo,
-        string accessToken,
+        SecretValue accessToken,
         string encodedJitConfig,
         CancellationToken cancellationToken)
     {
@@ -785,7 +788,7 @@ public class RunnerDaemonService : IRunnerDaemonService
         // Create a new container with the name
         var result = await _containerService.ExecuteJobAsync(
             registration, run.Id, run.HeadBranch,
-            accessToken, encodedJitConfig,
+            accessToken.Reveal()!, encodedJitConfig,
             progress => OnStatusChanged($"Run {run.Id}: {progress}"),
             cancellationToken,
             containerName: containerName,

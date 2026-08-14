@@ -1,6 +1,7 @@
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using Xunit;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.CLI.Tests.Services.GitHub;
 
@@ -101,7 +102,7 @@ public class MockGitHubServicesTests
         var service = new MockGitHubAuthenticationService();
         var token = new GitHubStoredToken
         {
-            AccessToken = "ghp_test_token",
+            AccessToken = SecretValue.From("ghp_test_token"),
             Scopes = new[] { "repo", "user:email" },
             CreatedAt = DateTime.UtcNow,
             IsValid = true
@@ -115,7 +116,7 @@ public class MockGitHubServicesTests
         // Assert
         Assert.True(storeResult);
         Assert.NotNull(retrievedToken);
-        Assert.Equal("ghp_test_token", retrievedToken.AccessToken);
+        Assert.Equal("ghp_test_token", retrievedToken.AccessToken.Reveal());
         Assert.True(isAuthenticated);
     }
 

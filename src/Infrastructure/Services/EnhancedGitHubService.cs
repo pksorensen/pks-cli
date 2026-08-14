@@ -1,5 +1,6 @@
 using System.Text.Json;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services;
 
@@ -89,7 +90,7 @@ public class EnhancedGitHubService : IGitHubService
                 // Store the token using the authentication service
                 var storedToken = new GitHubStoredToken
                 {
-                    AccessToken = personalAccessToken,
+                    AccessToken = SecretValue.From(personalAccessToken),
                     Scopes = validation.Scopes,
                     CreatedAt = DateTime.UtcNow,
                     IsValid = true,

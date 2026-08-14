@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Runner;
+using PKS.Infrastructure.Services.Security;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -110,8 +111,8 @@ public class RunnerRegisterCommand : RunnerCommand<RunnerRegisterCommand.Setting
                 // Step 3: Store the token
                 await _authService.StoreTokenAsync(new PKS.Infrastructure.Services.Models.GitHubStoredToken
                 {
-                    AccessToken = authResult.AccessToken!,
-                    RefreshToken = authResult.RefreshToken,
+                    AccessToken = SecretValue.From(authResult.AccessToken),
+                    RefreshToken = SecretValue.From(authResult.RefreshToken),
                     Scopes = authResult.Scopes,
                     CreatedAt = DateTime.UtcNow,
                     ExpiresAt = authResult.ExpiresAt,
@@ -128,7 +129,7 @@ public class RunnerRegisterCommand : RunnerCommand<RunnerRegisterCommand.Setting
 
             // 3. Set auth token on API client so subsequent API calls work
             var storedToken = await _authService.GetStoredTokenAsync();
-            if (storedToken == null || string.IsNullOrEmpty(storedToken.AccessToken))
+            if (storedToken == null || !storedToken.AccessToken.HasValue)
             {
                 DisplayError("Failed to retrieve stored authentication token.");
                 return 1;

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text.Json.Serialization;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services.Models;
 
@@ -500,9 +501,12 @@ public class DevcontainerSpawnOptions
     /// <summary>
     /// Git URL to clone into the volume instead of copying local source files.
     /// When set, an alpine/git container clones this URL into the volume before devcontainer up.
-    /// Credentials should be embedded in the URL (e.g. https://x-access-token:{token}@github.com/...).
+    /// Credentials are embedded in the URL (e.g. https://x-access-token:{token}@github.com/...), which
+    /// is why this is a <see cref="SecretValue"/> rather than a string: the URL *is* the credential, and
+    /// a progress line that echoed it would leak the token. Build it with
+    /// <c>GitCloneUrl.ForRepository</c> and log it with <c>GitCloneUrl.Redact</c>.
     /// </summary>
-    public string? GitUrl { get; set; }
+    public SecretValue GitUrl { get; set; }
 
     /// <summary>
     /// Branch to clone when GitUrl is set (default: "main").

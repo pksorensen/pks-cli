@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services.Runner;
 
@@ -285,7 +286,8 @@ public class RunnerContainerService : IRunnerContainerService
                 CopySourceFiles = false,
                 UseBootstrapContainer = true,
                 CredentialSocketPath = credentialSocketPath,
-                GitUrl = $"https://x-access-token:{accessToken}@github.com/{registration.Owner}/{registration.Repository}.git",
+                GitUrl = GitCloneUrl.ForRepository(
+                    $"{registration.Owner}/{registration.Repository}", SecretValue.From(accessToken)),
                 GitBranch = branch,
                 RemoteEnv = remoteEnv,
                 IdLabels = idLabels,

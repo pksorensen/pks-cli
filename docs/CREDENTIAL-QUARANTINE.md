@@ -53,8 +53,10 @@ The fix is not masking and not a confirmation prompt. There is no read path.
 | `src/Infrastructure/Services/Security/SecretStore.cs` | `ISecretStore` (write-only: set/has/describe/delete/list) and `ISecretResolver` (`RevealAsync`), both implemented by the encrypted store. |
 | `src/Infrastructure/Services/Security/SecretSeedingService.cs` | Copies one named credential into another HOME's store, re-encrypted. |
 | `src/Infrastructure/Services.cs` | `ConfigurationService` — routes secret writes to the store, hides them from reads, and migrates on load. |
-| `src/Infrastructure/Services/Security/SecretValue.cs` | The credential type: no string conversion, masked `ToString`, masked serialization, plus `SecretJson.Persistence` for the one place a credential is written unmasked. |
+| `src/Infrastructure/Services/Security/SecretValue.cs` | The credential type: no string conversion, masked `ToString`, masked serialization, plus `SecretJson.Persistence` / `SecretJson.ForPersistence(existing)` for the places a credential is written unmasked — the second preserves a service's own naming policy, without which every token already on disk stops resolving. |
 | `src/Infrastructure/Services/Security/SecretSink.cs` | The sanctioned egress points. Each is a no-op when the credential is absent and returns `bool`, so a missing credential shows up as "not configured" rather than an empty `Authorization` header that reads like a broken one. |
+| `src/Infrastructure/Services/Runner/GitCloneUrl.cs` | Composes and redacts the token-bearing clone URL, so the runner command never holds one. |
+| `src/Infrastructure/Services/Runner/GitAskpassScript.cs` | Writes the 0700 `GIT_ASKPASS` script whose body embeds the token, and returns only a path. |
 | `tests/Services/Security/SecretResolverGateTests.cs` | The gate. Fails the build if a command or MCP tool names the plaintext API. |
 | `tests/Infrastructure/Security/FakeSecretResolver.cs` | What a test injects instead of the real store. Empty by default; `BackedBy(…)` routes at a fixture's own configuration mock. |
 
@@ -114,6 +116,45 @@ When you move the work into a service, do not let the credential come back out a
 `ITailscaleService` is the shape to copy: `BuildUpArgs` returns `SecretValue` so cloud-init can carry
 it, and `JoinTailnetAsync` composes the whole `tailscale up …` command line internally, taking the
 caller's SSH runner as a delegate. The command supplies the *how to run*, never the *what to run*.
+
+The GitHub runner needed the same move twice. Building the clone URL and writing the `GIT_ASKPASS`
+script both used to happen in `AgenticsRunnerStartCommand`, which left a live token in two
+command-layer locals the source-scanning gate cannot see — one `MarkupLine($"Cloning {gitUrl}")`
+away from a transcript. `GitCloneUrl.ForRepository` now returns a `SecretValue` the command can pass
+on but not print, and `GitAskpassScript.WriteAsync` takes the credential and returns a path.
+The question to ask is not "is this a credential?" but "does this string let its holder
+authenticate?" — a URL and a shell script both do.
+
+## Traps found while quarantining a family
+
+Each of these cost a debugging round the first time and is now the reason a rule exists.
+
+- **The service's own `JsonSerializerOptions`.** `GitHubAuthenticationService` serializes with
+  snake_case options. Serializing the DTO with those writes `"***"` and logs every user out on the next
+  save; building fresh persistence options instead loses the naming policy and makes every token
+  already on disk deserialize to empty — which breaks the "nobody re-inits" promise just as thoroughly.
+  Use `SecretJson.ForPersistence(existingOptions)`, which copies the caller's options and adds the
+  persistence converter on top. `GitHubStoredTokenPersistenceTests` pins both directions: old on-disk
+  JSON reads back intact, and a fresh save contains the real token under the old names.
+- **Anonymous objects going out over the wire.** `GitCredentialServer` answers git with
+  `Results.Json(new { password = … })`. Default options mask, so the endpoint would have served `***`
+  with a perfectly well-formed 200 and every push would have failed much later with an authentication
+  error naming the wrong cause. Reveal explicitly at a deliberate egress like this, and cover it with a
+  test that asserts the *value* — nothing else notices a mask.
+- **Prefix tests are an oracle.** `github status --verbose` classified PAT vs OAuth with
+  `AccessToken.StartsWith("ghp_")`. `SecretValue` has no `StartsWith` on purpose: anything that can ask
+  "does it begin with X" recovers a credential one character at a time. The classification moved into
+  `IGitHubAuthenticationService.DescribeStoredTokenKindAsync`, which returns the label only. Same shape
+  for `ValidateStoredTokenAsync`: the command asks "is my login still good?" instead of reading the
+  token to pass it back in.
+- **A widening overload beats a Reveal at the call site.** `IGitHubApiClient.SetAuthenticationToken`
+  gained a `SecretValue` overload, so the command that authenticates the client never holds a string.
+  An absent credential clears the header rather than sending an empty one.
+- **A URL can be a credential.** `DevcontainerSpawnOptions.GitUrl` embeds
+  `x-access-token:<token>@`, so it is a `SecretValue`, composed by `GitCloneUrl.ForRepository` and
+  logged through `GitCloneUrl.Redact`. The same move applies to the runner's `GIT_ASKPASS` script,
+  whose body contains the token verbatim: `GitAskpassScript.WriteAsync` takes the credential and hands
+  back a path.
 
 ## What this does not stop
 

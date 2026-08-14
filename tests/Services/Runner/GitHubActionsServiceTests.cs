@@ -6,6 +6,7 @@ using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using PKS.Infrastructure.Services.Runner;
 using Xunit;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.CLI.Tests.Services.Runner;
 
@@ -424,7 +425,7 @@ public class GitHubActionsServiceTests
 
         var staleToken = new GitHubStoredToken
         {
-            AccessToken = "ghp_stale_revoked",
+            AccessToken = SecretValue.From("ghp_stale_revoked"),
             IsValid = true,
             Scopes = new[] { "repo" },
             ExpiresAt = DateTime.UtcNow.AddHours(8)
@@ -432,7 +433,7 @@ public class GitHubActionsServiceTests
 
         var refreshedToken = new GitHubStoredToken
         {
-            AccessToken = "ghp_refreshed_valid",
+            AccessToken = SecretValue.From("ghp_refreshed_valid"),
             IsValid = true,
             Scopes = new[] { "repo" },
             ExpiresAt = DateTime.UtcNow.AddHours(8)
@@ -465,7 +466,7 @@ public class GitHubActionsServiceTests
 
         // The actions service must have applied the refreshed token to its API
         // client, otherwise it would keep using the revoked stale token forever.
-        _mockApiClient.Verify(c => c.SetAuthenticationToken("ghp_refreshed_valid"), Times.AtLeastOnce);
+        _mockApiClient.Verify(c => c.SetAuthenticationToken(It.Is<SecretValue>(t => t.Reveal() == "ghp_refreshed_valid")), Times.AtLeastOnce);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────

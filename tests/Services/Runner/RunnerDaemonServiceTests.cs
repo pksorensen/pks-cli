@@ -5,6 +5,7 @@ using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using PKS.Infrastructure.Services.Runner;
 using Xunit;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.CLI.Tests.Services.Runner;
 
@@ -52,7 +53,7 @@ public class RunnerDaemonServiceTests : IDisposable
 
         _testToken = new GitHubStoredToken
         {
-            AccessToken = "ghp_test123",
+            AccessToken = SecretValue.From("ghp_test123"),
             IsValid = true,
             Scopes = new[] { "repo", "admin:org" }
         };
@@ -534,8 +535,8 @@ public class RunnerDaemonServiceTests : IDisposable
         // Initial token expires in 2 minutes (within the 5-minute threshold)
         var nearExpiryToken = new GitHubStoredToken
         {
-            AccessToken = "ghp_old_token",
-            RefreshToken = "ghr_refresh",
+            AccessToken = SecretValue.From("ghp_old_token"),
+            RefreshToken = SecretValue.From("ghr_refresh"),
             IsValid = true,
             Scopes = new[] { "repo" },
             ExpiresAt = DateTime.UtcNow.AddMinutes(2)
@@ -543,8 +544,8 @@ public class RunnerDaemonServiceTests : IDisposable
 
         var refreshedToken = new GitHubStoredToken
         {
-            AccessToken = "ghp_refreshed_token",
-            RefreshToken = "ghr_new_refresh",
+            AccessToken = SecretValue.From("ghp_refreshed_token"),
+            RefreshToken = SecretValue.From("ghr_new_refresh"),
             IsValid = true,
             Scopes = new[] { "repo" },
             ExpiresAt = DateTime.UtcNow.AddHours(8)
@@ -572,7 +573,7 @@ public class RunnerDaemonServiceTests : IDisposable
         // RefreshTokenAsync should have been called proactively (not from a "Bad credentials" error)
         _mockAuthService.Verify(a => a.RefreshTokenAsync(null), Times.AtLeastOnce);
         // The new token should have been set on the API client
-        _mockApiClient.Verify(a => a.SetAuthenticationToken("ghp_refreshed_token"), Times.AtLeastOnce);
+        _mockApiClient.Verify(a => a.SetAuthenticationToken(It.Is<SecretValue>(t => t.Reveal() == "ghp_refreshed_token")), Times.AtLeastOnce);
     }
 
     [Fact]
@@ -583,8 +584,8 @@ public class RunnerDaemonServiceTests : IDisposable
         // Token has null ExpiresAt (GitHub omitted expires_in)
         var nullExpiryToken = new GitHubStoredToken
         {
-            AccessToken = "ghp_null_expiry",
-            RefreshToken = "ghr_refresh",
+            AccessToken = SecretValue.From("ghp_null_expiry"),
+            RefreshToken = SecretValue.From("ghr_refresh"),
             IsValid = true,
             Scopes = new[] { "repo" },
             CreatedAt = DateTime.UtcNow,
@@ -593,8 +594,8 @@ public class RunnerDaemonServiceTests : IDisposable
 
         var refreshedToken = new GitHubStoredToken
         {
-            AccessToken = "ghp_refreshed_from_null",
-            RefreshToken = "ghr_new_refresh",
+            AccessToken = SecretValue.From("ghp_refreshed_from_null"),
+            RefreshToken = SecretValue.From("ghr_new_refresh"),
             IsValid = true,
             Scopes = new[] { "repo" },
             ExpiresAt = DateTime.UtcNow.AddHours(8)
@@ -616,7 +617,7 @@ public class RunnerDaemonServiceTests : IDisposable
         await _service.RunAsync(cts.Token);
 
         _mockAuthService.Verify(a => a.RefreshTokenAsync(null), Times.AtLeastOnce);
-        _mockApiClient.Verify(a => a.SetAuthenticationToken("ghp_refreshed_from_null"), Times.AtLeastOnce);
+        _mockApiClient.Verify(a => a.SetAuthenticationToken(It.Is<SecretValue>(t => t.Reveal() == "ghp_refreshed_from_null")), Times.AtLeastOnce);
     }
 
     [Fact]
@@ -627,8 +628,8 @@ public class RunnerDaemonServiceTests : IDisposable
         // Token was created 5 hours ago but claims to expire in 8 hours
         var oldToken = new GitHubStoredToken
         {
-            AccessToken = "ghp_old_token",
-            RefreshToken = "ghr_refresh",
+            AccessToken = SecretValue.From("ghp_old_token"),
+            RefreshToken = SecretValue.From("ghr_refresh"),
             IsValid = true,
             Scopes = new[] { "repo" },
             CreatedAt = DateTime.UtcNow.AddHours(-5),
@@ -637,8 +638,8 @@ public class RunnerDaemonServiceTests : IDisposable
 
         var refreshedToken = new GitHubStoredToken
         {
-            AccessToken = "ghp_refreshed_old",
-            RefreshToken = "ghr_new_refresh",
+            AccessToken = SecretValue.From("ghp_refreshed_old"),
+            RefreshToken = SecretValue.From("ghr_new_refresh"),
             IsValid = true,
             Scopes = new[] { "repo" },
             ExpiresAt = DateTime.UtcNow.AddHours(8)
@@ -660,7 +661,7 @@ public class RunnerDaemonServiceTests : IDisposable
         await _service.RunAsync(cts.Token);
 
         _mockAuthService.Verify(a => a.RefreshTokenAsync(null), Times.AtLeastOnce);
-        _mockApiClient.Verify(a => a.SetAuthenticationToken("ghp_refreshed_old"), Times.AtLeastOnce);
+        _mockApiClient.Verify(a => a.SetAuthenticationToken(It.Is<SecretValue>(t => t.Reveal() == "ghp_refreshed_old")), Times.AtLeastOnce);
     }
 
     [Fact]
@@ -672,8 +673,8 @@ public class RunnerDaemonServiceTests : IDisposable
         // CreatedAt is recent so the max-age safety net doesn't trigger
         var validToken = new GitHubStoredToken
         {
-            AccessToken = "ghp_valid_token",
-            RefreshToken = "ghr_refresh",
+            AccessToken = SecretValue.From("ghp_valid_token"),
+            RefreshToken = SecretValue.From("ghr_refresh"),
             IsValid = true,
             Scopes = new[] { "repo" },
             CreatedAt = DateTime.UtcNow,
@@ -814,7 +815,7 @@ public class RunnerDaemonServiceTests : IDisposable
             .Setup(a => a.RefreshTokenAsync(null))
             .ReturnsAsync(new GitHubStoredToken
             {
-                AccessToken = "ghp_refreshed",
+                AccessToken = SecretValue.From("ghp_refreshed"),
                 IsValid = true,
                 Scopes = new[] { "repo" }
             })
@@ -845,8 +846,8 @@ public class RunnerDaemonServiceTests : IDisposable
             .Setup(a => a.GetStoredTokenAsync(null))
             .ReturnsAsync(new GitHubStoredToken
             {
-                AccessToken = "ghp_test123",
-                RefreshToken = "ghr_refresh_token",
+                AccessToken = SecretValue.From("ghp_test123"),
+                RefreshToken = SecretValue.From("ghr_refresh_token"),
                 IsValid = true,
                 Scopes = new[] { "repo" }
             });
@@ -885,8 +886,8 @@ public class RunnerDaemonServiceTests : IDisposable
             .Setup(a => a.GetStoredTokenAsync(null))
             .ReturnsAsync(new GitHubStoredToken
             {
-                AccessToken = "ghp_test123",
-                RefreshToken = null,
+                AccessToken = SecretValue.From("ghp_test123"),
+                RefreshToken = SecretValue.From(null),
                 IsValid = true
             });
 
@@ -931,8 +932,8 @@ public class RunnerDaemonServiceTests : IDisposable
                 // 3rd refresh attempt succeeds
                 return Task.FromResult<GitHubStoredToken?>(new GitHubStoredToken
                 {
-                    AccessToken = "ghp_new_token",
-                    RefreshToken = "ghr_new_refresh",
+                    AccessToken = SecretValue.From("ghp_new_token"),
+                    RefreshToken = SecretValue.From("ghr_new_refresh"),
                     IsValid = true
                 });
             });
@@ -941,7 +942,7 @@ public class RunnerDaemonServiceTests : IDisposable
 
         // Polling should have resumed after the successful refresh
         pollCount.Should().BeGreaterThanOrEqualTo(5);
-        _mockApiClient.Verify(a => a.SetAuthenticationToken("ghp_new_token"), Times.AtLeastOnce);
+        _mockApiClient.Verify(a => a.SetAuthenticationToken(It.Is<SecretValue>(t => t.Reveal() == "ghp_new_token")), Times.AtLeastOnce);
     }
 
     #endregion
