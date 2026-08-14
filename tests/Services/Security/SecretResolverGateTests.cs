@@ -13,10 +13,20 @@ namespace PKS.CLI.Tests.Services.Security;
 /// context may not name the plaintext API at all. It is a source scan because that is the only thing
 /// that can express the rule.
 ///
+/// There are two ways to turn a stored credential into a string, and the scan covers both. The first
+/// is the store's own getter, <c>ISecretResolver.RevealAsync</c>. The second is
+/// <see cref="SecretValue"/>, which is what the auth services put on their stored-credential DTOs:
+/// the type itself refuses to become a string, so the remaining escape hatches are <c>Reveal()</c> and
+/// <c>SecretJson</c> — the serializer options under which a credential is written unmasked. A command
+/// that names either of those is asking for plaintext, whatever it intends to do with it.
+///
 /// If you are here because this test failed: do not add an exception. Move the work that needs the
 /// credential into a service under <c>Infrastructure/Services/</c> and have the command ask that
 /// service to do the thing — the way <c>AgenticsRunnerStartCommand</c> asks
 /// <c>IAgenticsRunnerSshHandoffService.ForwardStoredSecretAsync</c> to forward a token it never sees.
+/// If the command only needs the credential to *arrive* somewhere — a child process's environment, a
+/// docker run line, an <c>Authorization</c> header, an OAuth form body — that already exists:
+/// <c>SecretSink</c> performs those four without handing anything back.
 /// </summary>
 public class SecretResolverGateTests
 {
@@ -27,7 +37,8 @@ public class SecretResolverGateTests
     };
 
     private static readonly Regex PlaintextApi = new(
-        @"\bISecretResolver\b|\bRevealAsync\b", RegexOptions.Compiled);
+        @"\bISecretResolver\b|\bRevealAsync\b|\bReveal[A-Za-z]*\s*\(|\bSecretJson\b|\bSecretValuePersistenceConverter\b",
+        RegexOptions.Compiled);
 
     private static string RepoRoot()
     {
