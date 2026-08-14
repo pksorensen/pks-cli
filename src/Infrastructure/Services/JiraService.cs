@@ -48,12 +48,12 @@ public class JiraService : IJiraService
         HttpClient httpClient,
         IConfigurationService configurationService,
         ILogger<JiraService> logger,
-        ISecretResolver? secrets = null)
+        ISecretResolver secrets)
     {
         _httpClient = httpClient;
         _configurationService = configurationService;
         _logger = logger;
-        _secrets = secrets ?? new SecretStore();
+        _secrets = secrets;
     }
 
     public async Task<bool> IsAuthenticatedAsync()

@@ -194,6 +194,8 @@ public class ScalewayCreateOptions
     /// When set, the full argument string for `tailscale up` (from
     /// <see cref="ITailscaleService.BuildUpArgs"/>) — installs Tailscale and joins the
     /// tailnet via cloud-init runcmd at first boot, instead of a separate post-boot SSH step.
+    /// It embeds the auth key, so it travels as a <see cref="SecretValue"/> and is read only
+    /// where the cloud-init document is assembled.
     /// </summary>
-    public string? TailscaleUpArgs { get; set; }
+    public SecretValue TailscaleUpArgs { get; set; }
 }

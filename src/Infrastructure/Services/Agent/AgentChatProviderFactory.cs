@@ -21,13 +21,13 @@ public sealed class AgentChatProviderFactory
     public AgentChatProviderFactory(
         IConfigurationService config,
         HttpClient httpClient,
-        IAzureFoundryAuthService? foundryAuth = null,
-        ISecretResolver? secrets = null)
+        ISecretResolver secrets,
+        IAzureFoundryAuthService? foundryAuth = null)
     {
         _config = config;
         _httpClient = httpClient;
         _foundryAuth = foundryAuth;
-        _secrets = secrets ?? new SecretStore();
+        _secrets = secrets;
     }
 
     /// <summary>

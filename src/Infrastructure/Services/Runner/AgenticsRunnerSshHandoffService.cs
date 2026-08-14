@@ -119,14 +119,13 @@ public sealed class AgenticsRunnerSshHandoffService : IAgenticsRunnerSshHandoffS
 
     public AgenticsRunnerSshHandoffService(
         ISshCommandRunner sshRunner, ISshKeyStore keyStore, IHttpClientFactory httpClientFactory,
-        ISecretResolver? secrets = null, ISecretStore? secretStore = null)
+        ISecretResolver secrets, ISecretStore secretStore)
     {
         _sshRunner = sshRunner ?? throw new ArgumentNullException(nameof(sshRunner));
         _keyStore = keyStore ?? throw new ArgumentNullException(nameof(keyStore));
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
-        var store = new Lazy<SecretStore>(() => new SecretStore());
-        _secrets = secrets ?? store.Value;
-        _secretStore = secretStore ?? (_secrets as ISecretStore) ?? store.Value;
+        _secrets = secrets ?? throw new ArgumentNullException(nameof(secrets));
+        _secretStore = secretStore ?? throw new ArgumentNullException(nameof(secretStore));
     }
 
     public string BuildTmuxSessionName(string owner, string project) =>

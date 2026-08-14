@@ -98,14 +98,14 @@ public class GitHubAuthenticationService : IGitHubAuthenticationService
         HttpClient httpClient,
         IConfigurationService configurationService,
         ILogger<GitHubAuthenticationService> logger,
-        GitHubAuthConfig? config = null,
-        ISecretResolver? secrets = null)
+        ISecretResolver secrets,
+        GitHubAuthConfig? config = null)
     {
         _httpClient = httpClient;
         _configurationService = configurationService;
         _logger = logger;
         _config = config ?? new GitHubAuthConfig();
-        _secrets = secrets ?? new SecretStore();
+        _secrets = secrets;
 
         _jsonOptions = new JsonSerializerOptions
         {

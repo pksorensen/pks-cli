@@ -618,7 +618,7 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
         const string adminUser = "root";
 
         // 6b. Optionally join the tailnet at boot (if `pks tailscale init` has been run)
-        string? tailscaleUpArgs = null;
+        var tailscaleUpArgs = SecretValue.None;
         if (await _tailscale.IsAuthenticatedAsync()
             && _console.Confirm("[cyan]Join this VM to your Tailscale network at boot?[/]", defaultValue: true))
         {
@@ -635,7 +635,7 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
             [cyan1]Image:[/] {Markup.Escape(selectedImage.Name)}
             [cyan1]Project:[/] {Markup.Escape(creds.DefaultProjectName)} ({Markup.Escape(creds.DefaultProjectId)})
             [cyan1]SSH Key:[/] {Markup.Escape(keyPath)}
-            [cyan1]Tailscale:[/] {(tailscaleUpArgs != null ? "[green]join at boot[/]" : "[dim]no[/]")}
+            [cyan1]Tailscale:[/] {(tailscaleUpArgs.HasValue ? "[green]join at boot[/]" : "[dim]no[/]")}
             """)
             .Border(BoxBorder.Rounded).BorderStyle("cyan")
             .Header(" [bold cyan]Scaleway Instance[/] "));

@@ -75,14 +75,14 @@ public class AzureAuthService : IAzureAuthService
         HttpClient httpClient,
         IConfigurationService configurationService,
         ILogger<AzureAuthService> logger,
-        AzureAuthConfig? config = null,
-        ISecretResolver? secrets = null)
+        ISecretResolver secrets,
+        AzureAuthConfig? config = null)
     {
         _httpClient = httpClient;
         _configurationService = configurationService;
         _logger = logger;
         _config = config ?? new AzureAuthConfig();
-        _secrets = secrets ?? new SecretStore();
+        _secrets = secrets;
     }
 
     public async Task<string?> DiscoverTenantAsync(string email, CancellationToken cancellationToken = default)

@@ -1,3 +1,4 @@
+using PKS.CLI.Tests.Security;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -20,7 +21,7 @@ public class JiraServiceTests
         var httpClient = new HttpClient(handler);
         var config = new Mock<IConfigurationService>();
         var logger = new Mock<ILogger<JiraService>>();
-        var service = new JiraService(httpClient, config.Object, logger.Object);
+        var service = new JiraService(httpClient, config.Object, logger.Object, FakeSecretResolver.Empty);
 
         var credentials = new JiraStoredCredentials
         {
@@ -51,7 +52,7 @@ public class JiraServiceTests
         var httpClient = new HttpClient(handler);
         var config = new Mock<IConfigurationService>();
         var logger = new Mock<ILogger<JiraService>>();
-        var service = new JiraService(httpClient, config.Object, logger.Object);
+        var service = new JiraService(httpClient, config.Object, logger.Object, FakeSecretResolver.Empty);
 
         var credentials = new JiraStoredCredentials
         {
@@ -77,7 +78,7 @@ public class JiraServiceTests
         var httpClient = new HttpClient(handler);
         var config = new Mock<IConfigurationService>();
         var logger = new Mock<ILogger<JiraService>>();
-        var service = new JiraService(httpClient, config.Object, logger.Object);
+        var service = new JiraService(httpClient, config.Object, logger.Object, FakeSecretResolver.Empty);
 
         var credentials = new JiraStoredCredentials
         {
@@ -141,7 +142,7 @@ public class JiraServiceTests
                 .ReturnsAsync((string key) => configValues.TryGetValue(key, out var value) ? value : null);
 
         var logger = new Mock<ILogger<JiraService>>();
-        var service = new JiraService(httpClient, config.Object, logger.Object);
+        var service = new JiraService(httpClient, config.Object, logger.Object, FakeSecretResolver.Empty);
 
         var result = await service.SearchIssuesAsync("project = UDV ORDER BY created ASC", maxResults: 100);
 
@@ -192,7 +193,7 @@ public class JiraServiceTests
                 .ReturnsAsync((string key) => configValues.TryGetValue(key, out var value) ? value : null);
 
         var logger = new Mock<ILogger<JiraService>>();
-        var service = new JiraService(httpClient, config.Object, logger.Object);
+        var service = new JiraService(httpClient, config.Object, logger.Object, FakeSecretResolver.Empty);
 
         var result = await service.SearchIssuesAsync("project = UDV ORDER BY created ASC", maxResults: 100);
 
@@ -253,7 +254,7 @@ public class JiraServiceTests
                 .ReturnsAsync((string key) => configValues.TryGetValue(key, out var value) ? value : null);
 
         var logger = new Mock<ILogger<JiraService>>();
-        var service = new JiraService(httpClient, config.Object, logger.Object);
+        var service = new JiraService(httpClient, config.Object, logger.Object, FakeSecretResolver.Empty);
 
         var result = await service.SearchIssuesAsync("project = UDV ORDER BY created ASC", maxResults: 100);
 
@@ -338,7 +339,7 @@ public class JiraServiceTests
                 .ReturnsAsync((string key) => configValues.TryGetValue(key, out var value) ? value : null);
 
         var logger = new Mock<ILogger<JiraService>>();
-        var service = new JiraService(httpClient, config.Object, logger.Object);
+        var service = new JiraService(httpClient, config.Object, logger.Object, FakeSecretResolver.Empty);
 
         var result = await service.SearchIssuesAsync("project = UDV ORDER BY created ASC", maxResults: 2);
 
@@ -432,7 +433,7 @@ public class JiraServiceTests
                 .ReturnsAsync((string key) => configValues.TryGetValue(key, out var value) ? value : null);
 
         var logger = new Mock<ILogger<JiraService>>();
-        var service = new JiraService(httpClient, config.Object, logger.Object);
+        var service = new JiraService(httpClient, config.Object, logger.Object, FakeSecretResolver.Empty);
 
         var result = await service.SearchIssuesAsync("project = SRV ORDER BY created ASC", maxResults: 2);
 
@@ -477,7 +478,7 @@ public class JiraServiceTests
                 .ReturnsAsync((string key) => configValues.TryGetValue(key, out var value) ? value : null);
 
         var logger = new Mock<ILogger<JiraService>>();
-        var service = new JiraService(httpClient, config.Object, logger.Object);
+        var service = new JiraService(httpClient, config.Object, logger.Object, FakeSecretResolver.Empty);
 
         var result = await service.SearchIssuesAsync("project = UDV ORDER BY created ASC", maxResults: 100);
 

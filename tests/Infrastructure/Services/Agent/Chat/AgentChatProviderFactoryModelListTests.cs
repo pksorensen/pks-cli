@@ -37,7 +37,7 @@ public class AgentChatProviderFactoryModelListTests
             .ReturnsAsync((string key) => store.TryGetValue(key, out var v) ? v : null);
         configMock.Setup(x => x.GetAllAsync())
             .ReturnsAsync(() => new Dictionary<string, string>(store));
-        return new AgentChatProviderFactory(configMock.Object, new HttpClient(), foundryAuth, secretsMock.Object);
+        return new AgentChatProviderFactory(configMock.Object, new HttpClient(), secretsMock.Object, foundryAuth);
     }
 
     private static IAzureFoundryAuthService FoundryWith(string? selectedResourceEndpoint, params string[] enabledModels)

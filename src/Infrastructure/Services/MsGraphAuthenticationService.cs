@@ -92,14 +92,14 @@ public class MsGraphAuthenticationService : IMsGraphAuthenticationService
         HttpClient httpClient,
         IConfigurationService configurationService,
         ILogger<MsGraphAuthenticationService> logger,
-        MsGraphAuthConfig? config = null,
-        ISecretResolver? secrets = null)
+        ISecretResolver secrets,
+        MsGraphAuthConfig? config = null)
     {
         _httpClient = httpClient;
         _configurationService = configurationService;
         _logger = logger;
         _config = config ?? new MsGraphAuthConfig();
-        _secrets = secrets ?? new SecretStore();
+        _secrets = secrets;
 
         _jsonOptions = new JsonSerializerOptions
         {

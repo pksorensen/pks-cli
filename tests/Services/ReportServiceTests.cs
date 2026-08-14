@@ -1,3 +1,4 @@
+using PKS.CLI.Tests.Security;
 using NSubstitute;
 using PKS.Infrastructure;
 using PKS.Infrastructure.Services;
@@ -28,7 +29,8 @@ public class ReportServiceTests
             _mockSystemInformationService,
             _mockTelemetryService,
             _mockConfigurationService,
-            _mockAuthService);
+            _mockAuthService,
+            FakeSecretResolver.BackedBy(_mockConfigurationService.GetAsync));
     }
 
     [Fact]

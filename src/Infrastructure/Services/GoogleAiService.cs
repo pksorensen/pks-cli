@@ -40,11 +40,11 @@ public class GoogleAiService : IGoogleAiService
     private readonly HttpClient _http;
     private readonly ISecretResolver _secrets;
 
-    public GoogleAiService(IConfigurationService config, HttpClient http, ISecretResolver? secrets = null)
+    public GoogleAiService(IConfigurationService config, HttpClient http, ISecretResolver secrets)
     {
         _config = config;
         _http = http;
-        _secrets = secrets ?? new SecretStore();
+        _secrets = secrets;
     }
 
     public async Task<bool> IsAuthenticatedAsync()

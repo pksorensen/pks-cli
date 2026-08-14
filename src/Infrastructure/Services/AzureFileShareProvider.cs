@@ -31,14 +31,14 @@ public class AzureFileShareProvider : IFileShareProvider
         HttpClient httpClient,
         IConfigurationService configurationService,
         ILogger<AzureFileShareProvider> logger,
-        AzureFileShareAuthConfig? config = null,
-        ISecretResolver? secrets = null)
+        ISecretResolver secrets,
+        AzureFileShareAuthConfig? config = null)
     {
         _httpClient = httpClient;
         _configurationService = configurationService;
         _logger = logger;
         _config = config ?? new AzureFileShareAuthConfig();
-        _secrets = secrets ?? new SecretStore();
+        _secrets = secrets;
     }
 
     public async Task<bool> IsAuthenticatedAsync()

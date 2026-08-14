@@ -47,14 +47,14 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
         HttpClient httpClient,
         IConfigurationService configurationService,
         ILogger<AzureFoundryAuthService> logger,
-        AzureFoundryAuthConfig? config = null,
-        ISecretResolver? secrets = null)
+        ISecretResolver secrets,
+        AzureFoundryAuthConfig? config = null)
     {
         _httpClient = httpClient;
         _configurationService = configurationService;
         _logger = logger;
         _config = config ?? new AzureFoundryAuthConfig();
-        _secrets = secrets ?? new SecretStore();
+        _secrets = secrets;
     }
 
     public async Task<string?> DiscoverTenantAsync(string email, CancellationToken cancellationToken = default)

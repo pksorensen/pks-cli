@@ -1,3 +1,4 @@
+using PKS.CLI.Tests.Security;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -90,7 +91,7 @@ public class JiraIssueLinksTests
         var configService = CreateAuthenticatedConfigService();
         var logger = new Mock<ILogger<JiraService>>();
 
-        var service = new JiraService(httpClient, configService, logger.Object);
+        var service = new JiraService(httpClient, configService, logger.Object, FakeSecretResolver.Empty);
 
         // Act
         var issue = await service.GetIssueAsync("UDV-3496");
@@ -134,7 +135,7 @@ public class JiraIssueLinksTests
         var configService = CreateAuthenticatedConfigService();
         var logger = new Mock<ILogger<JiraService>>();
 
-        var service = new JiraService(httpClient, configService, logger.Object);
+        var service = new JiraService(httpClient, configService, logger.Object, FakeSecretResolver.Empty);
 
         // Act
         var issue = await service.GetIssueAsync("UDV-3497");

@@ -1,3 +1,4 @@
+using PKS.CLI.Tests.Security;
 using System.Net.Http;
 using FluentAssertions;
 using Moq;
@@ -136,7 +137,7 @@ public class AgenticsRunnerSshHandoffPersistenceTests
     {
         var foundryAuthService = new Mock<IAzureFoundryAuthService>();
         var chatProviderFactory = new AgentChatProviderFactory(
-            new Mock<IConfigurationService>().Object, new HttpClient(), foundryAuthService.Object);
+            new Mock<IConfigurationService>().Object, new HttpClient(), FakeSecretResolver.Empty, foundryAuthService.Object);
 
         return new AgenticsRunnerStartCommand(
             configService,

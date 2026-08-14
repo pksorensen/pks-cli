@@ -41,14 +41,14 @@ public class AzureDevOpsAuthService : IAzureDevOpsAuthService
         HttpClient httpClient,
         IConfigurationService configurationService,
         ILogger<AzureDevOpsAuthService> logger,
-        AzureDevOpsAuthConfig? config = null,
-        ISecretResolver? secrets = null)
+        ISecretResolver secrets,
+        AzureDevOpsAuthConfig? config = null)
     {
         _httpClient = httpClient;
         _configurationService = configurationService;
         _logger = logger;
         _config = config ?? new AzureDevOpsAuthConfig();
-        _secrets = secrets ?? new SecretStore();
+        _secrets = secrets;
     }
 
     public async Task<AdoAuthResult> InitiateAsync(string tenantId = "common", string? loginHint = null, CancellationToken cancellationToken = default)

@@ -1,3 +1,4 @@
+using PKS.CLI.Tests.Security;
 using Xunit;
 using Moq;
 using FluentAssertions;
@@ -63,10 +64,12 @@ public class AzureAuthServiceTests
         Mock<IConfigurationService>? configMock = null,
         AzureAuthConfig? config = null)
     {
+        var config1 = configMock ?? CreateConfigServiceMock();
         return new AzureAuthService(
             httpClient ?? new HttpClient(),
-            (configMock ?? CreateConfigServiceMock()).Object,
+            config1.Object,
             new Mock<ILogger<AzureAuthService>>().Object,
+            FakeSecretResolver.BackedBy(config1.Object.GetAsync),
             config ?? new AzureAuthConfig());
     }
 

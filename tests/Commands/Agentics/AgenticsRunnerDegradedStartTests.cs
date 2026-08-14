@@ -1,3 +1,4 @@
+using PKS.CLI.Tests.Security;
 using System.Net;
 using System.Net.Http;
 using FluentAssertions;
@@ -104,7 +105,7 @@ public class AgenticsRunnerDegradedStartTests
         var foundryAuthService = new Mock<IAzureFoundryAuthService>();
         var foundryConfig = new AzureFoundryAuthConfig();
         var chatProviderFactory = new AgentChatProviderFactory(
-            new Mock<IConfigurationService>().Object, new HttpClient(), foundryAuthService.Object);
+            new Mock<IConfigurationService>().Object, new HttpClient(), FakeSecretResolver.Empty, foundryAuthService.Object);
 
         var console = new Spectre.Console.Testing.TestConsole();
         // Non-interactive, per the injectable check (_console.Profile.Capabilities.Interactive) --
@@ -190,7 +191,7 @@ public class AgenticsRunnerDegradedStartTests
 
         var foundryAuthService = new Mock<IAzureFoundryAuthService>();
         var chatProviderFactory = new AgentChatProviderFactory(
-            new Mock<IConfigurationService>().Object, new HttpClient(), foundryAuthService.Object);
+            new Mock<IConfigurationService>().Object, new HttpClient(), FakeSecretResolver.Empty, foundryAuthService.Object);
 
         var console = new Spectre.Console.Testing.TestConsole();
         console.Profile.Capabilities.Interactive = false;

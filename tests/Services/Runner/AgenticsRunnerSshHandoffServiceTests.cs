@@ -1,3 +1,4 @@
+using PKS.CLI.Tests.Security;
 using PKS.Infrastructure.Services.Security;
 using System.Net.Http;
 using System.Text.Json;
@@ -28,7 +29,9 @@ public class AgenticsRunnerSshHandoffServiceTests
     };
 
     private static AgenticsRunnerSshHandoffService MakeService(Mock<ISshCommandRunner> sshRunner) =>
-        new AgenticsRunnerSshHandoffService(sshRunner.Object, new Mock<ISshKeyStore>().Object, new Mock<IHttpClientFactory>().Object);
+        new AgenticsRunnerSshHandoffService(
+            sshRunner.Object, new Mock<ISshKeyStore>().Object, new Mock<IHttpClientFactory>().Object,
+            FakeSecretResolver.Empty, new Mock<ISecretStore>().Object);
 
     /// <summary>
     /// A service whose secret store is a throwaway directory holding exactly one credential. The

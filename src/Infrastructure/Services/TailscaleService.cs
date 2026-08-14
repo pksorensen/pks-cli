@@ -11,8 +11,24 @@ public interface ITailscaleService
     Task StoreCredentialsAsync(TailscaleStoredCredentials credentials);
     Task ClearStoredCredentialsAsync();
 
-    /// <summary>Build the <c>tailscale up …</c> argument string for a given hostname.</summary>
-    string BuildUpArgs(TailscaleStoredCredentials creds, string hostname);
+    /// <summary>
+    /// Builds the <c>tailscale up …</c> argument line for a given hostname. It carries the auth key,
+    /// so it comes back as a <see cref="SecretValue"/>: a caller can hand it to cloud-init through
+    /// <c>ScalewayCreateOptions.TailscaleUpArgs</c>, but cannot print it.
+    /// </summary>
+    SecretValue BuildUpArgs(TailscaleStoredCredentials creds, string hostname);
+
+    /// <summary>
+    /// Runs <c>tailscale up</c> on an already-reachable host. The command line is composed here and
+    /// handed straight to <paramref name="run"/>, so the calling command never holds the auth key —
+    /// which is the whole reason this method exists rather than the caller doing
+    /// <c>$"tailscale up {BuildUpArgs(…)}"</c> itself.
+    /// </summary>
+    /// <param name="run">Executes one shell command on the target host; typically the caller's
+    /// spinner-wrapped SSH step. Null means the step did not complete.</param>
+    Task<SshResult?> JoinTailnetAsync(
+        TailscaleStoredCredentials creds, string hostname, string sudoPrefix,
+        Func<string, Task<SshResult?>> run);
 }
 
 public class TailscaleService : ITailscaleService
@@ -21,10 +37,10 @@ public class TailscaleService : ITailscaleService
     private readonly IConfigurationService _config;
     private readonly ISecretResolver _secrets;
 
-    public TailscaleService(IConfigurationService config, ISecretResolver? secrets = null)
+    public TailscaleService(IConfigurationService config, ISecretResolver secrets)
     {
         _config = config;
-        _secrets = secrets ?? new SecretStore();
+        _secrets = secrets;
     }
 
     public async Task<bool> IsAuthenticatedAsync()
@@ -51,10 +67,7 @@ public class TailscaleService : ITailscaleService
 
     public Task ClearStoredCredentialsAsync() => _config.DeleteAsync(StorageKey);
 
-    /// <summary>Builds the <c>tailscale up</c> argument line. The result carries the auth key in
-    /// plaintext because it has to reach a remote shell — callers may ship it over ssh or into
-    /// cloud-init, and must never print or log it.</summary>
-    public string BuildUpArgs(TailscaleStoredCredentials creds, string hostname)
+    public SecretValue BuildUpArgs(TailscaleStoredCredentials creds, string hostname)
     {
         var args = new List<string>
         {
@@ -65,8 +78,13 @@ public class TailscaleService : ITailscaleService
         if (creds.AcceptRoutes) args.Add("--accept-routes");
         if (creds.AdvertiseExitNode) args.Add("--advertise-exit-node");
         if (!string.IsNullOrWhiteSpace(creds.LoginServer)) args.Add($"--login-server={creds.LoginServer}");
-        return string.Join(' ', args);
+        return SecretValue.From(string.Join(' ', args));
     }
+
+    public Task<SshResult?> JoinTailnetAsync(
+        TailscaleStoredCredentials creds, string hostname, string sudoPrefix,
+        Func<string, Task<SshResult?>> run)
+        => run($"{sudoPrefix}tailscale up {BuildUpArgs(creds, hostname).Reveal()}");
 
     // Tailscale hostnames must be DNS-label-safe: lowercase alphanumerics and hyphens.
     private static string Sanitize(string name)

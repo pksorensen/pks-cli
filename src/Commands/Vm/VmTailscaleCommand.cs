@@ -130,10 +130,9 @@ public class VmTailscaleCommand : Command<VmTailscaleCommand.Settings>
                 target, TimeSpan.FromSeconds(30));
         }
 
-        // 7. tailscale up
-        var upArgs = _tailscale.BuildUpArgs(creds, record.VmName);
-        var upResult = await RunStep("Joining the tailnet (tailscale up)...",
-            $"{sudo}tailscale up {upArgs}", target, TimeSpan.FromMinutes(2));
+        // 7. tailscale up — composed inside the service so the auth key never lands in a local here
+        var upResult = await _tailscale.JoinTailnetAsync(creds, record.VmName, sudo,
+            cmd => RunStep("Joining the tailnet (tailscale up)...", cmd, target, TimeSpan.FromMinutes(2)));
         if (upResult == null) return 1;
         if (upResult.ExitCode != 0)
         {

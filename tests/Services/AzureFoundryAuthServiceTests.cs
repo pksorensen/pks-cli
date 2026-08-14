@@ -85,8 +85,8 @@ public class AzureFoundryAuthServiceTests
             httpClient ?? new HttpClient(),
             configuration,
             new Mock<ILogger<AzureFoundryAuthService>>().Object,
-            config ?? new AzureFoundryAuthConfig(),
-            resolver);
+            resolver,
+            config ?? new AzureFoundryAuthConfig());
     }
 
     private static FoundryStoredCredentials CreateValidCredentials()

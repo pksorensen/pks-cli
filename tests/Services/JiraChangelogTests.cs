@@ -1,3 +1,4 @@
+using PKS.CLI.Tests.Security;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -55,7 +56,7 @@ public class JiraChangelogTests
         var configService = CreateAuthenticatedConfigService();
         var logger = new Mock<ILogger<JiraService>>();
 
-        var service = new JiraService(httpClient, configService, logger.Object);
+        var service = new JiraService(httpClient, configService, logger.Object, FakeSecretResolver.Empty);
 
         // Act
         var changelog = await service.GetChangelogAsync("TEST-1");
@@ -87,7 +88,7 @@ public class JiraChangelogTests
         var configService = CreateAuthenticatedConfigService();
         var logger = new Mock<ILogger<JiraService>>();
 
-        var service = new JiraService(httpClient, configService, logger.Object);
+        var service = new JiraService(httpClient, configService, logger.Object, FakeSecretResolver.Empty);
 
         var changelog = await service.GetChangelogAsync("TEST-2");
 

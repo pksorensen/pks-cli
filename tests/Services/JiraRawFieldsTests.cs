@@ -1,3 +1,4 @@
+using PKS.CLI.Tests.Security;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -78,7 +79,7 @@ public class JiraRawFieldsTests
         var configService = CreateAuthenticatedConfigService();
         var logger = new Mock<ILogger<JiraService>>();
 
-        var service = new JiraService(httpClient, configService, logger.Object);
+        var service = new JiraService(httpClient, configService, logger.Object, FakeSecretResolver.Empty);
 
         // Act
         var issue = await service.GetIssueWithAllFieldsAsync("TEST-1");
@@ -110,7 +111,7 @@ public class JiraRawFieldsTests
         var configService = CreateAuthenticatedConfigService();
         var logger = new Mock<ILogger<JiraService>>();
 
-        var service = new JiraService(httpClient, configService, logger.Object);
+        var service = new JiraService(httpClient, configService, logger.Object, FakeSecretResolver.Empty);
 
         // Act
         var issue = await service.GetIssueWithAllFieldsAsync("TEST-1");
@@ -142,7 +143,7 @@ public class JiraRawFieldsTests
         var configService = CreateAuthenticatedConfigService();
         var logger = new Mock<ILogger<JiraService>>();
 
-        var service = new JiraService(httpClient, configService, logger.Object);
+        var service = new JiraService(httpClient, configService, logger.Object, FakeSecretResolver.Empty);
 
         // Act
         var issue = await service.GetIssueAsync("TEST-1");
@@ -202,7 +203,7 @@ public class JiraRawFieldsTests
         configMock.Setup(c => c.GetAsync("jira:ac_field_id")).ReturnsAsync("customfield_10064");
 
         var logger = new Mock<ILogger<JiraService>>();
-        var service = new JiraService(httpClient, configMock.Object, logger.Object);
+        var service = new JiraService(httpClient, configMock.Object, logger.Object, FakeSecretResolver.Empty);
 
         // Act
         var issue = await service.GetIssueWithAllFieldsAsync("TEST-1");

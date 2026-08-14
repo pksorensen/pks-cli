@@ -1,3 +1,4 @@
+using PKS.CLI.Tests.Security;
 using Xunit;
 using Moq;
 using FluentAssertions;
@@ -52,10 +53,12 @@ public class AzureFileShareProviderTests
         Mock<IConfigurationService>? configMock = null,
         AzureFileShareAuthConfig? config = null)
     {
+        var configuration = configMock ?? CreateConfigServiceMock();
         return new AzureFileShareProvider(
             httpClient ?? new HttpClient(),
-            (configMock ?? CreateConfigServiceMock()).Object,
+            configuration.Object,
             new Mock<ILogger<AzureFileShareProvider>>().Object,
+            FakeSecretResolver.BackedBy(configuration.Object.GetAsync),
             config ?? new AzureFileShareAuthConfig());
     }
 

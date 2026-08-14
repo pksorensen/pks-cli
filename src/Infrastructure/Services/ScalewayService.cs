@@ -53,11 +53,11 @@ public class ScalewayService : IScalewayService
 
     private readonly ISecretResolver _secrets;
 
-    public ScalewayService(HttpClient httpClient, IConfigurationService config, ISecretResolver? secrets = null)
+    public ScalewayService(HttpClient httpClient, IConfigurationService config, ISecretResolver secrets)
     {
         _httpClient = httpClient;
         _config = config;
-        _secrets = secrets ?? new SecretStore();
+        _secrets = secrets;
     }
 
     // ---------------------------------------------------------------- credentials
@@ -225,12 +225,14 @@ public class ScalewayService : IScalewayService
                 $"  - echo '{key}' >> /root/.ssh/authorized_keys\n" +
                 "  - chmod 600 /root/.ssh/authorized_keys\n" +
                 "  - sort -u -o /root/.ssh/authorized_keys /root/.ssh/authorized_keys\n";
-            if (!string.IsNullOrWhiteSpace(options.TailscaleUpArgs))
+            if (options.TailscaleUpArgs.HasValue)
             {
                 onProgress?.Invoke("Setting cloud-init (ssh key + tailscale)...");
+                // The one place the auth key is read: it has to be literal text in the cloud-init
+                // document the instance boots from.
                 runcmd +=
                     "  - curl -fsSL https://tailscale.com/install.sh | sh\n" +
-                    $"  - tailscale up {options.TailscaleUpArgs}\n";
+                    $"  - tailscale up {options.TailscaleUpArgs.Reveal()}\n";
             }
             var cloudInit =
                 "#cloud-config\n" +

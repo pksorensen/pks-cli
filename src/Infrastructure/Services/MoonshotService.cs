@@ -23,11 +23,11 @@ public sealed class MoonshotService : IMoonshotService
 
     private readonly ISecretResolver _secrets;
 
-    public MoonshotService(HttpClient httpClient, IConfigurationService configuration, ISecretResolver? secrets = null)
+    public MoonshotService(HttpClient httpClient, IConfigurationService configuration, ISecretResolver secrets)
     {
         _httpClient = httpClient;
         _configuration = configuration;
-        _secrets = secrets ?? new SecretStore();
+        _secrets = secrets;
     }
 
     public async Task<bool> IsAuthenticatedAsync()

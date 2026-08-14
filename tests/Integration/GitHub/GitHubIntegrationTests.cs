@@ -1,3 +1,4 @@
+using PKS.CLI.Tests.Security;
 using PKS.Infrastructure.Services.Security;
 using System.Net.Http;
 using Microsoft.Extensions.Configuration;
@@ -51,7 +52,7 @@ public class GitHubIntegrationTests : IDisposable
             ApiBaseUrl = "https://api.github.com"
         };
 
-        _authService = new GitHubAuthenticationService(_httpClient, _configService, new LoggerFactory().CreateLogger<GitHubAuthenticationService>(), config);
+        _authService = new GitHubAuthenticationService(_httpClient, _configService, new LoggerFactory().CreateLogger<GitHubAuthenticationService>(), FakeSecretResolver.Empty, config);
         _apiClient = new GitHubApiClient(_httpClient, config);
         _issuesService = new GitHubIssuesService(_apiClient, _authService);
 

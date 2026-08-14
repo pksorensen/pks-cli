@@ -16,12 +16,12 @@ public class GitHubService : IGitHubService
     private readonly ISecretResolver _secrets;
     private readonly string _baseUrl = "https://api.github.com";
 
-    public GitHubService(HttpClient httpClient, IConfigurationService configurationService, IGitHubAuthenticationService authService, ISecretResolver? secrets = null)
+    public GitHubService(HttpClient httpClient, IConfigurationService configurationService, IGitHubAuthenticationService authService, ISecretResolver secrets)
     {
         _httpClient = httpClient;
         _configurationService = configurationService;
         _authService = authService;
-        _secrets = secrets ?? new SecretStore();
+        _secrets = secrets;
 
         // Configure HttpClient for GitHub API
         _httpClient.DefaultRequestHeaders.Add("User-Agent", "PKS-CLI/1.0.0");

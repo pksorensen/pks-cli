@@ -1,3 +1,4 @@
+using PKS.CLI.Tests.Security;
 using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -46,6 +47,7 @@ public class MsGraphAuthenticationServiceTests
             _httpClient,
             _configServiceMock.Object,
             _loggerMock.Object,
+            FakeSecretResolver.BackedBy(_configServiceMock.Object.GetAsync),
             _config);
     }
 

@@ -22,14 +22,14 @@ public class ReportService : IReportService
         ITelemetryService telemetryService,
         IConfigurationService configurationService,
         IGitHubAuthenticationService authService,
-        ISecretResolver? secrets = null)
+        ISecretResolver secrets)
     {
         _gitHubService = gitHubService;
         _systemInformationService = systemInformationService;
         _telemetryService = telemetryService;
         _configurationService = configurationService;
         _authService = authService;
-        _secrets = secrets ?? new SecretStore();
+        _secrets = secrets;
     }
 
     public async Task<ReportResult> CreateReportAsync(CreateReportRequest request)

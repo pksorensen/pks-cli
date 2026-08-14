@@ -1,3 +1,4 @@
+using PKS.CLI.Tests.Security;
 using System.Net;
 using System.Text.Json;
 using FluentAssertions;
@@ -30,7 +31,8 @@ public class MoonshotServiceTests
                 sent = request;
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
             })),
-            Mock.Of<IConfigurationService>());
+            Mock.Of<IConfigurationService>(),
+            FakeSecretResolver.Empty);
 
         var valid = await service.ValidateApiKeyAsync("secret-value");
 
@@ -45,7 +47,7 @@ public class MoonshotServiceTests
     {
         var config = new Mock<IConfigurationService>();
         var service = new MoonshotService(new HttpClient(new Handler(_ =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)))), config.Object);
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)))), config.Object, FakeSecretResolver.Empty);
 
         await service.StoreCredentialsAsync(new MoonshotStoredCredentials { ApiKey = SecretValue.From("secret-value") });
 

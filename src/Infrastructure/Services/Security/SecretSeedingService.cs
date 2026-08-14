@@ -30,9 +30,9 @@ public sealed class SecretSeedingService : ISecretSeedingService
     /// credential that is right there. DI always supplies it; tests that build a store directly pass
     /// null because no legacy settings.json is in play.
     /// </param>
-    public SecretSeedingService(ISecretResolver? secrets = null, PKS.Infrastructure.IConfigurationService? migration = null)
+    public SecretSeedingService(ISecretResolver secrets, PKS.Infrastructure.IConfigurationService? migration = null)
     {
-        _secrets = secrets ?? new SecretStore();
+        _secrets = secrets;
         _migration = migration;
     }
 
