@@ -101,6 +101,26 @@ that exists to be isolated.
 **There is no export command.** If you need a credential somewhere else, authorize it there or rotate
 it — do not fetch it.
 
+## Handing an API key to a local script
+
+The common version of "I need it somewhere else" is not another machine — it is a script on this one
+that wants an OpenAI-compatible endpoint. Those get a proxy, not the key:
+
+```bash
+eval $(pks openrouter proxy)   # exports OPENROUTER_PROXY_URL + OPENROUTER_PROXY_TOKEN
+NEMO_BASE_URL=$OPENROUTER_PROXY_URL NEMO_API_KEY=$OPENROUTER_PROXY_TOKEN python3 run_llm_cleanup.py
+```
+
+The proxy listens on loopback, checks a token generated for this process, and signs the upstream
+request through `SecretSink` — so the real key never enters the script's environment, its argv, the
+shell history, or a terminal that is being recorded. The token dies when the proxy does; the key does
+not have to be rotated because a scrollback buffer got shared. `pks foundry proxy` is the same shape
+against Azure AI Foundry, and it is the pattern to copy for the next provider.
+
+What a proxy is *not* is a deployment story. A container in production cannot depend on a developer's
+pks-cli, so a deployed app gets its own key as a platform secret. That split is the design working:
+pks-cli is the developer and agent credential plane, not a distribution channel.
+
 ## If the gate test fails
 
 Do not add an exception. Move the work that needs the credential into a service under

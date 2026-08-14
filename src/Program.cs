@@ -429,6 +429,7 @@ services.AddSingleton<PKS.Infrastructure.Services.ISshExecutor, PKS.Infrastructu
 // Scaleway (GPU instances) + cloud-agnostic VM provider abstraction
 services.AddHttpClient<PKS.Infrastructure.Services.IScalewayService, PKS.Infrastructure.Services.ScalewayService>();
 services.AddHttpClient<PKS.Infrastructure.Services.IMoonshotService, PKS.Infrastructure.Services.MoonshotService>();
+services.AddHttpClient<PKS.Infrastructure.Services.IOpenRouterService, PKS.Infrastructure.Services.OpenRouterService>();
 
 // Two-factor action guard: gates billable/sensitive ACTIONS behind a TOTP second factor whose
 // seed lives behind the pks user and whose code lives on the human's phone (see Services/Security).
@@ -1188,6 +1189,20 @@ app.Configure(config =>
         moonshot.AddCommand<PKS.Commands.Moonshot.MoonshotInitCommand>("init")
             .WithDescription("Register a Moonshot API key")
             .WithExample(["moonshot", "init"]);
+    });
+
+    config.AddBranch<PKS.Commands.OpenRouter.OpenRouterSettings>("openrouter", openrouter =>
+    {
+        openrouter.SetDescription("Manage OpenRouter API authentication");
+        openrouter.AddCommand<PKS.Commands.OpenRouter.OpenRouterInitCommand>("init")
+            .WithDescription("Register an OpenRouter API key")
+            .WithExample(["openrouter", "init"]);
+        openrouter.AddCommand<PKS.Commands.OpenRouter.OpenRouterStatusCommand>("status")
+            .WithDescription("Show the registered key's label, credit and tier")
+            .WithExample(["openrouter", "status"]);
+        openrouter.AddCommand<PKS.Commands.OpenRouter.OpenRouterProxyCommand>("proxy")
+            .WithDescription("Start a local OpenAI-compatible proxy signed with the stored key")
+            .WithExample(["openrouter", "proxy"]);
     });
 
     // Add Tailscale branch command

@@ -26,6 +26,7 @@ public class SecretKeysTests
     [InlineData("scaleway.auth.credentials")]
     [InlineData("tailscale.auth.credentials")]
     [InlineData("moonshot.auth.credentials")]
+    [InlineData("openrouter.auth.credentials")]
     [InlineData("fileshare.azure.credentials")]
     [InlineData("google:api_key")]
     [InlineData("jira:api_token")]
