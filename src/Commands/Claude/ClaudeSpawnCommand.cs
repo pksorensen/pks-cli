@@ -165,8 +165,7 @@ public class ClaudeSpawnCommand : DevcontainerSpawnCommand
         env["ANTHROPIC_FOUNDRY_RESOURCE"] = creds.SelectedResourceName;
         env["IDENTITY_ENDPOINT"] = server.Endpoint;
         env["IDENTITY_HEADER"] = server.Secret;
-        if (!string.IsNullOrEmpty(creds.ApiKey))
-            env["ANTHROPIC_FOUNDRY_API_KEY"] = creds.ApiKey;
+        SecretSink.SetEnvironmentVariable(env, "ANTHROPIC_FOUNDRY_API_KEY", creds.ApiKey);
 
         var enabledModels = creds.EnabledModels.Count > 0 ? creds.EnabledModels : new List<string> { creds.DefaultModel };
 

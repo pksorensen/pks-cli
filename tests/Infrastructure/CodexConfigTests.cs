@@ -10,6 +10,7 @@ using PKS.Infrastructure.Services.Agent.Codex;
 using PKS.Infrastructure.Services.Agent.Foundry;
 using PKS.Infrastructure.Services.Models;
 using Xunit;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.CLI.Tests.Infrastructure;
 
@@ -112,7 +113,7 @@ public class CodexConfigTests
     public async Task ApplyUpstreamAuth_PrefersApiKey_WhenPresent()
     {
         var auth = new Mock<IAzureFoundryAuthService>(MockBehavior.Strict);
-        var creds = new FoundryStoredCredentials { ApiKey = "secret-key" };
+        var creds = new FoundryStoredCredentials { ApiKey = SecretValue.From("secret-key") };
         using var req = new HttpRequestMessage(HttpMethod.Post, "https://upstream/responses");
 
         await FoundryResponsesEndpoint.ApplyUpstreamAuthAsync(req, creds, auth.Object, "scope", default);
@@ -127,7 +128,7 @@ public class CodexConfigTests
     {
         var auth = new Mock<IAzureFoundryAuthService>();
         auth.Setup(x => x.GetAccessTokenAsync("scope", It.IsAny<CancellationToken>())).ReturnsAsync("aad-token");
-        var creds = new FoundryStoredCredentials { ApiKey = null };
+        var creds = new FoundryStoredCredentials { ApiKey = SecretValue.None };
         using var req = new HttpRequestMessage(HttpMethod.Post, "https://upstream/responses");
 
         await FoundryResponsesEndpoint.ApplyUpstreamAuthAsync(req, creds, auth.Object, "scope", default);
@@ -143,7 +144,7 @@ public class CodexConfigTests
     {
         var auth = new Mock<IAzureFoundryAuthService>();
         auth.Setup(x => x.GetAccessTokenAsync("scope", It.IsAny<CancellationToken>())).ReturnsAsync("aad-token");
-        var creds = new FoundryStoredCredentials { ApiKey = "secret-key" };
+        var creds = new FoundryStoredCredentials { ApiKey = SecretValue.From("secret-key") };
         using var req = new HttpRequestMessage(HttpMethod.Post, "https://upstream/responses");
 
         await FoundryResponsesEndpoint.ApplyUpstreamAuthAsync(req, creds, auth.Object, "scope", default, forceBearer: true);
@@ -186,6 +187,60 @@ public class CodexConfigTests
         using var doc = JsonDocument.Parse(filtered);
         var tools = doc.RootElement.GetProperty("input")[0].GetProperty("tools").EnumerateArray().ToArray();
         tools.Select(t => t.GetProperty("name").GetString()).Should().Equal("js_repl", "browser");
+    }
+
+    [Fact]
+    public void NormalizeEmptyToolDescriptions_FillsInputAdditionalToolDescriptions()
+    {
+        var json = """
+        {
+          "model": "gpt-5.6-sol",
+          "input": [
+            {
+              "type": "additional_tools",
+              "tools": [
+                { "name": "js_repl", "description": "" },
+                { "name": "browser", "description": "   " },
+                { "name": "shell", "description": "Run commands" }
+              ]
+            }
+          ]
+        }
+        """;
+
+        var normalized = FoundryResponsesPassthrough.NormalizeEmptyToolDescriptions(
+            Encoding.UTF8.GetBytes(json),
+            out var summary);
+
+        summary.Should().Contain("Filled 2 empty tool descriptions");
+        using var doc = JsonDocument.Parse(normalized);
+        var tools = doc.RootElement.GetProperty("input")[0].GetProperty("tools").EnumerateArray().ToArray();
+        tools[0].GetProperty("description").GetString().Should().Be("Tool js_repl.");
+        tools[1].GetProperty("description").GetString().Should().Be("Tool browser.");
+        tools[2].GetProperty("description").GetString().Should().Be("Run commands");
+    }
+
+    [Fact]
+    public void NormalizeEmptyToolDescriptions_FillsRootToolDescriptions()
+    {
+        var json = """
+        {
+          "model": "gpt-5.6-sol",
+          "tools": [
+            { "type": "function", "name": "read_file", "description": "" }
+          ],
+          "input": "test"
+        }
+        """;
+
+        var normalized = FoundryResponsesPassthrough.NormalizeEmptyToolDescriptions(
+            Encoding.UTF8.GetBytes(json),
+            out var summary);
+
+        summary.Should().Contain("Filled 1 empty tool description");
+        using var doc = JsonDocument.Parse(normalized);
+        doc.RootElement.GetProperty("tools")[0].GetProperty("description").GetString()
+            .Should().Be("Tool read_file.");
     }
 
     [Fact]

@@ -2,6 +2,7 @@ using System.ComponentModel;
 using PKS.Infrastructure.Services;
 using Spectre.Console;
 using Spectre.Console.Cli;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Commands.Foundry;
 
@@ -52,7 +53,7 @@ public class FoundryStatusCommand : Command<FoundrySettings>
         table.AddRow("Resource Group", Markup.Escape(credentials.SelectedResourceGroup));
         table.AddRow("Authenticated", credentials.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss UTC"));
         table.AddRow("Last Refreshed", credentials.LastRefreshedAt.ToString("yyyy-MM-dd HH:mm:ss UTC"));
-        var tokenStatus = string.IsNullOrEmpty(credentials.RefreshToken) ? "[red]Missing[/]" : "[green]Present[/]";
+        var tokenStatus = credentials.RefreshToken.HasValue ? "[green]Present[/]" : "[red]Missing[/]";
         table.AddRow("Refresh Token", tokenStatus);
 
         _console.Write(table);

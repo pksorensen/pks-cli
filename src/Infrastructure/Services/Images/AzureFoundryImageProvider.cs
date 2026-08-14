@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services.Images;
 
@@ -34,8 +35,7 @@ public class AzureFoundryImageProvider : IImageProvider
             return false;
 
         // Either an API key OR an OAuth refresh token is enough to authenticate.
-        return !string.IsNullOrWhiteSpace(creds.ApiKey)
-            || !string.IsNullOrWhiteSpace(creds.RefreshToken);
+        return creds.ApiKey.HasValue || creds.RefreshToken.HasValue;
     }
 
     public async Task<bool> CanServeModelAsync(string model)
@@ -82,10 +82,10 @@ public class AzureFoundryImageProvider : IImageProvider
         using var req = new HttpRequestMessage(HttpMethod.Post, url);
 
         // Prefer an explicit API key; otherwise mint a Bearer token from the OAuth refresh token.
-        if (!string.IsNullOrWhiteSpace(creds.ApiKey))
+        if (creds.ApiKey.HasValue)
         {
-            req.Headers.TryAddWithoutValidation("api-key", creds.ApiKey);
-            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", creds.ApiKey);
+            req.Headers.TryAddWithoutValidation("api-key", creds.ApiKey.Reveal());
+            SecretSink.SetBearerToken(req, creds.ApiKey);
         }
         else
         {

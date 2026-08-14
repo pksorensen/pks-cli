@@ -5,6 +5,7 @@ using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Commands.Foundry;
 
@@ -37,7 +38,7 @@ public class FoundryUsageCommand : Command<FoundrySettings>
     public async Task<int> ExecuteAsync()
     {
         var credentials = await _authService.GetStoredCredentialsAsync();
-        if (credentials == null || string.IsNullOrEmpty(credentials.RefreshToken))
+        if (credentials == null || !credentials.RefreshToken.HasValue)
         {
             _console.MarkupLine("[red]Not authenticated with Azure AI Foundry.[/]");
             _console.MarkupLine("[dim]Run [bold]pks foundry init[/] to authenticate first.[/]");

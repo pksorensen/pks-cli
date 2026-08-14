@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services.Models;
 
@@ -98,7 +99,10 @@ public class FoundryAuthResult
 public class FoundryStoredCredentials
 {
     public string TenantId { get; set; } = string.Empty;
-    public string RefreshToken { get; set; } = string.Empty;
+    /// <summary>The long-lived half of the Foundry session, and the reason this whole type is
+    /// quarantined: it is what an agent's <c>cat</c> used to hand out. Commands may check
+    /// <c>HasValue</c> and pass it along; only services can read it.</summary>
+    public SecretValue RefreshToken { get; set; }
     public string SelectedSubscriptionId { get; set; } = string.Empty;
     public string SelectedSubscriptionName { get; set; } = string.Empty;
     public string SelectedResourceEndpoint { get; set; } = string.Empty;
@@ -111,7 +115,7 @@ public class FoundryStoredCredentials
     public string DefaultModel { get; set; } = string.Empty;
     public List<string> EnabledModels { get; set; } = new();
     /// <summary>Azure resource API key from the Foundry portal (optional — enables no-az-CLI auth)</summary>
-    public string? ApiKey { get; set; }
+    public SecretValue ApiKey { get; set; }
     /// <summary>Deployment name used by heypoul for voice command classification (optional fast model).</summary>
     public string? VoiceClassifierModel { get; set; }
     public DateTime CreatedAt { get; set; }

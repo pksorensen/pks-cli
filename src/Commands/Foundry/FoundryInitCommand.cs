@@ -4,6 +4,7 @@ using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Commands.Foundry;
 
@@ -127,7 +128,7 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
         await _authService.StoreCredentialsAsync(new FoundryStoredCredentials
         {
             TenantId = tenantId,
-            RefreshToken = authResult.RefreshToken ?? string.Empty,
+            RefreshToken = SecretValue.From(authResult.RefreshToken),
             CreatedAt = DateTime.UtcNow,
             LastRefreshedAt = DateTime.UtcNow,
         });
@@ -283,7 +284,7 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
             await _authService.StoreCredentialsAsync(new FoundryStoredCredentials
             {
                 TenantId = tenantId,
-                RefreshToken = authResult.RefreshToken ?? string.Empty,
+                RefreshToken = SecretValue.From(authResult.RefreshToken),
                 SelectedSubscriptionId = selectedSubscription.SubscriptionId,
                 SelectedSubscriptionName = selectedSubscription.DisplayName,
                 SelectedResourceEndpoint = foundryEndpoint,
@@ -291,7 +292,7 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
                 SelectedResourceGroup = resourceGroup,
                 DefaultModel = selectedDeployment.Name,
                 EnabledModels = selectedDeploymentNames,
-                ApiKey = apiKey,
+                ApiKey = SecretValue.From(apiKey),
                 CreatedAt = DateTime.UtcNow,
                 LastRefreshedAt = DateTime.UtcNow,
             });

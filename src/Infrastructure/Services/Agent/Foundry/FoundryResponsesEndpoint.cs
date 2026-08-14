@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Azure.Core;
 using PKS.Infrastructure.Services.Agent.Anthropic;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services.Agent.Foundry;
 
@@ -38,9 +39,9 @@ public static class FoundryResponsesEndpoint
         CancellationToken ct,
         bool forceBearer = false)
     {
-        if (!forceBearer && !string.IsNullOrEmpty(creds.ApiKey))
+        if (!forceBearer && creds.ApiKey.HasValue)
         {
-            req.Headers.TryAddWithoutValidation("api-key", creds.ApiKey);
+            req.Headers.TryAddWithoutValidation("api-key", creds.ApiKey.Reveal());
             return;
         }
 

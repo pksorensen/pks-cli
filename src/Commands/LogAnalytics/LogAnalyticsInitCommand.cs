@@ -3,6 +3,7 @@ using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Commands.LogAnalytics;
 
@@ -225,7 +226,7 @@ public class LogAnalyticsInitCommand : Command<LogAnalyticsInitCommand.Settings>
             await _authService.StoreCredentialsAsync(new FoundryStoredCredentials
             {
                 TenantId = tenantId,
-                RefreshToken = result.RefreshToken ?? string.Empty,
+                RefreshToken = SecretValue.From(result.RefreshToken),
                 CreatedAt = DateTime.UtcNow,
                 LastRefreshedAt = DateTime.UtcNow,
             });

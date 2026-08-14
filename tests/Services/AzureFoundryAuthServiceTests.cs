@@ -12,6 +12,7 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.CLI.Tests.Services;
 
@@ -61,13 +62,31 @@ public class AzureFoundryAuthServiceTests
     private static AzureFoundryAuthService CreateService(
         HttpClient? httpClient = null,
         Mock<IConfigurationService>? configMock = null,
-        AzureFoundryAuthConfig? config = null)
+        AzureFoundryAuthConfig? config = null,
+        ISecretResolver? secrets = null)
     {
+        var configuration = (configMock ?? CreateConfigServiceMock()).Object;
+
+        // The resolver has to be faked, and reading through the config mock is how it stays in sync
+        // with whatever the test seeded. Left null, AzureFoundryAuthService falls back to
+        // `new SecretStore()` — the developer's real ~/.pks-cli — and these tests start asserting
+        // against whoever is logged in. That is why six of them failed on a machine with a live
+        // Foundry session and passed in CI.
+        var resolver = secrets;
+        if (resolver is null)
+        {
+            var resolverMock = new Mock<ISecretResolver>();
+            resolverMock.Setup(x => x.RevealAsync(It.IsAny<string>()))
+                .Returns((string key) => configuration.GetAsync(key));
+            resolver = resolverMock.Object;
+        }
+
         return new AzureFoundryAuthService(
             httpClient ?? new HttpClient(),
-            (configMock ?? CreateConfigServiceMock()).Object,
+            configuration,
             new Mock<ILogger<AzureFoundryAuthService>>().Object,
-            config ?? new AzureFoundryAuthConfig());
+            config ?? new AzureFoundryAuthConfig(),
+            resolver);
     }
 
     private static FoundryStoredCredentials CreateValidCredentials()
@@ -75,7 +94,7 @@ public class AzureFoundryAuthServiceTests
         return new FoundryStoredCredentials
         {
             TenantId = "test-tenant-id",
-            RefreshToken = "test-refresh-token",
+            RefreshToken = SecretValue.From("test-refresh-token"),
             SelectedSubscriptionId = "sub-123",
             SelectedSubscriptionName = "My Subscription",
             SelectedResourceEndpoint = "https://myresource.cognitiveservices.azure.com",
@@ -97,7 +116,9 @@ public class AzureFoundryAuthServiceTests
     {
         // Arrange
         var credentials = CreateValidCredentials();
-        var json = JsonSerializer.Serialize(credentials);
+        // Persistence options: this stands in for what the store holds, and the default options
+        // would seed a masked token — the credential would read back absent.
+        var json = JsonSerializer.Serialize(credentials, SecretJson.Persistence);
         var configMock = CreateConfigServiceMock(new Dictionary<string, string>
         {
             ["foundry.auth.credentials"] = json
@@ -132,8 +153,10 @@ public class AzureFoundryAuthServiceTests
     {
         // Arrange
         var credentials = CreateValidCredentials();
-        credentials.RefreshToken = string.Empty;
-        var json = JsonSerializer.Serialize(credentials);
+        credentials.RefreshToken = SecretValue.None;
+        // Persistence options: this stands in for what the store holds, and the default options
+        // would seed a masked token — the credential would read back absent.
+        var json = JsonSerializer.Serialize(credentials, SecretJson.Persistence);
         var configMock = CreateConfigServiceMock(new Dictionary<string, string>
         {
             ["foundry.auth.credentials"] = json
@@ -172,7 +195,9 @@ public class AzureFoundryAuthServiceTests
     {
         // Arrange
         var credentials = CreateValidCredentials();
-        var json = JsonSerializer.Serialize(credentials);
+        // Persistence options: this stands in for what the store holds, and the default options
+        // would seed a masked token — the credential would read back absent.
+        var json = JsonSerializer.Serialize(credentials, SecretJson.Persistence);
         var configMock = CreateConfigServiceMock(new Dictionary<string, string>
         {
             ["foundry.auth.credentials"] = json
@@ -185,7 +210,7 @@ public class AzureFoundryAuthServiceTests
         // Assert
         result.Should().NotBeNull();
         result!.TenantId.Should().Be("test-tenant-id");
-        result.RefreshToken.Should().Be("test-refresh-token");
+        result.RefreshToken.Should().Be(SecretValue.From("test-refresh-token"));
         result.SelectedSubscriptionId.Should().Be("sub-123");
         result.SelectedSubscriptionName.Should().Be("My Subscription");
         result.SelectedResourceEndpoint.Should().Be("https://myresource.cognitiveservices.azure.com");
@@ -239,6 +264,33 @@ public class AzureFoundryAuthServiceTests
             Times.Once);
     }
 
+    [Fact]
+    [Trait("Category", "AzureFoundry")]
+    public async Task StoredCredentials_SurviveTheRoundTripUnmasked()
+    {
+        // The trap this guards: FoundryStoredCredentials.RefreshToken is a SecretValue, and a
+        // SecretValue serializes to "***" under ordinary options. Persist it that way and nothing
+        // fails — the write succeeds, the file looks plausible, and the user is silently logged out
+        // an hour later when the refresh comes back absent. Both halves of the store path have to
+        // name SecretJson.Persistence, so both halves are asserted here.
+        string? persisted = null;
+        var configMock = CreateConfigServiceMock();
+        configMock.Setup(x => x.SetAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<bool>()))
+            .Callback<string, string, bool, bool>((_, json, _, _) => persisted = json)
+            .Returns(Task.CompletedTask);
+
+        var secrets = new Mock<ISecretResolver>();
+        secrets.Setup(x => x.RevealAsync(It.IsAny<string>())).ReturnsAsync(() => persisted);
+        var service = CreateService(configMock: configMock, secrets: secrets.Object);
+
+        await service.StoreCredentialsAsync(CreateValidCredentials());
+        persisted.Should().NotBeNull().And.NotContain("***");
+
+        var restored = await service.GetStoredCredentialsAsync();
+
+        restored!.RefreshToken.Should().Be(SecretValue.From("test-refresh-token"));
+    }
+
     // ═════════════════════════════════════════════
     //  4. ClearCredentialsAsync Tests
     // ═════════════════════════════════════════════
@@ -286,7 +338,9 @@ public class AzureFoundryAuthServiceTests
     {
         // Arrange
         var credentials = CreateValidCredentials();
-        var json = JsonSerializer.Serialize(credentials);
+        // Persistence options: this stands in for what the store holds, and the default options
+        // would seed a masked token — the credential would read back absent.
+        var json = JsonSerializer.Serialize(credentials, SecretJson.Persistence);
         var configMock = CreateConfigServiceMock(new Dictionary<string, string>
         {
             ["foundry.auth.credentials"] = json
@@ -295,7 +349,7 @@ public class AzureFoundryAuthServiceTests
         var tokenResponse = new FoundryTokenResponse
         {
             AccessToken = "new-access-token",
-            RefreshToken = credentials.RefreshToken, // same refresh token (no rotation)
+            RefreshToken = credentials.RefreshToken.Reveal(), // same refresh token (no rotation)
             ExpiresIn = 3600,
             TokenType = "Bearer"
         };
@@ -323,7 +377,9 @@ public class AzureFoundryAuthServiceTests
     {
         // Arrange
         var credentials = CreateValidCredentials();
-        var json = JsonSerializer.Serialize(credentials);
+        // Persistence options: this stands in for what the store holds, and the default options
+        // would seed a masked token — the credential would read back absent.
+        var json = JsonSerializer.Serialize(credentials, SecretJson.Persistence);
         var configMock = CreateConfigServiceMock(new Dictionary<string, string>
         {
             ["foundry.auth.credentials"] = json
@@ -368,7 +424,9 @@ public class AzureFoundryAuthServiceTests
     {
         // Arrange
         var credentials = CreateValidCredentials();
-        var json = JsonSerializer.Serialize(credentials);
+        // Persistence options: this stands in for what the store holds, and the default options
+        // would seed a masked token — the credential would read back absent.
+        var json = JsonSerializer.Serialize(credentials, SecretJson.Persistence);
         var configMock = CreateConfigServiceMock(new Dictionary<string, string>
         {
             ["foundry.auth.credentials"] = json

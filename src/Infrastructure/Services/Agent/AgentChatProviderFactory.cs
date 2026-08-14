@@ -210,7 +210,7 @@ public sealed class AgentChatProviderFactory
                 endpoint = creds.SelectedResourceEndpoint;
                 // Prefer a stored Foundry API key; otherwise BuildAzureOpenAI falls
                 // back to the FoundryTokenCredential bearer flow.
-                apiKey ??= creds.ApiKey;
+                apiKey ??= creds.ApiKey.Reveal();
             }
         }
 

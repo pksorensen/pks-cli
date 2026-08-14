@@ -8,6 +8,7 @@ using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Commands.Voice;
 
@@ -238,8 +239,7 @@ public class VoiceStartCommand : AsyncCommand<VoiceStartCommand.Settings>
             psi.Environment["HEYPOUL_DEVICE_NAME"] = deviceName;
         psi.Environment["HEYPOUL_TOKEN"] = token;
         // Pass subscription key — the Speech REST API prefers Ocp-Apim-Subscription-Key over Azure AD Bearer tokens
-        if (!string.IsNullOrEmpty(creds.ApiKey))
-            psi.Environment["HEYPOUL_API_KEY"] = creds.ApiKey;
+        SecretSink.SetEnvironmentVariable(psi, "HEYPOUL_API_KEY", creds.ApiKey);
         psi.Environment["HEYPOUL_LANGUAGE"] = language;
         psi.Environment["HEYPOUL_KEY"] = keyCode.ToString();
         psi.Environment["HEYPOUL_INJECT"] = injectMode;

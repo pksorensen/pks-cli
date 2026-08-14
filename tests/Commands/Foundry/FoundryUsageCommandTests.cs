@@ -5,6 +5,7 @@ using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console.Testing;
 using Xunit;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.CLI.Tests.Commands.Foundry;
 
@@ -35,7 +36,7 @@ public class FoundryUsageCommandTests
         auth.Setup(x => x.GetStoredCredentialsAsync()).ReturnsAsync(new FoundryStoredCredentials
         {
             TenantId = "tenant",
-            RefreshToken = "rt",
+            RefreshToken = SecretValue.From("rt"),
             SelectedSubscriptionId = "sub-1",
             SelectedSubscriptionName = "MySub",
             SelectedResourceGroup = "rg-1",
@@ -104,7 +105,7 @@ public class FoundryUsageCommandTests
         auth.Setup(x => x.GetStoredCredentialsAsync()).ReturnsAsync(new FoundryStoredCredentials
         {
             TenantId = "tenant",
-            RefreshToken = "rt",
+            RefreshToken = SecretValue.From("rt"),
             // no SelectedSubscriptionId / SelectedResourceName / SelectedResourceGroup
         });
         auth.Setup(x => x.GetAccessTokenAsync(It.IsAny<string>())).ReturnsAsync("tok");

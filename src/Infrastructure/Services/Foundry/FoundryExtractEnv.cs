@@ -1,5 +1,6 @@
 using Spectre.Console;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services.Foundry;
 
@@ -96,7 +97,7 @@ public sealed class FoundryExtractEnv : IFoundryExtractEnv
         {
             EnvVars = new FoundryEnvVars(
                 Resource: creds.SelectedResourceName,
-                ApiKey: creds.ApiKey,
+                ApiKey: creds.ApiKey.Reveal(),
                 IdentityEndpoint: server.Endpoint,
                 IdentityHeader: server.Secret,
                 ModelTier: tier),

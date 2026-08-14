@@ -167,7 +167,7 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
     public async Task<string?> GetAccessTokenAsync(string scope, CancellationToken cancellationToken = default)
     {
         var credentials = await GetStoredCredentialsAsync();
-        if (credentials == null || string.IsNullOrEmpty(credentials.RefreshToken))
+        if (credentials == null || !credentials.RefreshToken.HasValue)
         {
             _logger.LogWarning("Cannot refresh Foundry token: no stored credentials or refresh token");
             return null;
@@ -175,13 +175,14 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
 
         try
         {
-            var requestBody = new FormUrlEncodedContent(new Dictionary<string, string>
+            var form = new Dictionary<string, string>
             {
                 ["client_id"] = _config.ClientId,
                 ["grant_type"] = "refresh_token",
-                ["refresh_token"] = credentials.RefreshToken,
                 ["scope"] = scope
-            });
+            };
+            SecretSink.SetFormField(form, "refresh_token", credentials.RefreshToken);
+            var requestBody = new FormUrlEncodedContent(form);
 
             var tokenUrl = _config.GetTokenUrl(credentials.TenantId);
             var response = await _httpClient.PostAsync(tokenUrl, requestBody, cancellationToken);
@@ -217,14 +218,16 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
             }
 
             // Update stored refresh token if rotated
-            if (!string.IsNullOrEmpty(tokenResponse.RefreshToken) &&
-                tokenResponse.RefreshToken != credentials.RefreshToken)
+            var rotated = SecretValue.From(tokenResponse.RefreshToken);
+            if (rotated.HasValue && rotated != credentials.RefreshToken)
             {
-                credentials.RefreshToken = tokenResponse.RefreshToken;
+                credentials.RefreshToken = rotated;
             }
             credentials.LastRefreshedAt = DateTime.UtcNow;
 
-            var json = JsonSerializer.Serialize(credentials);
+            // Persistence options, or the refresh token would be written to the store as "***" and
+            // come back absent on the next load — a silent logout an hour later.
+            var json = JsonSerializer.Serialize(credentials, SecretJson.Persistence);
             await _configurationService.SetAsync(StorageKey, json, global: true);
 
             return tokenResponse.AccessToken;
@@ -314,7 +317,7 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
     public async Task<bool> IsAuthenticatedAsync()
     {
         var credentials = await GetStoredCredentialsAsync();
-        return credentials != null && !string.IsNullOrEmpty(credentials.RefreshToken);
+        return credentials != null && credentials.RefreshToken.HasValue;
     }
 
     public async Task<FoundryStoredCredentials?> GetStoredCredentialsAsync()
@@ -325,7 +328,7 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
             if (string.IsNullOrEmpty(json))
                 return null;
 
-            return JsonSerializer.Deserialize<FoundryStoredCredentials>(json);
+            return JsonSerializer.Deserialize<FoundryStoredCredentials>(json, SecretJson.Persistence);
         }
         catch
         {
@@ -335,7 +338,9 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
 
     public async Task StoreCredentialsAsync(FoundryStoredCredentials credentials)
     {
-        var json = JsonSerializer.Serialize(credentials);
+        // The one place Foundry credentials are written unmasked, and it writes into the encrypted
+        // store. Everywhere else a FoundryStoredCredentials serializes to "***" on purpose.
+        var json = JsonSerializer.Serialize(credentials, SecretJson.Persistence);
         await _configurationService.SetAsync(StorageKey, json, global: true);
     }
 

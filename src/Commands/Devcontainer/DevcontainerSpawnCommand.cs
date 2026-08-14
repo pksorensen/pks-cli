@@ -1795,8 +1795,7 @@ http.server.HTTPServer(('0.0.0.0', PORT), H).serve_forever()
         envVars.Append($"-e IDENTITY_ENDPOINT=http://172.17.0.1:{msiPort} ");
         envVars.Append($"-e IDENTITY_HEADER={msiSecret} ");
 
-        if (!string.IsNullOrEmpty(creds.ApiKey))
-            envVars.Append($"-e ANTHROPIC_FOUNDRY_API_KEY={creds.ApiKey} ");
+        SecretSink.AppendDockerEnvArgument(envVars, "ANTHROPIC_FOUNDRY_API_KEY", creds.ApiKey);
 
         // Only map Claude deployments to a tier — never let a non-Claude deployment (tts, image,
         // embeddings, gpt-*) clobber the Sonnet default, which would launch claude on the wrong model.

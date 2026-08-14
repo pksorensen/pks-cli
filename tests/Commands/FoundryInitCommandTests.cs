@@ -10,6 +10,7 @@ using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.CLI.Tests.Commands;
 
@@ -36,7 +37,7 @@ public class FoundryInitCommandTests
                 .ReturnsAsync(new FoundryStoredCredentials
                 {
                     TenantId = "test-tenant",
-                    RefreshToken = "test-refresh",
+                    RefreshToken = SecretValue.From("test-refresh"),
                     SelectedSubscriptionId = "sub-12345",
                     SelectedSubscriptionName = "Test Sub",
                     SelectedResourceName = "test-foundry",

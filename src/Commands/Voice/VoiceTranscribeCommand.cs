@@ -6,6 +6,7 @@ using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
+using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Commands.Voice;
 
@@ -171,8 +172,7 @@ public class VoiceTranscribeCommand : AsyncCommand<VoiceTranscribeCommand.Settin
         foreach (var a in args) psi.ArgumentList.Add(a);
         psi.Environment["HEYPOUL_ENDPOINT"] = endpoint;
         psi.Environment["HEYPOUL_TOKEN"] = token;
-        if (!string.IsNullOrEmpty(creds.ApiKey))
-            psi.Environment["HEYPOUL_API_KEY"] = creds.ApiKey;
+        SecretSink.SetEnvironmentVariable(psi, "HEYPOUL_API_KEY", creds.ApiKey);
         psi.Environment["HEYPOUL_LANGUAGE"] = language;
 
         // Per-engine model-dir env vars: heypoul picks these up when --engines is used.
