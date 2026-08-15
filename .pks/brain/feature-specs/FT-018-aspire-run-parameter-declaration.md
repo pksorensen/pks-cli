@@ -4,7 +4,7 @@ title: Aspire run — an AppHost declares its parameters, pks fills them
 domain: agentic-runtime
 status: implemented
 adrs: []
-tests: [tests/Services/Exec/ManifestResolverTests.cs]
+tests: [tests/Services/Exec/ManifestResolverTests.cs, tests/Commands/Aspire/PksAspireInitCommandTests.cs]
 source-files: [src/Commands/Aspire/PksAspireRunCommand.cs, src/Commands/Aspire/PksAspireInitCommand.cs, src/Infrastructure/Services/Exec/ManifestResolver.cs, src/Infrastructure/Services/Exec/PksManifest.cs, src/Infrastructure/Services/Exec/ResolvedEnvironment.cs, src/Infrastructure/Resources/Aspire/PksDeclare.cs.template]
 sessions: [5870168d-2595-4db1-88bb-3706fa630fea]
 ---
@@ -78,3 +78,10 @@ or a shell history. `pks aspire init` writes the AppHost half into a project.
   to run is the failure that looks like "pks resolved nothing".
 - **Not a timeout.** Discovery here compiles a project, so unlike FT-010's ten
   seconds there is no deadline on the declare pass.
+- **`PksDeclare.cs.template` was embedded as Czech.** MSBuild's `AssignCulture`
+  reads the middle extension of a resource file name as a culture, `cs` is a real
+  one, and the resource went into a `cs/` satellite assembly — where
+  `GetManifestResourceStream("PksDeclare.cs")` cannot see it. Build green, no
+  warning, `pks aspire init` dead on first use. The fix is `WithCulture="false"`
+  metadata on the item; `tests/Commands/Aspire/PksAspireInitCommandTests.cs` asks
+  the assembly the same question the command does, so it cannot come back quietly.
