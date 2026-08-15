@@ -70,9 +70,18 @@ or a shell history. `pks aspire init` writes the AppHost half into a project.
   reports success. Cost an hour on Margin's `ai-model`. `PksDeclare.cs` ships
   `SuggestedValue : ParameterDefault` for the case that reads the same and
   behaves as intended.
-- **The declare pass runs in publish mode.** An AppHost that branches on
-  `ExecutionContext.IsPublishMode` declares a different set of parameters than
-  the run will. Register parameters in both modes and gate only the wiring.
+- **The declare pass runs in publish mode.** `aspire do` always does, so an
+  AppHost that branches on `ExecutionContext.IsPublishMode` describes the
+  deployment while the run that follows is a local one — and the parameters
+  missing from the manifest are exactly the ones pks was asked to fill. It bit
+  Margin: `entra-client-secret` was declared only when there was no Key Vault,
+  and the vault exists in publish mode. `PksDeclare.cs` now exposes
+  `PksDeclareExtensions.IsDeclaring`; write
+  `builder.ExecutionContext.IsPublishMode && !declaring`, which reads as
+  "actually publishing", and the declare pass sees the composition the run will
+  have. (The earlier advice here — "declare in both modes, gate the wiring" —
+  is wrong for a parameter that must *not* exist in a deployed run: an
+  unconsumed parameter is still one Aspire resolves.)
 - **Both passes need the same `--` arguments.** Margin's model parameters exist
   only with `--ai`; declaring against a different composition than the one about
   to run is the failure that looks like "pks resolved nothing".

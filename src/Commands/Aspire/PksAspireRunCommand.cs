@@ -108,6 +108,8 @@ public sealed class PksAspireRunCommand : AsyncCommand<PksAspireRunCommand.Setti
             return 1;
         }
 
+        ReportStillMissing(manifest, resolved);
+
         if (settings.DryRun)
         {
             _console.MarkupLine("\n[yellow]--dry-run, would start with:[/]");
@@ -193,6 +195,33 @@ public sealed class PksAspireRunCommand : AsyncCommand<PksAspireRunCommand.Setti
                 $"[dim]not something pks can fill, and not yet answered: {string.Join(", ", unfillable).EscapeMarkup()}[/]");
         }
     }
+
+    /// <summary>
+    /// The gap between what a capability promised and what resolution produced.
+    ///
+    /// A skipped optional capability is a legitimate outcome — nothing was registered that could fill
+    /// it — but the parameters it bound are then unanswered, and the composition reported them as
+    /// <c>Bound</c>, so the earlier line stayed silent about them. Without this the run just stops on
+    /// a dashboard prompt with no explanation of which decision led there.
+    /// </summary>
+    private void ReportStillMissing(PksManifest manifest, ResolvedEnvironment resolved)
+    {
+        var missing = manifest.Parameters
+            .Where(p => p.Bound && !p.Supplied && !resolved.Contains(EnvironmentVariableFor(p)))
+            .Select(p => p.Name)
+            .ToList();
+
+        if (missing.Count > 0)
+        {
+            _console.MarkupLine(
+                $"[dim]still unanswered, so the run will ask: {string.Join(", ", missing).EscapeMarkup()}[/]");
+        }
+    }
+
+    /// <summary>The environment variable Aspire reads a parameter from — the same derivation the
+    /// AppHost side does, and the one thing both halves have to agree on.</summary>
+    private static string EnvironmentVariableFor(PksParameterManifest parameter)
+        => parameter.ConfigurationKey.Replace(":", "__", StringComparison.Ordinal);
 
     // ---------- pass two: the run itself ----------
 

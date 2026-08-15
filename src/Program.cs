@@ -419,6 +419,10 @@ services.AddHttpClient<IAzureFoundryAuthService, AzureFoundryAuthService>();
 // child process and cannot read a secret out of.
 services.AddSingleton<PKS.Infrastructure.Services.Exec.IManifestResolver, PKS.Infrastructure.Services.Exec.ManifestResolver>();
 
+// Entra app registrations. Provisions the client id and secret an application signs in with, and
+// writes the secret straight into the encrypted store — a command never sees it as a string.
+services.AddHttpClient<PKS.Infrastructure.Services.Entra.IEntraApplicationService, PKS.Infrastructure.Services.Entra.EntraApplicationService>();
+
 // Generic Azure authentication
 services.AddSingleton<PKS.Infrastructure.Services.Models.AzureAuthConfig>();
 services.AddHttpClient<PKS.Infrastructure.Services.IAzureAuthService, PKS.Infrastructure.Services.AzureAuthService>();
@@ -627,6 +631,31 @@ app.Configure(config =>
             .WithDescription("Add the pks-declare step to an AppHost so it can say what it needs")
             .WithExample(new[] { "aspire", "init" })
             .WithExample(new[] { "aspire", "init", "src/apphost" });
+    });
+
+    config.AddBranch("entra", entra =>
+    {
+        entra.SetDescription("Entra ID app registrations, without the portal and without the paste");
+
+        entra.AddBranch("app", app =>
+        {
+            app.SetDescription("App registrations an application signs in with");
+
+            app.AddCommand<PKS.Commands.Entra.EntraAppInitCommand>("init")
+                .WithDescription("Create or adopt a registration and store its secret out of reach")
+                .WithExample(new[] { "entra", "app", "init", "Margin v1 (dev)" })
+                .WithExample(new[] { "entra", "app", "init", "Margin v1 (dev)", "--redirect-uri", "http://localhost:3200/api/auth/callback/entra-id" })
+                .WithExample(new[] { "entra", "app", "init", "Margin v1 (dev)", "--rotate" });
+
+            app.AddCommand<PKS.Commands.Entra.EntraAppListCommand>("list")
+                .WithDescription("List the registrations pks holds, or the tenant's")
+                .WithExample(new[] { "entra", "app", "list" })
+                .WithExample(new[] { "entra", "app", "list", "--directory", "Margin" });
+
+            app.AddCommand<PKS.Commands.Entra.EntraAppForgetCommand>("forget")
+                .WithDescription("Forget a stored registration locally")
+                .WithExample(new[] { "entra", "app", "forget", "margin-v1-dev" });
+        });
     });
 
     config.AddCommand<AsciiCommand>("ascii")

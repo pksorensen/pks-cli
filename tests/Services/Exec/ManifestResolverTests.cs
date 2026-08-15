@@ -2,6 +2,7 @@ using System.Diagnostics;
 using FluentAssertions;
 using Moq;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Entra;
 using PKS.Infrastructure.Services.Exec;
 using PKS.Infrastructure.Services.Models;
 using PKS.Infrastructure.Services.Security;
@@ -51,7 +52,64 @@ public class ManifestResolverTests
     }
 
     private static ManifestResolver Resolver(Mock<IAzureFoundryAuthService> auth, TestConsole console)
-        => new(auth.Object, new AzureFoundryAuthConfig(), console);
+        => new(auth.Object, new AzureFoundryAuthConfig(), NoEntraApps, console);
+
+    private static ManifestResolver Resolver(
+        Mock<IAzureFoundryAuthService> auth,
+        IEntraApplicationService entra,
+        TestConsole console)
+        => new(auth.Object, new AzureFoundryAuthConfig(), entra, console);
+
+    /// <summary>Nothing provisioned — an `entra` provider is then simply not available.</summary>
+    private static IEntraApplicationService NoEntraApps
+    {
+        get
+        {
+            var mock = new Mock<IEntraApplicationService>();
+            mock.Setup(x => x.GetStoredAsync(It.IsAny<string>())).ReturnsAsync((EntraStoredApp?)null);
+            return mock.Object;
+        }
+    }
+
+    /// <summary>One app registration, stored under <paramref name="alias"/>.</summary>
+    private static IEntraApplicationService EntraApp(
+        string alias,
+        string appId = "client-id-1",
+        string tenantId = "tenant-1",
+        string? secret = "client-secret-1")
+    {
+        var mock = new Mock<IEntraApplicationService>();
+        mock.Setup(x => x.GetStoredAsync(It.IsAny<string>())).ReturnsAsync((string a) =>
+            a == alias
+                ? new EntraStoredApp
+                {
+                    Alias = alias,
+                    DisplayName = alias,
+                    AppId = appId,
+                    ObjectId = "obj-1",
+                    TenantId = tenantId,
+                    SecretKeyId = "key-1",
+                    SecretExpiresOn = DateTimeOffset.UtcNow.AddDays(90),
+                    ClientSecret = SecretValue.From(secret),
+                }
+                : null);
+        return mock.Object;
+    }
+
+    private static PksManifest OneEntraCapability(string capabilityId, Dictionary<string, string> env)
+        => new()
+        {
+            ManifestVersion = "v1",
+            Name = "test",
+            Capabilities =
+            {
+                new PksCapabilityManifest
+                {
+                    Id = capabilityId,
+                    Providers = { new PksProviderManifest { Kind = "entra", Env = env } },
+                },
+            },
+        };
 
     private static PksManifest OneFoundryCapability(Dictionary<string, string> env, bool required = false)
         => new()
@@ -303,5 +361,83 @@ public class ManifestResolverTests
         first.MergeFrom(second);
 
         first.Describe().Should().ContainEquivalentOf(("BASE_URL", "http://second/v1"));
+    }
+
+    // ─────────────────────────────────────────────
+    //  Entra app registrations
+    // ─────────────────────────────────────────────
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task An_entra_capability_fills_the_three_parameters_a_sign_in_needs()
+    {
+        var console = new TestConsole();
+        var resolver = Resolver(FoundrySignedOut(), EntraApp("margin-dev"), console);
+
+        var resolved = await resolver.ResolveAsync(
+            OneEntraCapability("margin-dev", new()
+            {
+                ["Parameters__entra-tenant-id"] = "{entra:tenantid}",
+                ["Parameters__entra-client-id"] = "{entra:clientid}",
+                ["Parameters__entra-client-secret"] = "{entra:clientsecret}",
+            }),
+            Unattended);
+
+        resolved.Should().NotBeNull();
+        resolved!.Describe().Should().ContainEquivalentOf(("Parameters__entra-client-id", "client-id-1"));
+        resolved.Describe().Should().ContainEquivalentOf(("Parameters__entra-tenant-id", "tenant-1"));
+
+        // The secret went in, and describing it says only that.
+        resolved.Contains("Parameters__entra-client-secret").Should().BeTrue();
+        resolved.Describe().Should().ContainEquivalentOf(("Parameters__entra-client-secret", "(set, hidden)"));
+
+        var start = new ProcessStartInfo();
+        resolved.ApplyTo(start);
+        start.Environment["Parameters__entra-client-secret"].Should().Be("client-secret-1");
+
+        console.Output.Should().NotContain("client-secret-1");
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task The_alias_defaults_to_the_capability_name_and_a_binding_can_override_it()
+    {
+        // The default is what keeps an AppHost from naming the alias twice; the override is what lets
+        // one composition bind two registrations — a dev one and a customer's.
+        var console = new TestConsole();
+        var resolver = Resolver(FoundrySignedOut(), EntraApp("other-app", appId: "client-id-2"), console);
+
+        var resolved = await resolver.ResolveAsync(
+            OneEntraCapability("other-app", new()
+            {
+                ["BY_DEFAULT"] = "{entra:clientid}",
+                ["BY_NAME"] = "{entra:clientid:other-app}",
+                ["SOMEBODY_ELSE"] = "{entra:clientid:not-provisioned}",
+            }),
+            Unattended);
+
+        resolved!.Describe().Should().ContainEquivalentOf(("BY_DEFAULT", "client-id-2"));
+        resolved.Describe().Should().ContainEquivalentOf(("BY_NAME", "client-id-2"));
+        resolved.Describe().Should().ContainEquivalentOf(("SOMEBODY_ELSE", ""));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task An_entra_capability_with_nothing_provisioned_is_skipped_not_guessed()
+    {
+        // Availability means "already provisioned". Writing an app registration into a company
+        // directory is not something a run gets to decide on its way past.
+        var console = new TestConsole();
+        var resolver = Resolver(FoundrySignedOut(), NoEntraApps, console);
+
+        var resolved = await resolver.ResolveAsync(
+            OneEntraCapability("margin-dev", new() { ["Parameters__entra-client-id"] = "{entra:clientid}" }),
+            Unattended);
+
+        resolved.Should().NotBeNull();
+        resolved!.Count.Should().Be(0);
     }
 }

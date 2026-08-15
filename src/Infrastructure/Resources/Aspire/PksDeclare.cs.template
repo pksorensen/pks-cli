@@ -28,10 +28,14 @@
 // The placeholder vocabulary is pks-cli's, and it is deliberately small:
 //
 //     {endpoint}       the chosen provider's base URL
+//     {endpoint:openai} the same, in the shape an OpenAI client can be pointed at
 //     {apikey}         a key for that endpoint, if the provider has one
 //     {model:<role>}   the model the developer picked for a named role
 //     {imds:endpoint}  a loopback managed-identity proxy pks starts for the run
 //     {imds:header}    that proxy's per-run secret
+//     {entra:tenantid}     ┐ an app registration `pks entra app init`
+//     {entra:clientid}     ├ provisioned, under the alias this capability
+//     {entra:clientsecret} ┘ is named — or `{entra:clientid:other-alias}`
 //
 // A parameter that is never bound is still reported, as something pks knows it
 // cannot fill — which is the difference between "you have nothing configured"
@@ -60,6 +64,29 @@ public static class PksDeclareExtensions
     public const string OutputVariable = "PKS_DECLARE_OUT";
 
     private const string ManifestVersion = "v1";
+
+    /// <summary>
+    /// Whether this process is the declare pass rather than a real run or a real publish.
+    ///
+    /// This matters more than it looks. `aspire do` executes in **publish** mode, so a composition
+    /// that branches on <c>ExecutionContext.IsPublishMode</c> — a Key Vault instead of parameters, a
+    /// real tenant instead of an emulator — describes the deployment while the run that follows is a
+    /// local one, and the parameters pks was asked to fill are exactly the ones missing from the
+    /// manifest. The symptom is a `pks aspire run` that resolves nothing and reports nothing wrong.
+    ///
+    /// So: fold this into the same condition. <c>IsPublishMode &amp;&amp; !IsDeclaring</c> reads as
+    /// "actually publishing", and the declare pass then sees the composition the run will have.
+    /// </summary>
+    public static bool IsDeclaring =>
+        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(OutputVariable));
+
+    /// <summary>Builder-shaped spelling of <see cref="IsDeclaring"/>, for compositions that read
+    /// better that way: <c>builder.ExecutionContext.IsPublishMode &amp;&amp; !builder.IsPksDeclaring()</c>.</summary>
+    public static bool IsPksDeclaring(this IDistributedApplicationBuilder builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        return IsDeclaring;
+    }
 
     /// <summary>
     /// Declares a capability this composition would like filled — a model to talk to, a registry to

@@ -77,6 +77,12 @@ builder.AddPksCapability("chat", "The model that writes the answer on Overview")
 | `{model:<role>}` | The model chosen for a named role |
 | `{imds:endpoint}` | A loopback managed-identity proxy pks starts for the run |
 | `{imds:header}` | That proxy's per-run secret |
+| `{entra:tenantid}` | The tenant of an app registration [`pks entra app init`](../entra/entra.md) provisioned |
+| `{entra:clientid}` | Its client id |
+| `{entra:clientsecret}` | Its client secret, from the encrypted store |
+
+An `{entra:…}` placeholder takes the alias from the capability's own name; `{entra:clientid:other}`
+names a different one, which is how one composition binds two registrations.
 
 Anything else passes through as a literal. A role is discovered from the bindings — binding `{model:default}` is how the composition says there is a role called `default` to ask about.
 
@@ -91,7 +97,7 @@ Values are never in the manifest. Names, descriptions and two booleans; the file
 ## Traps
 
 - **`AddParameter("ai-model", "gpt-4o-mini")` cannot be filled by anything.** The string overload pins the value and stops consulting configuration, so the environment variable is ignored without a word and the parameter keeps its old value while everything reports success. Use `new SuggestedValue("gpt-4o-mini")`, which is the default the reading suggests.
-- **The declare pass runs in publish mode.** An AppHost that branches on `ExecutionContext.IsPublishMode` declares a different set of parameters than the run will. Register parameters in both modes; gate only the wiring.
+- **The declare pass runs in publish mode.** `aspire do` always does, so an AppHost that branches on `ExecutionContext.IsPublishMode` — a Key Vault instead of parameters, a real tenant instead of an emulator — describes the deployment while the run that follows is a local one. The parameters missing from the manifest are then exactly the ones pks was asked to fill, and the symptom is a run that resolves nothing and reports nothing wrong. `PksDeclare.cs` exposes `PksDeclareExtensions.IsDeclaring` for this: write `builder.ExecutionContext.IsPublishMode && !declaring`, which reads as "actually publishing", and the declare pass then sees the composition the run will have.
 - **No shell can export `Parameters__ai-base-url`.** A dash is not a legal variable name to `bash` or `zsh`. pks sets it on the child process directly, which works; a hand-written `export` does not.
 
 ## See also

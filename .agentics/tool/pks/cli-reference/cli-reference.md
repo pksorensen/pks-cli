@@ -93,6 +93,17 @@ typed into a prompt. Detail: [pks aspire](/tools/pks/aspire).
 | `pks aspire run` | Asks the AppHost what it needs via its `pks-declare` pipeline step, resolves providers and models, then starts `aspire run` with the answers injected as `Parameters__<name>`. |
 | `pks aspire init` | Writes `PksDeclare.cs` into an AppHost so it can declare what it needs. |
 
+### pks entra
+
+Provisions the app registration an application signs in with, and keeps its client secret in the
+encrypted store instead of a paste. Detail: [pks entra](/tools/pks/entra).
+
+| Command | Purpose |
+| --- | --- |
+| `pks entra app init` | Adopts or creates a registration, ensures its service principal and redirect URIs, mints a client secret and stores it under an alias. `--rotate` replaces the one it minted last. |
+| `pks entra app list` | The registrations pks holds and when each secret expires; `--directory` lists the tenant's instead. |
+| `pks entra app forget` | Drops the local copy. The directory is untouched. |
+
 ### pks update
 
 Self-update, aware of how the running binary was installed. Detail: [pks update](/tools/pks/update).
