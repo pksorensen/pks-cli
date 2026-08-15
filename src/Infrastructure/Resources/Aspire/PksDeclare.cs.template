@@ -1,0 +1,380 @@
+// PksDeclare.cs — the AppHost half of `pks aspire run`.
+//
+// Copied verbatim out of pks-cli by `pks aspire init`. Nothing here references
+// pks-cli, and nothing here talks to it: it is a plain Aspire extension that any
+// AppHost can carry, and an AppHost that carries it still builds and runs
+// exactly as before when pks is not installed.
+//
+// What it adds is one pipeline step, `pks-declare`, with no dependencies and no
+// resources behind it. `aspire do pks-declare` therefore builds the AppHost,
+// walks the resource model and writes down which parameters this composition
+// needs — and, for the ones that were bound below, which kind of credential
+// would satisfy them. It starts nothing: no container, no app, no port.
+//
+// `pks aspire run` runs that step first, resolves the credentials on its own
+// side from whatever the developer is already signed in to, and then starts the
+// real `aspire run` with the answers already in the environment as
+// `Parameters__<name>`. The developer is never asked to paste a key, and no key
+// is written into user secrets, a launch profile or a shell history.
+//
+// Declaring a capability is three kinds of line:
+//
+//     var chat = builder.AddPksCapability("chat", "The model that answers on Overview");
+//     chat.Offers("foundry", "Azure AI Foundry — sign in once with `pks foundry init`");
+//     chat.Binds(aiBaseUrl, "{endpoint}");
+//     chat.Binds(aiApiKey,  "{apikey}");
+//     chat.Binds(aiModel,   "{model:default}");
+//
+// The placeholder vocabulary is pks-cli's, and it is deliberately small:
+//
+//     {endpoint}       the chosen provider's base URL
+//     {apikey}         a key for that endpoint, if the provider has one
+//     {model:<role>}   the model the developer picked for a named role
+//     {imds:endpoint}  a loopback managed-identity proxy pks starts for the run
+//     {imds:header}    that proxy's per-run secret
+//
+// A parameter that is never bound is still reported, as something pks knows it
+// cannot fill — which is the difference between "you have nothing configured"
+// and "this run is going to stop and ask you".
+
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Pipelines;
+using Microsoft.Extensions.Logging;
+
+namespace Aspire.Hosting;
+
+#pragma warning disable ASPIREPIPELINES001 // Pipelines are experimental in Aspire 13.4.
+
+/// <summary>
+/// Declares, to whoever is starting this AppHost, what it needs before it can run.
+/// </summary>
+public static class PksDeclareExtensions
+{
+    /// <summary>The step name. `pks aspire run` looks for exactly this.</summary>
+    public const string StepName = "pks-declare";
+
+    /// <summary>Where the manifest is written when this environment variable is set. pks sets it;
+    /// a person running the step by hand does not, and gets the manifest on the console instead.</summary>
+    public const string OutputVariable = "PKS_DECLARE_OUT";
+
+    private const string ManifestVersion = "v1";
+
+    /// <summary>
+    /// Declares a capability this composition would like filled — a model to talk to, a registry to
+    /// pull from — and registers the `pks-declare` step on first use.
+    /// </summary>
+    /// <param name="required">
+    /// A required capability is one the composition cannot run without, so pks refuses to start rather
+    /// than leaving a parameter to be typed. The default is optional, which is the honest answer for
+    /// anything sitting behind a flag.
+    /// </param>
+    public static PksCapability AddPksCapability(
+        this IDistributedApplicationBuilder builder,
+        string name,
+        string description = "",
+        bool required = false)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        var state = PksDeclareState.For(builder);
+        var capability = new PksCapability(name, description, required);
+        state.Capabilities.Add(capability);
+        return capability;
+    }
+
+    private sealed class PksDeclareState
+    {
+        public List<PksCapability> Capabilities { get; } = new();
+
+        private static readonly Dictionary<IDistributedApplicationBuilder, PksDeclareState> Registered = new();
+
+        public static PksDeclareState For(IDistributedApplicationBuilder builder)
+        {
+            if (Registered.TryGetValue(builder, out var existing))
+            {
+                return existing;
+            }
+
+            var state = new PksDeclareState();
+            Registered[builder] = state;
+
+            // No dependencies and nothing requiring it: the step stands alone, so
+            // `aspire do pks-declare` pulls in neither `parameter-prompt` nor a
+            // build of any resource image. Asking what a run needs must not be
+            // able to start the run.
+            builder.Pipeline.AddStep(StepName, context => WriteManifestAsync(context, state));
+
+            return state;
+        }
+    }
+
+    private static async Task WriteManifestAsync(PipelineStepContext context, PksDeclareState state)
+    {
+        var bound = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var capability in state.Capabilities)
+        {
+            foreach (var binding in capability.Bindings)
+            {
+                bound.Add(binding.Parameter.Name);
+            }
+        }
+
+        // Every parameter in the model, so the report covers the ones pks cannot
+        // fill as well as the ones it can. Names and descriptions only — a value
+        // here would be a credential on disk, which is the thing this exists to
+        // avoid. `Supplied` is the nearest thing to a value that is safe to write
+        // down: whether this parameter already resolves from the environment, a
+        // user secret or a default, which is what turns "pks will fill three
+        // parameters" into "and the other two are already answered".
+        var parameters = new List<PksParameterReport>();
+        foreach (var p in context.Model.Resources.OfType<ParameterResource>().OrderBy(p => p.Name, StringComparer.Ordinal))
+        {
+            parameters.Add(new PksParameterReport
+            {
+                Name = p.Name,
+                ConfigurationKey = ConfigurationKeyOf(p),
+                Secret = p.Secret,
+                Description = p.Description ?? "",
+                Bound = bound.Contains(p.Name),
+                Supplied = await IsSuppliedAsync(p, context.CancellationToken).ConfigureAwait(false),
+            });
+        }
+
+        var manifest = new PksManifestReport
+        {
+            ManifestVersion = ManifestVersion,
+            Name = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name ?? "apphost",
+            Description = "Aspire AppHost",
+            Capabilities = state.Capabilities.Select(c => c.ToReport()).ToList(),
+            Parameters = parameters,
+        };
+
+        var json = JsonSerializer.Serialize(manifest, ManifestJson);
+
+        var destination = Environment.GetEnvironmentVariable(OutputVariable);
+        if (string.IsNullOrWhiteSpace(destination))
+        {
+            // Run by hand. The console is the useful place for it, and it is also
+            // the only place it can go without inventing a path in somebody's repo.
+            context.Logger.LogInformation("{Manifest}", json);
+            return;
+        }
+
+        var directory = Path.GetDirectoryName(Path.GetFullPath(destination));
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        await File.WriteAllTextAsync(destination, json, context.CancellationToken).ConfigureAwait(false);
+        context.Logger.LogInformation("Declared {Count} parameter(s) to {Path}.", parameters.Count, destination);
+    }
+
+    /// <summary>
+    /// Whether this parameter already has an answer. The value is asked for and immediately dropped:
+    /// what comes back is a boolean, and the string it was derived from is never logged, serialized or
+    /// returned. Anything that goes wrong — no value, no prompt available, a provider that throws —
+    /// means "not supplied", because the only use of this is deciding what still needs asking.
+    /// </summary>
+    private static async Task<bool> IsSuppliedAsync(ParameterResource parameter, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var value = await parameter.GetValueAsync(cancellationToken).ConfigureAwait(false);
+            return !string.IsNullOrEmpty(value);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Where Aspire looks this parameter up. `ConfigurationKey` on the resource itself is internal, and
+    /// the format it documents is stable and short enough to state here rather than reach for.
+    /// </summary>
+    internal static string ConfigurationKeyOf(ParameterResource parameter) =>
+        parameter.IsConnectionString
+            ? $"ConnectionStrings:{parameter.Name}"
+            : $"Parameters:{parameter.Name}";
+
+    /// <summary>
+    /// The environment variable that fills that key. .NET's configuration reads `__` as the section
+    /// separator, so `Parameters:ai-base-url` arrives as `Parameters__ai-base-url` — dash and all,
+    /// because the name is not transformed on the way in.
+    /// </summary>
+    internal static string EnvironmentVariableFor(ParameterResource parameter) =>
+        ConfigurationKeyOf(parameter).Replace(":", "__", StringComparison.Ordinal);
+
+    private static readonly JsonSerializerOptions ManifestJson = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        WriteIndented = true,
+    };
+
+    internal sealed class PksManifestReport
+    {
+        public string ManifestVersion { get; set; } = "";
+        public string Name { get; set; } = "";
+        public string Version { get; set; } = "";
+        public string Description { get; set; } = "";
+        public List<PksCapabilityReport> Capabilities { get; set; } = new();
+        public List<PksParameterReport> Parameters { get; set; } = new();
+    }
+
+    internal sealed class PksCapabilityReport
+    {
+        public string Id { get; set; } = "";
+        public string Description { get; set; } = "";
+        public bool Required { get; set; }
+        public List<PksProviderReport> Providers { get; set; } = new();
+    }
+
+    internal sealed class PksProviderReport
+    {
+        public string Kind { get; set; } = "";
+        public string Description { get; set; } = "";
+        public List<PksModelReport> Models { get; set; } = new();
+        public Dictionary<string, string> Env { get; set; } = new();
+    }
+
+    internal sealed class PksModelReport
+    {
+        public string Role { get; set; } = "";
+        public string Description { get; set; } = "";
+    }
+
+    internal sealed class PksParameterReport
+    {
+        public string Name { get; set; } = "";
+        public string ConfigurationKey { get; set; } = "";
+        public bool Secret { get; set; }
+        public string Description { get; set; } = "";
+        public bool Bound { get; set; }
+        public bool Supplied { get; set; }
+    }
+}
+
+/// <summary>
+/// One thing this composition wants — described by the providers that could supply it and the
+/// parameters that receive it.
+/// </summary>
+public sealed class PksCapability
+{
+    internal PksCapability(string name, string description, bool required)
+    {
+        Name = name;
+        Description = description;
+        Required = required;
+    }
+
+    internal string Name { get; }
+    internal string Description { get; }
+    internal bool Required { get; }
+    internal List<(string Kind, string Description)> Providers { get; } = new();
+    internal List<PksBinding> Bindings { get; } = new();
+
+    /// <summary>
+    /// Names a kind of provider that could fill this capability. pks offers the developer only the
+    /// ones they are actually signed in to, so listing several is how a composition says "any of
+    /// these will do" rather than committing to one.
+    /// </summary>
+    public PksCapability Offers(string kind, string description = "")
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(kind);
+        Providers.Add((kind, description));
+        return this;
+    }
+
+    /// <summary>
+    /// Sends one resolved value into one parameter. <paramref name="placeholder"/> is from pks-cli's
+    /// vocabulary — <c>{endpoint}</c>, <c>{apikey}</c>, <c>{model:role}</c>, <c>{imds:endpoint}</c>,
+    /// <c>{imds:header}</c> — and anything else is passed through as a literal.
+    /// </summary>
+    public PksCapability Binds(
+        IResourceBuilder<ParameterResource> parameter,
+        string placeholder,
+        string description = "")
+    {
+        ArgumentNullException.ThrowIfNull(parameter);
+        ArgumentException.ThrowIfNullOrWhiteSpace(placeholder);
+        Bindings.Add(new PksBinding(parameter.Resource, placeholder, description));
+        return this;
+    }
+
+    internal PksDeclareExtensions.PksCapabilityReport ToReport()
+    {
+        // A model role is discovered from the bindings rather than declared twice: a
+        // composition that binds `{model:default}` has, by saying so, told pks there is
+        // a role called `default` to ask about.
+        var roles = Bindings
+            .Where(b => b.Placeholder.StartsWith("{model:", StringComparison.OrdinalIgnoreCase))
+            .Select(b => new PksDeclareExtensions.PksModelReport
+            {
+                Role = b.Placeholder[7..].TrimEnd('}'),
+                Description = string.IsNullOrEmpty(b.Description) ? b.Parameter.Description ?? "" : b.Description,
+            })
+            .GroupBy(m => m.Role, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .ToList();
+
+        // The same env map for every provider. Which provider was chosen changes what
+        // `{endpoint}` and `{apikey}` resolve to, not where they land.
+        var env = Bindings.ToDictionary(
+            b => PksDeclareExtensions.EnvironmentVariableFor(b.Parameter),
+            b => b.Placeholder,
+            StringComparer.Ordinal);
+
+        var providers = Providers.Count > 0
+            ? Providers
+            : new List<(string Kind, string Description)> { ("openai-compatible", "") };
+
+        return new PksDeclareExtensions.PksCapabilityReport
+        {
+            Id = Name,
+            Description = Description,
+            Required = Required,
+            Providers = providers.Select(p => new PksDeclareExtensions.PksProviderReport
+            {
+                Kind = p.Kind,
+                Description = p.Description,
+                Models = roles,
+                Env = env,
+            }).ToList(),
+        };
+    }
+}
+
+internal sealed record PksBinding(ParameterResource Parameter, string Placeholder, string Description);
+
+/// <summary>
+/// A starting value that anything else can still override.
+///
+/// <c>builder.AddParameter("ai-model", "gpt-4o-mini")</c> reads like a default and is not one. That
+/// overload pins the value: configuration is not consulted, so an environment variable, a user secret
+/// and anything pks resolves are all silently ignored, and the only symptom is that the parameter keeps
+/// its old value while everything reports success. The overload that takes a
+/// <see cref="ParameterDefault"/> is the one whose value is used <em>only</em> when nothing supplied
+/// one, which is what a default means — so a parameter that both suggests something and can be filled
+/// is written:
+///
+///     builder.AddParameter("ai-model", new SuggestedValue("gpt-4o-mini"))
+/// </summary>
+public sealed class SuggestedValue : ParameterDefault
+{
+    private readonly string _value;
+
+    public SuggestedValue(string value) => _value = value;
+
+    public override string GetDefaultValue() => _value;
+
+    public override void WriteToManifest(Aspire.Hosting.Publishing.ManifestPublishingContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        context.Writer.WriteString("value", _value);
+    }
+}

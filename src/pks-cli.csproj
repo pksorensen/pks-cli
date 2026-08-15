@@ -95,6 +95,9 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Infrastructure\Resources\bootstrap.Dockerfile"/>
+    <!-- The AppHost half of `pks aspire run`, shipped as source because an AppHost cannot
+         take a dependency on pks-cli. `.cs.template` so this tree does not compile it. -->
+    <EmbeddedResource Include="Infrastructure\Resources\Aspire\PksDeclare.cs.template" LogicalName="PksDeclare.cs"/>
     <EmbeddedResource Include="Infrastructure\Resources\Brain\brain-extract.SKILL.md" LogicalName="brain-extract.SKILL.md"/>
     <EmbeddedResource Include="Infrastructure\Resources\Brain\brain-synth-cluster.SKILL.md" LogicalName="brain-synth-cluster.SKILL.md"/>
     <EmbeddedResource Include="Infrastructure\Resources\Brain\brain-synth-habits.SKILL.md" LogicalName="brain-synth-habits.SKILL.md"/>

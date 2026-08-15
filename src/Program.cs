@@ -414,6 +414,11 @@ services.AddHttpClient<IAzureDevOpsAuthService, AzureDevOpsAuthService>();
 services.AddSingleton<PKS.Infrastructure.Services.Models.AzureFoundryAuthConfig>();
 services.AddHttpClient<IAzureFoundryAuthService, AzureFoundryAuthService>();
 
+// The discovery protocol's resolver — what `pks exec` and `pks aspire run` share. It reads stored
+// credentials, so it is a service: the command layer receives a ResolvedEnvironment it can hand to a
+// child process and cannot read a secret out of.
+services.AddSingleton<PKS.Infrastructure.Services.Exec.IManifestResolver, PKS.Infrastructure.Services.Exec.ManifestResolver>();
+
 // Generic Azure authentication
 services.AddSingleton<PKS.Infrastructure.Services.Models.AzureAuthConfig>();
 services.AddHttpClient<PKS.Infrastructure.Services.IAzureAuthService, PKS.Infrastructure.Services.AzureAuthService>();
@@ -607,6 +612,22 @@ app.Configure(config =>
         .WithDescription("Run a tool that supports the pks-cli discovery contract (PKS_DISCOVERY=1)")
         .WithExample(new[] { "exec", "agent-photographer.exe", "shoot" })
         .WithExample(new[] { "exec", "--provider", "foundry", "agent-photographer.exe", "preview" });
+
+    config.AddBranch("aspire", aspire =>
+    {
+        aspire.SetDescription("Run an Aspire AppHost without pasting its secrets in");
+
+        aspire.AddCommand<PKS.Commands.Aspire.PksAspireRunCommand>("run")
+            .WithDescription("Start an AppHost with its declared parameters already resolved")
+            .WithExample(new[] { "aspire", "run" })
+            .WithExample(new[] { "aspire", "run", "--", "--ai" })
+            .WithExample(new[] { "aspire", "run", "--dry-run", "--", "--ai" });
+
+        aspire.AddCommand<PKS.Commands.Aspire.PksAspireInitCommand>("init")
+            .WithDescription("Add the pks-declare step to an AppHost so it can say what it needs")
+            .WithExample(new[] { "aspire", "init" })
+            .WithExample(new[] { "aspire", "init", "src/apphost" });
+    });
 
     config.AddCommand<AsciiCommand>("ascii")
         .WithDescription("Generate beautiful ASCII art for your projects");

@@ -4,8 +4,8 @@ title: Exec — protocol for tools requesting model/AI access
 domain: agentic-runtime
 status: draft
 adrs: []
-tests: []
-source-files: [src/Commands/Exec/PksExecCommand.cs]
+tests: [tests/Services/Exec/ManifestResolverTests.cs]
+source-files: [src/Commands/Exec/PksExecCommand.cs, src/Infrastructure/Services/Exec/ManifestResolver.cs, src/Infrastructure/Services/Exec/PksManifest.cs, src/Infrastructure/Services/Exec/ResolvedEnvironment.cs]
 sessions: [808c2e3d-f1ee-4ddf-920a-93c69080374a, 99d43188-9dec-41ea-afb7-3d91da321907, 67ce78cd-d99e-4b15-a5dc-df9d16d734f7, cd04962e-09d1-4d84-a6bb-69df5ede0f04, 07b6cd63-ef0f-4da8-a1af-2347f743b091]
 ---
 
@@ -43,4 +43,5 @@ obtain model access — they ship only a manifest, never a token.
 ## Gotchas / known issues
 - Spectre.Console markup eats `[role]` in the model prompt label — code uses `[[role]]` escaping (`PksExecCommand.cs:251`) and the inline comment flags this as a footgun for anyone adding new prompt strings.
 - Tools that emit log lines before their JSON manifest are tolerated by `IndexOf('{')` scanning, but anything after the first `{` is parsed as JSON — a stray trailing log line will fail decode rather than be ignored.
-- No tests exist for this command yet (gap noted in front-matter `tests: []`); discovery-protocol regressions today are caught only by the consuming Go CLIs at runtime.
+- Tests arrived with FT-018, which extracted the resolver into `IManifestResolver` so both commands share it; before that, discovery-protocol regressions were caught only by the consuming Go CLIs at runtime.
+- The trailing-log-line limitation is now load-bearing rather than incidental: FT-018 writes its manifest to a file precisely because the declare pass builds a project and MSBuild talks on both sides of the document.

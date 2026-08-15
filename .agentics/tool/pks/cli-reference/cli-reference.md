@@ -83,6 +83,16 @@ Universal launcher for third-party tools that implement the `PKS_DISCOVERY=1` co
 | --- | --- |
 | `pks exec` | Reads a tool's capability manifest, prompts for an LLM provider and per-role models, resolves the manifest's environment templates, then re-executes the tool with those variables injected. |
 
+### pks aspire
+
+Starts a .NET Aspire AppHost with its declared parameters already resolved, so no endpoint or key is
+typed into a prompt. Detail: [pks aspire](/tools/pks/aspire).
+
+| Command | Purpose |
+| --- | --- |
+| `pks aspire run` | Asks the AppHost what it needs via its `pks-declare` pipeline step, resolves providers and models, then starts `aspire run` with the answers injected as `Parameters__<name>`. |
+| `pks aspire init` | Writes `PksDeclare.cs` into an AppHost so it can declare what it needs. |
+
 ### pks update
 
 Self-update, aware of how the running binary was installed. Detail: [pks update](/tools/pks/update).

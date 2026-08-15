@@ -1,0 +1,288 @@
+using System.ComponentModel;
+using System.Diagnostics;
+using PKS.Infrastructure.Services.Exec;
+using Spectre.Console;
+using Spectre.Console.Cli;
+
+namespace PKS.Commands.Aspire;
+
+/// <summary>
+/// `aspire run`, with the parameters already answered.
+///
+/// An Aspire AppHost that needs a model endpoint, a key and a deployment name asks for them by
+/// declaring parameters, and Aspire's honest answer is to stop and prompt — every run, or once into
+/// user secrets, where the key then lives in plaintext on a laptop for as long as the project does.
+/// The way out is not to make the prompt nicer. It is for the composition to say what *kind* of thing
+/// it needs, and for the tool that is already signed in to supply it.
+///
+/// So this runs in two passes, the same two `pks exec` uses. First `aspire do pks-declare`, which
+/// builds the AppHost, executes one dependency-free pipeline step and writes a manifest — no container
+/// starts, nothing listens. Then the real `aspire run`, with the resolved values in its environment as
+/// `Parameters__&lt;name&gt;`, which is the first place Aspire looks. The parameters resolve silently,
+/// no prompt appears, and nothing was written to disk.
+///
+/// An AppHost without the step still works: the first pass fails, this says so, and the run continues
+/// exactly as `aspire run` would have. The point is to remove a chore, not to become a dependency.
+/// </summary>
+[Description("Run an Aspire AppHost with its parameters resolved from what you are already signed in to")]
+public sealed class PksAspireRunCommand : AsyncCommand<PksAspireRunCommand.Settings>
+{
+    private readonly IManifestResolver _resolver;
+    private readonly IAnsiConsole _console;
+
+    public PksAspireRunCommand(IManifestResolver resolver, IAnsiConsole console)
+    {
+        _resolver = resolver;
+        _console = console;
+    }
+
+    public sealed class Settings : CommandSettings
+    {
+        [CommandOption("--apphost <PATH>")]
+        [Description("AppHost project file or a directory to search (passed through to aspire)")]
+        public string? AppHost { get; set; }
+
+        [CommandOption("--provider <KIND>")]
+        [Description("Skip the provider prompt and use this kind (foundry, gemini, openai-compatible)")]
+        public string? Provider { get; set; }
+
+        [CommandOption("--port <N>")]
+        [Description("Bind the managed-identity proxy to this port (default: a free one)")]
+        public int? Port { get; set; }
+
+        [CommandOption("--non-interactive")]
+        [Description("Take the default for every question — for CI, where there is nobody to ask")]
+        public bool NonInteractive { get; set; }
+
+        [CommandOption("--dry-run")]
+        [Description("Declare and resolve, print what would be set, and do not start the AppHost")]
+        public bool DryRun { get; set; }
+
+        [CommandOption("--start")]
+        [Description("Use `aspire start` (detached) instead of `aspire run`")]
+        public bool Start { get; set; }
+    }
+
+    public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
+    {
+        // The AppHost's own arguments decide which parameters exist — Margin's model
+        // parameters only appear with `--ai` — so both passes must be given the same
+        // ones. Declaring against a different composition than the one about to run
+        // is the failure that looks like "pks resolved nothing".
+        var appHostArgs = context.Remaining.Raw.ToList();
+
+        var manifestPath = Path.Combine(
+            Path.GetTempPath(),
+            $"pks-declare-{Guid.NewGuid():N}.json");
+
+        PksManifest manifest;
+        try
+        {
+            manifest = await DeclareAsync(settings, appHostArgs, manifestPath);
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[yellow]could not ask the AppHost what it needs: {ex.Message.EscapeMarkup()}[/]");
+            _console.MarkupLine("[dim]Add the `pks-declare` step with [bold]pks aspire init[/], or run [bold]aspire run[/] and answer the prompts.[/]");
+            return await StartAspireAsync(settings, appHostArgs, environment: null);
+        }
+        finally
+        {
+            TryDelete(manifestPath);
+        }
+
+        Report(manifest);
+
+        var resolved = await _resolver.ResolveAsync(manifest, new ManifestResolveOptions
+        {
+            PreferredProvider = settings.Provider,
+            ImdsPort = settings.Port,
+            NonInteractive = settings.NonInteractive,
+            AcceptOptional = true,
+        });
+
+        if (resolved is null)
+        {
+            _resolver.Release();
+            _console.MarkupLine("[red]a required capability could not be filled — not starting.[/]");
+            return 1;
+        }
+
+        if (settings.DryRun)
+        {
+            _console.MarkupLine("\n[yellow]--dry-run, would start with:[/]");
+            foreach (var (name, display) in resolved.Describe())
+            {
+                _console.MarkupLine($"  {name.EscapeMarkup()} = {display.EscapeMarkup()}");
+            }
+            _resolver.Release();
+            return 0;
+        }
+
+        try
+        {
+            return await StartAspireAsync(settings, appHostArgs, resolved);
+        }
+        finally
+        {
+            _resolver.Release();
+        }
+    }
+
+    // ---------- pass one: what does this composition need? ----------
+
+    private async Task<PksManifest> DeclareAsync(Settings settings, IReadOnlyList<string> appHostArgs, string manifestPath)
+    {
+        var psi = NewAspire();
+        psi.ArgumentList.Add("do");
+        psi.ArgumentList.Add("pks-declare");
+        AddAppHost(psi, settings);
+        psi.ArgumentList.Add("--non-interactive");
+        psi.ArgumentList.Add("--nologo");
+        AddAppHostArgs(psi, appHostArgs);
+
+        // The manifest goes to a file rather than stdout for one reason: this pass
+        // builds the AppHost, and MSBuild's output would arrive interleaved with it.
+        // Scanning stdout for JSON tolerates noise before the document and nothing
+        // after it, and a build writes on both sides.
+        psi.Environment["PKS_DECLARE_OUT"] = manifestPath;
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError = true;
+
+        using var process = Process.Start(psi)
+            ?? throw new InvalidOperationException("aspire did not start — is the CLI installed?");
+
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+
+        // No timeout worth having: this compiles a project. `pks exec` gives a tool ten
+        // seconds because a tool that has to think before printing its manifest is
+        // broken; an AppHost that has to be built first is normal.
+        await process.WaitForExitAsync();
+        await Task.WhenAll(stdout, stderr);
+
+        if (process.ExitCode != 0)
+        {
+            var detail = FirstMeaningfulLine(await stderr) ?? FirstMeaningfulLine(await stdout) ?? $"aspire exited {process.ExitCode}";
+            throw new InvalidOperationException(detail);
+        }
+
+        if (!File.Exists(manifestPath))
+        {
+            throw new InvalidOperationException("the AppHost has no `pks-declare` step");
+        }
+
+        return PksManifest.Parse(await File.ReadAllTextAsync(manifestPath));
+    }
+
+    private void Report(PksManifest manifest)
+    {
+        _console.MarkupLine($"[green]declared:[/] {manifest.Name.EscapeMarkup()}");
+
+        var unfillable = manifest.Parameters
+            .Where(p => !p.Bound && !p.Supplied)
+            .Select(p => p.Name)
+            .ToList();
+
+        if (unfillable.Count > 0)
+        {
+            // Said now rather than discovered when the run stops on a prompt. These are
+            // parameters nothing bound and nothing has answered — a tenant id, a
+            // connection string — and pks has no business inventing them.
+            _console.MarkupLine(
+                $"[dim]not something pks can fill, and not yet answered: {string.Join(", ", unfillable).EscapeMarkup()}[/]");
+        }
+    }
+
+    // ---------- pass two: the run itself ----------
+
+    private async Task<int> StartAspireAsync(Settings settings, IReadOnlyList<string> appHostArgs, ResolvedEnvironment? environment)
+    {
+        var psi = NewAspire();
+        psi.ArgumentList.Add(settings.Start ? "start" : "run");
+        AddAppHost(psi, settings);
+        AddAppHostArgs(psi, appHostArgs);
+
+        environment?.ApplyTo(psi);
+
+        if (environment is { Count: > 0 })
+        {
+            _console.MarkupLine($"[green]resolved[/] {environment.Count} parameter(s); starting aspire.");
+        }
+
+        Process? process;
+        try
+        {
+            process = Process.Start(psi);
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[red]failed to start aspire: {ex.Message.EscapeMarkup()}[/]");
+            return 127;
+        }
+
+        if (process is null)
+        {
+            return 127;
+        }
+
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            try { process.Kill(entireProcessTree: true); } catch { }
+        };
+
+        await process.WaitForExitAsync();
+        return process.ExitCode;
+    }
+
+    // ---------- plumbing ----------
+
+    private static ProcessStartInfo NewAspire() => new()
+    {
+        FileName = "aspire",
+        UseShellExecute = false,
+        CreateNoWindow = false,
+    };
+
+    private static void AddAppHost(ProcessStartInfo psi, Settings settings)
+    {
+        if (!string.IsNullOrWhiteSpace(settings.AppHost))
+        {
+            psi.ArgumentList.Add("--apphost");
+            psi.ArgumentList.Add(settings.AppHost);
+        }
+    }
+
+    private static void AddAppHostArgs(ProcessStartInfo psi, IReadOnlyList<string> appHostArgs)
+    {
+        if (appHostArgs.Count == 0)
+        {
+            return;
+        }
+
+        psi.ArgumentList.Add("--");
+        foreach (var arg in appHostArgs)
+        {
+            psi.ArgumentList.Add(arg);
+        }
+    }
+
+    private static string? FirstMeaningfulLine(string text)
+    {
+        foreach (var line in text.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.Length > 0 && !trimmed.StartsWith('-'))
+            {
+                return trimmed.Length <= 200 ? trimmed : trimmed[..200] + "…";
+            }
+        }
+        return null;
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); } catch { }
+    }
+}
