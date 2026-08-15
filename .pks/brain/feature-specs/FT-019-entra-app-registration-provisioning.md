@@ -59,6 +59,10 @@ touching the directory.
 - **`--rotate` removes only the credential pks minted itself** (matched by stored keyId). One somebody
   else added is theirs. If removal fails the command still succeeds — the new secret is stored and
   working, and failing there would be worse than an old credential the operator can remove by hand.
+- **An alias is slugged inside the store, not at the call site.** Not every caller is a command: the
+  resolver looks one up straight from a capability's name, so `AddPksCapability("Margin V1")` would
+  never find what `--alias "Margin V1"` wrote as `margin-v1`, and the hint would keep telling the
+  operator to run the command they just ran. `GetStoredAsync` slugs, so every path agrees.
 - **The stored secret expires quietly**; the first symptom is `AADSTS7000222`. `list` colours it a
   month early and `init` replaces an expired one without being asked.
 - **The declare pass sees a different composition than the run.** Margin declared

@@ -372,4 +372,34 @@ public class EntraApplicationServiceTests
     [InlineData("ctx/margin", "ctx-margin")]
     public void An_alias_is_the_same_alias_however_it_was_typed(string input, string expected)
         => EntraApplicationService.Slug(input).Should().Be(expected);
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task An_unslugged_alias_finds_what_it_stored()
+    {
+        // The resolver looks an alias up straight from a capability's name, so a capability called
+        // "Margin V1" has to find what `--alias "Margin V1"` wrote as `margin-v1`. Otherwise the hint
+        // tells the operator to run the command they already ran, for as long as they are willing.
+        var handler = new Handler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/v1.0/applications" => Json($$"""{"value":[{{ApplicationJson}}]}"""),
+            "/v1.0/servicePrincipals" => Json("""{"value":[{"id":"sp-1"}]}"""),
+            "/v1.0/applications/obj-1/addPassword" => Json(
+                """{"keyId":"key-1","secretText":"the-secret","endDateTime":"2027-01-01T00:00:00Z"}"""),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("{}") },
+        });
+
+        var store = new MemoryStore();
+        var service = Build(handler, store);
+
+        await service.InitAsync(new EntraAppRequest
+        {
+            DisplayName = "Margin v1 (dev)",
+            Alias = "Margin V1",
+        });
+
+        (await service.GetStoredAsync("Margin V1")).Should().NotBeNull();
+        (await service.GetStoredAsync("margin-v1")).Should().NotBeNull();
+    }
 }

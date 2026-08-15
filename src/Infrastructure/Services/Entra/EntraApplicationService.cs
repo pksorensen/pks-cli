@@ -460,7 +460,11 @@ public sealed class EntraApplicationService : IEntraApplicationService
 
     public async Task<EntraStoredApp?> GetStoredAsync(string alias)
     {
-        var json = await _secrets.RevealAsync(StorageKey(alias));
+        // Slugged here rather than at each call site, because the call sites are not all commands:
+        // the resolver looks an alias up straight from a capability's name, and a capability called
+        // "Margin V1" would otherwise never find what `--alias "Margin V1"` stored as `margin-v1` —
+        // a loop where the hint tells you to run the command you already ran.
+        var json = await _secrets.RevealAsync(StorageKey(Slug(alias)));
         if (string.IsNullOrEmpty(json))
         {
             return null;
