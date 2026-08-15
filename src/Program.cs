@@ -430,6 +430,7 @@ services.AddSingleton<PKS.Infrastructure.Services.ISshExecutor, PKS.Infrastructu
 services.AddHttpClient<PKS.Infrastructure.Services.IScalewayService, PKS.Infrastructure.Services.ScalewayService>();
 services.AddHttpClient<PKS.Infrastructure.Services.IMoonshotService, PKS.Infrastructure.Services.MoonshotService>();
 services.AddHttpClient<PKS.Infrastructure.Services.IOpenRouterService, PKS.Infrastructure.Services.OpenRouterService>();
+services.AddHttpClient<PKS.Infrastructure.Services.INvidiaService, PKS.Infrastructure.Services.NvidiaService>();
 
 // Two-factor action guard: gates billable/sensitive ACTIONS behind a TOTP second factor whose
 // seed lives behind the pks user and whose code lives on the human's phone (see Services/Security).
@@ -1203,6 +1204,20 @@ app.Configure(config =>
         openrouter.AddCommand<PKS.Commands.OpenRouter.OpenRouterProxyCommand>("proxy")
             .WithDescription("Start a local OpenAI-compatible proxy signed with the stored key")
             .WithExample(["openrouter", "proxy"]);
+    });
+
+    config.AddBranch<PKS.Commands.Nvidia.NvidiaSettings>("nvidia", nvidia =>
+    {
+        nvidia.SetDescription("Manage NVIDIA NIM (build.nvidia.com) API authentication");
+        nvidia.AddCommand<PKS.Commands.Nvidia.NvidiaInitCommand>("init")
+            .WithDescription("Register an NVIDIA NIM API key")
+            .WithExample(["nvidia", "init"]);
+        nvidia.AddCommand<PKS.Commands.Nvidia.NvidiaStatusCommand>("status")
+            .WithDescription("Check whether the registered NVIDIA key still works")
+            .WithExample(["nvidia", "status"]);
+        nvidia.AddCommand<PKS.Commands.Nvidia.NvidiaProxyCommand>("proxy")
+            .WithDescription("Start a local OpenAI-compatible proxy signed with the stored key")
+            .WithExample(["nvidia", "proxy"]);
     });
 
     // Add Tailscale branch command
