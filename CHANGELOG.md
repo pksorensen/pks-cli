@@ -49,6 +49,14 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.0.3](https://github.com/pksorensen/pks-cli/compare/v7.0.2...v7.0.3) (2026-08-16)
+
+
+### Bug Fixes
+
+* **runner:** authenticate runner registration ([7fcd90e](https://github.com/pksorensen/pks-cli/commit/7fcd90e8e6116e8b07d3c3bb3f312eff2bfdd8e4))
+* **runner:** stop reporting a wedged agent pane as completed/success ([f7b255f](https://github.com/pksorensen/pks-cli/commit/f7b255f1ddfd07dad1b4f83458e8175b360135fc))
+
 ## [7.0.2](https://github.com/pksorensen/pks-cli/compare/v7.0.1...v7.0.2) (2026-08-16)
 
 
