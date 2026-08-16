@@ -1835,8 +1835,15 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         // shell variables expand inside the inner shell. We resolve $HOME up
         // front so we can pass an absolute path to the archive endpoint (which
         // does not go through a shell).
+        // Resolved as the *agent* user, not as whoever `docker exec` defaults to. The job
+        // directory below holds start.sh, the prompt files and vibecast's own log and control
+        // socket, and every one of those is read or written by the agent. Resolving $HOME as
+        // root puts them under /root, which is mode 700 — so the agent cannot even traverse
+        // into it, tmux tears the window down, and the log we would have diagnosed it from is
+        // the one file we could not create. Measured: this is exactly how a job with tmux,
+        // ttyd and valid credentials still died with an empty vibecast log.
         var resolvedHome = await _spawnerService.ExecInContainerAsync(containerId,
-            "printf %s \"$HOME\"", timeoutSeconds: 10);
+            "printf %s \"$HOME\"", timeoutSeconds: 10, user: agentUser);
         if (!resolvedHome.Success || string.IsNullOrWhiteSpace(resolvedHome.Output))
         {
             var msg = $"Failed to resolve $HOME in container {containerId[..Math.Min(12, containerId.Length)]} (exit={resolvedHome.ExitCode}): " +
@@ -1853,7 +1860,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         var jobPrompt = job.AgentDef?.Prompt ?? "";
         var mkdirRes = await _spawnerService.ExecInContainerAsync(containerId,
             $"mkdir -p {vibecastHome} && test -d {vibecastHome} && echo OK",
-            timeoutSeconds: 30);
+            timeoutSeconds: 30, user: agentUser);
         if (!mkdirRes.Success || mkdirRes.ExitCode != 0 || !mkdirRes.Output.Contains("OK"))
         {
             var detail = (mkdirRes.Error ?? mkdirRes.Output ?? "").Trim();
@@ -2347,9 +2354,36 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             _console.MarkupLine($"[yellow]Warning:[/] [dim]{credDir} is not mounted; the agent will need credentials from elsewhere.[/]");
         }
 
+        // The job directory is created as the agent user, but its contents are not: prompts and
+        // start.sh go in through Docker's extract-archive endpoint, which does not go through a
+        // shell and lands them owned by root. Reading them is fine at mode 644/755 — writing is
+        // not, and vibecast writes its log and its control socket in there. Run as root
+        // explicitly, because on the house images a default exec is already the agent user and
+        // the chown would fail on precisely the images that otherwise work. Also repairs a warm
+        // container whose job directory an older build created under root.
+        if (!string.IsNullOrWhiteSpace(agentUser))
+        {
+            var chownJobDir = await _spawnerService.ExecInContainerAsync(containerId,
+                $"chown -R \"$(id -u {agentUser}):$(id -g {agentUser})\" {vibecastHome}",
+                timeoutSeconds: 30, user: "root");
+            if (!chownJobDir.Success)
+            {
+                _console.MarkupLine(
+                    $"[yellow]Warning:[/] [dim]could not chown {vibecastHome} to '{agentUser.EscapeMarkup()}' (exit {chownJobDir.ExitCode}); vibecast may not be able to write its log.[/]");
+            }
+        }
+
         _console.MarkupLine($"[cyan]Starting vibecast in container tmux session '{vibecastTmux}'...[/]");
         _console.MarkupLine($"[dim]Keyboard PIN (for web UI input): {keyboardPin}[/]");
+        // CLAUDE_CONFIG_DIR is set here, on the process that starts the tmux *server*, and not
+        // only in start.sh. vibecast creates the agent's own session with a curated environment
+        // — measured: only VIBECAST_HOME survived into the agent pane, so an export inside
+        // start.sh never reaches claude and it opens the OAuth login screen with a perfectly
+        // good credential sitting in the mounted volume. tmux seeds every new session from the
+        // server's global environment, so setting it on the server covers the sessions vibecast
+        // makes later. start.sh keeps its own export for the paths that do not go through tmux.
         var tmuxStart = await _spawnerService.ExecInContainerAsync(containerId,
+            $"CLAUDE_CONFIG_DIR={ClaudeCredentialVolumes.MountTarget} " +
             $"tmux new-session -d -s {vibecastTmux} -x 120 -y 48 " +
             $"bash -c '{launchScript} 2>&1 | tee {vibecastHome}/vibecast.log'",
             timeoutSeconds: 30, user: agentUser);
