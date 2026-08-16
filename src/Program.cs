@@ -2355,6 +2355,15 @@ static bool ShouldSkipFirstTimeWarning(string[] commandArgs)
             return true;
         }
 
+        // Skip when the caller has said it can never answer a question. The detached runner passes
+        // --no-prompt and lives in a tmux pane -- which HAS a TTY, so this confirm blocks there
+        // forever and looks exactly like a runner that started fine and never claims a job. The
+        // human saw this disclaimer in the foreground, on the `runner start` that launched it.
+        if (commandArgs.Any(a => a.Equals("--no-prompt", StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
         // Skip for git askpass (GIT_ASKPASS must have zero extra output)
         var isGitAskPass = commandArgs.Length > 2 &&
                            commandArgs[1].Equals("git", StringComparison.OrdinalIgnoreCase) &&
