@@ -7,7 +7,7 @@ namespace PKS.CLI.Tests.Services.Runner;
 /// <summary>
 /// Unit tests for <see cref="ClaudeCredentialVolumes"/>'s pure naming + remote-detection
 /// command/parser (docs/remote-runner-targets-plan.md Phase 5, work item 1). Mirrors the
-/// naming rules documented on <c>AgenticsRunnerStartCommand.PatchDevcontainerVolumes</c>,
+/// naming rules documented on <c>AgenticsRunnerRunCommand.PatchDevcontainerVolumes</c>,
 /// which now delegates here so the two never drift apart.
 /// </summary>
 public class ClaudeCredentialVolumesTests

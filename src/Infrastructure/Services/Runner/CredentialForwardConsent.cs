@@ -3,7 +3,7 @@ namespace PKS.Infrastructure.Services.Runner;
 /// <summary>
 /// Pure prompt-text builder for the opt-in, per-file credential-forwarding consent prompts
 /// (docs/remote-runner-targets-plan.md Phase 5, work item 3, decision D3). Kept separate from the
-/// interactive Confirm()/IActionGuard plumbing in AgenticsRunnerStartCommand so the exact wording
+/// interactive Confirm()/IActionGuard plumbing in AgenticsRunnerRunCommand so the exact wording
 /// -- especially the "the gate is inert" honesty requirement -- is directly unit-testable: with
 /// no authenticator enrolled, <see cref="Security.ActionGuard.RequireAsync"/> silently auto-satisfies
 /// every gated action (trust-on-first-use), so a prompt that merely says "this is gated" would be a

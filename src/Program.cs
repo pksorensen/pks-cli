@@ -520,6 +520,14 @@ services.AddSingleton<ICoolifyApiService, CoolifyApiService>();
 services.AddSingleton<IRunnerConfigurationService, RunnerConfigurationService>();
 services.AddSingleton<IAgenticsRunnerConfigurationService, AgenticsRunnerConfigurationService>();
 services.AddSingleton<IAgenticsRunnerSshHandoffService, AgenticsRunnerSshHandoffService>();
+services.AddSingleton<ILocalRunnerStore, LocalRunnerStore>();
+services.AddSingleton<ILocalRunnerSupervisor, LocalRunnerSupervisor>();
+// The SSH status/logs/stop commands are no longer registered as commands in their own right --
+// the unified selector commands delegate to them when the selector names a target -- so they need
+// explicit registrations to stay resolvable.
+services.AddSingleton<PKS.Commands.Agentics.Runner.AgenticsRunnerSshStatusCommand>();
+services.AddSingleton<PKS.Commands.Agentics.Runner.AgenticsRunnerSshLogsCommand>();
+services.AddSingleton<PKS.Commands.Agentics.Runner.AgenticsRunnerSshStopCommand>();
 services.AddSingleton<PKS.Infrastructure.Services.Agentics.IAgenticsAuthService, PKS.Infrastructure.Services.Agentics.AgenticsAuthService>();
 services.AddSingleton<PKS.Infrastructure.Services.Agentics.IAgenticsAuthConfigurationService, PKS.Infrastructure.Services.Agentics.AgenticsAuthConfigurationService>();
 services.AddSingleton<IFirecrackerRunnerConfigurationService, FirecrackerRunnerConfigurationService>();
@@ -757,9 +765,21 @@ app.Configure(config =>
                 .WithExample(new[] { "agentics", "runner", "register", "myorg/myproject", "--name", "my-runner" })
                 .WithExample(new[] { "agentics", "runner", "register", "myorg/myproject", "--server", "localhost:3000" });
 
+            // run = foreground, start = background. Same split as `aspire run` / `aspire start`,
+            // which this workspace's AGENTS.md already tells agents to observe.
+            runner.AddCommand<AgenticsRunnerRunCommand>("run")
+                .WithDescription("Run the runner in the foreground, polling for and executing jobs")
+                .WithExample(new[] { "agentics", "runner", "run" })
+                .WithExample(new[] { "agentics", "runner", "run", "--project", "myorg/myproject" });
+
             runner.AddCommand<AgenticsRunnerStartCommand>("start")
-                .WithDescription("Start the runner daemon to poll for and execute jobs")
-                .WithExample(new[] { "agentics", "runner", "start" });
+                .WithDescription("Start the runner in the background so it survives logout")
+                .WithExample(new[] { "agentics", "runner", "start", "--project", "myorg/myproject" })
+                .WithExample(new[] { "agentics", "runner", "start", "--project", "myorg/myproject", "--restart" });
+
+            runner.AddCommand<AgenticsRunnerListCommand>("list")
+                .WithDescription("List this machine's runners and whether they are running")
+                .WithExample(new[] { "agentics", "runner", "list" });
 
             runner.AddCommand<AgenticsRunnerCleanupCommand>("cleanup")
                 .WithDescription("Remove devcontainers from previous runner instances (see ADR 0002)")
@@ -767,16 +787,21 @@ app.Configure(config =>
                 .WithExample(new[] { "agentics", "runner", "cleanup", "--dry-run" })
                 .WithExample(new[] { "agentics", "runner", "cleanup", "--all" });
 
-            runner.AddCommand<AgenticsRunnerSshStatusCommand>("status")
-                .WithDescription("Show the remote tmux session status for a project handed off to an SSH target")
+            // One selector for both worlds: owner/project (has a slash) is a runner on this
+            // machine, a bare label is an SSH target it was handed off to.
+            runner.AddCommand<AgenticsRunnerStatusCommand>("status")
+                .WithDescription("Show a runner's state, local or handed off to an SSH target")
+                .WithExample(new[] { "agentics", "runner", "status", "myorg/myproject" })
                 .WithExample(new[] { "agentics", "runner", "status", "hetzner" });
 
-            runner.AddCommand<AgenticsRunnerSshLogsCommand>("logs")
-                .WithDescription("Show the full remote tmux pane output for a project handed off to an SSH target")
+            runner.AddCommand<AgenticsRunnerLogsCommand>("logs")
+                .WithDescription("Show a runner's output, local or handed off to an SSH target")
+                .WithExample(new[] { "agentics", "runner", "logs", "myorg/myproject" })
                 .WithExample(new[] { "agentics", "runner", "logs", "hetzner" });
 
-            runner.AddCommand<AgenticsRunnerSshStopCommand>("stop")
-                .WithDescription("Stop the remote tmux session for a project handed off to an SSH target")
+            runner.AddCommand<AgenticsRunnerStopLocalCommand>("stop")
+                .WithDescription("Stop a runner, local or handed off to an SSH target")
+                .WithExample(new[] { "agentics", "runner", "stop", "myorg/myproject" })
                 .WithExample(new[] { "agentics", "runner", "stop", "hetzner" });
 
             runner.AddCommand<AgenticsRunnerClaudeLoginCommand>("claude-login")
@@ -2121,7 +2146,7 @@ static TracerProvider? SetupTracing()
     return Sdk.CreateTracerProviderBuilder()
         .SetResourceBuilder(ResourceBuilder.CreateDefault()
             .AddService("pks-cli", serviceVersion: GetVersion()))
-        .AddSource(PKS.Commands.Agentics.Runner.AgenticsRunnerStartCommand.ActivitySourceName)
+        .AddSource(PKS.Commands.Agentics.Runner.AgenticsRunnerRunCommand.ActivitySourceName)
         .AddSource(PKS.Commands.Foundry.FoundryInitCommand.ActivitySourceName)
         .AddHttpClientInstrumentation(o =>
         {
@@ -2171,7 +2196,7 @@ static MeterProvider? SetupMetrics()
     return Sdk.CreateMeterProviderBuilder()
         .SetResourceBuilder(ResourceBuilder.CreateDefault()
             .AddService("pks-cli", serviceVersion: GetVersion()))
-        .AddMeter(PKS.Commands.Agentics.Runner.AgenticsRunnerStartCommand.MeterName)
+        .AddMeter(PKS.Commands.Agentics.Runner.AgenticsRunnerRunCommand.MeterName)
         .AddOtlpExporter(opts =>
         {
             if (isLocalhost)

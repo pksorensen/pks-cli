@@ -19,7 +19,7 @@ public class AdrComplianceTests
         while (dir != null && !File.Exists(Path.Combine(dir.FullName, "pks-cli.sln")))
             dir = dir.Parent;
         Assert.NotNull(dir);
-        var path = Path.Combine(dir!.FullName, "src", "Commands", "Agentics", "Runner", "AgenticsRunnerStartCommand.cs");
+        var path = Path.Combine(dir!.FullName, "src", "Commands", "Agentics", "Runner", "AgenticsRunnerRunCommand.cs");
         File.Exists(path).Should().BeTrue($"expected source at {path}");
         return path;
     }

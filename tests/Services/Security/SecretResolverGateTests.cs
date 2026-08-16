@@ -22,7 +22,7 @@ namespace PKS.CLI.Tests.Services.Security;
 ///
 /// If you are here because this test failed: do not add an exception. Move the work that needs the
 /// credential into a service under <c>Infrastructure/Services/</c> and have the command ask that
-/// service to do the thing — the way <c>AgenticsRunnerStartCommand</c> asks
+/// service to do the thing — the way <c>AgenticsRunnerRunCommand</c> asks
 /// <c>IAgenticsRunnerSshHandoffService.ForwardStoredSecretAsync</c> to forward a token it never sees.
 /// If the command only needs the credential to *arrive* somewhere — a child process's environment, a
 /// docker run line, an <c>Authorization</c> header, an OAuth form body — that already exists:

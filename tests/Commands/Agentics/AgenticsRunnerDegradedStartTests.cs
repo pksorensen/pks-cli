@@ -16,7 +16,7 @@ namespace PKS.CLI.Tests.Commands.Agentics;
 /// <summary>
 /// Unit tests for the client-side pre-claim refusal (Defect A/D2 fix,
 /// docs/remote-runner-targets-plan.md Phase 1):
-/// <see cref="AgenticsRunnerStartCommand.PollAndDispatchOnceAsync"/> must never reach
+/// <see cref="AgenticsRunnerRunCommand.PollAndDispatchOnceAsync"/> must never reach
 /// <c>POST .../runners/generate-jitconfig</c> for an ordinary (jobType == null) station job
 /// when devcontainer spawning is unavailable -- the poll endpoint only reads, so simply not
 /// claiming leaves the job "queued" for a capable runner instead of claiming-then-failing it.
@@ -112,7 +112,7 @@ public class AgenticsRunnerDegradedStartTests
         // ClaudeAnthropicCommand.cs is the exemplar for this pattern.
         console.Profile.Capabilities.Interactive = false;
 
-        var command = new AgenticsRunnerStartCommand(
+        var command = new AgenticsRunnerRunCommand(
             configService.Object,
             spawnerService.Object,
             httpClientFactory.Object,
@@ -123,7 +123,7 @@ public class AgenticsRunnerDegradedStartTests
             console,
             probe.Object);
 
-        var settings = new AgenticsRunnerStartCommand.Settings
+        var settings = new AgenticsRunnerRunCommand.Settings
         {
             InProcess = false,
             PollingInterval = 10,
@@ -196,7 +196,7 @@ public class AgenticsRunnerDegradedStartTests
         var console = new Spectre.Console.Testing.TestConsole();
         console.Profile.Capabilities.Interactive = false;
 
-        var command = new AgenticsRunnerStartCommand(
+        var command = new AgenticsRunnerRunCommand(
             new Mock<PKS.Infrastructure.Services.Runner.IAgenticsRunnerConfigurationService>().Object,
             new Mock<IDevcontainerSpawnerService>().Object,
             httpClientFactory.Object,
@@ -207,7 +207,7 @@ public class AgenticsRunnerDegradedStartTests
             console,
             probe.Object);
 
-        var settings = new AgenticsRunnerStartCommand.Settings { InProcess = false, PollingInterval = 10 };
+        var settings = new AgenticsRunnerRunCommand.Settings { InProcess = false, PollingInterval = 10 };
 
         await command.PollAndDispatchOnceAsync(
             registration,

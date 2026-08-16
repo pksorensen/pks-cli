@@ -6,8 +6,8 @@ namespace PKS.CLI.Tests.Commands.Agentics;
 
 /// <summary>
 /// Unit tests for the chat-model allowlist enforcement (Phase 3, docs/remote-runner-targets-plan.md
-/// "Chat model exposure is an enforcement gap"): <see cref="AgenticsRunnerStartCommand.IsChatModelAllowed"/>
-/// and <see cref="AgenticsRunnerStartCommand.FilterModelsByAllowlist"/>, the two <c>internal static</c>
+/// "Chat model exposure is an enforcement gap"): <see cref="AgenticsRunnerRunCommand.IsChatModelAllowed"/>
+/// and <see cref="AgenticsRunnerRunCommand.FilterModelsByAllowlist"/>, the two <c>internal static</c>
 /// pure functions that gate both the chat.models.request listing and the chat.completion.request
 /// resolution path against a persisted <see cref="PKS.Infrastructure.Services.Models.RunnerProfile.ChatModels"/>
 /// allowlist.
@@ -15,8 +15,8 @@ namespace PKS.CLI.Tests.Commands.Agentics;
 /// These are tested as pure functions rather than through a live WebSocket/AgentChatProviderFactory
 /// harness (AgentChatProviderFactory is a sealed class with no interface, and this repo has no
 /// WebSocket test server) -- but the production call sites in
-/// <see cref="AgenticsRunnerStartCommand.RunChatLlmChannelSessionAsync"/> check
-/// <see cref="AgenticsRunnerStartCommand.IsChatModelAllowed"/> BEFORE ever calling
+/// <see cref="AgenticsRunnerRunCommand.RunChatLlmChannelSessionAsync"/> check
+/// <see cref="AgenticsRunnerRunCommand.IsChatModelAllowed"/> BEFORE ever calling
 /// ForwardChatCompletionRequestViaProviderAsync (which is what reaches
 /// AgentChatProviderFactory.ResolveAsync).
 ///
@@ -34,21 +34,21 @@ public class AgenticsRunnerChatModelAllowlistTests
     [Fact]
     public void IsChatModelAllowed_NullAllowlist_AllowsAnyModel()
     {
-        AgenticsRunnerStartCommand.IsChatModelAllowed("gpt-5.5", null).Should().BeTrue();
-        AgenticsRunnerStartCommand.IsChatModelAllowed("claude-opus-4-7", null).Should().BeTrue();
+        AgenticsRunnerRunCommand.IsChatModelAllowed("gpt-5.5", null).Should().BeTrue();
+        AgenticsRunnerRunCommand.IsChatModelAllowed("claude-opus-4-7", null).Should().BeTrue();
     }
 
     [Fact]
     public void IsChatModelAllowed_EmptyAllowlist_AllowsAnyModel()
     {
-        AgenticsRunnerStartCommand.IsChatModelAllowed("gpt-5.5", new List<string>()).Should().BeTrue();
+        AgenticsRunnerRunCommand.IsChatModelAllowed("gpt-5.5", new List<string>()).Should().BeTrue();
     }
 
     [Fact]
     public void IsChatModelAllowed_ModelInAllowlist_ReturnsTrue()
     {
         var allowlist = new List<string> { "gpt-5.5" };
-        AgenticsRunnerStartCommand.IsChatModelAllowed("gpt-5.5", allowlist).Should().BeTrue();
+        AgenticsRunnerRunCommand.IsChatModelAllowed("gpt-5.5", allowlist).Should().BeTrue();
     }
 
     [Fact]
@@ -57,22 +57,22 @@ public class AgenticsRunnerChatModelAllowlistTests
         // The exact required scenario: ChatModels=['gpt-5.5'] configured, a chat.completion.request
         // names a different model -- must be rejected.
         var allowlist = new List<string> { "gpt-5.5" };
-        AgenticsRunnerStartCommand.IsChatModelAllowed("claude-opus-4-7", allowlist).Should().BeFalse();
+        AgenticsRunnerRunCommand.IsChatModelAllowed("claude-opus-4-7", allowlist).Should().BeFalse();
     }
 
     [Fact]
     public void IsChatModelAllowed_IsCaseInsensitive()
     {
         var allowlist = new List<string> { "gpt-5.5" };
-        AgenticsRunnerStartCommand.IsChatModelAllowed("GPT-5.5", allowlist).Should().BeTrue();
+        AgenticsRunnerRunCommand.IsChatModelAllowed("GPT-5.5", allowlist).Should().BeTrue();
     }
 
     [Fact]
     public void IsChatModelAllowed_NullOrWhitespaceModelId_WithNonEmptyAllowlist_ReturnsFalse()
     {
         var allowlist = new List<string> { "gpt-5.5" };
-        AgenticsRunnerStartCommand.IsChatModelAllowed(null, allowlist).Should().BeFalse();
-        AgenticsRunnerStartCommand.IsChatModelAllowed("   ", allowlist).Should().BeFalse();
+        AgenticsRunnerRunCommand.IsChatModelAllowed(null, allowlist).Should().BeFalse();
+        AgenticsRunnerRunCommand.IsChatModelAllowed("   ", allowlist).Should().BeFalse();
     }
 
     // ── FilterModelsByAllowlist ─────────────────────────────────────────────────────────
@@ -81,7 +81,7 @@ public class AgenticsRunnerChatModelAllowlistTests
     public void FilterModelsByAllowlist_NullAllowlist_ReturnsAllModelsUnfiltered()
     {
         var models = new List<string> { "gpt-5.5", "claude-opus-4-7", "claude-sonnet-4-6" };
-        var result = AgenticsRunnerStartCommand.FilterModelsByAllowlist(models, null);
+        var result = AgenticsRunnerRunCommand.FilterModelsByAllowlist(models, null);
         result.Should().BeEquivalentTo(models);
     }
 
@@ -94,7 +94,7 @@ public class AgenticsRunnerChatModelAllowlistTests
         var resolvedByFactory = new List<string> { "gpt-5.5", "claude-opus-4-7", "claude-sonnet-4-6" };
         var allowlist = new List<string> { "gpt-5.5" };
 
-        var result = AgenticsRunnerStartCommand.FilterModelsByAllowlist(resolvedByFactory, allowlist);
+        var result = AgenticsRunnerRunCommand.FilterModelsByAllowlist(resolvedByFactory, allowlist);
 
         result.Should().BeEquivalentTo(new[] { "gpt-5.5" });
     }
@@ -108,7 +108,7 @@ public class AgenticsRunnerChatModelAllowlistTests
         var resolvedByFactory = new List<string> { "gpt-5.5" };
         var allowlist = new List<string> { "gpt-5.5", "claude-opus-4-7" };
 
-        var result = AgenticsRunnerStartCommand.FilterModelsByAllowlist(resolvedByFactory, allowlist);
+        var result = AgenticsRunnerRunCommand.FilterModelsByAllowlist(resolvedByFactory, allowlist);
 
         result.Should().BeEquivalentTo(new[] { "gpt-5.5" });
     }
@@ -125,10 +125,10 @@ public class AgenticsRunnerChatModelAllowlistTests
     {
         var allowlist = new List<string> { "gpt-5.5" };
 
-        var decision = AgenticsRunnerStartCommand.DecideChatCompletionRoute(
+        var decision = AgenticsRunnerRunCommand.DecideChatCompletionRoute(
             backendUrl: null, requestedModel: "claude-opus-4-7", defaultModelId: "gpt-5.5", allowlist: allowlist);
 
-        decision.Route.Should().Be(AgenticsRunnerStartCommand.ChatCompletionRoute.Rejected);
+        decision.Route.Should().Be(AgenticsRunnerRunCommand.ChatCompletionRoute.Rejected);
         decision.ModelId.Should().Be("claude-opus-4-7");
     }
 
@@ -137,10 +137,10 @@ public class AgenticsRunnerChatModelAllowlistTests
     {
         var allowlist = new List<string> { "gpt-5.5", "claude-opus-4-7" };
 
-        var decision = AgenticsRunnerStartCommand.DecideChatCompletionRoute(
+        var decision = AgenticsRunnerRunCommand.DecideChatCompletionRoute(
             backendUrl: null, requestedModel: "claude-opus-4-7", defaultModelId: "gpt-5.5", allowlist: allowlist);
 
-        decision.Route.Should().Be(AgenticsRunnerStartCommand.ChatCompletionRoute.Provider);
+        decision.Route.Should().Be(AgenticsRunnerRunCommand.ChatCompletionRoute.Provider);
         decision.ModelId.Should().Be("claude-opus-4-7");
     }
 
@@ -149,21 +149,21 @@ public class AgenticsRunnerChatModelAllowlistTests
     {
         // The runner default is itself subject to the allowlist -- an operator who narrowed
         // ChatModels without updating --chat-llm-model must not get a silent bypass.
-        var decision = AgenticsRunnerStartCommand.DecideChatCompletionRoute(
+        var decision = AgenticsRunnerRunCommand.DecideChatCompletionRoute(
             backendUrl: null, requestedModel: null, defaultModelId: "gpt-5.5",
             allowlist: new List<string> { "claude-opus-4-7" });
 
-        decision.Route.Should().Be(AgenticsRunnerStartCommand.ChatCompletionRoute.Rejected);
+        decision.Route.Should().Be(AgenticsRunnerRunCommand.ChatCompletionRoute.Rejected);
         decision.ModelId.Should().Be("gpt-5.5");
     }
 
     [Fact]
     public void DecideChatCompletionRoute_NoAllowlist_RoutesToProvider()
     {
-        var decision = AgenticsRunnerStartCommand.DecideChatCompletionRoute(
+        var decision = AgenticsRunnerRunCommand.DecideChatCompletionRoute(
             backendUrl: null, requestedModel: "anything-at-all", defaultModelId: "gpt-5.5", allowlist: null);
 
-        decision.Route.Should().Be(AgenticsRunnerStartCommand.ChatCompletionRoute.Provider);
+        decision.Route.Should().Be(AgenticsRunnerRunCommand.ChatCompletionRoute.Provider);
         decision.ModelId.Should().Be("anything-at-all");
     }
 
@@ -173,10 +173,10 @@ public class AgenticsRunnerChatModelAllowlistTests
         // Literal-forward mode bypasses AgentChatProviderFactory entirely, so the allowlist (which
         // gates provider resolution) does not apply -- documented behavior, pinned so it is not
         // "fixed" into a rejection by accident.
-        var decision = AgenticsRunnerStartCommand.DecideChatCompletionRoute(
+        var decision = AgenticsRunnerRunCommand.DecideChatCompletionRoute(
             backendUrl: "http://localhost:11434/v1", requestedModel: "not-in-allowlist",
             defaultModelId: "gpt-5.5", allowlist: new List<string> { "gpt-5.5" });
 
-        decision.Route.Should().Be(AgenticsRunnerStartCommand.ChatCompletionRoute.Forward);
+        decision.Route.Should().Be(AgenticsRunnerRunCommand.ChatCompletionRoute.Forward);
     }
 }

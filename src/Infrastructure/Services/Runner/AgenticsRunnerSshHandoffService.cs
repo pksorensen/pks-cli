@@ -129,13 +129,7 @@ public sealed class AgenticsRunnerSshHandoffService : IAgenticsRunnerSshHandoffS
     }
 
     public string BuildTmuxSessionName(string owner, string project) =>
-        $"pks-agentics-{Sanitize(owner)}-{Sanitize(project)}";
-
-    private static string Sanitize(string value)
-    {
-        var chars = value.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '-').ToArray();
-        return new string(chars);
-    }
+        RunnerTmuxSession.Name(owner, project);
 
     /// <summary>
     /// Write secret content (tokens, credentials, registrations) to a staging file with
@@ -239,10 +233,23 @@ public sealed class AgenticsRunnerSshHandoffService : IAgenticsRunnerSshHandoffS
             if (shipError != null)
                 return Fail(runnerName, sessionName, started, shipError);
 
-            onProgress?.Invoke($"Launching tmux session '{sessionName}' on {target.Host}...");
+            // Which launcher the target can actually use is a probe result, not an assumption --
+            // see RunnerLauncher.ResolveRemote. The probe is cheap and we need it anyway; running
+            // it here (rather than trusting an earlier one) also means a target that lost its
+            // dotnet install between probe and handoff still gets a working command.
+            var probe = await SshRunnerProbe.ProbeAsync(_sshRunner, hostConfig, ct);
+            var launcher = RunnerLauncher.ResolveRemote(probe);
+            if (launcher == null)
+            {
+                return Fail(runnerName, sessionName, started,
+                    $"No way to start pks on {target.Host}: none of pks, dnx or npx is on its PATH.");
+            }
 
+            onProgress?.Invoke($"Launching tmux session '{sessionName}' on {target.Host} via {launcher.Kind}...");
+
+            var remoteArgs = $"agentics runner run --project {owner}/{project} --server {server}";
             var launchCommand =
-                $"tmux new-session -d -s {sessionName} 'dnx pks-cli -- agentics runner start --project {owner}/{project} --server {server}'";
+                $"tmux new-session -d -s {sessionName} '{launcher.BuildCommandLine(remoteArgs)}'";
             var launchResult = await _sshRunner.RunAsync(hostConfig, launchCommand, ct);
             if (!launchResult.Success)
             {

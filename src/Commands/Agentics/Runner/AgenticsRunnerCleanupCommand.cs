@@ -54,7 +54,7 @@ public sealed class AgenticsRunnerCleanupCommand : AsyncCommand<AgenticsRunnerCl
             return 0;
         }
 
-        // 2. Discover live runner instances. The current AgenticsRunnerStartCommand uses
+        // 2. Discover live runner instances. The current AgenticsRunnerRunCommand uses
         // a per-process static Guid for runner-instance, so we can't enumerate them directly —
         // approximate by treating any container whose runner process is still in `pgrep` as live.
         // Fallback: --all ignores the live check and removes everything.

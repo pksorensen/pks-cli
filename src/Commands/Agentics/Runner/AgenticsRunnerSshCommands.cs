@@ -137,7 +137,7 @@ public class AgenticsRunnerSshStatusCommand : AsyncCommand<AgenticsRunnerSshTarg
     }
 
     /// <summary>Same pre-flight warning shown right after a successful handoff
-    /// (<c>AgenticsRunnerStartCommand.WarnIfClaudeCredentialVolumeMissingAsync</c>), surfaced again
+    /// (<c>AgenticsRunnerRunCommand.WarnIfClaudeCredentialVolumeMissingAsync</c>), surfaced again
     /// any time an operator checks status later -- a job dispatched after the credential volume was
     /// removed or never populated would otherwise stall silently on an interactive OAuth login it
     /// can never complete headless. A <c>null</c> (host unreachable / probe failed) degrades to

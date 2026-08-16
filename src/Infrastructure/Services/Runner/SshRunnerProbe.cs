@@ -14,16 +14,26 @@ public sealed record SshProbeResult(
     string? TmuxVersion,
     bool DotnetAvailable,
     string? DotnetVersion,
-    bool DnxAvailable)
+    bool DnxAvailable,
+    bool PksAvailable = false,
+    bool NpxAvailable = false)
 {
     /// <summary>
-    /// Tmux is the hard dependency (vibecast requires it -- see CLAUDE.md), Docker is the whole
-    /// point of handing off (this flow only triggers when local Docker is unavailable), and dnx is
-    /// how the remote runner process itself gets launched (<c>dnx pks-cli -- agentics runner start
-    /// ...</c>). Dotnet's own version is informational only -- dnx already implies a working dotnet
-    /// install, it's surfaced separately purely for the readiness summary.
+    /// Any of the three ways to invoke this CLI on the target. dnx is not special: a box with the
+    /// self-contained <c>pks</c> binary on its PATH, or with npm but a broken dotnet install, can
+    /// host a runner perfectly well -- and both exist (measured on projects.si14agents.com, whose
+    /// <c>/usr/lib/dotnet</c> has no host/fxr at all, so <c>dnx</c> cannot run). Which one gets
+    /// used is <see cref="RunnerLauncher.ResolveRemote"/>'s call.
     /// </summary>
-    public bool IsReady => DockerAvailable && TmuxAvailable && DnxAvailable;
+    public bool LauncherAvailable => PksAvailable || DnxAvailable || NpxAvailable;
+
+    /// <summary>
+    /// Tmux is the hard dependency (vibecast requires it -- see CLAUDE.md), Docker is the whole
+    /// point of handing off (this flow only triggers when local Docker is unavailable), and some
+    /// launcher has to exist to start the remote runner process at all. Dotnet's own version is
+    /// informational only -- it's surfaced separately purely for the readiness summary.
+    /// </summary>
+    public bool IsReady => DockerAvailable && TmuxAvailable && LauncherAvailable;
 }
 
 /// <summary>
@@ -37,6 +47,8 @@ public static class SshRunnerProbe
     private const string TmuxMarker = "PKS_PROBE_TMUX=";
     private const string DotnetMarker = "PKS_PROBE_DOTNET=";
     private const string DnxMarker = "PKS_PROBE_DNX=";
+    private const string PksMarker = "PKS_PROBE_PKS=";
+    private const string NpxMarker = "PKS_PROBE_NPX=";
     private const string MissingSentinel = "MISSING";
 
     /// <summary>
@@ -50,7 +62,9 @@ public static class SshRunnerProbe
         "sh -c 'echo " + DockerMarker + "$(docker info >/dev/null 2>&1 && echo ok || echo " + MissingSentinel + "); " +
         "echo " + TmuxMarker + "$(tmux -V 2>/dev/null || echo " + MissingSentinel + "); " +
         "echo " + DotnetMarker + "$(dotnet --version 2>/dev/null || echo " + MissingSentinel + "); " +
-        "echo " + DnxMarker + "$(command -v dnx >/dev/null 2>&1 && echo ok || echo " + MissingSentinel + ")'";
+        "echo " + DnxMarker + "$(command -v dnx >/dev/null 2>&1 && echo ok || echo " + MissingSentinel + "); " +
+        "echo " + PksMarker + "$(command -v pks >/dev/null 2>&1 && echo ok || echo " + MissingSentinel + "); " +
+        "echo " + NpxMarker + "$(command -v npx >/dev/null 2>&1 && echo ok || echo " + MissingSentinel + ")'";
 
     /// <summary>Runs the probe over SSH and parses the result. Never throws on tool-not-found --
     /// only on a connection-level failure (non-zero exit / empty output), which is surfaced as an
@@ -73,6 +87,8 @@ public static class SshRunnerProbe
         var tmux = ExtractMarker(stdout, TmuxMarker);
         var dotnet = ExtractMarker(stdout, DotnetMarker);
         var dnx = ExtractMarker(stdout, DnxMarker);
+        var pks = ExtractMarker(stdout, PksMarker);
+        var npx = ExtractMarker(stdout, NpxMarker);
 
         return new SshProbeResult(
             DockerAvailable: docker is "ok",
@@ -80,7 +96,9 @@ public static class SshRunnerProbe
             TmuxVersion: tmux != null && tmux != MissingSentinel ? tmux : null,
             DotnetAvailable: dotnet != null && dotnet != MissingSentinel,
             DotnetVersion: dotnet != null && dotnet != MissingSentinel ? dotnet : null,
-            DnxAvailable: dnx is "ok");
+            DnxAvailable: dnx is "ok",
+            PksAvailable: pks is "ok",
+            NpxAvailable: npx is "ok");
     }
 
     private static string? ExtractMarker(string stdout, string marker)

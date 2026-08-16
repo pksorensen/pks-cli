@@ -130,7 +130,7 @@ public class AgenticsRunnerSshHandoffPersistenceTests
         configService.Verify(x => x.AddRegistrationAsync(It.IsAny<AgenticsRunnerRegistration>()), Times.Never);
     }
 
-    private static AgenticsRunnerStartCommand CreateCommand(
+    private static AgenticsRunnerRunCommand CreateCommand(
         IAgenticsRunnerConfigurationService configService,
         IAgenticsRunnerSshHandoffService handoff,
         Spectre.Console.Testing.TestConsole console)
@@ -139,7 +139,7 @@ public class AgenticsRunnerSshHandoffPersistenceTests
         var chatProviderFactory = new AgentChatProviderFactory(
             new Mock<IConfigurationService>().Object, new HttpClient(), FakeSecretResolver.Empty, foundryAuthService.Object);
 
-        return new AgenticsRunnerStartCommand(
+        return new AgenticsRunnerRunCommand(
             configService,
             new Mock<IDevcontainerSpawnerService>().Object,
             new Mock<IHttpClientFactory>().Object,

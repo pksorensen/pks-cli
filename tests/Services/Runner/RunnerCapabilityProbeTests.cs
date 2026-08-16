@@ -15,7 +15,7 @@ namespace PKS.CLI.Tests.Services.Runner;
 /// <summary>
 /// Unit tests for the honest-capabilities probe (Defect A fix, docs/remote-runner-targets-plan.md
 /// Phase 1): <see cref="RunnerExecutionCapabilityProbe"/>'s own memoization behavior, and
-/// <see cref="AgenticsRunnerStartCommand.ComputeCapabilitiesAsync"/>'s gating of
+/// <see cref="AgenticsRunnerRunCommand.ComputeCapabilitiesAsync"/>'s gating of
 /// devcontainer-spawn-dependent capabilities against it.
 /// </summary>
 [Trait("Category", "Unit")]
@@ -56,9 +56,9 @@ public class RunnerCapabilityProbeTests
         status.Reason.Should().Contain("Docker is not available");
     }
 
-    // ── AgenticsRunnerStartCommand.ComputeCapabilitiesAsync: gating ────────────────────────
+    // ── AgenticsRunnerRunCommand.ComputeCapabilitiesAsync: gating ────────────────────────
 
-    private static AgenticsRunnerStartCommand CreateCommand(
+    private static AgenticsRunnerRunCommand CreateCommand(
         IRunnerExecutionCapabilityProbe probe,
         IGitHubAuthenticationService? githubAuth = null)
     {
@@ -72,7 +72,7 @@ public class RunnerCapabilityProbeTests
             new Mock<IConfigurationService>().Object, new HttpClient(), FakeSecretResolver.Empty, foundryAuthService.Object);
         var console = new Spectre.Console.Testing.TestConsole();
 
-        return new AgenticsRunnerStartCommand(
+        return new AgenticsRunnerRunCommand(
             configService.Object,
             spawnerService.Object,
             httpClientFactory.Object,

@@ -4,7 +4,7 @@ namespace PKS.Infrastructure.Services.Runner;
 /// Pure naming + remote-detection helpers for the stable <c>pks-claude-*</c> Docker volumes that
 /// hold a devcontainer's <c>~/.claude</c> OAuth credentials (docs/remote-runner-targets-plan.md
 /// Phase 5, work item 1). The naming rules are the single source of truth for
-/// <c>AgenticsRunnerStartCommand.PatchDevcontainerVolumes</c>, which delegates here, and for the
+/// <c>AgenticsRunnerRunCommand.PatchDevcontainerVolumes</c>, which delegates here, and for the
 /// SSH-handoff pre-flight / <c>runner status</c> / <c>runner claude-login</c> commands, so all
 /// four call sites always agree on which volume a given owner/project/task/scope maps to.
 /// </summary>

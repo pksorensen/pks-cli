@@ -19,7 +19,7 @@ public sealed record RunnerExecutionCapabilityStatus(bool DockerAvailable, strin
 /// Existence of this probe is Defect A's fix (docs/remote-runner-targets-plan.md): a
 /// Docker-less runner must advertise capabilities honestly instead of claiming a devcontainer
 /// job and failing it at <c>CheckDockerAvailabilityAsync</c>-time. It also backs the
-/// client-side pre-claim refusal — see <c>AgenticsRunnerStartCommand.PollAndDispatchOnceAsync</c>.
+/// client-side pre-claim refusal — see <c>AgenticsRunnerRunCommand.PollAndDispatchOnceAsync</c>.
 /// </summary>
 public interface IRunnerExecutionCapabilityProbe
 {

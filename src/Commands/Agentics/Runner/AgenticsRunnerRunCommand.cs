@@ -22,7 +22,7 @@ namespace PKS.Commands.Agentics.Runner;
 /// <summary>
 /// Start the runner daemon to poll for and execute jobs
 /// </summary>
-public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Settings>
+public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Settings>
 {
     private readonly IAgenticsRunnerConfigurationService _configService;
     private readonly IDevcontainerSpawnerService _spawnerService;
@@ -199,12 +199,16 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         [Description("Log every chat-llm:v1 Chat Channel frame (chat.completion.request/chunk/done/error, chat.models.request/response, chat.end) to this console as it's sent/received, for debugging the chat pipeline. Frame text is markup-escaped and truncated -- it can include the user's own chat content, so avoid this on a shared/recorded terminal if that matters.")]
         public bool ChatLlmVerbose { get; set; }
 
+        [CommandOption("--no-prompt")]
+        [Description("Never ask anything, even on a terminal that could answer. Set automatically by the detached 'runner start' -- a tmux pane has a TTY, so the interactive gates would otherwise fire into a pane nobody is watching and the runner would sit on a prompt instead of polling.")]
+        public bool NoPrompt { get; set; }
+
         [CommandOption("--configure")]
         [Description("Re-run the interactive capability/chat-model configuration prompts even if this registration already has a persisted profile from a previous run. Ignored on a non-interactive console (never blocks).")]
         public bool Configure { get; set; }
     }
 
-    public AgenticsRunnerStartCommand(
+    public AgenticsRunnerRunCommand(
         IAgenticsRunnerConfigurationService configService,
         IDevcontainerSpawnerService spawnerService,
         IHttpClientFactory httpClientFactory,
@@ -318,7 +322,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             if (!settings.InProcess && !spawnModeAvailable)
             {
                 var reason = spawnCapabilityStatus?.Reason ?? "Docker availability check did not run";
-                if (_console.Profile.Capabilities.Interactive)
+                if (_console.Profile.Capabilities.Interactive && !settings.NoPrompt)
                 {
                     var panel = new Panel(
                         $"[yellow]Devcontainer spawning is unavailable on this machine.[/]\n" +
@@ -497,13 +501,14 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
                 // subsequent start is silent and just reuses the persisted profile. A
                 // non-interactive console never blocks on a prompt -- it always falls back to the
                 // persisted profile, or "auto" (null profile, probe/factory decide) if none exists.
-                if (_console.Profile.Capabilities.Interactive && (settings.Configure || registration.Profile == null))
+                if (_console.Profile.Capabilities.Interactive && !settings.NoPrompt &&
+                    (settings.Configure || registration.Profile == null))
                 {
                     registration.Profile = await RunInteractiveConfigureAsync(
                         registration, settings, spawnCapabilityStatus, cts.Token);
                     await _configService.AddRegistrationAsync(registration);
                 }
-                else if (settings.Configure && !_console.Profile.Capabilities.Interactive)
+                else if (settings.Configure && (settings.NoPrompt || !_console.Profile.Capabilities.Interactive))
                 {
                     _console.MarkupLine("[yellow]--configure requested but this console is non-interactive — using the persisted profile (or auto) instead.[/]");
                 }
@@ -615,115 +620,16 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
     private async Task<AgenticsRunnerRegistration> ResolveOrRegisterAsync(
         string ownerProject, string? serverOverride, bool verbose)
     {
-        var parts = ownerProject.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length < 2)
-            throw new InvalidOperationException($"--project must be in owner/project format, got: '{ownerProject}'");
+        // Shared with the detached `runner start` (see RunnerRegistrar) so the two entry points
+        // cannot drift on what "resolve or register" means -- they used to be the same code and
+        // would have diverged the first time either grew a rule.
+        var registration = await RunnerRegistrar.ResolveOrRegisterAsync(
+            _configService, ownerProject, serverOverride, DisplayInfo);
 
-        var owner = parts[0];
-        var project = parts[1];
+        if (verbose)
+            DisplayInfo($"Using registration for {registration.Owner}/{registration.Project} (id: {registration.Id})");
 
-        // Check if we already have a saved registration for this project
-        var registrations = await _configService.ListRegistrationsAsync();
-        var existing = registrations.FirstOrDefault(r =>
-            string.Equals(r.Owner, owner, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(r.Project, project, StringComparison.OrdinalIgnoreCase));
-
-        if (existing != null)
-        {
-            // If --server was explicitly provided and differs from the stored URL, update it
-            if (!string.IsNullOrEmpty(serverOverride))
-            {
-                var normalizedServer = serverOverride.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-                                       serverOverride.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-                    ? serverOverride.TrimEnd('/')
-                    : $"http://{serverOverride}";
-
-                if (!string.Equals(existing.Server, normalizedServer, StringComparison.OrdinalIgnoreCase))
-                {
-                    existing.Server = normalizedServer;
-                    await _configService.AddRegistrationAsync(existing);
-                    DisplayInfo($"Updated server URL for {owner}/{project}: {normalizedServer}");
-                }
-            }
-
-            if (verbose)
-                DisplayInfo($"Found existing registration for {owner}/{project} (id: {existing.Id})");
-            return existing;
-        }
-
-        // No saved registration — auto-register
-        DisplayInfo($"No saved registration for [cyan]{owner}/{project}[/], registering now...");
-
-        var serverHost = serverOverride
-            ?? Environment.GetEnvironmentVariable("AGENTICS_SERVER")
-            ?? Environment.GetEnvironmentVariable("AGENTIC_SERVER")
-            ?? "agentics.dk";
-
-        string serverUrl;
-        if (serverHost.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-            serverHost.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-        {
-            serverUrl = serverHost.TrimEnd('/');
-        }
-        else
-        {
-            var scheme = serverHost.StartsWith("localhost", StringComparison.OrdinalIgnoreCase) ||
-                         serverHost.StartsWith("127.0.0.1")
-                ? "http"
-                : "https";
-            serverUrl = $"{scheme}://{serverHost}";
-        }
-
-        var runnerName = System.Net.Dns.GetHostName();
-
-        using var httpClient = new HttpClient();
-        var requestBody = new { name = runnerName, labels = BuildDefaultRunnerLabels() };
-        var httpResponse = await httpClient.PostAsJsonAsync(
-            $"{serverUrl}/api/owners/{owner}/projects/{project}/runners",
-            requestBody);
-
-        if (!httpResponse.IsSuccessStatusCode)
-        {
-            var errorBody = await httpResponse.Content.ReadAsStringAsync();
-            throw new InvalidOperationException($"Auto-registration failed ({(int)httpResponse.StatusCode}): {errorBody}");
-        }
-
-        var json = await httpResponse.Content.ReadAsStringAsync();
-        var resp = System.Text.Json.JsonSerializer.Deserialize<RegisterRunnerResponse>(json, JsonOptions)
-            ?? throw new InvalidOperationException("Failed to parse registration response");
-
-        var registration = new AgenticsRunnerRegistration
-        {
-            Id = resp.Id ?? Guid.NewGuid().ToString(),
-            Name = resp.Name ?? runnerName,
-            Token = resp.Token ?? "",
-            Owner = owner,
-            Project = project,
-            Server = serverUrl,
-            RegisteredAt = DateTime.UtcNow
-        };
-
-        await _configService.AddRegistrationAsync(registration);
-        DisplayInfo($"[green]Registered runner '{registration.Name}' for {owner}/{project}[/]");
         return registration;
-    }
-
-    /// <summary>
-    /// Default job-targeting labels sent at registration when the operator hasn't configured any
-    /// (Phase 3, work item 6 -- registration used to send <c>Array.Empty&lt;string&gt;()</c>
-    /// unconditionally, which meant a runner could never be targeted by label). "self-hosted"
-    /// matches the convention already used by RunnerDaemonService's (unrelated, GitHub Actions)
-    /// self-hosted-runner labels; the OS name lets a job request "windows"/"macos"/"linux"
-    /// specifically. Duplicated in AgenticsRunnerRegisterCommand.cs rather than extracted, matching
-    /// this codebase's existing pattern of small per-command helpers over shared utility classes.
-    /// </summary>
-    private static string[] BuildDefaultRunnerLabels()
-    {
-        var os = OperatingSystem.IsWindows() ? "windows"
-            : OperatingSystem.IsMacOS() ? "macos"
-            : OperatingSystem.IsLinux() ? "linux"
-            : "unknown";
-        return new[] { "self-hosted", os };
     }
 
     /// <summary>
@@ -6344,7 +6250,7 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
 
     private void DisplayBanner()
     {
-        var panel = new Panel("[bold cyan]Agentics Runner Start[/]")
+        var panel = new Panel("[bold cyan]Agentics Runner[/]")
             .BorderStyle(Style.Parse("cyan"))
             .Padding(1, 0);
         _console.Write(panel);
