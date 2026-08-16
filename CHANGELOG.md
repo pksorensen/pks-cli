@@ -49,6 +49,38 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.0.0](https://github.com/pksorensen/pks-cli/compare/v6.25.0...v7.0.0) (2026-08-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **runner:** `agentics runner start` no longer blocks. Anything that shells it out and expects to stay in the foreground — a systemd unit, a supervisor config, a tmux pane, a test that owns the process — wants `agentics runner run` now. The SSH handoff was updated in the same commit.
+* **security:** `IConfigurationService.GetAsync` returns null for credential keys and `GetAllAsync` omits them. Services that use a credential take `ISecretResolver`; callers that only need presence use `HasSecretAsync`. `pks secrets list|status|delete|seed-home` is the new inspection surface — there is deliberately no export.
+
+### Features
+
+* **aspire:** pks aspire run — an AppHost declares its parameters, pks fills them ([68471e3](https://github.com/pksorensen/pks-cli/commit/68471e3583571b31d31edacd781f264f576ace4e))
+* **entra:** pks entra app init — provision the identity, keep the secret ([71c1219](https://github.com/pksorensen/pks-cli/commit/71c12196258f34fcfbaadadab5e47aa94a56592f))
+* **entra:** store a registration somebody else made, or one nobody stores ([301951b](https://github.com/pksorensen/pks-cli/commit/301951bda18e789286ba57af371a991d06d38eb1))
+* **nvidia:** add nvidia init, status and proxy; share the proxy server ([49098b7](https://github.com/pksorensen/pks-cli/commit/49098b7769ddaf1238d9a7e68d65a8982655250a))
+* **openrouter:** add openrouter init, status and proxy ([da0c044](https://github.com/pksorensen/pks-cli/commit/da0c04401b38c314f27806e9f012c4537ca05c65))
+* **runner:** run ALP agents as the devcontainer's own user and fail loudly ([e4d1af2](https://github.com/pksorensen/pks-cli/commit/e4d1af24ac3297289b13eedcf7b742d1568f19fa))
+* **runner:** split runner run (foreground) from runner start (background) ([a3fdbfa](https://github.com/pksorensen/pks-cli/commit/a3fdbfa506d4e7454219b1431d469cbfc45ba515))
+* **security:** add SecretValue so credentials cannot become strings by accident ([2c23f5e](https://github.com/pksorensen/pks-cli/commit/2c23f5e282faf8809ba41ca574ad1151f0fce777))
+* **security:** quarantine credentials behind a write-only store ([d294053](https://github.com/pksorensen/pks-cli/commit/d294053c04bfe0762556188525602199f3b42ca2))
+
+
+### Bug Fixes
+
+* **aspire:** declare in Development so user secrets are visible ([9581a1a](https://github.com/pksorensen/pks-cli/commit/9581a1ad179e009b268bd7ad171cc84126e68b60))
+* **aspire:** let an AppHost declare nothing without failing ([d56220c](https://github.com/pksorensen/pks-cli/commit/d56220c4c95d19407e4ffe9c191d9fba21d2c467))
+* **aspire:** stop shipping PksDeclare.cs as a Czech satellite resource ([bd3e842](https://github.com/pksorensen/pks-cli/commit/bd3e842a45e4256a321227916dcad0ef246810ae))
+* **codex:** land the tool-description normalizer its tests already assert ([58edb66](https://github.com/pksorensen/pks-cli/commit/58edb66c61c51af8a721c9fce3205cc492f3377b))
+* **entra:** look an alias up the way it was stored ([3f7bd62](https://github.com/pksorensen/pks-cli/commit/3f7bd62d1456f2a4b4eb3db950de10f7372af86e))
+* **runner:** put the job directory and CLAUDE_CONFIG_DIR where the agent can reach them ([b538a4a](https://github.com/pksorensen/pks-cli/commit/b538a4a00fa9e76afd2ffcff18a748dfd7f3c95c))
+* **security:** make the secret resolver required so no test can read the real store ([39801b3](https://github.com/pksorensen/pks-cli/commit/39801b3b5004fdae117040b4e67d8c3e20747e70))
+* **security:** migrate legacy plaintext before the secrets surface reads the store ([3c8d2e4](https://github.com/pksorensen/pks-cli/commit/3c8d2e42eb7e8be02b270e38cb9278c66491a7b9))
+
 ## [6.25.0](https://github.com/pksorensen/pks-cli/compare/v6.24.0...v6.25.0) (2026-08-12)
 
 
