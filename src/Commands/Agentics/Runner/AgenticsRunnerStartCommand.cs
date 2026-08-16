@@ -1550,6 +1550,11 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             spawnOptions.InlineDevcontainerFiles, registration.Owner, registration.Project,
             taskId, job.AgentDef?.ClaudeCredentialsScope);
         spawnOptions.InlineDevcontainerFiles = patchedFiles;
+        // The rewrite above only reaches operator-supplied inline files. Hand the resolved name to
+        // the spawner as well, so a job that gets its devcontainer from a curated template, from the
+        // repo's own .devcontainer, or from the built-in fallback also has credentials. The scope
+        // decision stays where it is made — assembly-line setting → project setting → "project".
+        spawnOptions.ClaudeCredentialVolumeName = claudeVolumeName;
         var claudeScope = job.AgentDef?.ClaudeCredentialsScope ?? "project";
         _console.MarkupLine($"[dim]Claude credentials volume: [cyan]{claudeVolumeName.EscapeMarkup()}[/] (scope: {claudeScope})[/]");
 
@@ -1583,6 +1588,12 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         var pluginContainerPaths = new List<string>();
 
         string containerId;
+        // The user the agent must run as. A raw `docker exec` lands on the image's USER, which is
+        // root for stock devcontainer images even when devcontainer.json sets remoteUser — and the
+        // agent cannot run as root (claude refuses --dangerously-skip-permissions with euid 0), so
+        // getting this wrong kills the job in a way that looks like an idle timeout. Filled from the
+        // devcontainer CLI's own answer below, with a workspace-ownership fallback for warm reuse.
+        string? agentUser = null;
         // Require BOTH fingerprint AND runner-instance to match — see ADR 0002.
         var warmId = await FindContainerByLabelsAsync(
             $"pks.agentics.fingerprint={fingerprint}",
@@ -1653,6 +1664,7 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
             }
 
             containerId = spawnResult.ContainerId;
+            agentUser = spawnResult.RemoteUser;
             _console.MarkupLine($"[green]Container ready:[/] {containerId[..12]} (labelled for reuse)");
             await PostJobProgressAsync(client, baseUrl, runId, job.Id, "provisioning_done", "container ready", ct);
         }
@@ -1783,6 +1795,19 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         // 5. Determine workspace folder and AGENTIC_SERVER for inside the container
         var repoName = spawnOptions.ProjectName;
         var workspaceFolder = $"/workspaces/{repoName}";
+
+        // A warm container was not spawned this run, so there is no devcontainer CLI answer to use.
+        // The workspace's own owner is the same thing by another route: the spawner chowns the
+        // volume to the remote user, so whoever owns the checkout is who should be running in it.
+        if (string.IsNullOrWhiteSpace(agentUser))
+        {
+            var owner = await _spawnerService.ExecInContainerAsync(containerId,
+                $"stat -c %U {workspaceFolder} 2>/dev/null", timeoutSeconds: 10);
+            var resolved = owner.Output?.Trim();
+            if (!string.IsNullOrWhiteSpace(resolved) && resolved != "UNKNOWN")
+                agentUser = resolved;
+        }
+        _console.MarkupLine($"[dim]Agent runs as: [cyan]{(agentUser ?? "<image default>").EscapeMarkup()}[/][/]");
 
         // localhost on the host is not localhost inside the container.
         // host.docker.internal only resolves on Docker Desktop (mac/win); on plain
@@ -1975,6 +2000,11 @@ public class AgenticsRunnerStartCommand : Command<AgenticsRunnerStartCommand.Set
         scriptLines.AppendLine("export COLORTERM=${COLORTERM:-truecolor}");
         scriptLines.AppendLine("export FORCE_COLOR=${FORCE_COLOR:-3}");
         scriptLines.AppendLine($"export VIBECAST_HOME={vibecastHome}");
+        // Point the agent at the mounted credentials volume explicitly. Without this it reads
+        // $HOME/.claude, and $HOME differs by user — so credentials mounted for one user are
+        // invisible to another. A fixed path is the same for root, node and vscode alike.
+        scriptLines.AppendLine(
+            $"export CLAUDE_CONFIG_DIR=${{CLAUDE_CONFIG_DIR:-{ClaudeCredentialVolumes.MountTarget}}}");
         scriptLines.AppendLine($"export AGENTICS_SERVER={agenticServerForContainer}");
         scriptLines.AppendLine($"export AGENTIC_SERVER={agenticServerForContainer}"); // deprecated, kept for backwards compat
         scriptLines.AppendLine($"export AGENTICS_PROJECT={registration.Owner}/{registration.Project}");
@@ -2246,23 +2276,75 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
 
         // Agents are delivered via --plugin-dir (VIBECAST_EXTRA_PLUGINS) — see WriteAgentPluginDirInVolumeAsync above.
 
-        // 7a. Pre-flight: verify tmux, npx, and agentic server reachability
+        // 7a. Pre-flight: verify the tools vibecast needs, and agentic server reachability.
+        // ttyd belongs in this list as much as tmux does: vibecast shells out to it to spawn the
+        // pane the agent runs in, and when it is missing the failure is logged as a warning and the
+        // job then idles to its wall with nothing running. Cheaper to say so here.
         var preFlight = await _spawnerService.ExecInContainerAsync(containerId,
-            "bash -c 'which tmux && echo tmux-ok || echo tmux-missing'", timeoutSeconds: 10);
+            "bash -c 'which tmux && echo tmux-ok || echo tmux-missing'", timeoutSeconds: 10, user: agentUser);
         var npxCheck = await _spawnerService.ExecInContainerAsync(containerId,
-            "bash -c 'which npx && npx --version && echo npx-ok || echo npx-missing'", timeoutSeconds: 10);
+            "bash -c 'which npx && npx --version && echo npx-ok || echo npx-missing'", timeoutSeconds: 10, user: agentUser);
+        var ttydCheck = await _spawnerService.ExecInContainerAsync(containerId,
+            "bash -c 'which ttyd && echo ttyd-ok || echo ttyd-missing'", timeoutSeconds: 10, user: agentUser);
         var reachCheck = await _spawnerService.ExecInContainerAsync(containerId,
             $"bash -c 'curl -sf --max-time 5 {serverUri.Scheme}://{agenticServerForContainer}/api/healthz -o /dev/null && echo reachable || echo unreachable'",
-            timeoutSeconds: 15);
+            timeoutSeconds: 15, user: agentUser);
         _console.MarkupLine($"[grey]tmux: {preFlight.Output.Trim()}[/]");
         _console.MarkupLine($"[grey]npx:  {npxCheck.Output.Trim()}[/]");
+        _console.MarkupLine($"[grey]ttyd: {ttydCheck.Output.Trim()}[/]");
         _console.MarkupLine($"[grey]agentic server ({agenticServerForContainer}): {reachCheck.Output.Trim()}[/]");
-        if (preFlight.Output.Contains("tmux-missing") || npxCheck.Output.Contains("npx-missing"))
+
+        var missingTools = new List<string>();
+        if (preFlight.Output.Contains("tmux-missing")) missingTools.Add("tmux");
+        if (npxCheck.Output.Contains("npx-missing")) missingTools.Add("npx");
+        if (ttydCheck.Output.Contains("ttyd-missing")) missingTools.Add("ttyd");
+        if (missingTools.Count > 0)
         {
-            _console.MarkupLine("[red]Missing required tool in container (tmux or npx). Cannot start vibecast.[/]");
+            var missing = string.Join(", ", missingTools);
+            _console.MarkupLine($"[red]Missing required tool(s) in container: {missing}. Cannot start the agent.[/]");
+            _console.MarkupLine("[yellow]Hint:[/] [dim]install them in the devcontainer's postCreateCommand — the built-in fallback devcontainer installs tmux only.[/]");
             await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "failure", ct);
-            await ReportJobResultAsync(registration, "failed", "missing tmux or npx in container", ct);
+            await ReportJobResultAsync(registration, "failed", $"missing in container: {missing}", ct);
             return;
+        }
+
+        // The agent cannot run as root: claude refuses --dangerously-skip-permissions with euid 0
+        // and exits 0, so the pane dies at launch and the job looks idle rather than broken. Say so
+        // now rather than 60 minutes from now.
+        var idCheck = await _spawnerService.ExecInContainerAsync(containerId,
+            "id -u", timeoutSeconds: 10, user: agentUser);
+        if (idCheck.Output.Trim() == "0")
+        {
+            _console.MarkupLine("[red]The agent would run as root in this container, and it cannot: claude refuses --dangerously-skip-permissions with root privileges.[/]");
+            _console.MarkupLine("[yellow]Hint:[/] [dim]use a devcontainer image whose USER is a non-root user (the house images end with `USER node`), or set \"containerUser\" in devcontainer.json.[/]");
+            await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "failure", ct);
+            await ReportJobResultAsync(registration, "failed", "agent would run as root; claude refuses --dangerously-skip-permissions as root", ct);
+            return;
+        }
+
+        // The credentials directory has to be writable, not just readable: claude rewrites
+        // .credentials.json when the OAuth token refreshes. Docker creates a fresh volume's root as
+        // root:root, so a non-root agent gets Permission denied — and the symptom is an expired
+        // login, not a permission error. The spawner chowns it on a cold spawn; this covers the warm
+        // reuse path too, and turns the whole class of failure into one line instead of a dead pane.
+        var credDir = ClaudeCredentialVolumes.MountTarget;
+        var writeCheck = await _spawnerService.ExecInContainerAsync(containerId,
+            $"test -d {credDir} && (touch {credDir}/.pks-write-probe && rm -f {credDir}/.pks-write-probe && echo writable || echo readonly) || echo absent",
+            timeoutSeconds: 10, user: agentUser);
+        var credState = writeCheck.Output.Trim();
+        if (credState.Contains("readonly"))
+        {
+            _console.MarkupLine($"[red]{credDir} is not writable by '{(agentUser ?? "the agent user").EscapeMarkup()}'.[/]");
+            _console.MarkupLine("[yellow]Hint:[/] [dim]the credentials volume was created as root; run `pks agentics runner claude-login` to re-seed it, or chown it to the devcontainer's user.[/]");
+            await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "failure", ct);
+            await ReportJobResultAsync(registration, "failed",
+                $"{credDir} is not writable by the agent user; claude cannot refresh its OAuth token", ct);
+            return;
+        }
+        if (credState.Contains("absent"))
+        {
+            // Not fatal on its own — a job may legitimately authenticate by API key instead.
+            _console.MarkupLine($"[yellow]Warning:[/] [dim]{credDir} is not mounted; the agent will need credentials from elsewhere.[/]");
         }
 
         _console.MarkupLine($"[cyan]Starting vibecast in container tmux session '{vibecastTmux}'...[/]");
@@ -2270,7 +2352,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         var tmuxStart = await _spawnerService.ExecInContainerAsync(containerId,
             $"tmux new-session -d -s {vibecastTmux} -x 120 -y 48 " +
             $"bash -c '{launchScript} 2>&1 | tee {vibecastHome}/vibecast.log'",
-            timeoutSeconds: 30);
+            timeoutSeconds: 30, user: agentUser);
         if (!string.IsNullOrWhiteSpace(tmuxStart.Error))
             _console.MarkupLine($"[grey]tmux start: {tmuxStart.Error.Trim()}[/]");
 
@@ -2310,25 +2392,25 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         for (var i = 0; i < 60; i++)
         {
             var check = await _spawnerService.ExecInContainerAsync(containerId,
-                $"test -S {controlSocket} && echo yes || echo no", timeoutSeconds: 5);
+                $"test -S {controlSocket} && echo yes || echo no", timeoutSeconds: 5, user: agentUser);
             if (check.Output.Contains("yes")) { socketReady = true; break; }
 
             // Every 5s print last few lines from vibecast log so we can see what's happening
             if (i % 5 == 4)
             {
                 var log = await _spawnerService.ExecInContainerAsync(containerId,
-                    $"tail -5 {vibecastHome}/vibecast.log 2>/dev/null || echo '(no log yet)'", timeoutSeconds: 5);
+                    $"tail -5 {vibecastHome}/vibecast.log 2>/dev/null || echo '(no log yet)'", timeoutSeconds: 5, user: agentUser);
                 _console.MarkupLine($"[grey]vibecast log (t+{i + 1}s):[/] {log.Output.Trim().EscapeMarkup()}");
                 SurfaceOnboardingPrompts(log.Output);
 
                 // Also check if the tmux session is still alive
                 var alive = await _spawnerService.ExecInContainerAsync(containerId,
-                    $"tmux has-session -t {vibecastTmux} 2>/dev/null && echo alive || echo exited", timeoutSeconds: 5);
+                    $"tmux has-session -t {vibecastTmux} 2>/dev/null && echo alive || echo exited", timeoutSeconds: 5, user: agentUser);
                 if (alive.Output.Contains("exited"))
                 {
                     _console.MarkupLine("[red]vibecast tmux session exited prematurely.[/]");
                     var fullLog = await _spawnerService.ExecInContainerAsync(containerId,
-                        $"cat {vibecastHome}/vibecast.log 2>/dev/null || echo '(empty)'", timeoutSeconds: 5);
+                        $"cat {vibecastHome}/vibecast.log 2>/dev/null || echo '(empty)'", timeoutSeconds: 5, user: agentUser);
                     _console.MarkupLine($"[grey]Full vibecast log:[/]\n{fullLog.Output.EscapeMarkup()}");
                     break;
                 }
@@ -2340,7 +2422,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         {
             _console.MarkupLine("[red]Control socket not ready — vibecast failed to start.[/]");
             var fullLog = await _spawnerService.ExecInContainerAsync(containerId,
-                $"cat {vibecastHome}/vibecast.log 2>/dev/null || echo '(empty)'", timeoutSeconds: 5);
+                $"cat {vibecastHome}/vibecast.log 2>/dev/null || echo '(empty)'", timeoutSeconds: 5, user: agentUser);
             _console.MarkupLine($"[grey]vibecast log:[/]\n{fullLog.Output.EscapeMarkup()}");
             await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "failure", ct);
             await ReportJobResultAsync(registration, "failed", "vibecast control socket not ready", ct);
@@ -2355,7 +2437,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             $"-X POST http://localhost/start-stream " +
             $"-H 'Content-Type: application/json' " +
             $"-d '{{\"promptSharing\":true,\"shareProjectInfo\":true}}'",
-            timeoutSeconds: 15);
+            timeoutSeconds: 15, user: agentUser);
 
         // 10. Get sessionId/broadcastId and link to task. Link as soon as sessionId is known
         // (any phase) — vibecast detectors that fire BEFORE phase=live (theme/login pickers,
@@ -2388,7 +2470,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         {
             var status = await _spawnerService.ExecInContainerAsync(containerId,
                 $"curl -sf --unix-socket {controlSocket} http://localhost/status",
-                timeoutSeconds: 5);
+                timeoutSeconds: 5, user: agentUser);
             // Extract sessionId/broadcastId regardless of phase so onboarding questions
             // posted by vibecast BEFORE phase=live can find the task by sessionId.
             if (sessionIdValue == null)
@@ -2410,7 +2492,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
 
         // Print vibecast log so far to help diagnose connection issues
         var vibecastLogSnapshot = await _spawnerService.ExecInContainerAsync(containerId,
-            $"cat {vibecastHome}/vibecast.log 2>/dev/null || echo '(empty)'", timeoutSeconds: 5);
+            $"cat {vibecastHome}/vibecast.log 2>/dev/null || echo '(empty)'", timeoutSeconds: 5, user: agentUser);
         if (!string.IsNullOrWhiteSpace(vibecastLogSnapshot.Output))
             _console.MarkupLine($"[grey]vibecast log:[/]\n{vibecastLogSnapshot.Output.Trim().EscapeMarkup()}");
 
@@ -2474,22 +2556,50 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         _console.MarkupLine($"[cyan]Waiting up to {maxTimeout.TotalMinutes:0}min (idle: {idleTimeoutMs / 60000}min)...[/]");
 
         var startTime = DateTime.UtcNow;
+        // Why the loop ended decides the job's conclusion. Treating every exit as success is how a
+        // job whose agent never launched still reported completed/success — the single most
+        // expensive defect here, because it makes a broken container look like a working one.
+        string? failureReason = null;
+        // The agent's own pane. Vibecast names it "main"; the info/help panes exist either way, so
+        // their presence proves nothing. If "main" never appears, the agent never started.
+        var agentPaneSeen = false;
         while (DateTime.UtcNow - startTime < maxTimeout && !ct.IsCancellationRequested)
         {
             // Check tmux session
             var tmuxCheck = await _spawnerService.ExecInContainerAsync(containerId,
                 $"tmux has-session -t {vibecastTmux} 2>/dev/null && echo running || echo done",
-                timeoutSeconds: 5);
+                timeoutSeconds: 5, user: agentUser);
             if (tmuxCheck.Output.Contains("done"))
             {
                 _console.MarkupLine("[green]Vibecast session ended — job complete.[/]");
                 break;
             }
 
+            if (!agentPaneSeen)
+            {
+                var paneCheck = await _spawnerService.ExecInContainerAsync(containerId,
+                    "tmux list-windows -a -F '#{window_name}' 2>/dev/null",
+                    timeoutSeconds: 5, user: agentUser);
+                var windows = paneCheck.Output ?? string.Empty;
+                if (windows.Split('\n').Any(w => w.Trim() == "main"))
+                {
+                    agentPaneSeen = true;
+                }
+                else if (DateTime.UtcNow - startTime > TimeSpan.FromMinutes(3))
+                {
+                    var seen = string.Join(",", windows.Split('\n')
+                        .Select(w => w.Trim()).Where(w => w.Length > 0).Distinct());
+                    _console.MarkupLine($"[red]The agent pane never started (tmux windows: {seen.EscapeMarkup()}).[/]");
+                    _console.MarkupLine($"[yellow]Hint:[/] [dim]read {vibecastHome}/vibecast.log in the container — the agent's own launch error is at the top, above the repeated [[pane-lost]] lines.[/]");
+                    failureReason = $"agent pane never started (tmux windows: {seen})";
+                    break;
+                }
+            }
+
             // Check .task-complete signal file
             var signalCheck = await _spawnerService.ExecInContainerAsync(containerId,
                 $"test -f {workspaceFolder}/.task-complete && echo yes || echo no",
-                timeoutSeconds: 5);
+                timeoutSeconds: 5, user: agentUser);
             if (signalCheck.Output.Contains("yes"))
             {
                 _console.MarkupLine("[green]Task completion signal detected.[/]");
@@ -2510,7 +2620,17 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                         if (actData.TryGetProperty("isActive", out var isActive) && !isActive.GetBoolean())
                         {
                             var idleSec = actData.TryGetProperty("idleSinceMs", out var ms) ? ms.GetInt64() / 1000 : 0;
-                            _console.MarkupLine($"[yellow]Agent idle for {idleSec}s — completing job.[/]");
+                            // Idle is only a completion if there was ever an agent to go idle. An
+                            // agent that never launched is idle from the first second.
+                            if (!agentPaneSeen)
+                            {
+                                _console.MarkupLine($"[red]Idle for {idleSec}s and the agent pane never started — failing the job.[/]");
+                                failureReason = "agent pane never started; job idled without an agent";
+                            }
+                            else
+                            {
+                                _console.MarkupLine($"[yellow]Agent idle for {idleSec}s — completing job.[/]");
+                            }
                             break;
                         }
                     }
@@ -2524,7 +2644,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             try
             {
                 var logTail = await _spawnerService.ExecInContainerAsync(containerId,
-                    $"tail -50 {vibecastHome}/vibecast.log 2>/dev/null", timeoutSeconds: 5);
+                    $"tail -50 {vibecastHome}/vibecast.log 2>/dev/null", timeoutSeconds: 5, user: agentUser);
                 SurfaceOnboardingPrompts(logTail.Output);
             }
             catch { /* best-effort */ }
@@ -2540,15 +2660,23 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         _console.MarkupLine("[cyan]Stopping vibecast...[/]");
         await _spawnerService.ExecInContainerAsync(containerId,
             $"curl -sf --unix-socket {controlSocket} -X POST http://localhost/stop-broadcast || true",
-            timeoutSeconds: 10);
+            timeoutSeconds: 10, user: agentUser);
         await Task.Delay(2000, ct);
         await _spawnerService.ExecInContainerAsync(containerId,
             $"tmux kill-session -t {vibecastTmux} 2>/dev/null || true",
-            timeoutSeconds: 10);
+            timeoutSeconds: 10, user: agentUser);
 
-        // 13. PATCH to completed
-        await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "success", ct);
-        await ReportJobResultAsync(registration, "success", null, ct);
+        // 13. PATCH to completed — with the conclusion the run actually earned.
+        if (failureReason != null)
+        {
+            await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "failure", ct);
+            await ReportJobResultAsync(registration, "failed", failureReason, ct);
+        }
+        else
+        {
+            await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "success", ct);
+            await ReportJobResultAsync(registration, "success", null, ct);
+        }
         // No plugin-volume teardown — per ADR 0003 plugins live as files inside the container,
         // wiped + repopulated on the next job dispatch.
     }

@@ -7,6 +7,7 @@ using Docker.DotNet;
 using Docker.DotNet.Models;
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Runner;
 using Spectre.Console;
 
 namespace PKS.Infrastructure.Services;
@@ -359,7 +360,8 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                     options.IdLabels,
                     options.RemoveExistingContainer,
                     options.PluginVolumeName,
-                    options.MemoryBytes);
+                    options.MemoryBytes,
+                    options.ClaudeCredentialVolumeName);
 
                 if (upResult.Outcome != "success")
                 {
@@ -423,6 +425,13 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
             }
 
             result.ContainerId = upResult.ContainerId;
+            // The CLI has already reconciled image USER, remoteUser, containerUser, features and
+            // updateRemoteUserUID into one answer. Carry it out so callers that docker-exec into the
+            // container run as that user instead of whatever the image's USER happens to be.
+            result.RemoteUser = string.IsNullOrWhiteSpace(upResult.RemoteUser) ? null : upResult.RemoteUser;
+
+            await EnsureClaudeCredentialsWritableAsync(
+                result.ContainerId, result.RemoteUser, options.ClaudeCredentialVolumeName);
 
             // Step 8: Launch VS Code
             if (options.LaunchVsCode)
@@ -1995,16 +2004,23 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
     /// <param name="command">Command to execute</param>
     /// <param name="workingDir">Working directory for command execution</param>
     /// <param name="timeoutSeconds">Timeout in seconds (default: 120)</param>
+    /// <param name="user">
+    /// User to run as, e.g. the <c>remoteUser</c> the devcontainer CLI resolved. When null the
+    /// Docker daemon uses the image's <c>USER</c>, which is root for stock devcontainer images —
+    /// fine for bootstrap plumbing, wrong for anything that should run as the workspace owner.
+    /// </param>
     /// <returns>Result of the command execution including output and exit code</returns>
     private async Task<BootstrapExecutionResult> ExecuteInBootstrapAsync(
         string containerId,
         string command,
         string? workingDir = null,
         int timeoutSeconds = 120,
-        Action<string>? onOutput = null)
+        Action<string>? onOutput = null,
+        string? user = null)
     {
         var startTime = DateTime.UtcNow;
-        _logger.LogDebug("Executing command in bootstrap container {ContainerId}: {Command}", containerId, command);
+        _logger.LogDebug("Executing command in bootstrap container {ContainerId} as {User}: {Command}",
+            containerId, user ?? "<image default>", command);
 
         try
         {
@@ -2014,7 +2030,8 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                 Cmd = new[] { "/bin/sh", "-c", command },
                 AttachStdout = true,
                 AttachStderr = true,
-                WorkingDir = workingDir
+                WorkingDir = workingDir,
+                User = string.IsNullOrWhiteSpace(user) ? null : user
             };
 
             var execCreateResponse = await _dockerClient.Exec.ExecCreateContainerAsync(containerId, execCreateParams);
@@ -2162,6 +2179,62 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
         else
         {
             _logger.LogWarning("Could not verify file copy: {Error}", verifyResult.Error);
+        }
+    }
+
+    /// <summary>
+    /// Makes the Claude credentials mount writable by the user the agent will run as.
+    ///
+    /// Docker creates the mount point, and the root of a brand-new volume, owned by root — measured:
+    /// a fresh volume mounted at <see cref="ClaudeCredentialVolumes.MountTarget"/> is <c>0:0 755</c>,
+    /// and a uid-1000 process gets <c>Permission denied</c> on it. That is not a read-only problem:
+    /// claude rewrites <c>.credentials.json</c> whenever the OAuth token refreshes, and writes
+    /// session state beside it. A non-writable mount therefore surfaces as an expired login rather
+    /// than as a permission error, which is one of the silent job deaths this whole change exists to
+    /// remove.
+    ///
+    /// The uid is read from the container itself rather than guessed from the username, because the
+    /// guess is only right for the images that already work.
+    /// </summary>
+    private async Task EnsureClaudeCredentialsWritableAsync(
+        string containerId, string? remoteUser, string? claudeCredentialVolumeName)
+    {
+        if (string.IsNullOrEmpty(containerId) ||
+            string.IsNullOrWhiteSpace(remoteUser) ||
+            string.IsNullOrWhiteSpace(claudeCredentialVolumeName))
+        {
+            return;
+        }
+
+        try
+        {
+            // Runs as root explicitly: on the house images `docker exec` without -u lands on `node`,
+            // so a default-user chown would fail on exactly the images that otherwise work.
+            var target = ClaudeCredentialVolumes.MountTarget;
+            var result = await ExecInContainerAsync(
+                containerId,
+                $"id -u {remoteUser} >/dev/null 2>&1 && chown -R \"$(id -u {remoteUser}):$(id -g {remoteUser})\" {target}",
+                timeoutSeconds: 60,
+                user: "root");
+
+            if (result.Success)
+            {
+                _logger.LogInformation("Claude credentials at {Target} are writable by '{User}'",
+                    target, remoteUser);
+            }
+            else
+            {
+                // A warning, not a failure: the volume may already carry the right ownership (the
+                // common case for a reused project-scoped volume), and the preflight in the runner
+                // is where an unusable agent environment is meant to stop the job.
+                _logger.LogWarning(
+                    "Could not chown {Target} to '{User}' (exit {Exit}): {Error}. The agent may not be able to refresh its OAuth token.",
+                    target, remoteUser, result.ExitCode, result.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to make Claude credentials writable; continuing");
         }
     }
 
@@ -2772,6 +2845,12 @@ DEVCONTAINER_EOF";
     /// <param name="forwardDockerConfig">Whether to forward Docker credentials</param>
     /// <param name="dockerConfigPath">Custom Docker config path</param>
     /// <param name="configHash">Configuration hash to label the container with (optional)</param>
+    /// <param name="claudeCredentialVolumeName">
+    /// Stable Claude credentials volume, already resolved by the caller from the platform's scope
+    /// setting. Always mounted at <see cref="ClaudeCredentialVolumes.MountTarget"/>, including when
+    /// the devcontainer.json declares its own mount of the same volume — see the call site for why
+    /// one guaranteed path beats one fewer mount.
+    /// </param>
     /// <returns>Parsed result from devcontainer CLI</returns>
     private async Task<DevcontainerUpResult> RunDevcontainerUpInBootstrapAsync(
         string bootstrapContainerId,
@@ -2789,7 +2868,8 @@ DEVCONTAINER_EOF";
         Dictionary<string, string>? idLabels = null,
         bool removeExistingContainer = false,
         string? pluginVolumeName = null,
-        long? memoryBytes = null)
+        long? memoryBytes = null,
+        string? claudeCredentialVolumeName = null)
     {
         _logger.LogDebug("Running devcontainer up in bootstrap container: {WorkspaceFolder}", workspaceFolder);
 
@@ -2838,6 +2918,25 @@ DEVCONTAINER_EOF";
         {
             pluginVolumeMountArg = $" --mount type=volume,source={pluginVolumeName},target=/run/alp/plugins";
             _logger.LogInformation("Mounting ALP plugin volume '{Volume}' at /run/alp/plugins", pluginVolumeName);
+        }
+
+        // Claude credentials volume (ADR 0004). Mounting it here — rather than relying on the
+        // devcontainer.json carrying a `mounts` entry — is what makes credentials work for all four
+        // devcontainer routes: inline operator files, a curated template, the repo's own
+        // .devcontainer, and the built-in fallback. Only the first of those ever gets its `mounts`
+        // array rewritten, so the other three had no credentials at all.
+        //
+        // The name is resolved by the caller from the platform's scope setting; we never derive it.
+        // Mounted unconditionally, even when the devcontainer.json declares its own ~/.claude mount
+        // of the same volume. Two paths onto one volume is legal and shows identical bytes, and the
+        // alternative — skipping this when a declaration exists — would leave CLAUDE_CONFIG_DIR
+        // pointing at a directory that does not exist. One invariant is worth more here than one
+        // fewer mount: MountTarget always exists and always holds the credentials.
+        var claudeVolumeMountArg = ClaudeCredentialVolumes.BuildMountArg(claudeCredentialVolumeName);
+        if (claudeVolumeMountArg.Length > 0)
+        {
+            _logger.LogInformation("Mounting Claude credentials volume '{Volume}' at {Target}",
+                claudeCredentialVolumeName, ClaudeCredentialVolumes.MountTarget);
         }
 
         string? credentialMountArg = null;
@@ -2906,13 +3005,13 @@ DEVCONTAINER_EOF";
             // The override config has workspaceMount/workspaceFolder removed, and we use --mount for the volume
             // This avoids the bind mount issue while preserving feature metadata processing
             _logger.LogInformation("Using override config approach with file: {OverrideConfig}", overrideConfigPath);
-            devcontainerCommand = $"devcontainer up --config {workspaceFolder}/.devcontainer/devcontainer.json --override-config {overrideConfigPath} --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg}{proxyMountArg}{otlpMountArg}{pluginVolumeMountArg} --update-remote-user-uid-default off --include-configuration --include-merged-configuration";
+            devcontainerCommand = $"devcontainer up --config {workspaceFolder}/.devcontainer/devcontainer.json --override-config {overrideConfigPath} --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg}{proxyMountArg}{otlpMountArg}{pluginVolumeMountArg}{claudeVolumeMountArg} --update-remote-user-uid-default off --include-configuration --include-merged-configuration";
         }
         else
         {
             // Fallback: use workspace-folder without override-config
             _logger.LogWarning("Using fallback approach without override config");
-            devcontainerCommand = $"devcontainer up --workspace-folder {workspaceFolder} --config {workspaceFolder}/.devcontainer/devcontainer.json --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg}{proxyMountArg}{otlpMountArg}{pluginVolumeMountArg} --update-remote-user-uid-default off --mount-workspace-git-root false --include-configuration --include-merged-configuration";
+            devcontainerCommand = $"devcontainer up --workspace-folder {workspaceFolder} --config {workspaceFolder}/.devcontainer/devcontainer.json --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg}{proxyMountArg}{otlpMountArg}{pluginVolumeMountArg}{claudeVolumeMountArg} --update-remote-user-uid-default off --mount-workspace-git-root false --include-configuration --include-merged-configuration";
         }
 
         // Append extra remote-env, id-labels, and ephemeral flag if provided
@@ -3599,9 +3698,10 @@ DEVCONTAINER_EOF";
         string command,
         string? workingDir = null,
         int timeoutSeconds = 3600,
-        Action<string>? onOutput = null)
+        Action<string>? onOutput = null,
+        string? user = null)
     {
-        var result = await ExecuteInBootstrapAsync(containerId, command, workingDir, timeoutSeconds, onOutput);
+        var result = await ExecuteInBootstrapAsync(containerId, command, workingDir, timeoutSeconds, onOutput, user);
         return (result.Success, result.Output ?? string.Empty, result.Error ?? string.Empty, result.ExitCode);
     }
 

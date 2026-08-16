@@ -36,6 +36,29 @@ public static class ClaudeCredentialVolumes
         };
     }
 
+    /// <summary>
+    /// Where the credentials volume is mounted inside a job devcontainer, and the value exported as
+    /// <c>CLAUDE_CONFIG_DIR</c> so the agent looks there.
+    ///
+    /// Deliberately NOT <c>~/.claude</c>: the agent's home depends on which user the container ends
+    /// up running as, which in turn depends on the image's <c>USER</c> — root for stock devcontainer
+    /// images, <c>node</c> for the house ones. A fixed path makes the mount work for every image and
+    /// every user, instead of only for the ones whose home happens to be <c>/home/node</c>.
+    /// </summary>
+    public const string MountTarget = "/opt/pks-claude";
+
+    /// <summary>
+    /// The <c>--mount</c> fragment that puts <paramref name="volumeName"/> at
+    /// <see cref="MountTarget"/>, ready to be appended to a <c>devcontainer up</c> command line.
+    /// Includes its own leading space so it composes with the other optional mount fragments.
+    /// Returns an empty string when no volume was resolved, so the caller can concatenate it
+    /// unconditionally.
+    /// </summary>
+    public static string BuildMountArg(string? volumeName) =>
+        string.IsNullOrWhiteSpace(volumeName)
+            ? string.Empty
+            : $" --mount type=volume,source={volumeName},target={MountTarget}";
+
     internal static string Sanitize(string s) =>
         System.Text.RegularExpressions.Regex.Replace(s.ToLowerInvariant(), @"[^a-z0-9]", "-");
 

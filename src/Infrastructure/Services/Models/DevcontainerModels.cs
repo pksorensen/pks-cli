@@ -499,6 +499,18 @@ public class DevcontainerSpawnOptions
     public string? PluginVolumeName { get; set; }
 
     /// <summary>
+    /// Name of the stable Claude credentials volume, already resolved by the caller per ADR 0004
+    /// (task / project / runner scope). When set, it is mounted at
+    /// <c>ClaudeCredentialVolumes.MountTarget</c> so the agent finds credentials regardless of which
+    /// devcontainer route was taken (inline files, curated template, the repo's own
+    /// <c>.devcontainer</c>, or the built-in fallback) and regardless of which user it runs as.
+    ///
+    /// The spawner deliberately does NOT derive this name itself: scope is chosen on the platform
+    /// (assembly-line setting → project setting → runner default) and must stay there.
+    /// </summary>
+    public string? ClaudeCredentialVolumeName { get; set; }
+
+    /// <summary>
     /// Git URL to clone into the volume instead of copying local source files.
     /// When set, an alpine/git container clones this URL into the volume before devcontainer up.
     /// Credentials are embedded in the URL (e.g. https://x-access-token:{token}@github.com/...), which
@@ -625,6 +637,15 @@ public class DevcontainerSpawnResult
     /// Name of the Docker volume used
     /// </summary>
     public string? VolumeName { get; set; }
+
+    /// <summary>
+    /// The user the devcontainer CLI resolved for this container, as reported by
+    /// <c>devcontainer up</c>. Callers that <c>docker exec</c> into the container should pass this
+    /// as the exec user: a raw exec without it lands on the image's <c>USER</c>, which is root for
+    /// stock devcontainer images even when devcontainer.json sets <c>remoteUser</c> (that key is a
+    /// tooling hint honoured only by <c>devcontainer exec</c> and VS Code, not by the Docker API).
+    /// </summary>
+    public string? RemoteUser { get; set; }
 
     /// <summary>
     /// VS Code URI for connecting to the container

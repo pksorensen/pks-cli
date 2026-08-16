@@ -101,4 +101,64 @@ public class ClaudeCredentialVolumesTests
         ClaudeCredentialVolumes.ParseDetectOutput(string.Empty).Should().BeFalse();
         ClaudeCredentialVolumes.ParseDetectOutput("garbage").Should().BeFalse();
     }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public void MountTarget_IsAbsoluteAndUserIndependent()
+    {
+        // The whole point of the constant: the agent's home depends on the image's USER (root for
+        // stock devcontainer images, node for the house ones), so a home-relative target only works
+        // for the images whose home happens to match. Anything under /home or /root, or any "~",
+        // reintroduces exactly the coupling this replaced.
+        ClaudeCredentialVolumes.MountTarget.Should().StartWith("/");
+        ClaudeCredentialVolumes.MountTarget.Should().NotContain("~");
+        ClaudeCredentialVolumes.MountTarget.Should().NotStartWith("/home/");
+        ClaudeCredentialVolumes.MountTarget.Should().NotStartWith("/root");
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public void BuildMountArg_TargetsMountTarget_AndComposesWithOtherFragments()
+    {
+        var arg = ClaudeCredentialVolumes.BuildMountArg("pks-claude-acme-widgets");
+
+        // Leading space so it can be concatenated straight after another --mount fragment.
+        arg.Should().StartWith(" --mount ");
+        arg.Should().Be(
+            $" --mount type=volume,source=pks-claude-acme-widgets,target={ClaudeCredentialVolumes.MountTarget}");
+
+        // No spaces inside the value: the devcontainer up command line is assembled as one string
+        // and passed through a shell, so an embedded space would split the argument.
+        arg.Trim().Split(' ').Should().HaveCount(2);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public void BuildMountArg_NoVolume_IsEmpty_SoCallersCanConcatenateUnconditionally()
+    {
+        ClaudeCredentialVolumes.BuildMountArg(null).Should().BeEmpty();
+        ClaudeCredentialVolumes.BuildMountArg(string.Empty).Should().BeEmpty();
+        ClaudeCredentialVolumes.BuildMountArg("   ").Should().BeEmpty();
+    }
+
+    [Theory]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    [InlineData("task", "t-42", "pks-claude-acme-widgets-task-t-42")]
+    [InlineData("project", "t-42", "pks-claude-acme-widgets")]
+    [InlineData("runner", "t-42", "pks-claude-acme")]
+    public void BuildMountArg_CarriesWhicheverScopeThePlatformChose(
+        string scope, string taskId, string expectedVolume)
+    {
+        // Guards the seam Ændring 2 depends on: the scope decision stays on the platform
+        // (assembly-line setting → project setting → runner default) and the mount only transports
+        // the name it was handed. If the mount ever started deriving a name, this drifts.
+        var name = ClaudeCredentialVolumes.ResolveVolumeName("Acme", "Widgets", taskId, scope);
+        name.Should().Be(expectedVolume);
+
+        ClaudeCredentialVolumes.BuildMountArg(name).Should().Contain($"source={expectedVolume},");
+    }
 }

@@ -139,13 +139,20 @@ public interface IDevcontainerSpawnerService
     /// <param name="workingDir">Optional working directory inside the container</param>
     /// <param name="timeoutSeconds">Timeout in seconds (default: 3600 = 1 hour)</param>
     /// <param name="onOutput">Optional callback called with each chunk of stdout/stderr as it arrives</param>
+    /// <param name="user">
+    /// User to run as — pass <see cref="DevcontainerSpawnResult.RemoteUser"/> for anything that
+    /// should run as the workspace owner. When null the Docker daemon uses the image's
+    /// <c>USER</c>, which is root for stock devcontainer images regardless of what
+    /// devcontainer.json's <c>remoteUser</c> says.
+    /// </param>
     /// <returns>Success flag, combined output, error output, and exit code</returns>
     Task<(bool Success, string Output, string Error, int ExitCode)> ExecInContainerAsync(
         string containerId,
         string command,
         string? workingDir = null,
         int timeoutSeconds = 3600,
-        Action<string>? onOutput = null);
+        Action<string>? onOutput = null,
+        string? user = null);
 
     /// <summary>
     /// Copies arbitrary bytes to a file inside a running container.
