@@ -2260,6 +2260,78 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             _console.MarkupLine($"[yellow]Warning:[/] [dim]{credDir} is not mounted; the agent will need credentials from elsewhere.[/]");
         }
 
+        // Mounted and writable still says nothing about whether anyone ever logged in. A volume
+        // Docker auto-created at `devcontainer up` comes up empty, and a .credentials.json copied
+        // from another volume gets rewritten with no usable tokens the first time claude tries to
+        // refresh it. Either way claude starts and answers every turn with
+        //     Not logged in · Please run /login
+        // — a pane that exists but does no work, which the idle timeout used to report as
+        // completed/success.
+        //
+        // Deliberately a warning and not a hard fail: vibecast reacts to that same line by typing
+        // /login, which walks into the OAuth gate it already surfaces as a dashboard question and
+        // as a sign-in URL in this console. Failing here would remove the only way to seed a
+        // volume for a locally-running runner (`pks agentics runner claude-login` needs an SSH
+        // target). If nobody signs in, the idle-wedge check further down fails the job — so an
+        // unattended run still reports failure, it just gets a chance to be rescued first.
+        // Skipped when the job carries its own provider credentials (a real ANTHROPIC_API_KEY, or
+        // the pks-agent-gateway LLM sim): those suppress the OAuth path entirely.
+        var hasEnvProvider = !string.IsNullOrEmpty(anthropicKey) || !string.IsNullOrEmpty(anthropicBaseUrl);
+        if (!hasEnvProvider && !credState.Contains("absent"))
+        {
+            var credFile = $"{credDir}/.credentials.json";
+            var loginCheck = await _spawnerService.ExecInContainerAsync(containerId,
+                $"if [ ! -s {credFile} ]; then echo PKS_LOGIN_NONE; " +
+                $"elif grep -q '\"accessToken\"[[:space:]]*:[[:space:]]*\"[^\"]' {credFile}; then echo PKS_LOGIN_OK; " +
+                "else echo PKS_LOGIN_EMPTY; fi",
+                timeoutSeconds: 10, user: agentUser);
+            var loginState = loginCheck.Output.Trim();
+            if (loginState.Contains("PKS_LOGIN_NONE") || loginState.Contains("PKS_LOGIN_EMPTY"))
+            {
+                var why = loginState.Contains("PKS_LOGIN_NONE")
+                    ? "holds no credential"
+                    : "holds a credential with no usable token (a copied credential is burned the first time the original refreshes)";
+                _console.MarkupLine(
+                    $"[yellow]Warning:[/] the Claude credentials volume [cyan]{claudeVolumeName.EscapeMarkup()}[/] {why}.");
+                _console.MarkupLine(
+                    "[dim]The agent will be sent to /login; the sign-in URL appears here and on the session page. Nobody signs in → the job fails at the idle timeout.[/]");
+            }
+        }
+
+        // Keep the agent runtime current. vibecast also runs `claude update` on first spawn, but it
+        // runs as the agent user, and claude is usually a root-owned global npm install — so the
+        // update fails with "Insufficient permissions" and the job silently runs a months-old
+        // binary. That is not just hygiene: vibecast's onboarding auto-answers are string-matched
+        // against specific claude screens, so version skew is what makes them stop firing. Here we
+        // can exec as root, which is exactly what the npm prefix needs. Fail-open — a stale claude
+        // is much better than a job that will not start.
+        var rootClaudeUpdateOk = false;
+        if (!ClaudeAutoUpdateDisabled())
+        {
+            // Resolve the binary as the AGENT user — that is the claude the job will actually run,
+            // and root's PATH often misses the npm-global bin dir the agent's PATH has.
+            var whichClaude = await _spawnerService.ExecInContainerAsync(containerId,
+                "command -v claude || true", timeoutSeconds: 10, user: agentUser);
+            var claudeBin = (whichClaude.Output ?? string.Empty).Trim().Split('\n')[0].Trim();
+            if (string.IsNullOrEmpty(claudeBin))
+            {
+                _console.MarkupLine("[dim]claude not on PATH for the agent user — skipping the version check.[/]");
+            }
+            else
+            {
+                var pinnedClaudeVersion = Environment.GetEnvironmentVariable("CLAUDE_VERSION")?.Trim();
+                var updateArgs = string.IsNullOrEmpty(pinnedClaudeVersion) ? "update" : $"install {pinnedClaudeVersion}";
+                var claudeUpdate = await _spawnerService.ExecInContainerAsync(containerId,
+                    $"{claudeBin} {updateArgs} 2>&1", timeoutSeconds: 180, user: "root");
+                var updateOut = (claudeUpdate.Output ?? string.Empty).Trim();
+                var updateTail = updateOut.Length > 300 ? updateOut[^300..] : updateOut;
+                rootClaudeUpdateOk = claudeUpdate.Success;
+                _console.MarkupLine(claudeUpdate.Success
+                    ? $"[dim]claude {updateArgs}: {updateTail.EscapeMarkup()}[/]"
+                    : $"[yellow]claude {updateArgs} failed (continuing with the installed version):[/] [dim]{updateTail.EscapeMarkup()}[/]");
+            }
+        }
+
         // The job directory is created as the agent user, but its contents are not: prompts and
         // start.sh go in through Docker's extract-archive endpoint, which does not go through a
         // shell and lands them owned by root. Reading them is fine at mode 644/755 — writing is
@@ -2288,8 +2360,13 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         // good credential sitting in the mounted volume. tmux seeds every new session from the
         // server's global environment, so setting it on the server covers the sessions vibecast
         // makes later. start.sh keeps its own export for the paths that do not go through tmux.
+        // When the update above already ran as root, tell vibecast not to repeat it as the agent
+        // user: it can only fail there (root-owned npm prefix) and it costs a slow, pointless
+        // registry round-trip on the critical path of the first spawn.
+        var claudeUpdateEnv = rootClaudeUpdateOk ? "CLAUDE_AUTO_UPDATE_DISABLED=1 " : string.Empty;
         var tmuxStart = await _spawnerService.ExecInContainerAsync(containerId,
             $"CLAUDE_CONFIG_DIR={ClaudeCredentialVolumes.MountTarget} " +
+            claudeUpdateEnv +
             $"tmux new-session -d -s {vibecastTmux} -x 120 -y 48 " +
             $"bash -c '{launchScript} 2>&1 | tee {vibecastHome}/vibecast.log'",
             timeoutSeconds: 30, user: agentUser);
@@ -2569,7 +2646,24 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                             }
                             else
                             {
-                                _console.MarkupLine($"[yellow]Agent idle for {idleSec}s — completing job.[/]");
+                                // The pane started, but "quiet" is not the same as "finished".
+                                // Look at what is actually on screen before calling it a success:
+                                // a login gate, an OAuth paste prompt or a Press-Enter screen is
+                                // an agent waiting for a human, and no human is coming.
+                                var paneDump = await _spawnerService.ExecInContainerAsync(containerId,
+                                    $"tmux capture-pane -p -t {vibecastTmux}:main.0 2>/dev/null",
+                                    timeoutSeconds: 5, user: agentUser);
+                                var wedge = AgentPaneWedge.Detect(paneDump.Output);
+                                if (wedge != null)
+                                {
+                                    _console.MarkupLine($"[red]Idle for {idleSec}s because {wedge.EscapeMarkup()} — failing the job.[/]");
+                                    _console.MarkupLine($"[yellow]Hint:[/] [dim]see the pane on the session page, or run `docker exec -u {(agentUser ?? "node").EscapeMarkup()} {containerId[..12]} tmux capture-pane -p -t {vibecastTmux}:main.0`.[/]");
+                                    failureReason = $"agent idled on an interactive prompt: {wedge}";
+                                }
+                                else
+                                {
+                                    _console.MarkupLine($"[yellow]Agent idle for {idleSec}s — completing job.[/]");
+                                }
                             }
                             break;
                         }
@@ -4011,6 +4105,14 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
     }
 
     /// <summary>Capture last 100 lines of a tmux pane — useful for seeing Claude's terminal output on failure.</summary>
+    /// <summary>
+    /// Same opt-out vibecast honours (<c>CLAUDE_AUTO_UPDATE_DISABLED</c>), read on the runner host so
+    /// an operator can pin a container's claude by setting it once for the runner process.
+    /// </summary>
+    private static bool ClaudeAutoUpdateDisabled() =>
+        (Environment.GetEnvironmentVariable("CLAUDE_AUTO_UPDATE_DISABLED") ?? string.Empty).Trim().ToLowerInvariant()
+            is "1" or "true" or "yes" or "on";
+
     private async Task<string> CaptureTmuxPaneAsync(string session, string window, CancellationToken ct)
     {
         try
