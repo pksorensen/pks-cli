@@ -64,6 +64,10 @@ public sealed class PksAspireInitCommand : AsyncCommand<PksAspireInitCommand.Set
 
         _console.MarkupLine($"[green]wrote[/] {Rel(destination).EscapeMarkup()}");
         _console.WriteLine();
+        _console.MarkupLine("Add one line near the top of [bold]AppHost.cs[/], so the composition can answer");
+        _console.MarkupLine("even when the answer is \"nothing\":");
+        _console.MarkupLine("[dim]    builder.AddPksDeclare();[/]");
+        _console.WriteLine();
         _console.MarkupLine("Declare what the composition needs, next to the parameters that receive it:");
         _console.MarkupLine("[dim]    builder.AddPksCapability(\"chat\", \"The model behind the assistant\")[/]");
         _console.MarkupLine("[dim]           .Offers(\"foundry\", \"Azure AI Foundry\")[/]");

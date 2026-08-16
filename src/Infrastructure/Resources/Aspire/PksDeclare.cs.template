@@ -17,6 +17,18 @@
 // `Parameters__<name>`. The developer is never asked to paste a key, and no key
 // is written into user secrets, a launch profile or a shell history.
 //
+// Put one line near the top of AppHost.cs:
+//
+//     builder.AddPksDeclare();
+//
+// It is not optional bookkeeping. The step registers itself the first time a
+// capability is declared, and most compositions declare theirs behind a flag —
+// `-- --ai`, `-- --real-entraid`. Run without those flags and there is no first
+// time, so `aspire do pks-declare` fails with "step not found", which is exactly
+// what an AppHost that was never wired says. The honest answer to "what does
+// this run need?" is sometimes "nothing", and that answer needs a step to be
+// given from.
+//
 // Declaring a capability is three kinds of line:
 //
 //     var chat = builder.AddPksCapability("chat", "The model that answers on Overview");
@@ -41,6 +53,7 @@
 // cannot fill — which is the difference between "you have nothing configured"
 // and "this run is going to stop and ask you".
 
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aspire.Hosting.ApplicationModel;
@@ -89,6 +102,25 @@ public static class PksDeclareExtensions
     }
 
     /// <summary>
+    /// Registers the `pks-declare` step, whether or not this composition ends up declaring anything.
+    ///
+    /// Worth one line in every AppHost that has this file. Capabilities usually sit behind a flag, so
+    /// a run without that flag declares none, the step is never registered on first use, and the
+    /// declare pass fails with "step not found" — indistinguishable from an AppHost pks was never
+    /// added to. With this call the pass answers "nothing to fill" and the run carries on, which is
+    /// both true and useful: the manifest still reports every parameter and whether it is already
+    /// supplied.
+    ///
+    /// Idempotent, and safe to call alongside <see cref="AddPksCapability"/> in either order.
+    /// </summary>
+    public static IDistributedApplicationBuilder AddPksDeclare(this IDistributedApplicationBuilder builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        _ = PksDeclareState.For(builder);
+        return builder;
+    }
+
+    /// <summary>
     /// Declares a capability this composition would like filled — a model to talk to, a registry to
     /// pull from — and registers the `pks-declare` step on first use.
     /// </summary>
@@ -116,25 +148,34 @@ public static class PksDeclareExtensions
     {
         public List<PksCapability> Capabilities { get; } = new();
 
-        private static readonly Dictionary<IDistributedApplicationBuilder, PksDeclareState> Registered = new();
+        // Weak, so a builder that has been through Build() and gone out of scope goes with it. A
+        // plain static dictionary would hold every composition the process ever made alive, which
+        // is invisible in a CLI that builds one and fatal in a test run that builds hundreds.
+        private static readonly ConditionalWeakTable<IDistributedApplicationBuilder, PksDeclareState> Registered = new();
 
         public static PksDeclareState For(IDistributedApplicationBuilder builder)
         {
-            if (Registered.TryGetValue(builder, out var existing))
+            // Not GetValue(builder, factory): that factory is allowed to run more than once under
+            // contention and only one result is kept — and the one thing this factory does that
+            // cannot be done twice is add the step.
+            lock (Registered)
             {
-                return existing;
+                if (Registered.TryGetValue(builder, out var existing))
+                {
+                    return existing;
+                }
+
+                var state = new PksDeclareState();
+                Registered.Add(builder, state);
+
+                // No dependencies and nothing requiring it: the step stands alone, so
+                // `aspire do pks-declare` pulls in neither `parameter-prompt` nor a
+                // build of any resource image. Asking what a run needs must not be
+                // able to start the run.
+                builder.Pipeline.AddStep(StepName, context => WriteManifestAsync(context, state));
+
+                return state;
             }
-
-            var state = new PksDeclareState();
-            Registered[builder] = state;
-
-            // No dependencies and nothing requiring it: the step stands alone, so
-            // `aspire do pks-declare` pulls in neither `parameter-prompt` nor a
-            // build of any resource image. Asking what a run needs must not be
-            // able to start the run.
-            builder.Pipeline.AddStep(StepName, context => WriteManifestAsync(context, state));
-
-            return state;
         }
     }
 

@@ -83,7 +83,7 @@ public sealed class PksAspireRunCommand : AsyncCommand<PksAspireRunCommand.Setti
         catch (Exception ex)
         {
             _console.MarkupLine($"[yellow]could not ask the AppHost what it needs: {ex.Message.EscapeMarkup()}[/]");
-            _console.MarkupLine("[dim]Add the `pks-declare` step with [bold]pks aspire init[/], or run [bold]aspire run[/] and answer the prompts.[/]");
+            HintAfterFailedDeclare(settings);
             return await StartAspireAsync(settings, appHostArgs, environment: null);
         }
         finally
@@ -175,6 +175,58 @@ public sealed class PksAspireRunCommand : AsyncCommand<PksAspireRunCommand.Setti
         }
 
         return PksManifest.Parse(await File.ReadAllTextAsync(manifestPath));
+    }
+
+    /// <summary>
+    /// Why the declare pass came back with nothing, in the two shapes that actually happen.
+    ///
+    /// They look identical from here — the step is missing either way — so the discriminator is on
+    /// disk: `PksDeclare.cs` next to the AppHost means somebody already ran `pks aspire init`, and
+    /// telling them to run it again is advice that cannot work. What is far more likely then is a
+    /// composition whose capabilities all sit behind a flag, declaring none of them for these
+    /// arguments and so never registering the step on first use.
+    ///
+    /// Not read from the failure text: the useful line is written to Aspire's own log file, and what
+    /// arrives on stderr is the pointer to that file.
+    /// </summary>
+    private void HintAfterFailedDeclare(Settings settings)
+    {
+        if (AppHostDirectory(settings) is { } directory
+            && File.Exists(Path.Combine(directory, "PksDeclare.cs")))
+        {
+            _console.MarkupLine(
+                "[dim]This AppHost has PksDeclare.cs, so the step is probably missing because nothing[/]");
+            _console.MarkupLine(
+                "[dim]declared a capability for these arguments — they are usually behind a flag ([bold]-- --ai[/]).[/]");
+            _console.MarkupLine(
+                "[dim]Add [bold]builder.AddPksDeclare();[/] near the top of AppHost.cs so it can also declare nothing.[/]");
+            return;
+        }
+
+        _console.MarkupLine("[dim]Add the `pks-declare` step with [bold]pks aspire init[/], or run [bold]aspire run[/] and answer the prompts.[/]");
+    }
+
+    /// <summary>Where `--apphost` points, when it points somewhere this process can look at.</summary>
+    private static string? AppHostDirectory(Settings settings)
+    {
+        // No `--apphost` means aspire searched for one, and repeating that search here would be a
+        // second implementation of somebody else's rule. The working directory is the common case
+        // and the only one worth guessing.
+        var hint = string.IsNullOrWhiteSpace(settings.AppHost)
+            ? Directory.GetCurrentDirectory()
+            : settings.AppHost;
+
+        try
+        {
+            if (File.Exists(hint)) return Path.GetDirectoryName(Path.GetFullPath(hint));
+            return Directory.Exists(hint) ? Path.GetFullPath(hint) : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            // A hint that cannot be looked at is not worth a second error message on top of the
+            // first one; the general advice below is still correct.
+            return null;
+        }
     }
 
     private void Report(PksManifest manifest)
