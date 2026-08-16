@@ -64,6 +64,19 @@ or a shell history. `pks aspire init` writes the AppHost half into a project.
   state away.
 
 ## Gotchas / known issues
+- **All capabilities behind a flag means no step at all.** The step registered itself on the first
+  `AddPksCapability`, and Margin declares every capability behind `--ai` or `--real-entraid` — so
+  `pks aspire run -- --fabric` declared none, never registered it, and `aspire do pks-declare` failed
+  with `Step 'pks-declare' not found in pipeline`. Identical, from pks's side, to an AppHost that was
+  never wired, and the hint said what that case needs: run `pks aspire init`, which was already done.
+  `builder.AddPksDeclare()` at the top registers it unconditionally; the manifest then reports zero
+  capabilities and every parameter, which is the true answer. Two things confirmed empirically rather
+  than assumed: a step with no dependencies and no capabilities stays out of `aspire publish` (4/4
+  steps, none of them this one), and the zero-capability manifest parses and resolves.
+- **The failure text is not in the streams pks captures.** `Step 'pks-declare' not found` goes to
+  Aspire's own log file; stderr carries `📄 See logs at …`, which is what `FirstMeaningfulLine`
+  reports. Any hint keyed on the message would have missed exactly this failure — so the hint
+  discriminates on `PksDeclare.cs` existing next to the AppHost instead.
 - **`AddParameter(name, "literal")` cannot be filled by anything.** That overload
   pins the value and stops consulting configuration, so the environment variable
   is ignored silently and the parameter keeps its old value while every step
