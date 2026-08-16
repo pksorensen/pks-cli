@@ -1,6 +1,7 @@
 using System.Reflection;
 using FluentAssertions;
 using PKS.Commands.Aspire;
+using PKS.CLI.Tests.Infrastructure;
 using Xunit;
 
 namespace PKS.CLI.Tests.Commands.Aspire;
@@ -13,6 +14,8 @@ namespace PKS.CLI.Tests.Commands.Aspire;
 /// `cs/` satellite assembly. Build green, `--list-steps` green, command dead. Hence a test that asks
 /// the assembly the same question the command asks it.
 /// </summary>
+[Trait(TestTraits.Category, TestCategories.Unit)]
+[Trait(TestTraits.Speed, TestSpeed.Fast)]
 public class PksAspireInitCommandTests
 {
     private static Assembly CommandAssembly => typeof(PksAspireInitCommand).Assembly;

@@ -42,6 +42,10 @@ public sealed class PksAspireRunCommand : AsyncCommand<PksAspireRunCommand.Setti
         [Description("AppHost project file or a directory to search (passed through to aspire)")]
         public string? AppHost { get; set; }
 
+        [CommandOption("--environment <NAME>")]
+        [Description("Environment for the declare pass (default: Development, which is what the run uses)")]
+        public string? Environment { get; set; }
+
         [CommandOption("--provider <KIND>")]
         [Description("Skip the provider prompt and use this kind (foundry, gemini, openai-compatible)")]
         public string? Provider { get; set; }
@@ -136,12 +140,10 @@ public sealed class PksAspireRunCommand : AsyncCommand<PksAspireRunCommand.Setti
     private async Task<PksManifest> DeclareAsync(Settings settings, IReadOnlyList<string> appHostArgs, string manifestPath)
     {
         var psi = NewAspire();
-        psi.ArgumentList.Add("do");
-        psi.ArgumentList.Add("pks-declare");
-        AddAppHost(psi, settings);
-        psi.ArgumentList.Add("--non-interactive");
-        psi.ArgumentList.Add("--nologo");
-        AddAppHostArgs(psi, appHostArgs);
+        foreach (var argument in DeclareArguments(settings, appHostArgs))
+        {
+            psi.ArgumentList.Add(argument);
+        }
 
         // The manifest goes to a file rather than stdout for one reason: this pass
         // builds the AppHost, and MSBuild's output would arrive interleaved with it.
@@ -315,6 +317,50 @@ public sealed class PksAspireRunCommand : AsyncCommand<PksAspireRunCommand.Setti
 
         await process.WaitForExitAsync();
         return process.ExitCode;
+    }
+
+    /// <summary>
+    /// The declare pass, as a list of arguments — separated out because the interesting part of it is
+    /// a decision, and a decision deserves a test that does not have to start a process to read it.
+    ///
+    /// The decision is <c>-e Development</c>. `aspire do` documents its default as `Production`, and
+    /// `aspire run` has no such option at all because it applies the AppHost's launch profile, which
+    /// every Aspire template writes as `DOTNET_ENVIRONMENT=Development`. The two passes therefore run
+    /// in different environments by default — and .NET loads user secrets only in Development, so the
+    /// declare pass cannot see them and reports parameters as unanswered that the run will answer
+    /// without asking. Measured on Margin: `fabric-tenant-id` and `fabric-client-id` sat in user
+    /// secrets and were reported missing; with `-e Development` only the one genuinely absent value,
+    /// `fabric-client-secret`, is named.
+    ///
+    /// Not read out of `Properties/launchSettings.json`: `aspire do` does not apply launch profiles,
+    /// so the profile would have to be parsed and replayed here, and the only entry in it that changes
+    /// this answer is the environment name. `--environment` is there for the AppHost that runs as
+    /// something else.
+    /// </summary>
+    internal static List<string> DeclareArguments(Settings settings, IReadOnlyList<string> appHostArgs)
+    {
+        var arguments = new List<string> { "do", "pks-declare" };
+
+        if (!string.IsNullOrWhiteSpace(settings.AppHost))
+        {
+            arguments.Add("--apphost");
+            arguments.Add(settings.AppHost);
+        }
+
+        arguments.Add("--environment");
+        arguments.Add(string.IsNullOrWhiteSpace(settings.Environment) ? "Development" : settings.Environment);
+        arguments.Add("--non-interactive");
+        arguments.Add("--nologo");
+
+        if (appHostArgs.Count > 0)
+        {
+            // Last, and everything after it belongs to the AppHost — including anything that looks
+            // like one of the options above.
+            arguments.Add("--");
+            arguments.AddRange(appHostArgs);
+        }
+
+        return arguments;
     }
 
     // ---------- plumbing ----------

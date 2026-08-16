@@ -4,7 +4,7 @@ title: Aspire run — an AppHost declares its parameters, pks fills them
 domain: agentic-runtime
 status: implemented
 adrs: []
-tests: [tests/Services/Exec/ManifestResolverTests.cs, tests/Commands/Aspire/PksAspireInitCommandTests.cs]
+tests: [tests/Services/Exec/ManifestResolverTests.cs, tests/Commands/Aspire/PksAspireInitCommandTests.cs, tests/Commands/Aspire/PksAspireRunCommandTests.cs]
 source-files: [src/Commands/Aspire/PksAspireRunCommand.cs, src/Commands/Aspire/PksAspireInitCommand.cs, src/Infrastructure/Services/Exec/ManifestResolver.cs, src/Infrastructure/Services/Exec/PksManifest.cs, src/Infrastructure/Services/Exec/ResolvedEnvironment.cs, src/Infrastructure/Resources/Aspire/PksDeclare.cs.template]
 sessions: [5870168d-2595-4db1-88bb-3706fa630fea]
 ---
@@ -64,6 +64,17 @@ or a shell history. `pks aspire init` writes the AppHost half into a project.
   state away.
 
 ## Gotchas / known issues
+- **The declare pass ran as Production, so it could not see user secrets.** `aspire do` defaults its
+  environment to `Production`; `aspire run` has no such option because it applies the AppHost's launch
+  profile, and every Aspire template writes `DOTNET_ENVIRONMENT=Development` there. .NET adds the user
+  secrets provider only in Development — so the declare pass read none of them and `IsSuppliedAsync`
+  answered "not supplied" for parameters the run resolves without asking. Measured on Margin:
+  `Parameters:fabric-tenant-id` and `Parameters:fabric-client-id` were in `secrets.json` and reported
+  unanswered; `aspire do -e Development` names only `fabric-client-secret`, which is the one genuinely
+  absent. The declare pass now passes `--environment Development` (overridable with `--environment`).
+  Same family as the publish-mode gotcha below: pass one has to be the composition *and the
+  configuration* pass two will have. Note the failure direction — it asks for more than it needs, so it
+  reads as pks being unable to resolve anything rather than as a bug.
 - **All capabilities behind a flag means no step at all.** The step registered itself on the first
   `AddPksCapability`, and Margin declares every capability behind `--ai` or `--real-entraid` — so
   `pks aspire run -- --fabric` declared none, never registered it, and `aspire do pks-declare` failed
