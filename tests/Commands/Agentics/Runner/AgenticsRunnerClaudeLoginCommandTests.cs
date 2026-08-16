@@ -67,7 +67,7 @@ public class AgenticsRunnerClaudeLoginCommandTests
         var (_, launcher, _, command) = MakeCommand(target, registration);
 
         var ctx = new CommandContext(Mock.Of<IRemainingArguments>(), "claude-login", null);
-        var result = await command.ExecuteAsync(ctx, new AgenticsRunnerSshTargetSettings { Target = "my-target" });
+        var result = await command.ExecuteAsync(ctx, new AgenticsRunnerClaudeLoginSettings { Target = "my-target" });
 
         result.Should().Be(0);
         launcher.Verify(l => l.RunAsync(
@@ -77,7 +77,68 @@ public class AgenticsRunnerClaudeLoginCommandTests
                 args.Contains(target.KeyPath) &&
                 args.Contains($"{target.Username}@{target.Host}") &&
                 args.Last().Contains("pks-claude-acme-widgets") &&
-                args.Last().Contains("/home/node/.claude")),
+                args.Last().Contains(ClaudeCredentialVolumes.MountTarget)),
+            It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task ExecuteAsync_Local_RunsDockerDirectly_ForTheResolvedRegistration()
+    {
+        // --local is the only seeding path a locally-run runner has: no SSH target exists, so the
+        // owner/project comes from the single local registration.
+        var (_, launcher, _, command) = MakeCommand(MakeTarget(), MakeRegistration());
+
+        var ctx = new CommandContext(Mock.Of<IRemainingArguments>(), "claude-login", null);
+        var result = await command.ExecuteAsync(ctx, new AgenticsRunnerClaudeLoginSettings { Local = true });
+
+        result.Should().Be(0);
+        launcher.Verify(l => l.RunAsync(
+            "docker",
+            It.Is<IReadOnlyList<string>>(args =>
+                args.Contains($"pks-claude-acme-widgets:{ClaudeCredentialVolumes.MountTarget}")),
+            It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task ExecuteAsync_Local_WithExplicitVolume_SkipsRegistrationLookup()
+    {
+        var (_, launcher, _, command) = MakeCommand(MakeTarget(), MakeRegistration());
+
+        var ctx = new CommandContext(Mock.Of<IRemainingArguments>(), "claude-login", null);
+        var result = await command.ExecuteAsync(ctx,
+            new AgenticsRunnerClaudeLoginSettings { Local = true, Volume = "pks-claude-pksorensen-museliving" });
+
+        result.Should().Be(0);
+        launcher.Verify(l => l.RunAsync(
+            "docker",
+            It.Is<IReadOnlyList<string>>(args =>
+                args.Contains($"pks-claude-pksorensen-museliving:{ClaudeCredentialVolumes.MountTarget}")),
+            It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task ExecuteAsync_Local_ProjectOption_OverridesRegistration()
+    {
+        var (_, launcher, _, command) = MakeCommand(MakeTarget(), MakeRegistration());
+
+        var ctx = new CommandContext(Mock.Of<IRemainingArguments>(), "claude-login", null);
+        var result = await command.ExecuteAsync(ctx,
+            new AgenticsRunnerClaudeLoginSettings { Local = true, Project = "pksorensen/museliving" });
+
+        result.Should().Be(0);
+        launcher.Verify(l => l.RunAsync(
+            "docker",
+            It.Is<IReadOnlyList<string>>(args =>
+                args.Contains($"pks-claude-pksorensen-museliving:{ClaudeCredentialVolumes.MountTarget}")),
             It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -95,7 +156,7 @@ public class AgenticsRunnerClaudeLoginCommandTests
         keyStore.Setup(k => k.MaterializeAsync("key-1", It.IsAny<CancellationToken>())).ReturnsAsync(materialized);
 
         var ctx = new CommandContext(Mock.Of<IRemainingArguments>(), "claude-login", null);
-        var result = await command.ExecuteAsync(ctx, new AgenticsRunnerSshTargetSettings { Target = "my-target" });
+        var result = await command.ExecuteAsync(ctx, new AgenticsRunnerClaudeLoginSettings { Target = "my-target" });
 
         result.Should().Be(0);
         launcher.Verify(l => l.RunAsync(
@@ -115,7 +176,7 @@ public class AgenticsRunnerClaudeLoginCommandTests
         var (_, _, _, command) = MakeCommand(target, registration, launcherExitCode: 7);
 
         var ctx = new CommandContext(Mock.Of<IRemainingArguments>(), "claude-login", null);
-        var result = await command.ExecuteAsync(ctx, new AgenticsRunnerSshTargetSettings { Target = "my-target" });
+        var result = await command.ExecuteAsync(ctx, new AgenticsRunnerClaudeLoginSettings { Target = "my-target" });
 
         result.Should().Be(7);
     }
@@ -130,7 +191,7 @@ public class AgenticsRunnerClaudeLoginCommandTests
         var (_, launcher, console, command) = MakeCommand(target, registration);
 
         var ctx = new CommandContext(Mock.Of<IRemainingArguments>(), "claude-login", null);
-        var result = await command.ExecuteAsync(ctx, new AgenticsRunnerSshTargetSettings { Target = "no-such-target" });
+        var result = await command.ExecuteAsync(ctx, new AgenticsRunnerClaudeLoginSettings { Target = "no-such-target" });
 
         result.Should().NotBe(0);
         launcher.Verify(l => l.RunAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()), Times.Never);

@@ -87,9 +87,41 @@ public class ClaudeLoginCommandBuilderTests
         var target = MakeTarget();
         var (_, args) = ClaudeLoginCommandBuilder.Build(target, "pks-claude-acme-widgets", keyPath: target.KeyPath);
 
+        // Same path a job spawn mounts it at, so one constant governs both.
         var remoteCommand = args[^1];
-        remoteCommand.Should().Contain("-v pks-claude-acme-widgets:/home/node/.claude");
-        remoteCommand.Should().Contain("CLAUDE_CONFIG_DIR=/home/node/.claude");
+        remoteCommand.Should().Contain($"-v pks-claude-acme-widgets:{ClaudeCredentialVolumes.MountTarget}");
+        remoteCommand.Should().Contain($"CLAUDE_CONFIG_DIR={ClaudeCredentialVolumes.MountTarget}");
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public void Build_RemoteCommand_RunsClaudeAsUid1000_NotRoot()
+    {
+        // The regression this guards: npm's global prefix needs root, so the install runs as root --
+        // but a volume left root-owned makes claude's own OAuth refresh fail inside the job, which
+        // surfaces as "OAuth session expired" and reads exactly like a stale token.
+        var target = MakeTarget();
+        var (_, args) = ClaudeLoginCommandBuilder.Build(target, "pks-claude-acme-widgets", keyPath: target.KeyPath);
+
+        var remoteCommand = args[^1];
+        remoteCommand.Should().Contain($"chown -R node:node {ClaudeCredentialVolumes.MountTarget}");
+        remoteCommand.Should().Contain("su node -c");
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public void BuildLocal_RunsTheSameContainerWithoutSsh()
+    {
+        var (fileName, args) = ClaudeLoginCommandBuilder.BuildLocal("pks-claude-acme-widgets");
+
+        fileName.Should().Be("docker");
+        args.Should().StartWith(new[] { "run", "-it", "--rm" });
+        args.Should().Contain($"pks-claude-acme-widgets:{ClaudeCredentialVolumes.MountTarget}");
+        // argv form: the script is one element, so it needs no shell quoting of its own.
+        args[^1].Should().Contain("npm install -g @anthropic-ai/claude-code");
+        args[^1].Should().NotStartWith("'");
     }
 
     [Fact]

@@ -240,8 +240,32 @@ public class AgenticsRunnerSshStopCommand : AsyncCommand<AgenticsRunnerSshTarget
     }
 }
 
-[Description("Interactively log in to Claude Code on an SSH target, populating its pks-claude-* credentials volume")]
-public class AgenticsRunnerClaudeLoginCommand : AsyncCommand<AgenticsRunnerSshTargetSettings>
+/// <summary>
+/// Settings for <c>claude-login</c>. Adds the local-daemon mode: a runner that runs as a local
+/// process never had a seeding path here, because the SSH form needs a target and a handed-off
+/// registration -- and the credential volume is exactly as necessary either way.
+/// </summary>
+public class AgenticsRunnerClaudeLoginSettings : AgenticsRunnerSshTargetSettings
+{
+    [CommandOption("--local")]
+    [Description("Seed the volume on the local Docker daemon instead of an SSH target")]
+    public bool Local { get; set; }
+
+    [CommandOption("--scope <SCOPE>")]
+    [Description("Credential scope to seed: project (default), owner-wide (runner), or task")]
+    public string? Scope { get; set; }
+
+    [CommandOption("--task <TASK_ID>")]
+    [Description("Task id, when --scope task")]
+    public string? TaskId { get; set; }
+
+    [CommandOption("--volume <NAME>")]
+    [Description("Seed this exact volume name, skipping owner/project resolution")]
+    public string? Volume { get; set; }
+}
+
+[Description("Interactively log in to Claude Code, populating a pks-claude-* credentials volume")]
+public class AgenticsRunnerClaudeLoginCommand : AsyncCommand<AgenticsRunnerClaudeLoginSettings>
 {
     private readonly ISshTargetConfigurationService _sshTargets;
     private readonly IAgenticsRunnerConfigurationService _runnerConfig;
@@ -263,15 +287,19 @@ public class AgenticsRunnerClaudeLoginCommand : AsyncCommand<AgenticsRunnerSshTa
         _console = console;
     }
 
-    public override async Task<int> ExecuteAsync(CommandContext context, AgenticsRunnerSshTargetSettings settings)
+    public override async Task<int> ExecuteAsync(CommandContext context, AgenticsRunnerClaudeLoginSettings settings)
     {
+        if (settings.Local)
+            return await ExecuteLocalAsync(settings);
+
         var resolved = await SshHandoffCommandHelpers.ResolveAsync(_console, _sshTargets, _runnerConfig, settings);
         if (resolved == null) return 1;
         var (target, registration) = resolved.Value;
 
         // "project" scope: the default a job uses when its AgentDef.ClaudeCredentialsScope is
         // unset, same choice DetectClaudeCredentialVolumeAsync makes -- see its doc comment.
-        var volumeName = ClaudeCredentialVolumes.ResolveVolumeName(registration.Owner, registration.Project, taskId: null, scope: "project");
+        var volumeName = settings.Volume ?? ClaudeCredentialVolumes.ResolveVolumeName(
+            registration.Owner, registration.Project, settings.TaskId, settings.Scope ?? "project");
 
         MaterializedKey? materialized = null;
         try
@@ -309,5 +337,65 @@ public class AgenticsRunnerClaudeLoginCommand : AsyncCommand<AgenticsRunnerSshTa
         {
             materialized?.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Local-daemon form. Same container, no ssh: this is the seeding path for a runner that runs
+    /// here rather than on an SSH target, where the volume is otherwise only ever created empty by
+    /// <c>devcontainer up</c> and the job then idles on the login screen.
+    /// </summary>
+    private async Task<int> ExecuteLocalAsync(AgenticsRunnerClaudeLoginSettings settings)
+    {
+        var volumeName = settings.Volume;
+        if (string.IsNullOrWhiteSpace(volumeName))
+        {
+            var resolved = await ResolveLocalOwnerProjectAsync(settings.Project);
+            if (resolved == null) return 1;
+            var (owner, project) = resolved.Value;
+            volumeName = ClaudeCredentialVolumes.ResolveVolumeName(owner, project, settings.TaskId, settings.Scope ?? "project");
+        }
+
+        var (fileName, args) = ClaudeLoginCommandBuilder.BuildLocal(volumeName);
+
+        _console.MarkupLine($"[dim]Opening an interactive Claude Code login against the local Docker daemon...[/]");
+        _console.MarkupLine($"[dim]This populates the '{Markup.Escape(volumeName)}' credentials volume via a one-off container -- log in, then exit (Ctrl+D) to finish.[/]");
+
+        var exitCode = await _launcher.RunAsync(fileName, args);
+
+        if (exitCode == 0)
+            _console.MarkupLine($"[green]Claude login session ended. '{Markup.Escape(volumeName)}' is seeded for future jobs.[/]");
+        else
+            _console.MarkupLine($"[yellow]Session exited with code {exitCode}.[/]");
+
+        return exitCode;
+    }
+
+    /// <summary>
+    /// owner/project for the local form: <c>--project owner/project</c> when given, otherwise the
+    /// single local registration. Prints what is missing rather than guessing -- seeding the wrong
+    /// volume looks identical to not seeding at all until a job idles out on the login screen.
+    /// </summary>
+    private async Task<(string Owner, string Project)?> ResolveLocalOwnerProjectAsync(string? projectOption)
+    {
+        if (!string.IsNullOrWhiteSpace(projectOption))
+        {
+            var parts = projectOption.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length != 2)
+            {
+                _console.MarkupLine("[red]--project expects owner/project format.[/]");
+                return null;
+            }
+            return (parts[0], parts[1]);
+        }
+
+        var registrations = await _runnerConfig.ListRegistrationsAsync();
+        if (registrations.Count == 1)
+            return (registrations[0].Owner, registrations[0].Project);
+
+        if (registrations.Count == 0)
+            _console.MarkupLine("[yellow]No runner registration found. Pass --project owner/project (or --volume) to say which volume to seed.[/]");
+        else
+            _console.MarkupLine($"[yellow]{registrations.Count} runner registrations found. Pass --project owner/project to pick one.[/]");
+        return null;
     }
 }

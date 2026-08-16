@@ -805,8 +805,9 @@ app.Configure(config =>
                 .WithExample(new[] { "agentics", "runner", "stop", "hetzner" });
 
             runner.AddCommand<AgenticsRunnerClaudeLoginCommand>("claude-login")
-                .WithDescription("Interactively log in to Claude Code on an SSH target, populating its pks-claude-* credentials volume")
-                .WithExample(new[] { "agentics", "runner", "claude-login", "hetzner" });
+                .WithDescription("Interactively log in to Claude Code, populating a pks-claude-* credentials volume (--local for the local Docker daemon)")
+                .WithExample(new[] { "agentics", "runner", "claude-login", "hetzner" })
+                .WithExample(new[] { "agentics", "runner", "claude-login", "--local", "--project", "pksorensen/museliving" });
         });
 
         agentics.AddBranch<AgenticsSettings>("task", task =>

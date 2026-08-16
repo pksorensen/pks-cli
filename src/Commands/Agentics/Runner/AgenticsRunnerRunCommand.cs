@@ -2329,6 +2329,29 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                 _console.MarkupLine(claudeUpdate.Success
                     ? $"[dim]claude {updateArgs}: {updateTail.EscapeMarkup()}[/]"
                     : $"[yellow]claude {updateArgs} failed (continuing with the installed version):[/] [dim]{updateTail.EscapeMarkup()}[/]");
+
+                // Say which claude the job is actually about to run, and — when the base image pins
+                // it — why updating cannot help. Otherwise a container stuck on an old release looks
+                // identical to a current one until you read the version out of the agent pane.
+                var claudeVersion = await _spawnerService.ExecInContainerAsync(containerId,
+                    $"{claudeBin} --version 2>&1", timeoutSeconds: 20, user: agentUser);
+                var versionLine = (claudeVersion.Output ?? string.Empty).Trim().Split('\n').LastOrDefault()?.Trim();
+                if (!string.IsNullOrEmpty(versionLine))
+                    _console.MarkupLine($"[dim]Agent runtime: claude {versionLine.EscapeMarkup()}[/]");
+
+                var nodeVersion = await _spawnerService.ExecInContainerAsync(containerId,
+                    "node --version 2>/dev/null || true", timeoutSeconds: 10, user: agentUser);
+                var nodeMajor = ClaudeRuntimeCheck.ParseNodeMajor(nodeVersion.Output);
+                if (ClaudeRuntimeCheck.PinsClaudeToAnOldRelease(nodeMajor))
+                {
+                    _console.MarkupLine(
+                        $"[yellow]Warning:[/] this devcontainer runs Node {nodeMajor}, and current Claude Code needs Node " +
+                        $"{ClaudeRuntimeCheck.MinimumNodeMajor}+. npm therefore installs the last Node-{nodeMajor}-compatible " +
+                        "release and [italic]claude update cannot move past it[/].");
+                    _console.MarkupLine(
+                        "[dim]Bump the assembly line's devcontainer to a Node 22+ image or feature. An old claude also stops " +
+                        "vibecast's onboarding auto-answers from matching, which is how a job ends up parked on a prompt.[/]");
+                }
             }
         }
 
