@@ -1,5 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.Extensions.Logging.Abstractions;
+using PKS.Infrastructure.Services.Agentics;
 using PKS.Infrastructure.Services.Models;
 
 namespace PKS.Infrastructure.Services.Runner;
@@ -61,12 +63,31 @@ public static class RunnerRegistrar
         return new[] { "self-hosted", os };
     }
 
+    /// <summary>
+    /// The credential registration presents. <see cref="IAgenticsAuthService.GetTokenAsync"/>'s
+    /// own docs name this case ("for runner registration this is the project URL"), but the call
+    /// was never wired up, so registration went out bare and the server let it through whenever
+    /// AUTH_REQUIRED was false — which is how anyone who knew a project name could mint a live
+    /// runner token. The server now requires Keycloak or GitHub OIDC here (a runner token is
+    /// refused, so one credential cannot mint another), so the bearer is no longer optional.
+    /// <para>
+    /// Built inline rather than injected to keep this class static: the two callers construct
+    /// no auth service, and threading one through would break the fixtures that build the run
+    /// command positionally — the reason this class is static in the first place.
+    /// </para>
+    /// </summary>
+    private static IAgenticsAuthService DefaultAuth(IAgenticsRunnerConfigurationService configService) =>
+        new AgenticsAuthService(
+            configService,
+            new AgenticsAuthConfigurationService(NullLogger<AgenticsAuthConfigurationService>.Instance));
+
     public static async Task<AgenticsRunnerRegistration> ResolveOrRegisterAsync(
         IAgenticsRunnerConfigurationService configService,
         string ownerProject,
         string? serverOverride,
         Action<string>? onInfo = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        IAgenticsAuthService? auth = null)
     {
         ArgumentNullException.ThrowIfNull(configService);
 
@@ -102,14 +123,30 @@ public static class RunnerRegistrar
         var runnerName = System.Net.Dns.GetHostName();
 
         using var httpClient = new HttpClient();
+        var registerUrl = $"{serverUrl}/api/owners/{owner}/projects/{project}/runners";
+        var bearer = await (auth ?? DefaultAuth(configService))
+            .GetTokenAsync($"{serverUrl}/p/{owner}/{project}", null, owner, project);
+        if (!string.IsNullOrEmpty(bearer))
+        {
+            httpClient.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", bearer);
+        }
+
         var requestBody = new { name = runnerName, labels = BuildDefaultRunnerLabels() };
-        var httpResponse = await httpClient.PostAsJsonAsync(
-            $"{serverUrl}/api/owners/{owner}/projects/{project}/runners", requestBody, ct);
+        var httpResponse = await httpClient.PostAsJsonAsync(registerUrl, requestBody, ct);
 
         if (!httpResponse.IsSuccessStatusCode)
         {
             var errorBody = await httpResponse.Content.ReadAsStringAsync(ct);
-            throw new InvalidOperationException($"Auto-registration failed ({(int)httpResponse.StatusCode}): {errorBody}");
+            // 401/403 here is nearly always "no usable credential", not "wrong project": the
+            // chain falls back to a stored runner token, which this endpoint refuses on purpose.
+            var hint = httpResponse.StatusCode is System.Net.HttpStatusCode.Unauthorized
+                                               or System.Net.HttpStatusCode.Forbidden
+                ? " — run `pks agentics init` to sign in; runner registration accepts only a user "
+                  + "credential or GitHub Actions OIDC, never another runner's token"
+                : "";
+            throw new InvalidOperationException(
+                $"Auto-registration failed ({(int)httpResponse.StatusCode}): {errorBody}{hint}");
         }
 
         var json = await httpResponse.Content.ReadAsStringAsync(ct);

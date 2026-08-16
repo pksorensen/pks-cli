@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Net.Http.Json;
 using System.Text.Json;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Agentics;
 using PKS.Infrastructure.Services.Models;
 using PKS.Infrastructure.Services.Runner;
 using Spectre.Console;
@@ -16,6 +17,7 @@ public class AgenticsRunnerRegisterCommand(
     IAgenticsRunnerConfigurationService configService,
     IGitHubAuthenticationService githubAuth,
     GitHubAuthConfig authConfig,
+    IAgenticsAuthService agenticsAuth,
     IAnsiConsole console) : Command<AgenticsRunnerRegisterCommand.Settings>
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
@@ -100,6 +102,17 @@ public class AgenticsRunnerRegisterCommand(
                     try
                     {
                         using var httpClient = new HttpClient();
+                        // Registration mints a live runner token, so the server accepts only a
+                        // user credential or GitHub Actions OIDC here — never another runner
+                        // token. See RunnerRegistrar.DefaultAuth for why this was missing.
+                        var bearer = await agenticsAuth.GetTokenAsync(
+                            $"{serverUrl}/p/{owner}/{project}", null, owner, project);
+                        if (!string.IsNullOrEmpty(bearer))
+                        {
+                            httpClient.DefaultRequestHeaders.Authorization =
+                                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", bearer);
+                        }
+
                         var requestBody = new { name = runnerName, labels = RunnerRegistrar.BuildDefaultRunnerLabels() };
                         var httpResponse = await httpClient.PostAsJsonAsync(
                             $"{serverUrl}/api/owners/{owner}/projects/{project}/runners",
@@ -108,7 +121,11 @@ public class AgenticsRunnerRegisterCommand(
                         if (!httpResponse.IsSuccessStatusCode)
                         {
                             var errorBody = await httpResponse.Content.ReadAsStringAsync();
-                            registerError = $"Server returned {(int)httpResponse.StatusCode}: {errorBody}";
+                            var hint = httpResponse.StatusCode is System.Net.HttpStatusCode.Unauthorized
+                                                               or System.Net.HttpStatusCode.Forbidden
+                                ? " (run `pks agentics init` to sign in first)"
+                                : "";
+                            registerError = $"Server returned {(int)httpResponse.StatusCode}: {errorBody}{hint}";
                             return;
                         }
 
