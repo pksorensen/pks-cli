@@ -27,6 +27,17 @@ touching the directory.
 > "og ja pks entra app init er fint at få tilføjet som en måde at registere en app reg der kan bruges til app adgang."
 
 ## Key decisions
+- **Graph is the convenience, not the contract.** Two ways in: `--manual` stores a registration
+  somebody else made — three prompts, no token, no Graph call, checked *before* the sign-in check so it
+  works for the operator who has no permissions — and the default path provisions one. The store, the
+  alias and everything downstream are identical. Provisioning is for a tenant you own; a customer's
+  production directory gets the manual path. The prompt-at-run-time variant below is the same store
+  write made optional.
+- **A run can ask, and forget.** When `pks aspire run` meets an unknown alias interactively it offers to
+  take the three values on the spot; they live in the resolver for that run and go into the child
+  process's environment. The follow-up — keep it? — defaults to **no**. Aspire's own parameter dialog
+  asks too, but its checkbox is *Save to user secret*, i.e. plaintext under the project for as long as
+  the project exists. The cost is being asked again next run, and it is stated.
 - **The sign-in pks already has.** Graph is called with a token minted from the stored Azure refresh
   token (`IAzureFoundryAuthService.GetAccessTokenAsync("https://graph.microsoft.com/.default")`). The
   client is the Azure CLI's well-known public client, which pks already uses everywhere else, and a
@@ -59,6 +70,10 @@ touching the directory.
 - **`--rotate` removes only the credential pks minted itself** (matched by stored keyId). One somebody
   else added is theirs. If removal fails the command still succeeds — the new secret is stored and
   working, and failing there would be worse than an old credential the operator can remove by hand.
+- **A manual entry deliberately has no key id and no expiry.** Carrying a previous `SecretKeyId`
+  forward would point a later `--rotate` at a credential pks no longer holds the secret for and remove
+  somebody else's. And `IsExpired` reads a `default` expiry as "not stated", which is what keeps a
+  hand-entered secret from showing red in `list` on the day it was typed.
 - **An alias is slugged inside the store, not at the call site.** Not every caller is a command: the
   resolver looks one up straight from a capability's name, so `AddPksCapability("Margin V1")` would
   never find what `--alias "Margin V1"` wrote as `margin-v1`, and the hint would keep telling the
@@ -75,4 +90,6 @@ touching the directory.
   is, because it carried a secret.
 - **Not yet run against a real tenant.** The read path is proven live (listing the Context& tenant's
   registrations through Graph with the stored sign-in); every write path is proven against a scripted
-  Graph in tests. The first real create/adopt is the operator's call, in a directory they own.
+  Graph in tests. The first real create/adopt is the operator's call, in a directory they own — and
+  since `--manual` and the run-time prompt reach the same end state with no directory write at all,
+  there is no longer a reason to try the Graph path in a tenant somebody else administers.

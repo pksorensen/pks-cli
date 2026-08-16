@@ -104,6 +104,30 @@ public sealed class EntraAppRequest
     public bool Rotate { get; set; }
 }
 
+/// <summary>
+/// Credentials somebody else provisioned — read off the portal blade, or out of a password manager —
+/// on their way into the same encrypted store a minted one lands in.
+///
+/// This is the mode for a directory pks has no business writing to: a customer's production tenant,
+/// or one where creating an app registration is somebody's job and not yours. Everything downstream is
+/// identical afterwards; the only difference is who made the registration.
+/// </summary>
+public sealed class EntraManualApp
+{
+    public string Alias { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string TenantId { get; set; } = string.Empty;
+    public string ClientId { get; set; } = string.Empty;
+    public SecretValue ClientSecret { get; set; }
+
+    /// <summary>
+    /// When the portal says it expires, if the operator happened to know. Left unset it stays
+    /// <c>default</c>, which <see cref="EntraStoredApp.IsExpired"/> reads as "not stated" — better
+    /// than a guess that would colour a working credential red on the day it was entered.
+    /// </summary>
+    public DateTimeOffset? ExpiresOn { get; set; }
+}
+
 /// <summary>How an init call ended, so the command can say what it did rather than guess.</summary>
 public sealed class EntraAppResult
 {

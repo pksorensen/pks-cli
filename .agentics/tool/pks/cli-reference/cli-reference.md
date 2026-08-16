@@ -100,7 +100,7 @@ encrypted store instead of a paste. Detail: [pks entra](/tools/pks/entra).
 
 | Command | Purpose |
 | --- | --- |
-| `pks entra app init` | Adopts or creates a registration, ensures its service principal and redirect URIs, mints a client secret and stores it under an alias. `--rotate` replaces the one it minted last. |
+| `pks entra app init` | Adopts or creates a registration, ensures its service principal and redirect URIs, mints a client secret and stores it under an alias. `--rotate` replaces the one it minted last. `--manual` skips Graph entirely and stores a registration somebody else made. |
 | `pks entra app list` | The registrations pks holds and when each secret expires; `--directory` lists the tenant's instead. |
 | `pks entra app forget` | Drops the local copy. The directory is untouched. |
 

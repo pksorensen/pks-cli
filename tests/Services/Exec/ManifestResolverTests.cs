@@ -61,14 +61,16 @@ public class ManifestResolverTests
         => new(auth.Object, new AzureFoundryAuthConfig(), entra, console);
 
     /// <summary>Nothing provisioned — an `entra` provider is then simply not available.</summary>
-    private static IEntraApplicationService NoEntraApps
+    private static IEntraApplicationService NoEntraApps => NothingStored().Object;
+
+    /// <summary>The same, kept as the mock, for asserting on what was or was not written.</summary>
+    private static Mock<IEntraApplicationService> NothingStored()
     {
-        get
-        {
-            var mock = new Mock<IEntraApplicationService>();
-            mock.Setup(x => x.GetStoredAsync(It.IsAny<string>())).ReturnsAsync((EntraStoredApp?)null);
-            return mock.Object;
-        }
+        var mock = new Mock<IEntraApplicationService>();
+        mock.Setup(x => x.GetStoredAsync(It.IsAny<string>())).ReturnsAsync((EntraStoredApp?)null);
+        mock.Setup(x => x.SaveAsync(It.IsAny<EntraManualApp>()))
+            .ReturnsAsync((EntraManualApp a) => new EntraStoredApp { Alias = a.Alias, AppId = a.ClientId });
+        return mock;
     }
 
     /// <summary>One app registration, stored under <paramref name="alias"/>.</summary>
@@ -436,6 +438,112 @@ public class ManifestResolverTests
         var resolved = await resolver.ResolveAsync(
             OneEntraCapability("margin-dev", new() { ["Parameters__entra-client-id"] = "{entra:clientid}" }),
             Unattended);
+
+        resolved.Should().NotBeNull();
+        resolved!.Count.Should().Be(0);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task An_app_registration_can_be_typed_in_for_one_run_and_kept_nowhere()
+    {
+        // The answer to "I have the credential, I just do not want it on my disk yet". Aspire would ask
+        // too, but its dialog offers to save into user secrets — plaintext under the project. Here the
+        // default is no, and no means nothing is written at all.
+        var console = new TestConsole();
+        console.Interactive();
+        console.Input.PushTextWithEnter("y");             // enter it now?
+        console.Input.PushTextWithEnter("tenant-typed");
+        console.Input.PushTextWithEnter("client-typed");
+        console.Input.PushTextWithEnter("secret-typed");
+        console.Input.PushTextWithEnter("n");             // keep it for next time?
+
+        var entra = NothingStored();
+        var resolver = Resolver(FoundrySignedOut(), entra.Object, console);
+
+        var resolved = await resolver.ResolveAsync(
+            OneEntraCapability("margin-dev", new()
+            {
+                ["Parameters__entra-tenant-id"] = "{entra:tenantid}",
+                ["Parameters__entra-client-id"] = "{entra:clientid}",
+                ["Parameters__entra-client-secret"] = "{entra:clientsecret}",
+            }),
+            new ManifestResolveOptions { AcceptOptional = true });
+
+        resolved.Should().NotBeNull();
+        resolved!.Describe().Should().ContainEquivalentOf(("Parameters__entra-tenant-id", "tenant-typed"));
+        resolved.Describe().Should().ContainEquivalentOf(("Parameters__entra-client-id", "client-typed"));
+        resolved.Describe().Should().ContainEquivalentOf(("Parameters__entra-client-secret", "(set, hidden)"));
+
+        var start = new ProcessStartInfo();
+        resolved.ApplyTo(start);
+        start.Environment["Parameters__entra-client-secret"].Should().Be("secret-typed");
+
+        // The whole point: nothing reached the store, and nothing reached the console.
+        entra.Verify(x => x.SaveAsync(It.IsAny<EntraManualApp>()), Times.Never);
+        console.Output.Should().NotContain("secret-typed");
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task Saying_yes_to_keeping_it_stores_it_under_the_capability_alias()
+    {
+        var console = new TestConsole();
+        console.Interactive();
+        console.Input.PushTextWithEnter("y");
+        console.Input.PushTextWithEnter("tenant-typed");
+        console.Input.PushTextWithEnter("client-typed");
+        console.Input.PushTextWithEnter("secret-typed");
+        console.Input.PushTextWithEnter("y");             // keep it
+
+        var entra = NothingStored();
+        var resolver = Resolver(FoundrySignedOut(), entra.Object, console);
+
+        await resolver.ResolveAsync(
+            OneEntraCapability("Margin Dev", new() { ["X"] = "{entra:clientid}" }),
+            new ManifestResolveOptions { AcceptOptional = true });
+
+        entra.Verify(
+            x => x.SaveAsync(It.Is<EntraManualApp>(a =>
+                a.Alias == "margin-dev" && a.ClientId == "client-typed" && a.TenantId == "tenant-typed")),
+            Times.Once);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task An_unattended_run_is_never_asked_for_an_app_registration()
+    {
+        // A CI job has nobody to answer, and a prompt there is a hang rather than a question.
+        var console = new TestConsole();
+        var entra = NothingStored();
+        var resolver = Resolver(FoundrySignedOut(), entra.Object, console);
+
+        var resolved = await resolver.ResolveAsync(
+            OneEntraCapability("margin-dev", new() { ["X"] = "{entra:clientid}" }),
+            Unattended);
+
+        resolved!.Count.Should().Be(0);
+        entra.Verify(x => x.SaveAsync(It.IsAny<EntraManualApp>()), Times.Never);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task A_run_with_a_pipe_for_stdin_skips_rather_than_throws()
+    {
+        // Without --non-interactive but with nobody at the keyboard, Spectre's answer to a prompt is to
+        // throw — which would turn "this capability was skipped" into "the run failed". The terminal is
+        // asked before the question is.
+        var console = new TestConsole();     // not .Interactive()
+        var entra = NothingStored();
+        var resolver = Resolver(FoundrySignedOut(), entra.Object, console);
+
+        var resolved = await resolver.ResolveAsync(
+            OneEntraCapability("margin-dev", new() { ["X"] = "{entra:clientid}" }),
+            new ManifestResolveOptions { AcceptOptional = true });
 
         resolved.Should().NotBeNull();
         resolved!.Count.Should().Be(0);

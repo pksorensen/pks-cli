@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using PKS.Infrastructure.Services.Entra;
+using PKS.Infrastructure.Services.Security;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -67,6 +68,10 @@ public sealed class EntraAppInitCommand : AsyncCommand<EntraAppInitCommand.Setti
         [CommandOption("--yes")]
         [Description("Do not ask before writing to the directory")]
         public bool Yes { get; set; }
+
+        [CommandOption("--manual")]
+        [Description("Type in a client id and secret that already exist, instead of talking to Graph")]
+        public bool Manual { get; set; }
     }
 
     public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
@@ -76,6 +81,14 @@ public sealed class EntraAppInitCommand : AsyncCommand<EntraAppInitCommand.Setti
         {
             _console.MarkupLine("[red]give the app registration a name:[/] pks entra app init \"Margin v1 (dev)\"");
             return 1;
+        }
+
+        // Before any sign-in check, because the operator who picks this mode is often the one who
+        // cannot sign in to that directory — or does not want pks writing in it. Nothing below this
+        // branch touches Graph.
+        if (settings.Manual)
+        {
+            return await ManualAsync(name, settings);
         }
 
         if (!await _entra.IsAuthenticatedAsync())
@@ -160,13 +173,89 @@ public sealed class EntraAppInitCommand : AsyncCommand<EntraAppInitCommand.Setti
             _console.MarkupLine("[dim]  - the previous secret was removed from the directory[/]");
         }
 
+        PrintBinding(app.Alias);
+        return 0;
+    }
+
+    /// <summary>
+    /// The registration already exists and somebody else made it. All this does is move the secret from
+    /// wherever it is being pasted from into the encrypted store, once, under an alias — which is the
+    /// whole benefit of the Graph path anyway. No token, no directory write, no permissions needed.
+    /// </summary>
+    private async Task<int> ManualAsync(string name, Settings settings)
+    {
+        var alias = settings.Alias ?? name;
+        var existing = await _entra.GetStoredAsync(alias);
+
+        _console.MarkupLine($"[bold cyan]Storing an existing app registration as [/][yellow]{alias.EscapeMarkup()}[/]");
+        _console.MarkupLine("[dim]Portal → App registrations → your app → Overview for the two ids, Certificates & secrets for the value.[/]");
+
+        var tenantPrompt = new TextPrompt<string>("[cyan]tenant id:[/]")
+            .Validate(v => string.IsNullOrWhiteSpace(v)
+                ? ValidationResult.Error("[red]the directory (tenant) id is required.[/]")
+                : ValidationResult.Success());
+        if (!string.IsNullOrEmpty(existing?.TenantId))
+        {
+            tenantPrompt = tenantPrompt.DefaultValue(existing.TenantId).ShowDefaultValue();
+        }
+        var tenantId = _console.Prompt(tenantPrompt).Trim();
+
+        var clientPrompt = new TextPrompt<string>("[cyan]client id:[/]")
+            .Validate(v => string.IsNullOrWhiteSpace(v)
+                ? ValidationResult.Error("[red]the application (client) id is required.[/]")
+                : ValidationResult.Success());
+        if (!string.IsNullOrEmpty(existing?.AppId))
+        {
+            clientPrompt = clientPrompt.DefaultValue(existing.AppId).ShowDefaultValue();
+        }
+        var clientId = _console.Prompt(clientPrompt).Trim();
+
+        // Masked, and it goes into a SecretValue on the next line — this method never holds it as
+        // anything a later `_console.WriteLine` could reach.
+        var secret = _console.Prompt(
+            new TextPrompt<string>("[cyan]client secret:[/]")
+                .Secret()
+                .Validate(v => string.IsNullOrWhiteSpace(v)
+                    ? ValidationResult.Error("[red]the secret value is required — the long one, not the secret id.[/]")
+                    : ValidationResult.Success()))
+            .Trim();
+
+        var stored = await _entra.SaveAsync(new EntraManualApp
+        {
+            Alias = alias,
+            DisplayName = name,
+            TenantId = tenantId,
+            ClientId = clientId,
+            ClientSecret = SecretValue.From(secret),
+        });
+
+        _console.WriteLine();
+        _console.MarkupLine($"[green]stored[/] {stored.DisplayName.EscapeMarkup()}");
+
+        var table = new Table().Border(TableBorder.None).HideHeaders();
+        table.AddColumn(new TableColumn("").PadRight(2));
+        table.AddColumn(new TableColumn(""));
+        table.AddRow("alias", $"[bold]{stored.Alias.EscapeMarkup()}[/]");
+        table.AddRow("client id", stored.AppId.EscapeMarkup());
+        table.AddRow("tenant id", stored.TenantId.EscapeMarkup());
+        table.AddRow("secret", "stored, expiry not known to pks");
+        _console.Write(table);
+
+        _console.MarkupLine("[dim]  pks did not mint this one, so it will not warn before it expires and[/]");
+        _console.MarkupLine("[dim]  [bold]--rotate[/] will not replace it — that stays a portal visit.[/]");
+
+        PrintBinding(stored.Alias);
+        return 0;
+    }
+
+    private void PrintBinding(string alias)
+    {
         _console.WriteLine();
         _console.MarkupLine("Bind it in an AppHost, next to the parameters that receive it:");
-        _console.MarkupLine($"[dim]    builder.AddPksCapability(\"{app.Alias.EscapeMarkup()}\", \"Signing in with Entra ID\")[/]");
+        _console.MarkupLine($"[dim]    builder.AddPksCapability(\"{alias.EscapeMarkup()}\", \"Signing in with Entra ID\")[/]");
         _console.MarkupLine("[dim]           .Offers(\"entra\", \"An app registration pks provisioned\")[/]");
         _console.MarkupLine("[dim]           .Binds(tenantId,     \"{entra:tenantid}\")[/]");
         _console.MarkupLine("[dim]           .Binds(clientId,     \"{entra:clientid}\")[/]");
         _console.MarkupLine("[dim]           .Binds(clientSecret, \"{entra:clientsecret}\");[/]");
-        return 0;
     }
 }

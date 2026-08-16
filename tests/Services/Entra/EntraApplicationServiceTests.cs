@@ -376,6 +376,78 @@ public class EntraApplicationServiceTests
     [Fact]
     [Trait("Category", "Unit")]
     [Trait("Speed", "Fast")]
+    public async Task A_manual_save_never_touches_graph()
+    {
+        // The mode exists for a directory pks has no business writing to — a customer's production
+        // tenant, or one where making an app registration is somebody else's job. A single Graph call
+        // in here would fail for exactly the operator who chose it.
+        var handler = new Handler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError)
+        {
+            Content = new StringContent("{}"),
+        });
+
+        var store = new MemoryStore();
+        var service = Build(handler, store);
+
+        var stored = await service.SaveAsync(new EntraManualApp
+        {
+            Alias = "margin-dev",
+            DisplayName = "Margin v1 (dev)",
+            TenantId = "tenant-9",
+            ClientId = "client-9",
+            ClientSecret = SecretValue.From("pasted-secret"),
+        });
+
+        handler.Calls.Should().BeEmpty();
+        stored.AppId.Should().Be("client-9");
+        stored.TenantId.Should().Be("tenant-9");
+
+        // No expiry was stated, so nothing pretends to know one — a manual entry must not read as
+        // expired on the day it was typed.
+        stored.IsExpired.Should().BeFalse();
+
+        // pks did not mint it, so it does not know which directory credential it is. A stale key id
+        // here would point a later --rotate at somebody else's secret.
+        stored.SecretKeyId.Should().BeEmpty();
+
+        stored.ClientSecret.ToString().Should().Be("***");
+        (await store.Resolver.RevealAsync("entra.app.margin-dev.credentials"))
+            .Should().Contain("pasted-secret");
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task A_manual_save_over_a_provisioned_alias_drops_the_key_it_no_longer_owns()
+    {
+        var handler = new Handler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/v1.0/applications" => Json($$"""{"value":[{{ApplicationJson}}]}"""),
+            "/v1.0/servicePrincipals" => Json("""{"value":[{"id":"sp-1"}]}"""),
+            "/v1.0/applications/obj-1/addPassword" => Json(
+                """{"keyId":"key-1","secretText":"the-secret","endDateTime":"2027-01-01T00:00:00Z"}"""),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("{}") },
+        });
+
+        var store = new MemoryStore();
+        var service = Build(handler, store);
+
+        await service.InitAsync(new EntraAppRequest { DisplayName = "Margin v1 (dev)", Alias = "margin-dev" });
+        var stored = await service.SaveAsync(new EntraManualApp
+        {
+            Alias = "margin-dev",
+            TenantId = "tenant-9",
+            ClientId = "app-1",
+            ClientSecret = SecretValue.From("hand-made"),
+        });
+
+        stored.SecretKeyId.Should().BeEmpty();
+        stored.ObjectId.Should().Be("obj-1", "the registration is the same one, so the object id still holds");
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
     public async Task An_unslugged_alias_finds_what_it_stored()
     {
         // The resolver looks an alias up straight from a capability's name, so a capability called

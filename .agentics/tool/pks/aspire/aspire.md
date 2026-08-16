@@ -84,6 +84,11 @@ builder.AddPksCapability("chat", "The model that writes the answer on Overview")
 An `{entra:…}` placeholder takes the alias from the capability's own name; `{entra:clientid:other}`
 names a different one, which is how one composition binds two registrations.
 
+When the alias is not stored and the run is interactive, pks offers to take the tenant id, client id
+and secret right there, and asks afterwards whether to keep them — defaulting to **no**, in which case
+they exist only for this run. Aspire's own dialog would ask too, but its *Save to user secret* checkbox
+writes plaintext under the project; this one forgets. `--non-interactive` skips the offer entirely.
+
 Anything else passes through as a literal. A role is discovered from the bindings — binding `{model:default}` is how the composition says there is a role called `default` to ask about.
 
 A capability is optional by default. `AddPksCapability(name, description, required: true)` makes a missing provider stop the run instead of skipping the capability.

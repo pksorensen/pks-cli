@@ -17,6 +17,13 @@ public sealed class ManifestResolver : IManifestResolver
 
     private ImdsProxy? _imds;
 
+    /// <summary>
+    /// App registrations typed in during this run and deliberately not written anywhere. They live for
+    /// as long as the resolver does — which is one <c>aspire run</c> — and go the same way every other
+    /// resolved value goes: into the child process's environment and nowhere else.
+    /// </summary>
+    private readonly Dictionary<string, EntraStoredApp> _entered = new(StringComparer.OrdinalIgnoreCase);
+
     public ManifestResolver(
         IAzureFoundryAuthService foundryAuth,
         AzureFoundryAuthConfig foundryConfig,
@@ -75,6 +82,7 @@ public sealed class ManifestResolver : IManifestResolver
     {
         _imds?.Stop();
         _imds = null;
+        _entered.Clear();
     }
 
     // ---------- provider selection ----------
@@ -99,6 +107,24 @@ public sealed class ManifestResolver : IManifestResolver
             {
                 _console.MarkupLine($"  [dim]{hint}[/]");
             }
+
+            // An app registration is the one kind whose values a person can simply *have* — in the
+            // portal, in a password manager — without pks having provisioned anything. So ask, rather
+            // than skip a capability the operator could fill in ten seconds. Asking is not writing:
+            // the answer stays in memory unless they say to keep it.
+            // The capability check is the flag; the console check is the terminal. A run whose stdin is
+            // a pipe has nobody to ask either, and Spectre's answer to being asked anyway is to throw —
+            // which would turn a skipped capability into a failed run.
+            var entra = capability.Providers.FirstOrDefault(
+                p => string.Equals(p.Kind, "entra", StringComparison.OrdinalIgnoreCase));
+            if (entra is not null
+                && !options.NonInteractive
+                && _console.Profile.Capabilities.Interactive
+                && await PromptForEntraAsync(capability.Id))
+            {
+                return entra;
+            }
+
             return null;
         }
 
@@ -149,7 +175,8 @@ public sealed class ManifestResolver : IManifestResolver
         "foundry" => "sign in with [bold]pks foundry init[/]",
         "gemini" => "set GEMINI_API_KEY",
         "openai-compatible" => "set OPENAI_BASE_URL (and OPENAI_API_KEY where the endpoint wants one)",
-        "entra" => $"provision one with [bold]pks entra app init \"{capabilityId.EscapeMarkup()}\" --alias {capabilityId.EscapeMarkup()}[/]",
+        "entra" => $"provision one with [bold]pks entra app init \"{capabilityId.EscapeMarkup()}\" --alias {capabilityId.EscapeMarkup()}[/], "
+                 + "or add [bold]--manual[/] to store one that already exists",
         _ => $"nothing registered can provide [bold]{kind.EscapeMarkup()}[/]",
     };
 
@@ -166,8 +193,86 @@ public sealed class ManifestResolver : IManifestResolver
             return null;
         }
 
+        // What was typed in for this run wins over what is on disk, so an operator can try a rotated
+        // secret without overwriting the stored one first.
+        if (_entered.TryGetValue(EntraApplicationService.Slug(alias), out var entered))
+        {
+            return entered;
+        }
+
         var app = await _entra.GetStoredAsync(alias);
         return app is not null && app.ClientSecret.HasValue ? app : null;
+    }
+
+    /// <summary>
+    /// Asks for an app registration's three values at run time and keeps them in memory for this run.
+    ///
+    /// This is the answer to "I have the credential but I do not want it on my disk": Aspire would also
+    /// ask — its parameter dialog has a *Save to user secret* checkbox — but what it saves is plaintext
+    /// under the project, for as long as the project exists. Here the default is not to save, and a run
+    /// that does not save asks again next time, which is the price of that and worth saying out loud.
+    /// </summary>
+    private async Task<bool> PromptForEntraAsync(string alias)
+    {
+        var key = EntraApplicationService.Slug(alias);
+        if (!_console.Confirm($"  enter the app registration for [yellow]{key.EscapeMarkup()}[/] now?", false))
+        {
+            return false;
+        }
+
+        var tenantId = _console.Prompt(
+            new TextPrompt<string>("    tenant id:")
+                .Validate(v => string.IsNullOrWhiteSpace(v)
+                    ? ValidationResult.Error("[red]required[/]")
+                    : ValidationResult.Success()))
+            .Trim();
+
+        var clientId = _console.Prompt(
+            new TextPrompt<string>("    client id:")
+                .Validate(v => string.IsNullOrWhiteSpace(v)
+                    ? ValidationResult.Error("[red]required[/]")
+                    : ValidationResult.Success()))
+            .Trim();
+
+        var secret = _console.Prompt(
+            new TextPrompt<string>("    client secret:")
+                .Secret()
+                .Validate(v => string.IsNullOrWhiteSpace(v)
+                    ? ValidationResult.Error("[red]required[/]")
+                    : ValidationResult.Success()))
+            .Trim();
+
+        _entered[key] = new EntraStoredApp
+        {
+            Alias = key,
+            DisplayName = key,
+            AppId = clientId,
+            TenantId = tenantId,
+            ClientSecret = SecretValue.From(secret),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+
+        // Default no. Somebody who wanted it stored would have run `pks entra app init --manual`;
+        // getting here usually means they specifically did not.
+        if (_console.Confirm($"    keep it under alias [yellow]{key.EscapeMarkup()}[/] so the next run does not ask?", false))
+        {
+            await _entra.SaveAsync(new EntraManualApp
+            {
+                Alias = key,
+                DisplayName = key,
+                TenantId = tenantId,
+                ClientId = clientId,
+                ClientSecret = SecretValue.From(secret),
+            });
+            _console.MarkupLine("    [green]stored[/] [dim]— encrypted, and readable only on its way into a child process[/]");
+        }
+        else
+        {
+            _console.MarkupLine("    [dim]this run only — nothing written to disk[/]");
+        }
+
+        return true;
     }
 
     // ---------- model selection ----------

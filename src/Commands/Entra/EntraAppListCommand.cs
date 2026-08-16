@@ -62,6 +62,10 @@ public sealed class EntraAppListCommand : AsyncCommand<EntraAppListCommand.Setti
             // whole contract.
             var secret = !app.ClientSecret.HasValue
                 ? "[red]missing[/]"
+                // A hand-entered one has no end date, and printing 0001-01-01 in a warning colour says
+                // something false about a credential that is probably fine.
+                : app.SecretExpiresOn == default
+                    ? "[dim]stored, expiry unknown[/]"
                 : app.IsExpired
                     ? $"[red]expired {app.SecretExpiresOn:yyyy-MM-dd}[/]"
                     : app.SecretExpiresOn - DateTimeOffset.UtcNow < TimeSpan.FromDays(30)

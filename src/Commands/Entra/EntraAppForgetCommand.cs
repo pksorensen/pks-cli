@@ -43,7 +43,12 @@ public sealed class EntraAppForgetCommand : AsyncCommand<EntraAppForgetCommand.S
         _console.MarkupLine($"[green]forgot[/] {settings.Alias.EscapeMarkup()}");
         if (stored is not null && !string.IsNullOrEmpty(stored.AppId))
         {
-            _console.MarkupLine($"[dim]the registration {stored.AppId.EscapeMarkup()} still exists in the tenant, with the credential pks minted still on it.[/]");
+            // Only claim the credential is one pks made when it is. A stored key id is the proof;
+            // without one this alias was typed in, and what is on the registration is somebody else's.
+            var credential = string.IsNullOrEmpty(stored.SecretKeyId)
+                ? "and its credentials are unchanged"
+                : "with the credential pks minted still on it";
+            _console.MarkupLine($"[dim]the registration {stored.AppId.EscapeMarkup()} still exists in the tenant, {credential}.[/]");
         }
         return 0;
     }

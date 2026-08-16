@@ -37,6 +37,14 @@ public interface IEntraApplicationService
     /// </summary>
     Task<EntraAppResult> InitAsync(EntraAppRequest request, CancellationToken ct = default);
 
+    /// <summary>
+    /// Stores an app registration somebody else made, without calling Graph or needing a sign-in at
+    /// all. The point of the mode: an operator who does not want pks writing in their directory still
+    /// wants the secret out of a paste and into the store, and everything downstream — the alias, the
+    /// capability binding, the resolver — works the same afterwards.
+    /// </summary>
+    Task<EntraStoredApp> SaveAsync(EntraManualApp app);
+
     /// <summary>Apps in the directory whose display name starts with <paramref name="prefix"/>.</summary>
     Task<IReadOnlyList<EntraApplication>> ListDirectoryAsync(string? prefix = null, CancellationToken ct = default);
 
@@ -244,6 +252,56 @@ public sealed class EntraApplicationService : IEntraApplicationService
         }
 
         return result;
+    }
+
+    /// <inheritdoc />
+    public async Task<EntraStoredApp> SaveAsync(EntraManualApp app)
+    {
+        ArgumentNullException.ThrowIfNull(app);
+        if (string.IsNullOrWhiteSpace(app.Alias))
+        {
+            throw new ArgumentException("a stored app registration needs an alias", nameof(app));
+        }
+        if (string.IsNullOrWhiteSpace(app.ClientId))
+        {
+            throw new ArgumentException("a stored app registration needs a client id", nameof(app));
+        }
+        if (!app.ClientSecret.HasValue)
+        {
+            throw new ArgumentException("a stored app registration needs a client secret", nameof(app));
+        }
+
+        // Not one Graph call in here, deliberately. The operator who reaches for this mode is exactly
+        // the one who has no Graph permissions or does not want to use them, and a sign-in check would
+        // be the first thing to fail for them.
+        var alias = Slug(app.Alias);
+        var existing = await GetStoredAsync(alias);
+        var sameApp = existing is not null
+            && string.Equals(existing.AppId, app.ClientId, StringComparison.OrdinalIgnoreCase);
+
+        var stored = new EntraStoredApp
+        {
+            Alias = alias,
+            DisplayName = string.IsNullOrWhiteSpace(app.DisplayName)
+                ? existing?.DisplayName ?? alias
+                : app.DisplayName,
+            AppId = app.ClientId,
+
+            // pks did not mint this credential, so it does not know which of the registration's
+            // credentials it is. Carrying the old key id forward would point a later `--rotate` at
+            // somebody else's secret and remove it.
+            ObjectId = sameApp ? existing!.ObjectId : "",
+            SecretKeyId = "",
+
+            TenantId = string.IsNullOrWhiteSpace(app.TenantId) ? existing?.TenantId ?? "" : app.TenantId,
+            SecretExpiresOn = app.ExpiresOn ?? default,
+            ClientSecret = app.ClientSecret,
+            CreatedAt = existing?.CreatedAt ?? DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+
+        await StoreAsync(stored);
+        return stored;
     }
 
     // ─────────────────────────────────────────────
