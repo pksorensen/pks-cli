@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.0.2](https://github.com/pksorensen/pks-cli/compare/v7.0.1...v7.0.2) (2026-08-16)
+
+
+### Bug Fixes
+
+* **npm:** find the platform binary when npm nests it ([f8f4a81](https://github.com/pksorensen/pks-cli/commit/f8f4a81e002dcba2ad160180ec794955243cc112))
+
 ## [7.0.1](https://github.com/pksorensen/pks-cli/compare/v7.0.0...v7.0.1) (2026-08-16)
 
 
