@@ -42,24 +42,45 @@ function getBinaryPath() {
   // Binary may be at package root or in bin/ subdirectory
   const scopeDir = join(__dirname, '..', '..');           // node_modules/@pks-cli/
   const parentScopeDir = join(__dirname, '..', '..', '..', '@pks-cli'); // ../node_modules/@pks-cli/
+  // Not hoisted: npm nests the optional dependency inside this package when the
+  // install has nowhere to hoist it to -- which is exactly what `npm i -g` does,
+  // so a global install found no binary at all until this root was added.
+  const ownScopeDir = join(__dirname, '..', 'node_modules', '@pks-cli');
 
-  const paths = [
-    // Scoped: node_modules/@pks-cli/cli-linux-x64/bin/pks
-    join(scopeDir, packageDir, 'bin', 'pks'),
-    join(scopeDir, packageDir, 'bin', 'pks.exe'),
-    join(scopeDir, packageDir, 'pks'),
-    join(scopeDir, packageDir, 'pks.exe'),
-    // Parent node_modules (hoisted)
-    join(parentScopeDir, packageDir, 'bin', 'pks'),
-    join(parentScopeDir, packageDir, 'bin', 'pks.exe'),
-    join(parentScopeDir, packageDir, 'pks'),
-    join(parentScopeDir, packageDir, 'pks.exe'),
-  ];
+  const roots = [scopeDir, parentScopeDir, ownScopeDir];
+  const paths = [];
+  for (const root of roots) {
+    paths.push(
+      join(root, packageDir, 'bin', 'pks'),
+      join(root, packageDir, 'bin', 'pks.exe'),
+      join(root, packageDir, 'pks'),
+      join(root, packageDir, 'pks.exe'),
+    );
+  }
 
   for (const path of paths) {
     if (existsSync(path)) {
       return path;
     }
+  }
+
+  // Last resort: let Node walk the node_modules chain itself, which covers layouts
+  // (pnpm, yarn PnP-less workspaces) that no hardcoded root above anticipates.
+  try {
+    const manifest = require.resolve(`${packageName}/package.json`, { paths: [__dirname] });
+    const packageRoot = join(manifest, '..');
+    for (const candidate of [
+      join(packageRoot, 'bin', 'pks'),
+      join(packageRoot, 'bin', 'pks.exe'),
+      join(packageRoot, 'pks'),
+      join(packageRoot, 'pks.exe'),
+    ]) {
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  } catch {
+    // Fall through to the error below -- resolution failing just means "not installed".
   }
 
   console.error(`PKS CLI binary not found for ${platform}-${arch}`);

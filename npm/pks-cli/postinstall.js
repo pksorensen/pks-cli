@@ -39,6 +39,8 @@ function checkPlatformPackage() {
     join(__dirname, '..', packageDir),
     // Parent node_modules (hoisted)
     join(__dirname, '..', '..', '@pks-cli', packageDir),
+    // Nested, i.e. not hoisted anywhere -- what `npm i -g` produces
+    join(__dirname, 'node_modules', '@pks-cli', packageDir),
   ];
 
   for (const path of paths) {
@@ -48,7 +50,15 @@ function checkPlatformPackage() {
     }
   }
 
-  return false;
+  // Same fallback as bin/pks.js: Node's own resolution covers layouts the
+  // hardcoded paths above do not.
+  try {
+    require.resolve(`${packageName}/package.json`, { paths: [__dirname] });
+    console.log(`✅ PKS CLI installed successfully for ${platform}-${arch}`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
