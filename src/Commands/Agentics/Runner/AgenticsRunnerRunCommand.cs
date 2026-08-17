@@ -2141,6 +2141,12 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         scriptLines.AppendLine($"git config --global user.email \"{gitUserEmail}\"");
         scriptLines.AppendLine($"cd {workspaceFolder}");
 
+        // Runner-owned environment files must be present inside the workspace, but they are not
+        // repository work. Hide only untracked paths through .git/info/exclude so AutoGit's clean
+        // tree gate cannot pressure the agent into committing devcontainer scaffolding, Claude
+        // settings, or a runner-generated MCP file. Tracked project files remain visible.
+        scriptLines.AppendLine(BuildRunnerGitExcludeScript(job.AgentDef?.DevcontainerFiles?.Keys));
+
         // initBranch: create a task-scoped branch before Claude starts so work is isolated
         if (job.AgentDef?.InitBranch == true && !string.IsNullOrEmpty(job.AgentDef.TaskId))
         {
@@ -2148,9 +2154,10 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             scriptLines.AppendLine($"git checkout -b {branchName} 2>/dev/null || git checkout {branchName}");
         }
 
-        // Remove any stale .mcp.json left by an older vibecast session (plugin dir handles MCP now).
-        // Tools like `aspire agent init` run during the session and will recreate it correctly.
-        scriptLines.AppendLine("rm -f .mcp.json");
+        // Remove only an untracked stale .mcp.json left by an older vibecast session. A tracked
+        // project MCP configuration belongs to the repository and must never be deleted by the
+        // runner merely because the plugin directory now handles its own MCP wiring.
+        scriptLines.AppendLine("git ls-files --error-unmatch -- .mcp.json >/dev/null 2>&1 || rm -f .mcp.json");
 
         // Devagent session (plan `snappy-wandering-mochi` Phase 3): wire Claude's `agent-share
         // channel` stdio bridge to the project's dedicated inbox so the light chat's
@@ -4060,6 +4067,64 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         if (allowlist is null || allowlist.Count == 0)
             return models;
         return models.Where(m => allowlist.Contains(m, StringComparer.OrdinalIgnoreCase)).ToList();
+    }
+
+    /// <summary>
+    /// Returns workspace-relative paths/patterns owned by the runner rather than the checked-out
+    /// repository. They are written to the clone's local <c>.git/info/exclude</c>, never to the
+    /// project's committed <c>.gitignore</c>. Exact paths that are already tracked are skipped by
+    /// <see cref="BuildRunnerGitExcludeScript"/> at runtime.
+    /// </summary>
+    internal static IReadOnlyList<string> RunnerGitExcludePatterns(IEnumerable<string>? devcontainerFiles)
+    {
+        var patterns = new List<string>
+        {
+            "CLAUDE.md",
+            ".claude/settings.json",
+            ".claude/settings.local.json",
+            ".claude/.gitignore",
+            ".mcp.json",
+            // devcontainer CLI materializes this beside a server-supplied config.
+            ".devcontainer/override-config-devcontainer-*.json",
+        };
+
+        if (devcontainerFiles is not null)
+        {
+            foreach (var rawPath in devcontainerFiles)
+            {
+                var path = rawPath.Replace('\\', '/').TrimStart('/');
+                if (string.IsNullOrWhiteSpace(path)) continue;
+                if (path.Split('/').Any(segment => segment == "..")) continue;
+                patterns.Add(path);
+            }
+        }
+
+        return patterns.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>
+    /// Builds the bash fragment that locally excludes runner-owned files from Git. Wildcard
+    /// patterns are always added; exact paths are added only when the repository does not track
+    /// them, so a real project file can never be hidden from AutoGit.
+    /// </summary>
+    internal static string BuildRunnerGitExcludeScript(IEnumerable<string>? devcontainerFiles)
+    {
+        static string ShellQuote(string value) => "'" + value.Replace("'", "'\"'\"'") + "'";
+
+        var paths = string.Join(" ", RunnerGitExcludePatterns(devcontainerFiles).Select(ShellQuote));
+        return $$"""
+            runner_git_exclude="$(git rev-parse --git-path info/exclude)"
+            mkdir -p "$(dirname "$runner_git_exclude")"
+            for runner_injected_path in {{paths}}; do
+              case "$runner_injected_path" in
+                *'*'*|*'?'*|*'['*) ;;
+                *) git ls-files --error-unmatch -- "$runner_injected_path" >/dev/null 2>&1 && continue ;;
+              esac
+              runner_git_pattern="/$runner_injected_path"
+              grep -qxF "$runner_git_pattern" "$runner_git_exclude" 2>/dev/null || printf '%s\n' "$runner_git_pattern" >> "$runner_git_exclude"
+            done
+            unset runner_injected_path runner_git_pattern runner_git_exclude
+            """;
     }
 
     /// <summary>
