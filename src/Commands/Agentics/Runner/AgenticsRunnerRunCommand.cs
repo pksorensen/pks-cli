@@ -2089,8 +2089,24 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                 var escapedHint = job.AgentDef.CommitMessageTemplate.Replace("'", "'\\''");
                 scriptLines.AppendLine($"export AGENTICS_COMMIT_MESSAGE_HINT='{escapedHint}'");
             }
-            if (!string.IsNullOrWhiteSpace(job.AgentDef.ProjectRepoToken))
-                scriptLines.AppendLine($"export AGENTICS_REPO_TOKEN='{job.AgentDef.ProjectRepoToken}'");
+            if (job.AgentDef.CommitBackRepository is { } commitBack)
+            {
+                var escapedUrl = commitBack.Url?.Replace("'", "'\\''");
+                var escapedKind = commitBack.CredentialKind?.Replace("'", "'\\''");
+                scriptLines.AppendLine($"export AGENTICS_COMMIT_BACK_URL='{escapedUrl}'");
+                scriptLines.AppendLine($"export AGENTICS_COMMIT_BACK_CREDENTIAL_KIND='{escapedKind}'");
+                if (!string.IsNullOrWhiteSpace(commitBack.Token))
+                {
+                    var escapedToken = commitBack.Token.Replace("'", "'\\''");
+                    scriptLines.AppendLine($"export AGENTICS_COMMIT_BACK_TOKEN='{escapedToken}'");
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(job.AgentDef.ProjectRepoToken))
+            {
+                // Backward compatibility for jobs produced by an older server.
+                var escapedToken = job.AgentDef.ProjectRepoToken.Replace("'", "'\\''");
+                scriptLines.AppendLine($"export AGENTICS_REPO_TOKEN='{escapedToken}'");
+            }
         }
 
         // Operator: auto-approve image uploads so headless stations don't require TUI interaction
@@ -4599,10 +4615,24 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
                     var escapedHint = job.AgentDef.CommitMessageTemplate.Replace("'", "'\\''");
                     autoGitEnv += $" AGENTICS_COMMIT_MESSAGE_HINT='{escapedHint}'";
                 }
-                // Pass the project repo token separately — AGENTICS_TOKEN is the runner API token
-                // and is NOT accepted by the git server's repo.git endpoint.
-                if (!string.IsNullOrWhiteSpace(job.AgentDef.ProjectRepoToken))
-                    autoGitEnv += $" AGENTICS_REPO_TOKEN='{job.AgentDef.ProjectRepoToken}'";
+                if (job.AgentDef.CommitBackRepository is { } commitBack)
+                {
+                    var escapedUrl = commitBack.Url?.Replace("'", "'\\''");
+                    var escapedKind = commitBack.CredentialKind?.Replace("'", "'\\''");
+                    autoGitEnv += $" AGENTICS_COMMIT_BACK_URL='{escapedUrl}'";
+                    autoGitEnv += $" AGENTICS_COMMIT_BACK_CREDENTIAL_KIND='{escapedKind}'";
+                    if (!string.IsNullOrWhiteSpace(commitBack.Token))
+                    {
+                        var escapedToken = commitBack.Token.Replace("'", "'\\''");
+                        autoGitEnv += $" AGENTICS_COMMIT_BACK_TOKEN='{escapedToken}'";
+                    }
+                }
+                else if (!string.IsNullOrWhiteSpace(job.AgentDef.ProjectRepoToken))
+                {
+                    // Backward compatibility for jobs produced by an older server.
+                    var escapedToken = job.AgentDef.ProjectRepoToken.Replace("'", "'\\''");
+                    autoGitEnv += $" AGENTICS_REPO_TOKEN='{escapedToken}'";
+                }
             }
 
             // Operator: auto-approve image uploads so headless stations don't require TUI interaction
@@ -6448,7 +6478,8 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         public int? MaxTimeoutMinutes { get; set; }
         public string? StageGitUrl { get; set; }
         public string? StageGitToken { get; set; }
-        /// <summary>Token for the project's main repo.git endpoint — separate from the runner API token (AGENTICS_TOKEN).</summary>
+        public CommitBackRepositoryDefinition? CommitBackRepository { get; set; }
+        /// <summary>Legacy token field used by jobs from an older server.</summary>
         public string? ProjectRepoToken { get; set; }
         public Dictionary<string, string>? DevcontainerFiles { get; set; }
         /// <summary>
@@ -6529,6 +6560,13 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         /// wiring Claude's `agent-share channel` stdio bridge to this inbox so the in-container session
         /// long-polls it and can reply via `complete()`.</summary>
         public RunnerDevAgentChannel? DevAgentChannel { get; set; }
+    }
+
+    private class CommitBackRepositoryDefinition
+    {
+        public string? Url { get; set; }
+        public string? CredentialKind { get; set; }
+        public string? Token { get; set; }
     }
 
     private class RunnerDevAgentChannel
