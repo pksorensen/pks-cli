@@ -34,6 +34,7 @@ public class RunnerDaemonService : IRunnerDaemonService
     private readonly HashSet<string> _reportedRunnerSwaps = new();
     private readonly object _lock = new();
     private int _consecutiveAuthFailures;
+    private int _consecutiveRateLimitFailures;
 
     public event EventHandler<RunnerJobState>? JobStarted;
     public event EventHandler<RunnerJobState>? JobCompleted;
@@ -221,10 +222,35 @@ public class RunnerDaemonService : IRunnerDaemonService
                     _logger.LogInformation("Polling succeeded after {Count} auth failure(s), resetting counter", _consecutiveAuthFailures);
                     _consecutiveAuthFailures = 0;
                 }
+                _consecutiveRateLimitFailures = 0;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 break;
+            }
+            catch (GitHubApiException ex) when (IsGitHubRateLimit(ex))
+            {
+                _consecutiveRateLimitFailures++;
+                var now = DateTime.UtcNow;
+                var delay = CalculateRateLimitBackoff(
+                    now,
+                    ex.RateLimitResetAt,
+                    ex.RetryAfter,
+                    _consecutiveRateLimitFailures,
+                    config.PollingIntervalSeconds,
+                    jitter: TimeSpan.FromSeconds(Random.Shared.Next(1, 6)));
+                var resumeAt = now + delay;
+
+                _logger.LogWarning(ex,
+                    "GitHub rate limit reached. Pausing all polling for {Delay} until {ResumeAt:u}",
+                    delay, resumeAt);
+                OnStatusChanged(
+                    $"GitHub rate limit reached — polling paused until {resumeAt:HH:mm:ss} UTC " +
+                    $"({FormatBackoff(delay)})");
+
+                try { await Task.Delay(delay, cancellationToken); }
+                catch (OperationCanceledException) { break; }
+                continue;
             }
             catch (Exception ex) when (ex.Message.Contains("Bad credentials", StringComparison.OrdinalIgnoreCase)
                                      || ex.Message.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase))
@@ -291,6 +317,48 @@ public class RunnerDaemonService : IRunnerDaemonService
             }
         }
     }
+
+    internal static bool IsGitHubRateLimit(GitHubApiException exception) =>
+        exception.IsRateLimit
+        || exception.StatusCode == System.Net.HttpStatusCode.TooManyRequests
+        || exception.Message.Contains("rate limit", StringComparison.OrdinalIgnoreCase);
+
+    internal static TimeSpan CalculateRateLimitBackoff(
+        DateTime now,
+        DateTime? resetAt,
+        TimeSpan? retryAfter,
+        int consecutiveFailures,
+        int pollingIntervalSeconds,
+        TimeSpan jitter)
+    {
+        var authoritative = retryAfter.HasValue && retryAfter.Value > TimeSpan.Zero
+            ? retryAfter.Value
+            : resetAt.HasValue && resetAt.Value > now
+                ? resetAt.Value - now
+                : TimeSpan.Zero;
+
+        TimeSpan delay;
+        if (authoritative > TimeSpan.Zero)
+        {
+            delay = authoritative;
+        }
+        else
+        {
+            var baseSeconds = Math.Max(30, pollingIntervalSeconds);
+            var exponent = Math.Clamp(consecutiveFailures - 1, 0, 10);
+            delay = TimeSpan.FromSeconds(baseSeconds * Math.Pow(2, exponent));
+        }
+
+        var maximum = TimeSpan.FromHours(1);
+        if (delay > maximum) delay = maximum;
+        if (jitter > TimeSpan.Zero) delay += jitter;
+        return delay;
+    }
+
+    private static string FormatBackoff(TimeSpan delay) =>
+        delay.TotalMinutes >= 1
+            ? $"{Math.Ceiling(delay.TotalMinutes):0} min"
+            : $"{Math.Ceiling(delay.TotalSeconds):0} sec";
 
     private async Task PollRegistration(
         RunnerRegistration registration,

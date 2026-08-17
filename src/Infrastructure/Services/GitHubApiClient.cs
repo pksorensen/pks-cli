@@ -254,20 +254,24 @@ public class GitHubApiClient : IGitHubApiClient, IDisposable
                     return JsonSerializer.Deserialize<T>(content, _jsonOptions);
                 }
 
-                // Handle rate limiting
-                if (response.StatusCode == HttpStatusCode.Forbidden &&
-                    response.Headers.Contains("X-RateLimit-Remaining") &&
-                    response.Headers.GetValues("X-RateLimit-Remaining").First() == "0")
+                var primaryRateLimit = response.Headers.TryGetValues("X-RateLimit-Remaining", out var remainingValues)
+                    && remainingValues.FirstOrDefault() == "0";
+                var retryAfter = response.Headers.RetryAfter?.Delta;
+                if (retryAfter is null && response.Headers.RetryAfter?.Date is { } retryDate)
+                    retryAfter = retryDate - DateTimeOffset.UtcNow;
+                var rateLimitResetAt = primaryRateLimit ? GetRateLimitResetTime(response) : (DateTime?)null;
+
+                // Short rate-limit waits are cheap enough to absorb inside one API call. Long waits
+                // are surfaced with reset metadata so daemon callers can pause the whole poll loop
+                // instead of every registration independently retrying every 30 seconds.
+                if ((primaryRateLimit || response.StatusCode == HttpStatusCode.TooManyRequests || retryAfter > TimeSpan.Zero)
+                    && attempt < _retryPolicy.MaxRetries)
                 {
-                    if (attempt < _retryPolicy.MaxRetries)
+                    var waitTime = retryAfter ?? (rateLimitResetAt - DateTime.UtcNow);
+                    if (waitTime > TimeSpan.Zero && waitTime <= _retryPolicy.MaxDelay)
                     {
-                        var resetTime = GetRateLimitResetTime(response);
-                        var waitTime = resetTime - DateTime.UtcNow;
-                        if (waitTime > TimeSpan.Zero && waitTime < _retryPolicy.MaxDelay)
-                        {
-                            await Task.Delay(waitTime, cancellationToken);
-                            continue;
-                        }
+                        await Task.Delay(waitTime.Value, cancellationToken);
+                        continue;
                     }
                 }
 
@@ -282,7 +286,14 @@ public class GitHubApiClient : IGitHubApiClient, IDisposable
                 // Handle non-retryable errors
                 var errorContent = await response.Content.ReadAsStringAsync(cancellationToken);
                 var error = ParseApiError(errorContent);
-                throw new GitHubApiException($"GitHub API error: {error.Message}", response.StatusCode, error);
+                var messageSaysRateLimit = error.Message.Contains("rate limit", StringComparison.OrdinalIgnoreCase);
+                throw new GitHubApiException(
+                    $"GitHub API error: {error.Message}",
+                    response.StatusCode,
+                    error,
+                    isRateLimit: primaryRateLimit || response.StatusCode == HttpStatusCode.TooManyRequests || retryAfter > TimeSpan.Zero || messageSaysRateLimit,
+                    rateLimitResetAt: rateLimitResetAt,
+                    retryAfter: retryAfter);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -434,12 +445,24 @@ public class GitHubApiException : Exception
 {
     public HttpStatusCode StatusCode { get; }
     public GitHubApiError? ApiError { get; }
+    public bool IsRateLimit { get; }
+    public DateTime? RateLimitResetAt { get; }
+    public TimeSpan? RetryAfter { get; }
 
-    public GitHubApiException(string message, HttpStatusCode statusCode, GitHubApiError? apiError = null)
+    public GitHubApiException(
+        string message,
+        HttpStatusCode statusCode,
+        GitHubApiError? apiError = null,
+        bool isRateLimit = false,
+        DateTime? rateLimitResetAt = null,
+        TimeSpan? retryAfter = null)
         : base(message)
     {
         StatusCode = statusCode;
         ApiError = apiError;
+        IsRateLimit = isRateLimit;
+        RateLimitResetAt = rateLimitResetAt;
+        RetryAfter = retryAfter;
     }
 
     public GitHubApiException(string message, HttpStatusCode statusCode, Exception? innerException)

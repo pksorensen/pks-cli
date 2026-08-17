@@ -6,6 +6,7 @@ using PKS.Infrastructure.Services.Models;
 using PKS.Infrastructure.Services.Runner;
 using Xunit;
 using PKS.Infrastructure.Services.Security;
+using System.Net;
 
 namespace PKS.CLI.Tests.Services.Runner;
 
@@ -148,6 +149,53 @@ public class RunnerDaemonServiceTests : IDisposable
         status.ActiveJobs.Should().BeEmpty();
         status.TotalJobsCompleted.Should().Be(0);
         status.TotalJobsFailed.Should().Be(0);
+    }
+
+    #endregion
+
+    #region GitHub rate limiting
+
+    [Fact]
+    public void CalculateRateLimitBackoff_UsesGitHubResetTime()
+    {
+        var now = new DateTime(2026, 8, 17, 19, 0, 0, DateTimeKind.Utc);
+
+        var delay = RunnerDaemonService.CalculateRateLimitBackoff(
+            now,
+            resetAt: now.AddMinutes(42),
+            retryAfter: null,
+            consecutiveFailures: 1,
+            pollingIntervalSeconds: 30,
+            jitter: TimeSpan.FromSeconds(3));
+
+        delay.Should().Be(TimeSpan.FromMinutes(42) + TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
+    public void CalculateRateLimitBackoff_UsesExponentialFallbackAndCapsIt()
+    {
+        var now = DateTime.UtcNow;
+
+        RunnerDaemonService.CalculateRateLimitBackoff(
+                now, null, null, consecutiveFailures: 1, pollingIntervalSeconds: 30, jitter: TimeSpan.Zero)
+            .Should().Be(TimeSpan.FromSeconds(30));
+        RunnerDaemonService.CalculateRateLimitBackoff(
+                now, null, null, consecutiveFailures: 4, pollingIntervalSeconds: 30, jitter: TimeSpan.Zero)
+            .Should().Be(TimeSpan.FromMinutes(4));
+        RunnerDaemonService.CalculateRateLimitBackoff(
+                now, null, null, consecutiveFailures: 20, pollingIntervalSeconds: 30, jitter: TimeSpan.Zero)
+            .Should().Be(TimeSpan.FromHours(1));
+    }
+
+    [Fact]
+    public void IsGitHubRateLimit_RecognizesPrimaryAndSecondaryLimits()
+    {
+        RunnerDaemonService.IsGitHubRateLimit(new GitHubApiException(
+                "forbidden", HttpStatusCode.Forbidden, isRateLimit: true))
+            .Should().BeTrue();
+        RunnerDaemonService.IsGitHubRateLimit(new GitHubApiException(
+                "GitHub API error: secondary rate limit exceeded", HttpStatusCode.Forbidden))
+            .Should().BeTrue();
     }
 
     #endregion
