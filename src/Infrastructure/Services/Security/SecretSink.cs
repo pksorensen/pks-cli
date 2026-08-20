@@ -89,7 +89,10 @@ public static class SecretSink
     public static bool WriteTo(TextWriter writer, SecretValue secret, bool newLine = true)
     {
         if (!secret.HasValue) return false;
-        if (newLine) writer.WriteLine(secret.Reveal()); else writer.Write(secret.Reveal());
+        // "\n", not WriteLine: these bytes are on their way to a POSIX host, and TextWriter.NewLine
+        // follows the *sending* machine — CRLF when pks runs on Windows. The CR would ride along
+        // inside the credential itself.
+        writer.Write(newLine ? secret.Reveal() + "\n" : secret.Reveal());
         return true;
     }
 
@@ -103,7 +106,8 @@ public static class SecretSink
     public static bool WriteEnvLine(TextWriter writer, string name, SecretValue secret)
     {
         if (!secret.HasValue) return false;
-        writer.WriteLine($"{name}={secret.Reveal()}");
+        // See WriteTo: LF explicitly, so a Windows host cannot append a CR to the value.
+        writer.Write($"{name}={secret.Reveal()}\n");
         return true;
     }
 }

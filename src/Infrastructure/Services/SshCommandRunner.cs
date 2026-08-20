@@ -253,6 +253,11 @@ public class SshCommandRunner : ISshCommandRunner
         process.Start();
         try
         {
+            // StreamWriter.NewLine defaults to Environment.NewLine, which is CRLF on Windows. The
+            // far end is a `tee` into a file that systemd and oauth2-proxy then parse, so a CR would
+            // ride along inside every value: the client secret becomes "<secret>\r" and Entra
+            // rejects every login, on Windows only, with nothing in the logs pointing at a newline.
+            process.StandardInput.NewLine = "\n";
             await writeStdin(process.StandardInput);
         }
         finally

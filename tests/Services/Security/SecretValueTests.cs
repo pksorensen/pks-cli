@@ -17,6 +17,28 @@ namespace PKS.CLI.Tests.Services.Security;
 /// </summary>
 public class SecretValueTests
 {
+    /// <summary>
+    /// The env-file writers stream to a POSIX host over ssh, but TextWriter.NewLine follows the
+    /// machine pks is *running on* — CRLF on Windows. `tee` on the far end writes what arrives, so
+    /// the CR ends up inside the value: the Entra client secret becomes "<secret>\r" and every login
+    /// fails, on Windows only, with nothing in any log naming a newline. A StringWriter forced to
+    /// CRLF is the only way to see it from Linux.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public void EnvWriters_emit_LF_even_when_the_host_newline_is_CRLF()
+    {
+        var writer = new StringWriter { NewLine = "\r\n" };
+
+        SecretSink.WriteEnvLine(writer, "OAUTH2_PROXY_CLIENT_SECRET", SecretValue.From("s3cr3t")).Should().BeTrue();
+        SecretSink.WriteTo(writer, SecretValue.From("tok3n")).Should().BeTrue();
+
+        var written = writer.ToString();
+        written.Should().NotContain("\r", "a CR here lands inside the credential on the remote host");
+        written.Should().Be("OAUTH2_PROXY_CLIENT_SECRET=s3cr3t\ntok3n\n");
+    }
+
     private sealed class Holder
     {
         public string Tenant { get; set; } = "contoso";
