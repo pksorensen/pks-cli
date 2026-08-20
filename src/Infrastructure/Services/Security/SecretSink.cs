@@ -77,4 +77,33 @@ public static class SecretSink
         form[name] = secret.Reveal()!;
         return true;
     }
+
+    /// <summary>
+    /// Writes a credential to a stream that is going somewhere else — the stdin of a remote command,
+    /// a config file being generated on a box we do not control. The fourth destination the class
+    /// comment names ("hands it to an ssh session") and the only one that had no helper.
+    ///
+    /// A newline is appended because every consumer on the other end is line-oriented: <c>read VAR</c>,
+    /// <c>tee</c>, a here-doc terminator. Callers wanting no newline can say so; nothing currently does.
+    /// </summary>
+    public static bool WriteTo(TextWriter writer, SecretValue secret, bool newLine = true)
+    {
+        if (!secret.HasValue) return false;
+        if (newLine) writer.WriteLine(secret.Reveal()); else writer.Write(secret.Reveal());
+        return true;
+    }
+
+    /// <summary>
+    /// Writes a <c>NAME=value</c> line into an env-file being streamed to a remote host.
+    ///
+    /// The value is not quoted: the consumers of this shape (systemd <c>EnvironmentFile=</c>,
+    /// oauth2-proxy's <c>--config</c>) take the rest of the line verbatim, and a quote character added
+    /// here would end up *in* the credential rather than around it.
+    /// </summary>
+    public static bool WriteEnvLine(TextWriter writer, string name, SecretValue secret)
+    {
+        if (!secret.HasValue) return false;
+        writer.WriteLine($"{name}={secret.Reveal()}");
+        return true;
+    }
 }

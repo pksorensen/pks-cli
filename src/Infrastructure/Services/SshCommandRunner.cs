@@ -41,6 +41,18 @@ public interface ISshCommandRunner
     /// stdout is captured for the result (e.g., devcontainer up JSON).
     /// </summary>
     Task<SshCommandResult> RunWithOutputAsync(RemoteHostConfig host, string command, string logFile, Action<string>? onOutput = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// Execute a remote command and feed it stdin from a callback, so a credential can reach the
+    /// remote host without ever being an argument.
+    ///
+    /// The distinction matters: <see cref="RunAsync"/> puts <paramref name="command"/> on an ssh
+    /// argv, which the remote sshd hands to a login shell — it lands in that shell's history, in
+    /// <c>ps</c> output for as long as it runs, and in any auditd rule watching execve. Anything
+    /// secret therefore goes down the pipe instead, and the command reads it with <c>read</c> or
+    /// <c>cat</c>. Callers write through <c>SecretSink</c> rather than materializing a string.
+    /// </summary>
+    Task<SshCommandResult> RunWithStdinAsync(RemoteHostConfig host, string command, Func<StreamWriter, Task> writeStdin, CancellationToken ct = default);
 }
 
 public class SshCommandRunner : ISshCommandRunner
@@ -212,6 +224,49 @@ public class SshCommandRunner : ISshCommandRunner
         }
 
         return null;
+    }
+
+    public async Task<SshCommandResult> RunWithStdinAsync(RemoteHostConfig host, string command, Func<StreamWriter, Task> writeStdin, CancellationToken ct = default)
+    {
+        var args = BuildSshArgs(host);
+        args.Add($"{host.Username}@{host.Host}");
+        args.Add(command);
+
+        // No command text in the log line — the caller is by definition sending something secret, and
+        // the wrapper script around it names the file it writes.
+        _logger.LogDebug("SSH (stdin) -> {Host}", host.Host);
+
+        var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = "ssh",
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            }
+        };
+        foreach (var a in args) process.StartInfo.ArgumentList.Add(a);
+
+        process.Start();
+        try
+        {
+            await writeStdin(process.StandardInput);
+        }
+        finally
+        {
+            // The remote `read`/`cat` blocks until EOF, so closing is what makes the command finish —
+            // a missed Close here is an ssh that hangs until the CancellationToken fires.
+            process.StandardInput.Close();
+        }
+
+        var stdout = await process.StandardOutput.ReadToEndAsync(ct);
+        var stderr = await process.StandardError.ReadToEndAsync(ct);
+        await process.WaitForExitAsync(ct);
+
+        return new SshCommandResult { ExitCode = process.ExitCode, StdOut = stdout, StdErr = stderr };
     }
 
     private static List<string> BuildSshArgs(RemoteHostConfig host)

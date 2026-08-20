@@ -1306,6 +1306,18 @@ app.Configure(config =>
     });
 
     // Add vm branch command
+    // T3 Code — a private box running the T3 control plane, gated by Entra and driving Foundry.
+    config.AddBranch<PKS.Commands.T3.T3Settings>("t3", t3 =>
+    {
+        t3.SetDescription("Provision and manage a private T3 Code box");
+
+        t3.AddCommand<PKS.Commands.T3.T3InitCommand>("init")
+            .WithDescription("Provision a VM running T3 Code, wired to Azure AI Foundry and gated by Entra ID")
+            .WithExample(new[] { "t3", "init" })
+            .WithExample(new[] { "t3", "init", "--domain", "t3.example.com" })
+            .WithExample(new[] { "t3", "init", "--vm", "pks-vm-a1b2", "--skip-bootstrap" });
+    });
+
     config.AddBranch<PKS.Commands.Vm.VmSettings>("vm", vm =>
     {
         vm.SetDescription("Manage virtual machines");
