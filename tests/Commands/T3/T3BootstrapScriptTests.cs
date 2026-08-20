@@ -1,3 +1,4 @@
+using System.Linq;
 using FluentAssertions;
 using PKS.CLI.Tests.Infrastructure;
 using PKS.Commands.T3;
@@ -44,6 +45,56 @@ public class T3BootstrapScriptTests
 
         script.Should().Contain("t3 serve --host 127.0.0.1");
         script.Should().NotContain("--host 0.0.0.0");
+    }
+
+    [Fact]
+    public void T3_unit_sources_the_foundry_env_so_spawned_codex_sees_the_token()
+    {
+        // codex is spawned by t3, not by pks, so it inherits t3.service's environment. If the unit
+        // does not source foundry.env, `env_key = "PKS_CODEX_TOKEN"` resolves to nothing and every
+        // model call 401s — on a box where systemd reports all four units healthy.
+        var script = T3BootstrapScript.Build(Options());
+
+        script.Should().Contain("EnvironmentFile=-/etc/pks-t3/foundry.env");
+
+        // And the token has to reach the already-running processes, not just the file on disk.
+        T3BootstrapScript.FoundryTokenDeliveryScript("azureuser")
+            .Should().Contain("systemctl try-restart t3.service pks-foundry-proxy.service");
+    }
+
+    [Fact]
+    public void Heredoc_bodies_contain_nothing_the_shell_would_expand()
+    {
+        // The unit-file heredocs are unquoted (the foundry unit needs \${VAR} to survive into
+        // systemd), so anything inside them that looks like a command substitution *runs* — a
+        // backtick in a comment silently deletes the text and prints "command not found" while
+        // the file still gets written and every unit still starts. bash -n does not catch it.
+        var lines = T3BootstrapScript.Build(Options()).Split('\n');
+        string? open = null;
+
+        foreach (var raw in lines)
+        {
+            var line = raw.TrimEnd('\r');
+
+            if (open is null)
+            {
+                var idx = line.IndexOf("<<", StringComparison.Ordinal);
+                if (idx >= 0)
+                {
+                    var tag = line[(idx + 2)..].Trim();
+                    if (tag.Length > 0 && tag.All(c => char.IsLetterOrDigit(c) || c == '_'))
+                        open = tag;
+                }
+                continue;
+            }
+
+            if (line.Trim() == open) { open = null; continue; }
+
+            line.Should().NotContain("`", $"heredoc <<{open} is unquoted, so this line would execute: {line}");
+            line.Replace("\\$(", "").Should().NotContain("$(", $"heredoc <<{open} is unquoted, so this line would execute: {line}");
+        }
+
+        open.Should().BeNull("every heredoc in the script must be terminated");
     }
 
     [Fact]

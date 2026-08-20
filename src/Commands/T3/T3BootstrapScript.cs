@@ -133,6 +133,12 @@ public static class T3BootstrapScript
         Restart=always
         RestartSec=5
         Environment=NODE_ENV=production
+        # codex is spawned *by t3*, so it inherits this unit's environment -- and env_key in
+        # ~/.codex/config.toml names PKS_CODEX_TOKEN. Without this line every codex request to the
+        # passthrough goes out unauthenticated and the box looks healthy while Foundry is dead.
+        # The leading dash is required: phase 1 enables this unit before the file is delivered.
+        # (No backticks in this heredoc -- it is unquoted, so they would run as commands.)
+        EnvironmentFile=-/etc/pks-t3/foundry.env
 
         [Install]
         WantedBy=multi-user.target
@@ -245,6 +251,10 @@ public static class T3BootstrapScript
         sudo tee /etc/pks-t3/foundry.env >/dev/null
         sudo chmod 0640 /etc/pks-t3/foundry.env
         sudo chown root:{remoteUser} /etc/pks-t3/foundry.env
+        # Both units read this file, and both are already running by the time it lands (or is
+        # rewritten by --rotate). try-restart, not restart: on the first pass the passthrough is not
+        # enabled yet and restart would fail the script.
+        sudo systemctl try-restart t3.service pks-foundry-proxy.service
         """;
 }
 

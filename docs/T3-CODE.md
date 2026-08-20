@@ -103,6 +103,13 @@ outlive any single invocation. Hence `pks-foundry-proxy.service` on a fixed port
 provider block in `~/.codex/config.toml`, where `pks codex` writes a per-launch one against a random
 port.
 
+One linkage is easy to lose: `env_key = "PKS_CODEX_TOKEN"` means *codex* reads that variable from its
+own environment, and codex's parent is `t3.service` — not the passthrough unit. So `t3.service`
+sources `/etc/pks-t3/foundry.env` too (`EnvironmentFile=-`, optional, because phase 1 enables the
+unit before the file exists), and delivering the token ends in `systemctl try-restart` for both units
+so a rotation reaches the running processes rather than only the file. A test pins this: get it wrong
+and every unit reports healthy while every model call 401s.
+
 ## What still needs a human
 
 **DNS.** `<domain>` → the VM's public IP, ports 80/443 open.
@@ -112,8 +119,14 @@ port.
 headless VM, forward the port and open it locally:
 
 ```bash
-ssh -L 8400:localhost:8400 <user>@<vm>
-pks foundry init                     # open the printed URL in your own browser
+pks foundry init                     # on the box; note the port in the URL it prints
+```
+
+`AzureFoundryAuthService` picks a *free* port per run, so the forward can only be set up once you
+have seen the URL — open a second terminal with `ssh -L <thatport>:localhost:<thatport> <user>@<vm>`
+and then open the URL in your own browser. Afterwards:
+
+```bash
 sudo systemctl enable --now pks-foundry-proxy
 ```
 
@@ -139,7 +152,12 @@ Things a real provisioning run needs to settle, in rough order of how likely the
    `vm init` to return the target it made.
 5. **Foundry passthrough token on the command line.** `pks foundry proxy` only takes `--token`, so
    the token is visible in `ps` on the box. Adding an env-var fallback to that command would close it.
-6. **Codex `wire_api = "responses"`** is copied from `CodexCliConfig.BuildProxyProviderBlock`; the
+6. **The first Entra login may need an email-claim knob.** Entra ID tokens frequently carry no
+   `email` claim (UPN-only accounts) and no `email_verified`, and oauth2-proxy's `oidc` provider can
+   refuse the login on that alone. The two knobs are `oidc_email_claim = "preferred_username"` and
+   `insecure_oidc_allow_unverified_email = true`. Neither is set — setting them blind weakens the
+   config for tenants that don't need it. Try them, in that order, if the first real login fails.
+7. **Codex `wire_api = "responses"`** is copied from `CodexCliConfig.BuildProxyProviderBlock`; the
    static block should be generated from that same code rather than restated here.
 
 ## Files
@@ -152,7 +170,7 @@ Things a real provisioning run needs to settle, in rough order of how likely the
 | `src/Infrastructure/Services/SshCommandRunner.cs` | `RunWithStdinAsync` |
 | `src/Infrastructure/Services/Security/SecretSink.cs` | `WriteTo`, `WriteEnvLine` |
 | `src/Program.cs` | the `t3` branch |
-| `tests/Commands/T3/T3BootstrapScriptTests.cs` | pins the loopback bind, the file modes, and "no secret in phase 1" |
+| `tests/Commands/T3/T3BootstrapScriptTests.cs` | pins the loopback bind, the file modes, the env chain, and "no secret in phase 1" |
 
 ## One trap worth knowing
 

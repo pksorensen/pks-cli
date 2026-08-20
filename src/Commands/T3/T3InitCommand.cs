@@ -346,8 +346,11 @@ public sealed class T3InitCommand : AsyncCommand<T3InitCommand.Settings>
     /// <summary>32 random bytes, base64url — what oauth2-proxy wants for its cookie signing key.</summary>
     private static string NewCookieSecret()
     {
+        // oauth2-proxy's own documented generator is `openssl rand -base64 32 | tr -- '+/' '-_'`,
+        // which keeps the padding. Whether an unpadded value decodes cleanly varies by release, so
+        // match the documented form rather than find out.
         var bytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
-        return Convert.ToBase64String(bytes).Replace('+', '-').Replace('/', '_').TrimEnd('=');
+        return Convert.ToBase64String(bytes).Replace('+', '-').Replace('/', '_');
     }
 
     private static string Sanitize(string s) =>
