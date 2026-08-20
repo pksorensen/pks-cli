@@ -49,6 +49,17 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.0.4](https://github.com/pksorensen/pks-cli/compare/v7.0.3...v7.0.4) (2026-08-20)
+
+
+### Bug Fixes
+
+* **github-runner:** back off at API limits ([b9371d8](https://github.com/pksorensen/pks-cli/commit/b9371d8624c5bda83e5c48bd26572f85951ceb9b))
+* **hooks:** stop the test suite from writing real Claude Code settings ([5ee0ce3](https://github.com/pksorensen/pks-cli/commit/5ee0ce39c4456bf2c2a43f828a75d850638aac06))
+* **runner:** keep injected files out of commits ([bc839cf](https://github.com/pksorensen/pks-cli/commit/bc839cf6857ee8080347a8a229b1c9259e373910))
+* **runner:** name the Node-20 claude pin and give a local credential-seeding path ([c4c3342](https://github.com/pksorensen/pks-cli/commit/c4c33421e4f54c343702faac408b257334890f85))
+* **runner:** route commit-back credentials explicitly ([a40c72b](https://github.com/pksorensen/pks-cli/commit/a40c72bb819853c881de9edcb307c2c65846fed3))
+
 ## [7.0.3](https://github.com/pksorensen/pks-cli/compare/v7.0.2...v7.0.3) (2026-08-16)
 
 
