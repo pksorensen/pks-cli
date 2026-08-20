@@ -24,7 +24,11 @@ public class ClaudeCodeIntegrationTests : TestBase
     {
         _testProjectDirectory = CreateTempDirectory();
         var mockLogger = new Mock<ILogger<HooksService>>();
-        _hooksService = new HooksService(mockLogger.Object);
+        _hooksService = new HooksService(
+            mockLogger.Object,
+            () => _testProjectDirectory,
+            () => _testProjectDirectory,
+            () => "pks");
     }
 
     [Fact]

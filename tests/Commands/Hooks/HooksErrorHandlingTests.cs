@@ -185,7 +185,7 @@ public class HooksErrorHandlingTests : TestBase
     public async Task HooksService_WithInvalidJsonInExistingFile_ShouldHandleError()
     {
         // Arrange
-        var service = new HooksService(_mockLogger.Object);
+        var service = CreateHooksService();
         var originalDirectory = Directory.GetCurrentDirectory();
         Directory.SetCurrentDirectory(_testDirectory);
 
@@ -220,7 +220,7 @@ public class HooksErrorHandlingTests : TestBase
         }
 
         // Arrange
-        var service = new HooksService(_mockLogger.Object);
+        var service = CreateHooksService();
         var originalDirectory = Directory.GetCurrentDirectory();
         Directory.SetCurrentDirectory(_testDirectory);
 
@@ -265,7 +265,7 @@ public class HooksErrorHandlingTests : TestBase
     public async Task HooksService_WithNetworkDriveOrUncPath_ShouldHandleGracefully()
     {
         // Arrange
-        var service = new HooksService(_mockLogger.Object);
+        var service = CreateHooksService();
 
         // Act - Try to initialize with an invalid UNC path
         var result = await service.InitializeClaudeCodeHooksAsync(false, SettingsScope.User);
@@ -329,7 +329,7 @@ public class HooksErrorHandlingTests : TestBase
     public async Task HooksService_WithCancellationToken_ShouldRespectCancellation()
     {
         // Arrange
-        var service = new HooksService(_mockLogger.Object);
+        var service = CreateHooksService();
         var cts = new CancellationTokenSource();
         cts.Cancel(); // Cancel immediately
 
@@ -345,7 +345,7 @@ public class HooksErrorHandlingTests : TestBase
     {
         // Arrange
         var mockLogger = new Mock<ILogger<HooksService>>();
-        var service = new HooksService(mockLogger.Object);
+        var service = CreateHooksService(mockLogger.Object);
 
         // Act - Force an error by using invalid path
         var originalDirectory = Directory.GetCurrentDirectory();
@@ -383,6 +383,15 @@ public class HooksErrorHandlingTests : TestBase
     private CommandContext CreateMockCommandContext(string? commandName)
     {
         return new CommandContext(Mock.Of<IRemainingArguments>(), commandName ?? "test", null);
+    }
+
+    private HooksService CreateHooksService(ILogger<HooksService>? logger = null)
+    {
+        return new HooksService(
+            logger ?? _mockLogger.Object,
+            () => _testDirectory,
+            () => _testDirectory,
+            () => "pks");
     }
 
     public override void Dispose()

@@ -23,8 +23,64 @@ public class HooksServiceTests : TestBase
     public HooksServiceTests()
     {
         _mockLogger = new Mock<ILogger<HooksService>>();
-        _service = new HooksService(_mockLogger.Object);
         _testDirectory = CreateTempDirectory();
+        _service = new HooksService(
+            _mockLogger.Object,
+            () => _testDirectory,
+            () => _testDirectory,
+            () => "pks");
+    }
+
+    [Fact]
+    public void GetPksCommandPrefix_WhenEntryAssemblyIsTesthost_ShouldFallBackToPathCommand()
+    {
+        var result = HooksService.GetPksCommandPrefix(
+            "/usr/share/dotnet/dotnet",
+            ["/workspace/tests/bin/Debug/net10.0/testhost.dll"]);
+
+        result.Should().Be("pks");
+    }
+
+    [Fact]
+    public void GetPksCommandPrefix_WhenEntryAssemblyIsPksCli_ShouldUseDotnetExec()
+    {
+        var result = HooksService.GetPksCommandPrefix(
+            "/usr/share/dotnet/dotnet",
+            ["/workspace/pks-cli.dll"]);
+
+        result.Should().Be("dotnet exec /workspace/pks-cli.dll");
+    }
+
+    [Fact]
+    public void IsTestHostProcess_WhenTesthostIsNativeExecutable_ShouldReturnTrue()
+    {
+        var result = HooksService.IsTestHostProcess(
+            "/workspace/tests/bin/Debug/net10.0/testhost",
+            []);
+
+        result.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task InitializeClaudeCodeHooksAsync_WithDefaultServiceUnderTesthost_ShouldRefuseWrite()
+    {
+        var service = new HooksService(_mockLogger.Object);
+
+        var result = await service.InitializeClaudeCodeHooksAsync(false, SettingsScope.Project);
+
+        result.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task InitializeClaudeCodeHooksAsync_WithExplicitRoots_ShouldNotUseProcessCurrentDirectory()
+    {
+        var originalDirectory = Directory.GetCurrentDirectory();
+
+        var result = await _service.InitializeClaudeCodeHooksAsync(false, SettingsScope.Project);
+
+        result.Should().BeTrue();
+        Directory.GetCurrentDirectory().Should().Be(originalDirectory);
+        File.Exists(Path.Combine(_testDirectory, ".claude", "settings.json")).Should().BeTrue();
     }
 
     [Theory]
@@ -32,98 +88,52 @@ public class HooksServiceTests : TestBase
     [InlineData(SettingsScope.Local)]
     public async Task InitializeClaudeCodeHooksAsync_WithNewFile_ShouldCreateCorrectConfiguration(SettingsScope scope)
     {
-        // Arrange
-        var originalDirectory = Directory.GetCurrentDirectory();
-        Directory.SetCurrentDirectory(_testDirectory);
+        // Act
+        var result = await _service.InitializeClaudeCodeHooksAsync(false, scope);
 
-        try
-        {
-            // Act
-            var result = await _service.InitializeClaudeCodeHooksAsync(false, scope);
+        // Assert
+        result.Should().BeTrue();
 
-            // Assert
-            result.Should().BeTrue();
+        var settingsPath = Path.Combine(_testDirectory, ".claude", "settings.json");
+        File.Exists(settingsPath).Should().BeTrue();
 
-            var settingsPath = Path.Combine(_testDirectory, ".claude", "settings.json");
-            File.Exists(settingsPath).Should().BeTrue();
+        var json = await File.ReadAllTextAsync(settingsPath);
+        var settings = JsonDocument.Parse(json);
 
-            var json = await File.ReadAllTextAsync(settingsPath);
-            var settings = JsonDocument.Parse(json);
-
-            // Verify all 7 hook types are present
-            VerifyHookConfiguration(settings, "PreToolUse", "pks hooks pre-tool-use");
-            VerifyHookConfiguration(settings, "PostToolUse", "pks hooks post-tool-use");
-            VerifyHookConfiguration(settings, "UserPromptSubmit", "pks hooks user-prompt-submit");
-            VerifyHookConfiguration(settings, "Notification", "pks hooks notification");
-            VerifyHookConfiguration(settings, "Stop", "pks hooks stop");
-            VerifyHookConfiguration(settings, "SubagentStop", "pks hooks subagent-stop");
-            VerifyHookConfiguration(settings, "PreCompact", "pks hooks pre-compact");
-        }
-        finally
-        {
-            Directory.SetCurrentDirectory(originalDirectory);
-        }
+        VerifyHookConfiguration(settings, "PreToolUse", "pks hooks pre-tool-use");
+        VerifyHookConfiguration(settings, "PostToolUse", "pks hooks post-tool-use");
+        VerifyHookConfiguration(settings, "UserPromptSubmit", "pks hooks user-prompt-submit");
+        VerifyHookConfiguration(settings, "Notification", "pks hooks notification");
+        VerifyHookConfiguration(settings, "Stop", "pks hooks stop");
+        VerifyHookConfiguration(settings, "SubagentStop", "pks hooks subagent-stop");
+        VerifyHookConfiguration(settings, "PreCompact", "pks hooks pre-compact");
     }
 
-    [Fact(Skip = "Mock-only test - file system conflicts with container environment, no real value")]
+    [Fact]
     public async Task InitializeClaudeCodeHooksAsync_WithUserScope_ShouldCreateInUserDirectory()
     {
-        // Arrange
-        var userClaudeDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
+        var userClaudeDir = Path.Combine(_testDirectory, ".claude");
         var settingsPath = Path.Combine(userClaudeDir, "settings.json");
 
-        // Clean up if exists
-        if (File.Exists(settingsPath))
-        {
-            File.Delete(settingsPath);
-        }
-        if (Directory.Exists(userClaudeDir))
-        {
-            Directory.Delete(userClaudeDir, true);
-        }
+        var result = await _service.InitializeClaudeCodeHooksAsync(false, SettingsScope.User);
 
-        try
-        {
-            // Act
-            var result = await _service.InitializeClaudeCodeHooksAsync(false, SettingsScope.User);
+        result.Should().BeTrue();
+        Directory.Exists(userClaudeDir).Should().BeTrue();
+        File.Exists(settingsPath).Should().BeTrue();
 
-            // Assert
-            result.Should().BeTrue();
-            Directory.Exists(userClaudeDir).Should().BeTrue();
-            File.Exists(settingsPath).Should().BeTrue();
-
-            var json = await File.ReadAllTextAsync(settingsPath);
-            var settings = JsonDocument.Parse(json);
-            settings.RootElement.TryGetProperty("hooks", out _).Should().BeTrue();
-        }
-        finally
-        {
-            // Clean up
-            if (File.Exists(settingsPath))
-            {
-                File.Delete(settingsPath);
-            }
-            if (Directory.Exists(userClaudeDir))
-            {
-                Directory.Delete(userClaudeDir, true);
-            }
-        }
+        var json = await File.ReadAllTextAsync(settingsPath);
+        var settings = JsonDocument.Parse(json);
+        settings.RootElement.TryGetProperty("hooks", out _).Should().BeTrue();
     }
 
     [Fact]
     public async Task InitializeClaudeCodeHooksAsync_WithForceFlag_ShouldOverwriteExisting()
     {
-        // Arrange
-        var originalDirectory = Directory.GetCurrentDirectory();
-        Directory.SetCurrentDirectory(_testDirectory);
+        var claudeDir = Path.Combine(_testDirectory, ".claude");
+        var settingsPath = Path.Combine(claudeDir, "settings.json");
 
-        try
-        {
-            var claudeDir = Path.Combine(_testDirectory, ".claude");
-            var settingsPath = Path.Combine(claudeDir, "settings.json");
-
-            Directory.CreateDirectory(claudeDir);
-            await File.WriteAllTextAsync(settingsPath, @"{
+        Directory.CreateDirectory(claudeDir);
+        await File.WriteAllTextAsync(settingsPath, @"{
                 ""hooks"": {
                     ""preToolUse"": [
                         {
@@ -139,42 +149,30 @@ public class HooksServiceTests : TestBase
                 }
             }");
 
-            // Act
-            var result = await _service.InitializeClaudeCodeHooksAsync(true, SettingsScope.Project);
+        var result = await _service.InitializeClaudeCodeHooksAsync(true, SettingsScope.Project);
 
-            // Assert
-            result.Should().BeTrue();
+        result.Should().BeTrue();
 
-            var json = await File.ReadAllTextAsync(settingsPath);
-            var settings = JsonDocument.Parse(json);
+        var json = await File.ReadAllTextAsync(settingsPath);
+        var settings = JsonDocument.Parse(json);
 
-            // Verify PKS hooks are present
-            VerifyHookConfiguration(settings, "PreToolUse", "pks hooks pre-tool-use");
-        }
-        finally
-        {
-            Directory.SetCurrentDirectory(originalDirectory);
-        }
+        VerifyHookConfiguration(settings, "PreToolUse", "pks hooks pre-tool-use");
     }
 
     [Fact]
     public async Task InitializeClaudeCodeHooksAsync_WithInvalidDirectory_ShouldHandleError()
     {
-        // Arrange
-        var originalDirectory = Directory.GetCurrentDirectory();
-        var invalidPath = "/invalid/path/that/does/not/exist";
+        var invalidRoot = Path.Combine(_testDirectory, "not-a-directory");
+        await File.WriteAllTextAsync(invalidRoot, "file blocks directory creation");
+        var service = new HooksService(
+            _mockLogger.Object,
+            () => invalidRoot,
+            () => _testDirectory,
+            () => "pks");
 
-        // This test simulates error handling when directory creation fails
-        var mockService = new Mock<HooksService>(_mockLogger.Object);
+        var result = await service.InitializeClaudeCodeHooksAsync(false, SettingsScope.Project);
 
-        // Act & Assert - should not throw exception
-        await Assert.ThrowsAsync<DirectoryNotFoundException>(async () =>
-        {
-            Directory.SetCurrentDirectory(invalidPath);
-            await _service.InitializeClaudeCodeHooksAsync(false, SettingsScope.Project);
-        });
-
-        Directory.SetCurrentDirectory(originalDirectory);
+        result.Should().BeFalse();
     }
 
     [Fact]

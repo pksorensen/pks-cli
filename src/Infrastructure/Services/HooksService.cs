@@ -13,6 +13,10 @@ namespace PKS.Infrastructure.Services;
 public class HooksService : IHooksService
 {
     private readonly ILogger<HooksService> _logger;
+    private readonly Func<string> _projectDirectoryProvider;
+    private readonly Func<string> _userProfileDirectoryProvider;
+    private readonly Func<string> _commandPrefixProvider;
+    private readonly bool _allowTestHostWrites;
 
     /// <summary>
     /// Claude Code hook names (PascalCase as expected by Claude Code)
@@ -58,12 +62,53 @@ public class HooksService : IHooksService
     }
 
     public HooksService(ILogger<HooksService> logger)
+        : this(
+            logger,
+            Directory.GetCurrentDirectory,
+            () => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            GetPksCommandPrefix,
+            allowTestHostWrites: false)
     {
-        _logger = logger;
+    }
+
+    internal HooksService(
+        ILogger<HooksService> logger,
+        Func<string> projectDirectoryProvider,
+        Func<string> userProfileDirectoryProvider,
+        Func<string> commandPrefixProvider)
+        : this(
+            logger,
+            projectDirectoryProvider,
+            userProfileDirectoryProvider,
+            commandPrefixProvider,
+            allowTestHostWrites: true)
+    {
+    }
+
+    private HooksService(
+        ILogger<HooksService> logger,
+        Func<string> projectDirectoryProvider,
+        Func<string> userProfileDirectoryProvider,
+        Func<string> commandPrefixProvider,
+        bool allowTestHostWrites)
+    {
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _projectDirectoryProvider = projectDirectoryProvider ?? throw new ArgumentNullException(nameof(projectDirectoryProvider));
+        _userProfileDirectoryProvider = userProfileDirectoryProvider ?? throw new ArgumentNullException(nameof(userProfileDirectoryProvider));
+        _commandPrefixProvider = commandPrefixProvider ?? throw new ArgumentNullException(nameof(commandPrefixProvider));
+        _allowTestHostWrites = allowTestHostWrites;
     }
 
     public async Task<bool> InitializeClaudeCodeHooksAsync(bool force = false, SettingsScope scope = SettingsScope.Project)
     {
+        if (!_allowTestHostWrites && IsTestHostProcess(
+                Environment.ProcessPath ?? string.Empty,
+                Environment.GetCommandLineArgs()))
+        {
+            _logger.LogWarning("Refusing to write Claude Code hooks from a test host process");
+            return false;
+        }
+
         try
         {
             var (claudeDir, settingsPath) = GetSettingsPaths(scope);
@@ -320,7 +365,18 @@ public class HooksService : IHooksService
     /// </summary>
     internal static string GetPksCommandPrefix()
     {
-        var processPath = Environment.ProcessPath ?? string.Empty;
+        return GetPksCommandPrefix(
+            Environment.ProcessPath ?? string.Empty,
+            Environment.GetCommandLineArgs());
+    }
+
+    internal static string GetPksCommandPrefix(string processPath, IReadOnlyList<string> commandLineArgs)
+    {
+        if (IsTestHostProcess(processPath, commandLineArgs))
+        {
+            return "pks";
+        }
+
         var processName = Path.GetFileNameWithoutExtension(processPath);
 
         // Not running via the dotnet host → self-contained exe or global tool
@@ -335,9 +391,9 @@ public class HooksService : IHooksService
 
         // Running via dotnet host (dotnet run, dotnet exec, etc.)
         // GetCommandLineArgs()[0] is the managed entry assembly (the .dll)
-        var dllPath = Environment.GetCommandLineArgs().FirstOrDefault() ?? string.Empty;
+        var dllPath = commandLineArgs.FirstOrDefault() ?? string.Empty;
         if (!string.IsNullOrEmpty(dllPath) &&
-            dllPath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+            Path.GetFileName(dllPath).Equals("pks-cli.dll", StringComparison.OrdinalIgnoreCase))
         {
             return dllPath.Contains(' ')
                 ? $"dotnet exec \"{dllPath}\""
@@ -345,6 +401,18 @@ public class HooksService : IHooksService
         }
 
         return "pks";
+    }
+
+    internal static bool IsTestHostProcess(string processPath, IReadOnlyList<string> commandLineArgs)
+    {
+        static bool IsTestHostName(string path)
+        {
+            var name = Path.GetFileNameWithoutExtension(path);
+            return name.Equals("testhost", StringComparison.OrdinalIgnoreCase) ||
+                   name.Equals("vstest.console", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return IsTestHostName(processPath) || commandLineArgs.Any(IsTestHostName);
     }
 
     private static void MergeHookType(JsonObject hooksSection, string hookType, object pksHookConfig, bool force)
@@ -485,9 +553,9 @@ public class HooksService : IHooksService
         }
     }
 
-    private static dynamic CreatePksHooksConfiguration()
+    private dynamic CreatePksHooksConfiguration()
     {
-        var pks = GetPksCommandPrefix();
+        var pks = _commandPrefixProvider();
 
         return new
         {
@@ -576,7 +644,7 @@ public class HooksService : IHooksService
         };
     }
 
-    private static (string claudeDir, string settingsPath) GetSettingsPaths(SettingsScope scope)
+    private (string claudeDir, string settingsPath) GetSettingsPaths(SettingsScope scope)
     {
         string claudeDir;
         string settingsPath;
@@ -584,17 +652,17 @@ public class HooksService : IHooksService
         switch (scope)
         {
             case SettingsScope.User:
-                claudeDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
+                claudeDir = Path.Combine(_userProfileDirectoryProvider(), ".claude");
                 settingsPath = Path.Combine(claudeDir, "settings.json");
                 break;
 
             case SettingsScope.Project:
-                claudeDir = Path.Combine(Directory.GetCurrentDirectory(), ".claude");
+                claudeDir = Path.Combine(_projectDirectoryProvider(), ".claude");
                 settingsPath = Path.Combine(claudeDir, "settings.json");
                 break;
 
             case SettingsScope.Local:
-                claudeDir = ".claude";
+                claudeDir = Path.Combine(_projectDirectoryProvider(), ".claude");
                 settingsPath = Path.Combine(claudeDir, "settings.json");
                 break;
 
