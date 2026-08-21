@@ -56,11 +56,52 @@ If you would rather keep `app.t3.codes`, don't use this command's Entra half —
 | 1. VM | chains into `VmInitCommand`, or reuses an SSH target | joins on the SSH target registered after `vm init` returns |
 | 2. Hostname | DNS label on the VM's public IP + an NSG rule for 80/443 | Azure only; falls back to a prompt — see below |
 | 3. Deployment | prompts, defaulting to `pks foundry`'s selected model | |
-| 4. Entra app | `IEntraApplicationService.InitAsync` | adopt-or-create, registers the redirect URI, mints a secret |
+| 4. Entra app | `InitAsync`, or `SaveAsync` for one made by hand | the operator chooses the directory — see below |
 | 5. Bootstrap | one `ssh` running generated bash | node 22, `t3`, `@openai/codex`, caddy, oauth2-proxy, a service account, four systemd units |
 | 6. Credentials | `ssh` + **stdin** | client secret, cookie secret, Foundry passthrough token |
 | 7. Foundry | `ssh` + **stdin** | the pks binary, then this machine's Foundry credential |
 | 8. Summary | | prints the URL to open |
+
+### Which directory owns the login
+
+T3 Code has no authentication of its own, so oauth2-proxy and this app registration are the only
+thing between the public internet and a box that runs coding agents holding an Azure credential.
+The registration is not an implementation detail of the setup; it *is* the front door.
+
+Which is why the first version got it wrong. It created the app in whatever tenant pks happened to
+hold a Graph token for, and that is frequently not the tenant where the operator can consent to an
+app: the run ends with a registration nobody can approve, in a directory nobody chose. Three ways
+in now, and the interactive path asks rather than assuming:
+
+| | Graph writes | For |
+|---|---|---|
+| default | creates the app, mints a secret, adds the redirect URI | a directory you administer |
+| `--app-id` | adopts it, mints a secret, adds the redirect URI | an app that already exists |
+| `--app-id` + `--client-secret` | none at all | a directory pks has no business writing to |
+
+The third prints the redirect URI to add by hand instead of adding it. Interactively the secret is
+prompted for masked rather than read off `--client-secret`, because a secret on a command line
+becomes a line in the shell's history file, which outlives the session.
+
+`--non-interactive` turns every prompt into a failure, for scripted runs where a prompt is a hang.
+
+### The tenant, and a failure that does not look like one
+
+The tenant is not cosmetic: it becomes `oidc_issuer_url`. The first version read it from the
+**Foundry** credential store rather than from the Graph identity it had just queried — two separate
+stores, and the Foundry one legitimately holds `common` when the resource was picked through the
+multi-tenant endpoint.
+
+An issuer of `.../common/v2.0` against tokens carrying a real tenant GUID fails at the callback,
+*after* a Microsoft sign-in that looked like it worked. The box reads as broken rather than as
+misconfigured, which is the expensive kind of wrong. The `tid` claim on the Graph token is the
+authoritative answer and costs no extra Graph permission; anything that is not a GUID is refused
+rather than passed on.
+
+Worth stating plainly: the generated config sets `email_domains = ["*"]`. That is bounded by the
+app's `AzureADMyOrg` audience — only accounts in its home tenant can obtain a token for it — so the
+gate admits that tenant's members and its guests, and nobody else. It rests entirely on the audience
+setting, so do not change that to a multi-tenant value without also narrowing the domain list.
 
 ### Where the hostname comes from
 
@@ -178,7 +219,12 @@ summary tells you what is missing.
 ## What still needs a human
 
 On an Azure VM provisioned by `pks vm init`, with a Foundry credential stored locally and a build
-that embeds the linux binary: nothing. The command ends with a URL.
+that embeds the linux binary: nothing, provided the operator can create an app registration in the
+directory pks signed in to. When they cannot — the common case for a sponsored subscription or a
+customer tenant — they supply an app registration and the command consumes it; making that app is
+then the one manual step, and `--app-id --client-secret` is the shape for it.
+
+Otherwise the command ends with a URL.
 
 Off that path it degrades one step at a time, and says which step: a non-Azure box asks for a
 hostname, a build without the embedded binary skips the passthrough, no local Foundry credential
@@ -187,7 +233,12 @@ one of them is the supported repair.
 
 ## Unverified
 
-Things a real provisioning run needs to settle, in rough order of how likely they are to bite:
+Things a real provisioning run needs to settle, in rough order of how likely they are to bite.
+
+Steps 1 to 4 have now been exercised against a real Azure subscription once: the DNS label and the
+NSG rule landed, and the Entra app was created. Step 5 failed there and the reason is still open —
+`sudo` was stripping `DEBIAN_FRONTEND` and the caller printed only the debconf chatter that
+followed, so what actually died was never visible. Both are fixed; the cause is not yet known.
 
 1. **T3 loopback trust.** Behind the proxy, T3 sees every connection from `127.0.0.1`. If it treats
    loopback as trusted it will skip pairing entirely — convenient (Entra becomes the sole gate) but
@@ -229,6 +280,7 @@ Things a real provisioning run needs to settle, in rough order of how likely the
 | `src/Infrastructure/Services/AzureFoundryAuthService.cs` | `WriteRemoteSettingsAsync` |
 | `tests/Commands/T3/T3BootstrapScriptTests.cs` | pins the loopback bind, the file modes, the env chain, the service account, and "no secret in phase 1" |
 | `tests/Services/Azure/AzureDnsLabelTests.cs` | the DNS label grammar and the port-range cover check |
+| `tests/Services/Entra/EntraTenantFromTokenTests.cs` | that the issuer only ever gets a real tenant GUID |
 
 ## One trap worth knowing
 
