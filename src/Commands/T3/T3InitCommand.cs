@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Reflection;
 using PKS.Commands.Vm;
 using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Entra;
@@ -39,6 +40,8 @@ public sealed class T3InitCommand : AsyncCommand<T3InitCommand.Settings>
     private readonly IEntraApplicationService _entra;
     private readonly IAzureFoundryAuthService _foundry;
     private readonly IAzureVmMetadataService _vmMetadata;
+    private readonly IAzureAuthService _azureAuth;
+    private readonly IAzureVmService _azureVm;
     private readonly VmInitCommand _vmInit;
     private readonly IAnsiConsole _console;
 
@@ -48,6 +51,8 @@ public sealed class T3InitCommand : AsyncCommand<T3InitCommand.Settings>
         IEntraApplicationService entra,
         IAzureFoundryAuthService foundry,
         IAzureVmMetadataService vmMetadata,
+        IAzureAuthService azureAuth,
+        IAzureVmService azureVm,
         VmInitCommand vmInit,
         IAnsiConsole console)
     {
@@ -56,6 +61,8 @@ public sealed class T3InitCommand : AsyncCommand<T3InitCommand.Settings>
         _entra = entra;
         _foundry = foundry;
         _vmMetadata = vmMetadata;
+        _azureAuth = azureAuth;
+        _azureVm = azureVm;
         _vmInit = vmInit;
         _console = console;
     }
@@ -67,7 +74,7 @@ public sealed class T3InitCommand : AsyncCommand<T3InitCommand.Settings>
         public string? Vm { get; set; }
 
         [CommandOption("--domain <FQDN>")]
-        [Description("Public hostname for the box, e.g. t3.example.com — must already point at its IP")]
+        [Description("Use your own hostname instead of the Azure-assigned one (must already point at the box)")]
         public string? Domain { get; set; }
 
         [CommandOption("--tenant <TENANT_ID>")]
@@ -106,10 +113,14 @@ public sealed class T3InitCommand : AsyncCommand<T3InitCommand.Settings>
         _console.MarkupLine($"[green]VM:[/] {Markup.Escape(target.Label ?? target.Host)} [dim]({Markup.Escape(target.Host)})[/]");
 
         // ── 2. The name Entra will redirect back to ─────────────────────────────────────────────
-        // Asked for rather than derived: Entra rejects a non-HTTPS web redirect URI outside
-        // localhost, HTTPS needs a certificate, and a certificate needs a name that resolves. There
-        // is no default that can be guessed from an IP address.
+        // Entra rejects a non-HTTPS web redirect URI outside localhost, HTTPS needs a certificate,
+        // and a certificate needs a name that resolves. On Azure that name is free — a DNS label on
+        // the VM's public IP yields <label>.<region>.cloudapp.azure.com — so the command claims one
+        // and opens 80/443 rather than asking the operator to go and build the prerequisite by hand.
         var domain = settings.Domain;
+        if (string.IsNullOrWhiteSpace(domain))
+            domain = await TryClaimAzureHostnameAsync(target);
+
         if (string.IsNullOrWhiteSpace(domain))
         {
             _console.MarkupLine("[dim]Entra will only accept an HTTPS redirect URI, so the box needs a DNS name.[/]");
@@ -123,9 +134,8 @@ public sealed class T3InitCommand : AsyncCommand<T3InitCommand.Settings>
         var redirectUri = T3BootstrapScript.RedirectUriFor(domain);
 
         // ── 3. Foundry ──────────────────────────────────────────────────────────────────────────
-        // Only the deployment name is decided here. The VM authenticates to Foundry itself: the
-        // stored credential is a user refresh token tied to this machine, and copying it to a box
-        // that is by design reachable from the internet would be the wrong trade even if it worked.
+        // Only the deployment name is decided here; the credential itself is delivered in step 7,
+        // after the box exists and has somewhere safe to put it.
         var deployment = settings.Deployment;
         if (string.IsNullOrWhiteSpace(deployment))
         {
@@ -192,7 +202,7 @@ public sealed class T3InitCommand : AsyncCommand<T3InitCommand.Settings>
             _console.MarkupLine("[yellow]--skip-bootstrap:[/] [dim]nothing was run on the VM. Script follows.[/]");
             _console.WriteLine();
             Console.WriteLine(script);
-            PrintSummary(domain, redirectUri, app, deployment!, target, bootstrapped: false);
+            PrintSummary(domain, redirectUri, app, deployment!, target, bootstrapped: false, foundryReady: false);
             return 0;
         }
 
@@ -261,7 +271,37 @@ public sealed class T3InitCommand : AsyncCommand<T3InitCommand.Settings>
         if (!secretsOk) return 1;
         _console.MarkupLine("[green]Credentials installed.[/]");
 
-        PrintSummary(domain, redirectUri, app, deployment!, target, bootstrapped: true);
+        // ── 7. Foundry, without a second terminal ───────────────────────────────────────────────
+        // The draft ended here and told the operator to ssh in, port-forward, and sign in to Azure
+        // on the box. That put the same refresh token on the same machine — it just made a person
+        // do it. What is worth controlling is who on the box can read it, and the delivery target
+        // is a service account no agent runs as.
+        var foundryReady = false;
+        if (await _foundry.IsAuthenticatedAsync())
+        {
+            if (await TryInstallPksOnBoxAsync(host))
+            {
+                await _console.Status().SpinnerStyle(Style.Parse("cyan")).Spinner(Spinner.Known.Dots)
+                    .StartAsync("Handing the box its Foundry credential…", async _ =>
+                    {
+                        var wrote = false;
+                        var result = await _ssh.RunWithStdinAsync(host, T3BootstrapScript.FoundryCredentialDeliveryScript(),
+                            async w => wrote = await _foundry.WriteRemoteSettingsAsync(w));
+
+                        foundryReady = wrote && result.Success;
+                        if (!foundryReady)
+                            _console.MarkupLine($"[yellow]The Foundry passthrough is not running yet (exit {result.ExitCode}):[/] {Markup.Escape(Tail(result.StdErr, 5))}");
+                    });
+            }
+        }
+        else
+        {
+            _console.MarkupLine("[yellow]No Foundry credential stored locally[/] [dim]— run [bold]pks foundry init[/] here, then re-run this command.[/]");
+        }
+
+        if (foundryReady) _console.MarkupLine("[green]Foundry passthrough is live.[/]");
+
+        PrintSummary(domain, redirectUri, app, deployment!, target, bootstrapped: true, foundryReady: foundryReady);
         return 0;
     }
 
@@ -312,35 +352,142 @@ public sealed class T3InitCommand : AsyncCommand<T3InitCommand.Settings>
         return fresh;
     }
 
-    private void PrintSummary(string domain, string redirectUri, EntraAppResult app, string deployment, SshTarget target, bool bootstrapped)
+    /// <summary>
+    /// Claims <c>&lt;label&gt;.&lt;region&gt;.cloudapp.azure.com</c> for the box and opens 80/443, or
+    /// returns null and leaves the caller to ask.
+    ///
+    /// This is the step that turns the command into one command. Without it the operator is told to
+    /// go and create an A record and open two ports before anything else can work, which is most of
+    /// the manual labour the command exists to remove — and on Azure the name is already there for
+    /// the asking. Null means "this is not an Azure VM we provisioned", not "it failed": a Scaleway
+    /// box, a hand-registered SSH target, or an unreadable subscription all fall back to the prompt.
+    /// </summary>
+    private async Task<string?> TryClaimAzureHostnameAsync(SshTarget target)
     {
-        _console.Write(new Panel($"""
-            [green]T3 Code is set up on[/] [bold]https://{Markup.Escape(domain)}[/]
+        var vmName = target.Label ?? target.Host;
+        var record = await _vmMetadata.FindAsync(vmName);
+        if (record is null || !string.Equals(record.Provider, "azure", StringComparison.OrdinalIgnoreCase))
+            return null;
+        if (string.IsNullOrWhiteSpace(record.SubscriptionId) || string.IsNullOrWhiteSpace(record.ResourceGroup))
+            return null;
 
-            [cyan1]Sign-in:[/]        Microsoft Entra ID (oauth2-proxy)
-            [cyan1]Redirect URI:[/]   {Markup.Escape(redirectUri)}
-                              [dim]already registered on app {Markup.Escape(app.App.AppId)} — nothing to paste[/]
+        try
+        {
+            var token = await _azureAuth.GetAccessTokenAsync("https://management.azure.com/.default");
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                _console.MarkupLine("[yellow]Not signed in to Azure[/] [dim]— falling back to asking for a hostname.[/]");
+                return null;
+            }
+
+            string? fqdn = null;
+            await _console.Status().SpinnerStyle(Style.Parse("cyan")).Spinner(Spinner.Known.Dots)
+                .StartAsync("Claiming a public hostname and opening 80/443…", async _ =>
+                {
+                    fqdn = await _azureVm.EnsurePublicIpDnsLabelAsync(
+                        token!, record.SubscriptionId, record.ResourceGroup, record.VmName, record.VmName);
+
+                    // Both are needed and neither is enough: Caddy's ACME challenge arrives on 80,
+                    // and the browser then wants 443. `pks vm init` opens only 22.
+                    await _azureVm.EnsureInboundPortsAsync(
+                        token!, record.SubscriptionId, record.ResourceGroup, record.VmName,
+                        "AllowWeb", new[] { "80", "443" });
+                });
+
+            if (string.IsNullOrWhiteSpace(fqdn)) return null;
+
+            _console.MarkupLine($"[green]Hostname:[/] {Markup.Escape(fqdn!)} [dim](Azure-assigned; ports 80/443 open)[/]");
+            return fqdn;
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[yellow]Could not set up the public hostname automatically:[/] {Markup.Escape(ex.Message)}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Pushes the embedded linux-x64 pks to <c>/usr/local/bin/pks</c>, or explains why it cannot.
+    ///
+    /// Only builds made with <c>-p:EmbedPksLinux=true</c> carry one. When it is absent the Foundry
+    /// half is skipped rather than half-configured, because the alternatives are both wrong: the npm
+    /// package of that name is a different project entirely, and the NuGet one needs a .NET SDK on
+    /// a box that otherwise needs no runtime at all.
+    /// </summary>
+    private async Task<bool> TryInstallPksOnBoxAsync(RemoteHostConfig host)
+    {
+        await using var embedded = Assembly.GetExecutingAssembly().GetManifestResourceStream("pks-linux-x64");
+        if (embedded is null)
+        {
+            _console.MarkupLine("[yellow]This build carries no linux pks binary[/] [dim]— skipping the Foundry passthrough.[/]");
+            return false;
+        }
+
+        using var buffer = new MemoryStream();
+        await embedded.CopyToAsync(buffer);
+
+        var ok = false;
+        await _console.Status().SpinnerStyle(Style.Parse("cyan")).Spinner(Spinner.Known.Dots)
+            .StartAsync($"Installing pks on the box ({buffer.Length / (1024 * 1024)} MB)…", async _ =>
+            {
+                var result = await _ssh.RunWithStdinAsync(host, T3BootstrapScript.PksBinaryDeliveryScript(), async w =>
+                {
+                    await w.FlushAsync();
+                    buffer.Position = 0;
+                    // Straight at the byte stream: this is an executable, and the TextWriter would
+                    // re-encode it.
+                    await buffer.CopyToAsync(w.BaseStream);
+                    await w.BaseStream.FlushAsync();
+                });
+
+                ok = result.Success;
+                if (!ok)
+                    _console.MarkupLine($"[yellow]Could not install pks on the box (exit {result.ExitCode}):[/] {Markup.Escape(Tail(result.StdErr, 5))}");
+            });
+
+        return ok;
+    }
+
+    private void PrintSummary(string domain, string redirectUri, EntraAppResult app, string deployment,
+        SshTarget target, bool bootstrapped, bool foundryReady)
+    {
+        var url = $"https://{domain}";
+
+        var body = $"""
+            [green]Open this and sign in with your Microsoft account:[/]
+
+                [bold]{Markup.Escape(url)}[/]
+
+            [cyan1]Sign-in:[/]        Microsoft Entra ID (oauth2-proxy), app {Markup.Escape(app.App.AppId)}
+            [cyan1]Redirect URI:[/]   {Markup.Escape(redirectUri)} [dim]— already registered[/]
             [cyan1]Agent:[/]          codex → Azure AI Foundry, deployment [bold]{Markup.Escape(deployment)}[/]
             [cyan1]SSH:[/]            pks ssh connect {Markup.Escape(target.Label ?? target.Host)}
+            """;
 
-            [yellow]Two things still need you:[/]
+        if (!foundryReady)
+            body += $"""
 
-            [bold]1.[/] DNS. [bold]{Markup.Escape(domain)}[/] must resolve to [bold]{Markup.Escape(target.Host)}[/],
-               and ports 80 and 443 must be open, or Caddy cannot get a certificate.
 
-            [bold]2.[/] Foundry sign-in on the box. The passthrough needs its own credential:
+                [yellow]The Foundry passthrough is not running.[/] T3 will start and you can sign in,
+                but codex has no model until this box has a credential:
 
-                 [dim]ssh -L 8400:localhost:8400 {Markup.Escape(target.Username)}@{Markup.Escape(target.Host)}[/]
-                 [dim]pks foundry init          # open the printed URL in your local browser[/]
-                 [dim]sudo systemctl enable --now pks-foundry-proxy[/]
+                  [dim]pks foundry init[/]   [dim]# here, on this machine[/]
+                  [dim]pks t3 init --vm {Markup.Escape(target.Label ?? target.Host)}[/]   [dim]# then re-run; everything else is idempotent[/]
+                """;
 
-            [dim]https://app.t3.codes will not work against this box — that client reaches the
-            backend directly with a pairing token, which the Entra gate cannot satisfy. Use the UI
-            served at the domain above.[/]
-            """)
+        body += """
+
+
+            [dim]The certificate is fetched on the first request, so give the first load a few
+            seconds. https://app.t3.codes will not work against this box — that client reaches the
+            backend directly with a pairing token, which the Entra gate cannot satisfy; use the UI
+            served at the URL above.[/]
+            """;
+
+        _console.Write(new Panel(body)
             .Border(BoxBorder.Rounded)
-            .BorderStyle(bootstrapped ? "green" : "yellow")
-            .Header(bootstrapped ? " [bold green]Ready[/] " : " [bold yellow]Planned[/] "));
+            .BorderStyle(bootstrapped ? (foundryReady ? "green" : "yellow") : "yellow")
+            .Header(bootstrapped ? (foundryReady ? " [bold green]Ready[/] " : " [bold yellow]Almost[/] ") : " [bold yellow]Planned[/] "));
     }
 
     /// <summary>32 random bytes, base64url — what oauth2-proxy wants for its cookie signing key.</summary>

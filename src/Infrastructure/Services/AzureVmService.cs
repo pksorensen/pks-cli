@@ -2,6 +2,7 @@ using System.Net.Sockets;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure.Services.Models;
@@ -19,6 +20,23 @@ public interface IAzureVmService
     Task<AzureResourceGroup> EnsureResourceGroupAsync(string accessToken, string subscriptionId, string name, string location, CancellationToken ct = default);
     Task<AzureVmInfo> CreateVmAsync(AzureVmCreateOptions options, Action<string>? onProgress = null, CancellationToken ct = default);
     Task<string?> GetVmPublicIpAsync(string accessToken, string subscriptionId, string resourceGroup, string vmName, CancellationToken ct = default);
+
+    /// <summary>
+    /// Gives the VM's public IP a DNS label and returns the resulting
+    /// <c>&lt;label&gt;.&lt;region&gt;.cloudapp.azure.com</c> name.
+    ///
+    /// Azure hands out this name for free, which is the difference between "create an A record and
+    /// come back" and a command that finishes. Idempotent: an IP that already carries an fqdn keeps
+    /// it, whatever the label was, because something is already pointing at it.
+    /// </summary>
+    Task<string?> EnsurePublicIpDnsLabelAsync(string accessToken, string subscriptionId, string resourceGroup,
+        string vmName, string desiredLabel, CancellationToken ct = default);
+
+    /// <summary>
+    /// Opens inbound TCP ports on the VM's NSG, adding a rule only if nothing already allows them.
+    /// </summary>
+    Task EnsureInboundPortsAsync(string accessToken, string subscriptionId, string resourceGroup,
+        string vmName, string ruleName, string[] ports, CancellationToken ct = default);
     Task<bool> WaitForSshAsync(string host, int port, TimeSpan timeout, CancellationToken ct = default);
     /// <summary>Returns the power state (e.g. "running", "deallocated", "stopped") or null if the VM does not exist.</summary>
     Task<string?> GetVmStatusAsync(string accessToken, string subscriptionId, string resourceGroup, string vmName, CancellationToken ct = default);
@@ -633,6 +651,203 @@ public class AzureVmService : IAzureVmService
                 $"ARM {(int)resp.StatusCode} disabling scheduled start for '{vmName}': {responseBody}",
                 null, resp.StatusCode);
         }
+    }
+
+    public async Task<string?> EnsurePublicIpDnsLabelAsync(string accessToken, string subscriptionId,
+        string resourceGroup, string vmName, string desiredLabel, CancellationToken ct = default)
+    {
+        var ipUrl = $"https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{resourceGroup}" +
+                    $"/providers/Microsoft.Network/publicIPAddresses/{vmName}-ip?api-version={NetworkApiVersion}";
+
+        // GET → mutate → PUT, not a hand-built body. By now the IP is attached to a NIC and has an
+        // allocated address; a PUT that reconstructs only the properties we care about drops the
+        // ones ARM handed back, which is a 400 on a good day and a detached IP on a bad one.
+        var current = await ReadJsonAsync(accessToken, ipUrl, ct);
+        if (current is null)
+        {
+            _logger.LogWarning("Public IP {VmName}-ip not found; cannot assign a DNS label", vmName);
+            return null;
+        }
+
+        var existing = current["properties"]?["dnsSettings"]?["fqdn"]?.GetValue<string>();
+        if (!string.IsNullOrWhiteSpace(existing))
+            return existing;   // already named — and something may already point at it
+
+        var label = SanitizeDnsLabel(desiredLabel);
+
+        // The label is a global name inside the region, so it collides with strangers, not just
+        // with us. Azure says DnsRecordInUse; the answer is another label, not a failure.
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            var candidate = attempt == 0 ? label : $"{label}-{Guid.NewGuid().ToString("N")[..5]}";
+            var body = current.DeepClone()!.AsObject();
+            var props = body["properties"]?.AsObject() ?? throw new InvalidOperationException("Public IP has no properties.");
+            props["dnsSettings"] = new JsonObject { ["domainNameLabel"] = candidate };
+
+            var (ok, response) = await TryPutAsync(accessToken, ipUrl, body.ToJsonString(), ct);
+            if (ok)
+            {
+                // Read the fqdn back rather than composing it: the suffix is the region's, and
+                // regions do not all spell it the way the docs' example does.
+                var fqdn = JsonNode.Parse(response)?["properties"]?["dnsSettings"]?["fqdn"]?.GetValue<string>();
+                if (!string.IsNullOrWhiteSpace(fqdn)) return fqdn;
+                var refreshed = await ReadJsonAsync(accessToken, ipUrl, ct);
+                return refreshed?["properties"]?["dnsSettings"]?["fqdn"]?.GetValue<string>();
+            }
+
+            if (!response.Contains("DnsRecordInUse", StringComparison.OrdinalIgnoreCase))
+                throw new HttpRequestException($"ARM refused the DNS label '{candidate}': {response}");
+
+            _logger.LogInformation("DNS label {Label} is taken; retrying with a suffix", candidate);
+        }
+
+        return null;
+    }
+
+    public async Task EnsureInboundPortsAsync(string accessToken, string subscriptionId, string resourceGroup,
+        string vmName, string ruleName, string[] ports, CancellationToken ct = default)
+    {
+        var nsgBase = $"https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{resourceGroup}" +
+                      $"/providers/Microsoft.Network/networkSecurityGroups/{vmName}-nsg";
+        var nsgUrl = $"{nsgBase}?api-version={NetworkApiVersion}";
+
+        var nsg = await ReadJsonAsync(accessToken, nsgUrl, ct)
+            ?? throw new InvalidOperationException($"Network security group '{vmName}-nsg' not found.");
+
+        var rules = nsg["properties"]?["securityRules"]?.AsArray() ?? new JsonArray();
+
+        // Read the existing rules for two things: whether these ports are already allowed (someone
+        // may have opened them by hand, under any name), and which priorities are spoken for. Two
+        // inbound rules cannot share a priority, so a fixed number would fail on exactly the boxes
+        // that had been fixed manually first.
+        var taken = new HashSet<int>();
+        var alreadyOpen = true;
+        var remaining = new HashSet<string>(ports);
+
+        foreach (var rule in rules)
+        {
+            var p = rule?["properties"];
+            if (p is null) continue;
+            if (p["priority"] is { } pr && pr.GetValue<int>() is var prio) taken.Add(prio);
+
+            var inbound = string.Equals(p["direction"]?.GetValue<string>(), "Inbound", StringComparison.OrdinalIgnoreCase);
+            var allow = string.Equals(p["access"]?.GetValue<string>(), "Allow", StringComparison.OrdinalIgnoreCase);
+            if (!inbound || !allow) continue;
+
+            var protocol = p["protocol"]?.GetValue<string>() ?? "*";
+            if (!protocol.Equals("Tcp", StringComparison.OrdinalIgnoreCase) && protocol != "*") continue;
+
+            foreach (var declared in DeclaredPorts(p))
+                remaining.RemoveWhere(want => PortRangeCovers(declared, want));
+        }
+
+        alreadyOpen = remaining.Count == 0;
+        if (alreadyOpen)
+        {
+            _logger.LogInformation("NSG {VmName}-nsg already allows {Ports}", vmName, string.Join(",", ports));
+            return;
+        }
+
+        var priority = 1010;
+        while (taken.Contains(priority)) priority += 10;
+
+        // A child-resource PUT, not a PUT of the whole NSG. Replacing the parent with a body built
+        // here would delete every rule it does not restate — starting with AllowSSH, i.e. locking
+        // this command out of the box it is halfway through configuring.
+        var ruleUrl = $"{nsgBase}/securityRules/{ruleName}?api-version={NetworkApiVersion}";
+        var payload = new JsonObject
+        {
+            ["properties"] = new JsonObject
+            {
+                ["priority"] = priority,
+                ["protocol"] = "Tcp",
+                ["access"] = "Allow",
+                ["direction"] = "Inbound",
+                ["sourceAddressPrefix"] = "*",
+                ["sourcePortRange"] = "*",
+                ["destinationAddressPrefix"] = "*",
+                ["destinationPortRanges"] = new JsonArray(ports.Select(x => (JsonNode)x!).ToArray()),
+            }
+        };
+
+        var (ok, response) = await TryPutAsync(accessToken, ruleUrl, payload.ToJsonString(), ct);
+        if (!ok)
+            throw new HttpRequestException($"ARM refused security rule '{ruleName}': {response}");
+
+        await WaitForResourceAsync(accessToken, ruleUrl, ruleName, ct);
+    }
+
+    private static IEnumerable<string> DeclaredPorts(JsonNode p)
+    {
+        if (p["destinationPortRange"]?.GetValue<string>() is { Length: > 0 } single) yield return single;
+        if (p["destinationPortRanges"]?.AsArray() is { } many)
+            foreach (var r in many)
+                if (r?.GetValue<string>() is { Length: > 0 } v) yield return v;
+    }
+
+    /// <summary>True when an NSG port declaration ("*", "443", "80-90") covers <paramref name="want"/>.</summary>
+    internal static bool PortRangeCovers(string declared, string want)
+    {
+        if (declared == "*") return true;
+        if (!int.TryParse(want, out var w)) return false;
+        var dash = declared.IndexOf('-');
+        if (dash < 0) return int.TryParse(declared, out var one) && one == w;
+        return int.TryParse(declared[..dash], out var lo)
+            && int.TryParse(declared[(dash + 1)..], out var hi)
+            && w >= lo && w <= hi;
+    }
+
+    /// <summary>
+    /// Azure's grammar: lowercase alphanumerics and hyphens, must start with a letter or digit and
+    /// end with one, 3–63 characters. A VM name that violates it produces a 400 whose message does
+    /// not mention the VM name, so normalise here rather than explain there.
+    /// </summary>
+    internal static string SanitizeDnsLabel(string raw)
+    {
+        var chars = raw.ToLowerInvariant()
+            .Select(c => char.IsLetterOrDigit(c) || c == '-' ? c : '-')
+            .ToArray();
+        var label = new string(chars).Trim('-');
+        while (label.Contains("--")) label = label.Replace("--", "-");
+        if (label.Length == 0 || !char.IsLetter(label[0])) label = "t3-" + label;
+        label = label.Trim('-');
+        if (label.Length > 63) label = label[..63].TrimEnd('-');
+        while (label.Length < 3) label += "0";
+        return label;
+    }
+
+    private async Task<JsonNode?> ReadJsonAsync(string accessToken, string url, CancellationToken ct)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        var resp = await _httpClient.SendAsync(req, ct);
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        return resp.IsSuccessStatusCode ? JsonNode.Parse(body) : null;
+    }
+
+    private async Task<(bool Ok, string Body)> TryPutAsync(string accessToken, string url, string json, CancellationToken ct)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Put, url);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        req.Content = new StringContent(json, Encoding.UTF8, "application/json");
+        var resp = await _httpClient.SendAsync(req, ct);
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        return (resp.IsSuccessStatusCode, body);
+    }
+
+    private async Task WaitForResourceAsync(string accessToken, string url, string label, CancellationToken ct)
+    {
+        var deadline = DateTime.UtcNow.AddMinutes(3);
+        while (DateTime.UtcNow < deadline)
+        {
+            var node = await ReadJsonAsync(accessToken, url, ct);
+            var state = node?["properties"]?["provisioningState"]?.GetValue<string>();
+            if (string.Equals(state, "Succeeded", StringComparison.OrdinalIgnoreCase)) return;
+            if (string.Equals(state, "Failed", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"{label} provisioning failed.");
+            await Task.Delay(_pollInterval, ct);
+        }
+        throw new TimeoutException($"Timed out waiting for {label}.");
     }
 
     public async Task<string?> GetVmPublicIpAsync(string accessToken, string subscriptionId, string resourceGroup, string vmName, CancellationToken ct = default)

@@ -65,8 +65,11 @@ public static class T3BootstrapScript
         node --version
 
         # ---------------------------------------------------------------- CLIs
-        # t3 itself, the agent it will drive, and pks (for the Foundry passthrough below).
-        sudo npm install -g --silent t3@latest @openai/codex pks-cli
+        # t3 itself and the agent it will drive. pks is NOT installed from npm: the package called
+        # `pks-cli` on the npm registry is an unrelated project last published in 2022. This tool
+        # ships on NuGet, and the passthrough gets it as a self-contained binary pushed down the
+        # pipe by PksBinaryDeliveryScript instead — no runtime to install, no version to guess.
+        sudo npm install -g --silent t3@latest @openai/codex
 
         # ---------------------------------------------------------------- caddy
         if ! command -v caddy >/dev/null; then
@@ -91,6 +94,15 @@ public static class T3BootstrapScript
         fi
 
         sudo install -d -m 0750 -o root -g root /etc/pks-t3
+
+        # ---------------------------------------------------------------- service account
+        # The Foundry passthrough holds an Azure *user* refresh token. T3 spawns coding agents as
+        # {{o.RemoteUser}}, so anything that user can read, every agent on this box can read and
+        # exfiltrate. The passthrough therefore gets its own account and its own home; agents reach
+        # it only over loopback, holding PKS_CODEX_TOKEN, which buys nothing outside this machine.
+        id -u pks-foundry >/dev/null 2>&1 || sudo useradd --system --create-home \
+          --home-dir /var/lib/pks-foundry --shell /usr/sbin/nologin pks-foundry
+        sudo install -d -m 0700 -o pks-foundry -g pks-foundry /var/lib/pks-foundry/.pks-cli
 
         # ---------------------------------------------------------------- oauth2-proxy config
         # Only the non-secret half. The client secret and cookie secret are written by the stdin
@@ -155,10 +167,15 @@ public static class T3BootstrapScript
 
         [Service]
         Type=simple
-        User={{o.RemoteUser}}
-        WorkingDirectory={{o.RemoteHome}}
+        User=pks-foundry
+        Group=pks-foundry
+        WorkingDirectory=/var/lib/pks-foundry
+        # pks keeps its credential store under the home directory, and systemd does not set one
+        # for a User= it was given. Without this line it looks in /root, finds nothing, and still
+        # reports a clean start.
+        Environment=HOME=/var/lib/pks-foundry
         EnvironmentFile=/etc/pks-t3/foundry.env
-        ExecStart=/usr/bin/env pks foundry proxy --port {{FoundryProxyPort}} --token \${PKS_FOUNDRY_PROXY_TOKEN}
+        ExecStart=/usr/local/bin/pks foundry proxy --port {{FoundryProxyPort}} --token \${PKS_FOUNDRY_PROXY_TOKEN}
         Restart=always
         RestartSec=5
 
@@ -256,8 +273,49 @@ public static class T3BootstrapScript
         # enabled yet and restart would fail the script.
         sudo systemctl try-restart t3.service pks-foundry-proxy.service
         """;
-}
 
+    /// <summary>
+    /// Phase 1b — the pks binary itself, read from stdin.
+    ///
+    /// It is pushed rather than installed because there is nothing to install from: the npm package
+    /// named <c>pks-cli</c> belongs to someone else, and the NuGet package needs a .NET SDK on a box
+    /// whose only job is to run one proxy. A self-contained binary needs neither.
+    /// </summary>
+    public static string PksBinaryDeliveryScript() => """
+        set -euo pipefail
+        umask 022
+        cat > /tmp/pks-incoming
+        sudo install -m 0755 -o root -g root /tmp/pks-incoming /usr/local/bin/pks
+        rm -f /tmp/pks-incoming
+        /usr/local/bin/pks --version >/dev/null 2>&1 || true
+        """;
+
+    /// <summary>
+    /// Phase 2c — this machine's Foundry credential, delivered into the passthrough account's home.
+    ///
+    /// The alternative was one <c>ssh -L</c> and an interactive <c>pks foundry init</c> on the box,
+    /// which is what the first draft told people to do. Both put the same user refresh token on the
+    /// same internet-facing machine; the difference is only whether a human watches it happen. What
+    /// actually changes the exposure is <em>who on the box can read it</em>, and that is why this
+    /// lands under <c>pks-foundry</c> rather than in the home directory of the user T3 runs agents
+    /// as. The receiving pks migrates it into its own encrypted store and blanks this file.
+    /// </summary>
+    public static string FoundryCredentialDeliveryScript() => """
+        set -euo pipefail
+        umask 077
+        id -u pks-foundry >/dev/null 2>&1 || { echo "pks t3: the pks-foundry account is missing — run the bootstrap first" >&2; exit 78; }
+        sudo install -d -m 0700 -o pks-foundry -g pks-foundry /var/lib/pks-foundry/.pks-cli
+        sudo tee /var/lib/pks-foundry/.pks-cli/settings.json >/dev/null
+        sudo chmod 0600 /var/lib/pks-foundry/.pks-cli/settings.json
+        sudo chown pks-foundry:pks-foundry /var/lib/pks-foundry/.pks-cli/settings.json
+        # Reading it once as that user is what performs the plaintext -> AES-GCM migration, so the
+        # credential does not sit readable on disk waiting for the first real request.
+        sudo -u pks-foundry HOME=/var/lib/pks-foundry /usr/local/bin/pks foundry status >/dev/null 2>&1 || true
+        sudo systemctl enable --now pks-foundry-proxy.service
+        systemctl is-active pks-foundry-proxy.service
+        """;
+
+}
 /// <summary>Everything <see cref="T3BootstrapScript.Build"/> needs that is not a secret.</summary>
 public sealed record T3BootstrapOptions
 {

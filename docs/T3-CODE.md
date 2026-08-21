@@ -1,8 +1,9 @@
 # `pks t3` — a private T3 Code box
 
 **Status: draft.** The code compiles, the generated bash passes `bash -n`, and the secret-handling
-path goes through `SecretSink` so the gate test holds. Nothing here has been run against a real
-Azure subscription yet — see [Unverified](#unverified) before trusting it.
+path goes through `SecretSink` so the gate test holds. The credential hand-off has been proved
+end-to-end against a real `pks` (delivered blob → migrated → read back), but no full run against a
+real Azure subscription has happened yet — see [Unverified](#unverified) before trusting it.
 
 ```
 dnx pks-cli t3 init
@@ -53,21 +54,38 @@ If you would rather keep `app.t3.codes`, don't use this command's Entra half —
 | Step | Mechanism | Notes |
 |---|---|---|
 | 1. VM | chains into `VmInitCommand`, or reuses an SSH target | joins on the SSH target registered after `vm init` returns |
-| 2. Domain | prompts | no default is derivable — see below |
+| 2. Hostname | DNS label on the VM's public IP + an NSG rule for 80/443 | Azure only; falls back to a prompt — see below |
 | 3. Deployment | prompts, defaulting to `pks foundry`'s selected model | |
 | 4. Entra app | `IEntraApplicationService.InitAsync` | adopt-or-create, registers the redirect URI, mints a secret |
-| 5. Bootstrap | one `ssh` running generated bash | node 22, `t3`, `@openai/codex`, `pks-cli`, caddy, oauth2-proxy, four systemd units |
+| 5. Bootstrap | one `ssh` running generated bash | node 22, `t3`, `@openai/codex`, caddy, oauth2-proxy, a service account, four systemd units |
 | 6. Credentials | `ssh` + **stdin** | client secret, cookie secret, Foundry passthrough token |
-| 7. Summary | | prints the redirect URI it already registered |
+| 7. Foundry | `ssh` + **stdin** | the pks binary, then this machine's Foundry credential |
+| 8. Summary | | prints the URL to open |
 
-### Why the domain is a prompt and not a default
+### Where the hostname comes from
 
 Entra rejects a `Web` redirect URI that isn't HTTPS (localhost excepted). HTTPS needs a certificate,
-a certificate needs a name that resolves, and nothing about a fresh VM's IP address implies one. So
-the command asks — and it asks *before* touching Graph, so a wrong answer costs nothing.
+and a certificate needs a name that resolves — which is why the first draft stopped and asked for
+one, and why it then told the operator to go and create an A record and open two ports before
+anything would work. That is most of the manual labour the command exists to remove.
 
-The user still has to create the A record. Caddy fetches the certificate during bootstrap, so if DNS
-isn't in place the bootstrap is where you find out.
+On Azure the name is already there for the asking: a `domainNameLabel` on the VM's public IP yields
+`<label>.<region>.cloudapp.azure.com` at no cost. So the command claims one, opens 80 and 443 on the
+NSG (`pks vm init` opens only 22, so ACME would fail otherwise), and reads the FQDN back off the
+resource rather than composing it — the suffix belongs to the region, and regions do not all spell
+it the way the docs' example does.
+
+Both ARM calls are written to be re-runnable, and both avoid the same trap in different ways:
+
+- The **public IP** is read, mutated and written back. A reconstructed body would drop the
+  properties ARM has since attached to it.
+- The **NSG rule** is a PUT of the *child* resource. A PUT of the NSG itself carrying only the new
+  rule deletes every rule it does not restate — starting with `AllowSSH`, i.e. locking the command
+  out of the box it is halfway through configuring. It also scans the existing rules first, so a
+  port already opened by hand adds nothing and a taken priority is skipped.
+
+`--domain` overrides all of this. Anything that is not an Azure VM `pks` provisioned — a Scaleway
+box, a hand-registered SSH target, a subscription it cannot read — falls back to the old prompt.
 
 ### Why the secret goes down a pipe
 
@@ -110,29 +128,62 @@ unit before the file exists), and delivering the token ends in `systemctl try-re
 so a rotation reaches the running processes rather than only the file. A test pins this: get it wrong
 and every unit reports healthy while every model call 401s.
 
+### How pks gets onto the box, and why not from a package
+
+The passthrough is `pks foundry proxy`, so the box needs `pks`. It does **not** come from a package
+manager:
+
+- **npm.** The first draft ran `npm install -g … pks-cli`. The package by that name on the npm
+  registry is an unrelated project last published in 2022. It installs cleanly, which is the whole
+  problem: nothing fails, and `pks` on the box is a stranger's binary or absent.
+- **NuGet.** The real package is there and current, but `dotnet tool install` needs a .NET SDK on a
+  machine whose only other job is to run one proxy.
+
+So the command pushes its own embedded linux-x64 binary down the same stdin channel the secrets use,
+and installs it at `/usr/local/bin/pks`. Only builds made with `-p:EmbedPksLinux=true` carry one;
+without it the Foundry half is **skipped and reported**, not half-configured.
+
+### The Foundry credential, and the position this reverses
+
+An earlier version of this document said the credential would not be automated, because "the
+alternative to signing in on the box is copying that token onto an internet-facing machine, which is
+a worse trade than one `ssh -L`."
+
+That was wrong, and worth saying plainly rather than quietly deleting. Signing in *on the box* puts
+exactly the same user refresh token on exactly the same internet-facing machine. The only thing the
+manual route changed was that a human watched it happen. It bought no security and cost the command
+its reason to exist.
+
+What does change the exposure is **who on the box can read it**. T3's entire purpose is to spawn
+coding agents as the VM user; anything that user can read, every agent on that box can read and send
+anywhere. So the passthrough gets its own account:
+
+| | |
+|---|---|
+| Account | `pks-foundry`, system user, `/usr/sbin/nologin` |
+| Home | `/var/lib/pks-foundry`, 0700 |
+| Credential | `~/.pks-cli/settings.json` → migrated into an AES-GCM store on first read |
+| Agents see | `PKS_CODEX_TOKEN` and a loopback port, neither of which is worth anything off the box |
+
+Two details that are easy to get wrong and produce a unit that starts cleanly and does nothing:
+systemd does not set `HOME` for a `User=`, and `pks` keeps its store under `$HOME` — hence the
+explicit `Environment=HOME=`. And the credential is delivered as *plaintext* in `settings.json`
+because that is the only format the receiving `pks` migrates; the delivery script reads it once as
+`pks-foundry` immediately afterwards to force that migration rather than leaving it on disk.
+
+This is still a real transfer of a real credential. If that is not a trade you want on a given box,
+`--skip-bootstrap` or simply not storing Foundry credentials locally both leave it out, and the
+summary tells you what is missing.
+
 ## What still needs a human
 
-**DNS.** `<domain>` → the VM's public IP, ports 80/443 open.
+On an Azure VM provisioned by `pks vm init`, with a Foundry credential stored locally and a build
+that embeds the linux binary: nothing. The command ends with a URL.
 
-**Foundry sign-in on the box.** `AzureFoundryAuthService` does an authorization-code flow against an
-`HttpListener` on `http://localhost:<port>` — it prints the URL and tries to open a browser. On a
-headless VM, forward the port and open it locally:
-
-```bash
-pks foundry init                     # on the box; note the port in the URL it prints
-```
-
-`AzureFoundryAuthService` picks a *free* port per run, so the forward can only be set up once you
-have seen the URL — open a second terminal with `ssh -L <thatport>:localhost:<thatport> <user>@<vm>`
-and then open the URL in your own browser. Afterwards:
-
-```bash
-sudo systemctl enable --now pks-foundry-proxy
-```
-
-This is deliberately not automated in the draft. The stored credential is a user refresh token; the
-alternative to signing in on the box is copying that token onto an internet-facing machine, which is
-a worse trade than one `ssh -L`.
+Off that path it degrades one step at a time, and says which step: a non-Azure box asks for a
+hostname, a build without the embedded binary skips the passthrough, no local Foundry credential
+prints the `pks foundry init` + re-run pair. Everything is idempotent, so re-running after fixing
+one of them is the supported repair.
 
 ## Unverified
 
@@ -147,17 +198,20 @@ Things a real provisioning run needs to settle, in rough order of how likely the
    `--tailscale-serve`); `--port` is assumed and 3773 comes from the doc's example URL.
 3. **oauth2-proxy 7.8.1 pinned.** The generated config uses v7 key names. A newer release is fine but
    is not automatic, deliberately — an unpinned fetch would silently stop matching the config.
-4. **The `vm init` join.** `VmInitCommand` returns an `int`, so the new SSH target is found by
+4. **Certificate timing.** Caddy fetches on first request, so the first load takes a few seconds
+   and can fail if the DNS label has not propagated yet. A retry is the answer; a failure here looks
+   like a broken box and is not one.
+5. **The `vm init` join.** `VmInitCommand` returns an `int`, so the new SSH target is found by
    diffing the target list. Fine while nothing else registers targets concurrently; a real fix is for
    `vm init` to return the target it made.
-5. **Foundry passthrough token on the command line.** `pks foundry proxy` only takes `--token`, so
+6. **Foundry passthrough token on the command line.** `pks foundry proxy` only takes `--token`, so
    the token is visible in `ps` on the box. Adding an env-var fallback to that command would close it.
-6. **The first Entra login may need an email-claim knob.** Entra ID tokens frequently carry no
+7. **The first Entra login may need an email-claim knob.** Entra ID tokens frequently carry no
    `email` claim (UPN-only accounts) and no `email_verified`, and oauth2-proxy's `oidc` provider can
    refuse the login on that alone. The two knobs are `oidc_email_claim = "preferred_username"` and
    `insecure_oidc_allow_unverified_email = true`. Neither is set — setting them blind weakens the
    config for tenants that don't need it. Try them, in that order, if the first real login fails.
-7. **Codex `wire_api = "responses"`** is copied from `CodexCliConfig.BuildProxyProviderBlock`; the
+8. **Codex `wire_api = "responses"`** is copied from `CodexCliConfig.BuildProxyProviderBlock`; the
    static block should be generated from that same code rather than restated here.
 
 ## Files
@@ -170,7 +224,10 @@ Things a real provisioning run needs to settle, in rough order of how likely the
 | `src/Infrastructure/Services/SshCommandRunner.cs` | `RunWithStdinAsync` |
 | `src/Infrastructure/Services/Security/SecretSink.cs` | `WriteTo`, `WriteEnvLine` |
 | `src/Program.cs` | the `t3` branch |
-| `tests/Commands/T3/T3BootstrapScriptTests.cs` | pins the loopback bind, the file modes, the env chain, and "no secret in phase 1" |
+| `src/Infrastructure/Services/AzureVmService.cs` | `EnsurePublicIpDnsLabelAsync`, `EnsureInboundPortsAsync` |
+| `src/Infrastructure/Services/AzureFoundryAuthService.cs` | `WriteRemoteSettingsAsync` |
+| `tests/Commands/T3/T3BootstrapScriptTests.cs` | pins the loopback bind, the file modes, the env chain, the service account, and "no secret in phase 1" |
+| `tests/Services/Azure/AzureDnsLabelTests.cs` | the DNS label grammar and the port-range cover check |
 
 ## One trap worth knowing
 
@@ -186,4 +243,5 @@ marker like `VmSettings` — which is empty for the same reason, whether or not 
 pks t3 init --vm <existing-ssh-target> --domain t3.example.com --skip-bootstrap
 ```
 
-Registers the Entra app and prints the bash instead of running it.
+Registers the Entra app and prints the bash instead of running it. Passing `--domain` also skips the
+ARM calls, so this touches nothing on Azure.

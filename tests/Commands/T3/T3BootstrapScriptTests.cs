@@ -91,7 +91,18 @@ public class T3BootstrapScriptTests
             if (line.Trim() == open) { open = null; continue; }
 
             line.Should().NotContain("`", $"heredoc <<{open} is unquoted, so this line would execute: {line}");
-            line.Replace("\\$(", "").Should().NotContain("$(", $"heredoc <<{open} is unquoted, so this line would execute: {line}");
+
+            // Every unescaped $ expands, not just $( — a bare $HOME or ${VAR} in a unit file or a
+            // comment is substituted by the *sending* shell and reaches the box already resolved,
+            // or resolved to nothing. Only \$ survives, which is how the token reference is written.
+            var stripped = line.Replace("\\$", "");
+            var dollar = stripped.IndexOf('$');
+            if (dollar >= 0 && dollar + 1 < stripped.Length)
+            {
+                var next = stripped[dollar + 1];
+                (char.IsLetter(next) || next is '_' or '{' or '(')
+                    .Should().BeFalse($"heredoc <<{open} is unquoted, so the shell expands this: {line}");
+            }
         }
 
         open.Should().BeNull("every heredoc in the script must be terminated");
@@ -129,6 +140,44 @@ public class T3BootstrapScriptTests
         T3BootstrapScript.Build(Options()).Should().Contain($"email admin@{Domain}");
         T3BootstrapScript.Build(Options() with { AcmeEmail = "ops@example.com" })
             .Should().Contain("email ops@example.com");
+    }
+
+    [Fact]
+    public void Foundry_passthrough_does_not_run_as_the_user_that_runs_agents()
+    {
+        // The passthrough holds an Azure *user* refresh token. T3 spawns coding agents as
+        // RemoteUser, so running the passthrough as that user would put the token in a home
+        // directory every agent on the box can read — and an agent that can read it can send it
+        // anywhere. Everything still works if this regresses, which is why it is pinned.
+        var script = T3BootstrapScript.Build(Options());
+
+        script.Should().Contain("useradd --system --create-home");
+        script.Should().Contain("User=pks-foundry");
+        script.Should().NotContain("ExecStart=/usr/bin/env pks foundry proxy");
+
+        // systemd does not set HOME for a User=, and pks keeps its credential store under $HOME.
+        // Without this the unit starts cleanly and finds no credential at all.
+        script.Should().Contain("Environment=HOME=/var/lib/pks-foundry");
+
+        T3BootstrapScript.FoundryCredentialDeliveryScript()
+            .Should().Contain("chown pks-foundry:pks-foundry /var/lib/pks-foundry/.pks-cli/settings.json");
+    }
+
+    [Fact]
+    public void Bootstrap_does_not_install_the_unrelated_npm_package_named_pks_cli()
+    {
+        // `pks-cli` on the npm registry is a different project, last published in 2022. Installing
+        // it succeeds, so the only symptom is that `pks` on the box is a stranger's binary — or
+        // absent, and the Foundry passthrough silently never starts.
+        var script = T3BootstrapScript.Build(Options());
+
+        var npmLine = script.Split('\n').Single(l => l.Contains("npm install -g"));
+        npmLine.Should().NotContain("pks-cli");
+
+        // pks arrives as a binary on stdin instead, and the unit invokes it by absolute path.
+        T3BootstrapScript.PksBinaryDeliveryScript()
+            .Should().Contain("install -m 0755 -o root -g root /tmp/pks-incoming /usr/local/bin/pks");
+        script.Should().Contain("ExecStart=/usr/local/bin/pks foundry proxy");
     }
 
     [Fact]

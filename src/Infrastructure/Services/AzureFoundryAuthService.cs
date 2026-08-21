@@ -27,6 +27,18 @@ public interface IAzureFoundryAuthService
     Task<FoundryStoredCredentials?> GetStoredCredentialsAsync();
     Task StoreCredentialsAsync(FoundryStoredCredentials credentials);
     Task ClearCredentialsAsync();
+
+    /// <summary>
+    /// Writes a <c>~/.pks-cli/settings.json</c> carrying this machine's stored Foundry credential,
+    /// for delivery to another machine over a pipe. Returns false when nothing is stored.
+    ///
+    /// It exists so a *command* can hand the credential to an ssh stdin without ever holding the
+    /// plaintext — <c>SecretResolverGateTests</c> fails the build if anything under
+    /// <c>src/Commands/</c> so much as names <c>Reveal(</c>, and that gate is the point, not an
+    /// obstacle to route around. The receiving pks migrates the plaintext into its own AES-GCM
+    /// store on first load and blanks the file, so what lands on disk there is short-lived.
+    /// </summary>
+    Task<bool> WriteRemoteSettingsAsync(TextWriter writer, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -342,6 +354,30 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
         // store. Everywhere else a FoundryStoredCredentials serializes to "***" on purpose.
         var json = JsonSerializer.Serialize(credentials, SecretJson.Persistence);
         await _configurationService.SetAsync(StorageKey, json, global: true);
+    }
+
+    public async Task<bool> WriteRemoteSettingsAsync(TextWriter writer, CancellationToken cancellationToken = default)
+    {
+        var json = await _secrets.RevealAsync(StorageKey);
+        if (string.IsNullOrWhiteSpace(json)) return false;
+
+        // The receiving side reads settings.json and migrates any key that names credential
+        // material into its encrypted store, so the shape has to be exactly what it writes: the
+        // whole serialized blob as a *string* value under the same key.
+        var doc = new System.Text.Json.Nodes.JsonObject
+        {
+            [StorageKey] = json,
+            // Otherwise the first thing pks does on that box is print a disclaimer and ask for a
+            // y/n — under systemd stdin is /dev/null, so it takes the default and continues, but
+            // the prompt lands in the journal of every unit and reads like a hang.
+            ["cli.first-time-warning-acknowledged"] = "true",
+        };
+
+        // "\n", never WriteLine: TextWriter.NewLine follows the *sending* machine, and this is on
+        // its way to a POSIX host. See SecretSink.
+        await writer.WriteAsync(doc.ToJsonString() + "\n");
+        await writer.FlushAsync(cancellationToken);
+        return true;
     }
 
     public async Task ClearCredentialsAsync()
