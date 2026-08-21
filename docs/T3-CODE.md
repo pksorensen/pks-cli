@@ -198,9 +198,10 @@ Things a real provisioning run needs to settle, in rough order of how likely the
    `--tailscale-serve`); `--port` is assumed and 3773 comes from the doc's example URL.
 3. **oauth2-proxy 7.8.1 pinned.** The generated config uses v7 key names. A newer release is fine but
    is not automatic, deliberately — an unpinned fetch would silently stop matching the config.
-4. **Certificate timing.** Caddy fetches on first request, so the first load takes a few seconds
-   and can fail if the DNS label has not propagated yet. A retry is the answer; a failure here looks
-   like a broken box and is not one.
+4. **Certificate timing.** Caddy issues for a named site block when it *starts*, not on the first
+   request, so the race is against `caddy` coming up before the DNS label resolves rather than
+   against the browser. Either way a retry is the answer and the box is not broken — but do not
+   debug this on the assumption that loading the page is what triggers issuance.
 5. **The `vm init` join.** `VmInitCommand` returns an `int`, so the new SSH target is found by
    diffing the target list. Fine while nothing else registers targets concurrently; a real fix is for
    `vm init` to return the target it made.
