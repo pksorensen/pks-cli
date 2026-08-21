@@ -93,6 +93,18 @@ public sealed class T3InitCommand : AsyncCommand<T3InitCommand.Settings>
         [Description("Contact address for Let's Encrypt (default: admin@<domain>)")]
         public string? AcmeEmail { get; set; }
 
+        [Description("Use this existing app registration instead of creating one")]
+        [CommandOption("--app-id <GUID>")]
+        public string? AppId { get; set; }
+
+        [Description("Client secret for --app-id, when pks cannot write to that directory itself")]
+        [CommandOption("--client-secret <VALUE>")]
+        public string? ClientSecret { get; set; }
+
+        [Description("Never prompt; fail instead. For scripts and assembly-line jobs, where a prompt is a hang")]
+        [CommandOption("--non-interactive")]
+        public bool NonInteractive { get; set; }
+
         [CommandOption("--rotate")]
         [Description("Mint a fresh client secret even if a live one is stored for the alias")]
         public bool Rotate { get; set; }
@@ -145,45 +157,111 @@ public sealed class T3InitCommand : AsyncCommand<T3InitCommand.Settings>
         }
 
         // ── 4. The Entra app ────────────────────────────────────────────────────────────────────
-        if (!await _entra.IsAuthenticatedAsync())
+        // This registration *is* the login: T3 Code has no authentication of its own, so oauth2-proxy
+        // and this app are the only thing between the public internet and a box that runs coding
+        // agents holding an Azure credential. Which directory it lives in is therefore the user's
+        // call, not ours — the tenant pks happens to hold a Graph token for is frequently not the
+        // one where they can consent to an app.
+        var alias = settings.Alias ?? $"t3-{Sanitize(target.Label ?? target.Host)}";
+        var displayName = $"T3 Code — {domain}";
+
+        var appId = settings.AppId;
+        var clientSecret = settings.ClientSecret;
+
+        if (string.IsNullOrWhiteSpace(appId) && !settings.NonInteractive)
+        {
+            var choice = _console.Prompt(new SelectionPrompt<string>()
+                .Title($"[cyan]Sign-in for[/] [bold]{Markup.Escape(domain)}[/][cyan]:[/]")
+                .AddChoices(CreateAppChoice, ExistingAppChoice));
+
+            if (choice == ExistingAppChoice)
+            {
+                appId = _console.Prompt(new TextPrompt<string>("[cyan]Application (client) ID:[/]")
+                    .Validate(v => Guid.TryParse(v.Trim(), out _)
+                        ? ValidationResult.Success()
+                        : ValidationResult.Error("[red]that is not a GUID[/]")))
+                    .Trim();
+            }
+        }
+
+        // A supplied app id with a supplied secret is the hands-off mode: pks writes nothing to that
+        // directory, so it works for a tenant where creating registrations is somebody else's job.
+        // Without a secret we still need Graph, to mint one and to add the redirect URI.
+        var manual = !string.IsNullOrWhiteSpace(appId) && !string.IsNullOrWhiteSpace(clientSecret);
+
+        if (!manual && !await _entra.IsAuthenticatedAsync())
         {
             _console.MarkupLine("[red]Not signed in to Microsoft Graph.[/] [dim]Run [bold]pks entra app list[/] once to sign in, then retry.[/]");
             return 1;
         }
 
-        var who = await _entra.WhoAmIAsync();
+        var who = manual ? null : await _entra.WhoAmIAsync();
         var tenantId = settings.TenantId ?? who?.TenantId;
+
+        // A tenant pks inferred belongs to the directory pks signed in to. If the app was named by
+        // hand it may well live somewhere else, and an issuer pointing at the wrong tenant fails
+        // only at the callback — after a sign-in that looked like it worked.
+        if (string.IsNullOrWhiteSpace(tenantId) && !string.IsNullOrWhiteSpace(appId) && !settings.NonInteractive)
+        {
+            tenantId = _console.Prompt(new TextPrompt<string>("[cyan]Directory (tenant) ID that app belongs to:[/]")
+                .Validate(v => Guid.TryParse(v.Trim(), out _)
+                    ? ValidationResult.Success()
+                    : ValidationResult.Error("[red]that is not a GUID[/]")))
+                .Trim();
+        }
+
         if (string.IsNullOrWhiteSpace(tenantId))
         {
             _console.MarkupLine("[red]Could not determine the tenant.[/] [dim]Pass [bold]--tenant <id>[/].[/]");
             return 1;
         }
 
-        var alias = settings.Alias ?? $"t3-{Sanitize(target.Label ?? target.Host)}";
-        var displayName = $"T3 Code — {domain}";
-
-        _console.MarkupLine($"[dim]Registering [bold]{Markup.Escape(redirectUri)}[/] on [bold]{Markup.Escape(displayName)}[/] as [bold]{Markup.Escape(who?.UserPrincipalName ?? "?")}[/]…[/]");
-
         EntraAppResult app;
-        try
+        if (manual)
         {
-            app = await _entra.InitAsync(new EntraAppRequest
-            {
-                DisplayName = displayName,
-                Alias = alias,
-                TenantId = tenantId,
-                RedirectUris = { redirectUri },
-                Rotate = settings.Rotate,
-            });
-        }
-        catch (Exception ex)
-        {
-            _console.MarkupLine($"[red]Entra app registration failed:[/] {Markup.Escape(ex.Message)}");
-            return 1;
-        }
+            _console.MarkupLine($"[dim]Using app [bold]{Markup.Escape(appId!)}[/] in tenant [bold]{Markup.Escape(tenantId!)}[/] — pks will not modify it.[/]");
 
-        _console.MarkupLine($"[green]Entra app:[/] {Markup.Escape(app.App.AppId)} " +
-            $"[dim]({(app.CreatedApplication ? "created" : "adopted")}{(app.MintedSecret ? ", secret minted" : ", existing secret")})[/]");
+            var stored = await _entra.SaveAsync(new EntraManualApp
+            {
+                Alias = alias,
+                DisplayName = displayName,
+                TenantId = tenantId!,
+                ClientId = appId!,
+                ClientSecret = SecretValue.From(clientSecret!),
+            });
+
+            app = new EntraAppResult { App = stored };
+
+            _console.MarkupLine($"[yellow]Add this redirect URI to that app yourself[/] [dim](Authentication → Web → Redirect URIs)[/]:");
+            _console.MarkupLine($"  [bold]{Markup.Escape(redirectUri)}[/]");
+        }
+        else
+        {
+            _console.MarkupLine($"[dim]Registering [bold]{Markup.Escape(redirectUri)}[/] on [bold]{Markup.Escape(displayName)}[/] as [bold]{Markup.Escape(who?.UserPrincipalName ?? "?")}[/]…[/]");
+
+            try
+            {
+                app = await _entra.InitAsync(new EntraAppRequest
+                {
+                    DisplayName = displayName,
+                    Alias = alias,
+                    TenantId = tenantId,
+                    AdoptAppId = appId,
+                    RedirectUris = { redirectUri },
+                    Rotate = settings.Rotate,
+                });
+            }
+            catch (Exception ex)
+            {
+                _console.MarkupLine($"[red]Entra app registration failed:[/] {Markup.Escape(ex.Message)}");
+                _console.MarkupLine("[dim]If you cannot create or edit app registrations in that directory, pass[/] " +
+                    "[bold]--app-id <guid> --client-secret <value>[/] [dim]for one made by hand.[/]");
+                return 1;
+            }
+
+            _console.MarkupLine($"[green]Entra app:[/] {Markup.Escape(app.App.AppId)} " +
+                $"[dim]({(app.CreatedApplication ? "created" : "adopted")}{(app.MintedSecret ? ", secret minted" : ", existing secret")})[/]");
+        }
 
         // ── 5. Bootstrap ────────────────────────────────────────────────────────────────────────
         var remoteHome = target.Username == "root" ? "/root" : $"/home/{target.Username}";
@@ -506,6 +584,9 @@ public sealed class T3InitCommand : AsyncCommand<T3InitCommand.Settings>
         var bytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
         return Convert.ToBase64String(bytes).Replace('+', '-').Replace('/', '_');
     }
+
+    private const string CreateAppChoice = "Create a new app registration for me";
+    private const string ExistingAppChoice = "I already have an app registration (paste its client ID)";
 
     private static string Sanitize(string s) =>
         new(s.Select(c => char.IsLetterOrDigit(c) || c == '-' ? char.ToLowerInvariant(c) : '-').ToArray());
