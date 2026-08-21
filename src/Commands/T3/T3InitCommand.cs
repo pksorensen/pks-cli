@@ -181,6 +181,17 @@ public sealed class T3InitCommand : AsyncCommand<T3InitCommand.Settings>
                         ? ValidationResult.Success()
                         : ValidationResult.Error("[red]that is not a GUID[/]")))
                     .Trim();
+
+                // Asked for rather than taken from --client-secret, because a secret on the command
+                // line is a line in the shell's history file. Empty is a real answer: it means pks
+                // should mint one through Graph, which needs write access to that directory.
+                _console.MarkupLine("[dim]Leave blank to let pks mint a secret (needs write access to that directory).[/]");
+                clientSecret = _console.Prompt(new TextPrompt<string>("[cyan]Client secret:[/]")
+                    .AllowEmpty()
+                    .Secret())
+                    .Trim();
+
+                if (clientSecret.Length == 0) clientSecret = null;
             }
         }
 
