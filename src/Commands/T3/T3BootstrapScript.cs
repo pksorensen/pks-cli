@@ -46,21 +46,25 @@ public static class T3BootstrapScript
         return $$"""
         set -euo pipefail
 
+        # set -e aborts with no indication of where. apt's debconf chatter then fills the tail of
+        # stderr, so the caller prints noise and the actual failure has scrolled out of view.
+        trap 'echo "pks t3: FAILED at line $LINENO: $BASH_COMMAND" >&2' ERR
+
         echo "==> pks t3: bootstrapping {{o.Domain}}"
 
         export DEBIAN_FRONTEND=noninteractive
         sudo -n true 2>/dev/null || { echo "pks t3: passwordless sudo is required on this VM" >&2; exit 78; }
 
         # ---------------------------------------------------------------- packages
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq curl ca-certificates gnupg debian-keyring debian-archive-keyring apt-transport-https jq
+        sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates gnupg debian-keyring debian-archive-keyring apt-transport-https jq
 
         # ---------------------------------------------------------------- node 22
         # t3 requires ^22.16 || ^23.11 || >=24.10. Ubuntu's own nodejs is far below that on every
         # LTS image, so NodeSource is not optional here.
         if ! node --version 2>/dev/null | grep -qE '^v(2[2-9]|[3-9][0-9])'; then
           curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-          sudo apt-get install -y -qq nodejs
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
         fi
         node --version
 
@@ -77,8 +81,8 @@ public static class T3BootstrapScript
             | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
           curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
             | sudo tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq caddy
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq caddy
         fi
 
         # ---------------------------------------------------------------- oauth2-proxy

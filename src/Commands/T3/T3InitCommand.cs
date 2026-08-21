@@ -221,7 +221,14 @@ public sealed class T3InitCommand : AsyncCommand<T3InitCommand.Settings>
                 var result = await _ssh.RunAsync(host, script);
                 bootstrapOk = result.Success;
                 if (!result.Success)
-                    _console.MarkupLine($"[red]Bootstrap failed (exit {result.ExitCode}):[/]\n{Markup.Escape(Tail(result.StdErr))}");
+                {
+                    // stderr alone is not enough: apt writes its progress there too, so on a failure
+                    // the tail is debconf chatter and the line that actually died is above it. The
+                    // ERR trap in the script names the step; stdout carries the "==>" markers.
+                    _console.MarkupLine($"[red]Bootstrap failed (exit {result.ExitCode}).[/]");
+                    _console.MarkupLine($"[dim]--- last output ---[/]\n{Markup.Escape(Tail(result.StdOut))}");
+                    _console.MarkupLine($"[dim]--- errors ---[/]\n{Markup.Escape(Tail(result.StdErr))}");
+                }
             });
 
         if (!bootstrapOk) return 1;

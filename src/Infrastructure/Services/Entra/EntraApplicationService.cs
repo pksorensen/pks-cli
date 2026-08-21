@@ -120,6 +120,31 @@ public sealed class EntraApplicationService : IEntraApplicationService
         return token;
     }
 
+    /// <summary>
+    /// The <c>tid</c> claim of a JWT, or null if the token is not a readable JWT. No signature check:
+    /// the token came from our own token acquisition a moment ago, and the value is used to build a
+    /// URL, not to authorize anything.
+    /// </summary>
+    internal static string? TenantFromToken(string token)
+    {
+        try
+        {
+            var parts = token.Split('.');
+            if (parts.Length < 2) return null;
+
+            var payload = parts[1].Replace('-', '+').Replace('_', '/');
+            payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
+
+            using var doc = JsonDocument.Parse(Convert.FromBase64String(payload));
+            var tid = doc.RootElement.TryGetProperty("tid", out var t) ? t.GetString() : null;
+            return Guid.TryParse(tid, out _) ? tid : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private async Task<HttpRequestMessage> RequestAsync(HttpMethod method, string url, CancellationToken ct)
     {
         var request = new HttpRequestMessage(method, url);
@@ -141,7 +166,15 @@ public sealed class EntraApplicationService : IEntraApplicationService
             var json = await response.Content.ReadAsStringAsync(ct);
             using var doc = JsonDocument.Parse(json);
             var upn = doc.RootElement.TryGetProperty("userPrincipalName", out var u) ? u.GetString() ?? "" : "";
-            var tenant = (await _foundryAuth.GetStoredCredentialsAsync())?.TenantId ?? "";
+
+            // The tenant has to describe *this* Graph identity, not the Foundry sign-in. Those are
+            // separate stores, and the Foundry one legitimately holds "common" when the resource was
+            // picked through the multi-tenant endpoint. Handing "common" onward produces an OIDC
+            // issuer of .../common/v2.0 while the token Entra mints carries the real tenant GUID, so
+            // oauth2-proxy rejects a login that looked like it worked. The `tid` claim on the Graph
+            // token is the authoritative answer and costs no extra Graph permission to read.
+            var tenant = TenantFromToken(await GraphTokenAsync(ct))
+                ?? (await _foundryAuth.GetStoredCredentialsAsync())?.TenantId ?? "";
             return (upn, tenant);
         }
         catch (Exception ex)
