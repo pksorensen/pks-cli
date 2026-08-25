@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using PKS.Infrastructure.Services.Expo;
 
 namespace PKS.Infrastructure.Services.Runner;
 
@@ -20,6 +21,7 @@ public class GitCredentialServer : IAsyncDisposable
     private readonly ICoolifyTokenStore? _tokenStore;
     private readonly IRegistryConfigurationService? _registryConfig;
     private readonly ICertStore? _certStore;
+    private readonly IExpoCredentialService? _expoCredentials;
     private WebApplication? _app;
 
     public GitCredentialServer(
@@ -29,7 +31,8 @@ public class GitCredentialServer : IAsyncDisposable
         IJobTokenService? tokenService = null,
         ICoolifyTokenStore? tokenStore = null,
         IRegistryConfigurationService? registryConfig = null,
-        ICertStore? certStore = null)
+        ICertStore? certStore = null,
+        IExpoCredentialService? expoCredentials = null)
     {
         // Use a stable directory so we can bind-mount the directory (not the file).
         // Directory mounts survive socket file recreation across runner restarts.
@@ -41,6 +44,7 @@ public class GitCredentialServer : IAsyncDisposable
         _tokenStore = tokenStore;
         _registryConfig = registryConfig;
         _certStore = certStore;
+        _expoCredentials = expoCredentials;
     }
 
     /// <summary>
@@ -281,6 +285,39 @@ public class GitCredentialServer : IAsyncDisposable
                 thumbprint = record.Thumbprint,
                 publicCertPem = record.PublicCertPem,
             });
+        });
+
+        // Vend the host's Expo robot token to a job that asked for it. Scoped twice: the per-job JWT
+        // proves which repository the job belongs to, and that repository must have been registered
+        // with `--expo`. Without the second check every repo on the box could spend the token.
+        _app.MapGet("/expo/token", async (HttpRequest request) =>
+        {
+            var claims = ValidateRequest(request);
+            if (claims == null)
+                return Results.Json(new { error = "unauthorized" }, statusCode: 401);
+
+            if (_expoCredentials == null)
+                return Results.Json(new { error = "expo service unavailable" }, statusCode: 503);
+
+            if (!await _expoCredentials.IsRepoAllowedAsync(claims.Owner, claims.Repo))
+            {
+                _onLog?.Invoke($"Expo token DENIED for {claims.Owner}/{claims.Repo} (not registered with --expo)");
+                return Results.Json(
+                    new { error = $"{claims.Owner}/{claims.Repo} is not registered for Expo access" },
+                    statusCode: 403);
+            }
+
+            var token = await _expoCredentials.RevealTokenAsync();
+            if (string.IsNullOrEmpty(token))
+                return Results.Json(
+                    new { error = "No Expo token stored — run 'pks expo init' on the runner host" },
+                    statusCode: 404);
+
+            _onLog?.Invoke($"Expo token served for {claims.Owner}/{claims.Repo} (job {claims.JobId})");
+            // Revealed explicitly, for the same reason as /git-credential: this response *is* the
+            // credential handoff, and a default-serialized SecretValue would ship "***" and fail
+            // later with an error naming the wrong cause.
+            return Results.Json(new { token });
         });
 
         await _app.StartAsync(ct);

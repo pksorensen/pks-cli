@@ -20,7 +20,7 @@ public interface IRunnerConfigurationService
     /// <summary>
     /// Adds a new runner registration for the given owner/repository and persists it
     /// </summary>
-    Task<RunnerRegistration> AddRegistrationAsync(string owner, string repository, string? labels = null);
+    Task<RunnerRegistration> AddRegistrationAsync(string owner, string repository, string? labels = null, bool expoEnabled = false);
 
     /// <summary>
     /// Removes a registration by ID. Returns true if found and removed, false otherwise

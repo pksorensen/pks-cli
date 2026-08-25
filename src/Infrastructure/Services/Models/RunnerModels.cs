@@ -11,6 +11,16 @@ public class RunnerRegistration
     public string Labels { get; set; } = "devcontainer-runner";
     public DateTime RegisteredAt { get; set; }
     public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// Whether jobs for this repository may fetch the stored Expo access token from the
+    /// credential broker (<c>GET /expo/token</c>).
+    ///
+    /// Opt-in on purpose, and false for every registration written before this field existed:
+    /// the per-job token proves which repo a job belongs to, so this is the difference between
+    /// "the box holds an Expo token" and "every repo registered on the box can spend it".
+    /// </summary>
+    public bool ExpoEnabled { get; set; }
 }
 
 /// <summary>
