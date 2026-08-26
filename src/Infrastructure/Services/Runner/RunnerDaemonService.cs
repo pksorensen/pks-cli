@@ -30,11 +30,30 @@ public class RunnerDaemonService : IRunnerDaemonService
     private readonly Dictionary<string, DateTime> _lastPollTimes = new();
     private readonly List<Task<RunnerJobState>> _runningTasks = new();
     private readonly HashSet<long> _dispatchedJobIds = new();
+    /// <summary>Dispatches per job that no runner has claimed yet. Reset the moment one does.</summary>
+    private readonly Dictionary<long, int> _dispatchAttempts = new();
+    /// <summary>Jobs the daemon has stopped dispatching, so it stops minting runners for them.</summary>
+    private readonly HashSet<long> _abandonedJobIds = new();
     private readonly Dictionary<long, string> _lastRunSummaries = new();
     private readonly HashSet<string> _reportedRunnerSwaps = new();
     private readonly object _lock = new();
     private int _consecutiveAuthFailures;
     private int _consecutiveRateLimitFailures;
+
+    /// <summary>
+    /// How many times a job may be dispatched without any runner claiming it before the daemon
+    /// gives up on it.
+    /// </summary>
+    /// <remarks>
+    /// There was no ceiling at all until 2026-08-26, and the absence was expensive. Every terminal
+    /// path in <see cref="ExecuteAndTrackJob"/> removes the job from <see cref="_dispatchedJobIds"/>,
+    /// so a job that fails to start is queued again on GitHub, seen again by the next poll thirty
+    /// seconds later, and dispatched again — forever, until a human cancels the run. Each attempt
+    /// mints a JIT registration, and those are only auto-deleted by GitHub when the runner finishes
+    /// a job, which by definition never happened. Four iOS jobs looping like that for one hour on
+    /// 2026-08-25 left 86 dead registrations on a single repository.
+    /// </remarks>
+    internal const int MaxDispatchAttempts = 3;
 
     public event EventHandler<RunnerJobState>? JobStarted;
     public event EventHandler<RunnerJobState>? JobCompleted;
@@ -418,7 +437,7 @@ public class RunnerDaemonService : IRunnerDaemonService
                 // Skip if already dispatched
                 lock (_lock)
                 {
-                    if (_dispatchedJobIds.Contains(job.Id))
+                    if (_dispatchedJobIds.Contains(job.Id) || _abandonedJobIds.Contains(job.Id))
                         continue;
                 }
 
@@ -463,6 +482,21 @@ public class RunnerDaemonService : IRunnerDaemonService
     {
         if (jobs.Count == 0)
             return;
+
+        // Jobs that finish while the daemon is watching drop their bookkeeping here, so a daemon
+        // running for weeks does not accumulate an entry per job it ever saw. It is not airtight —
+        // a run cancelled outright leaves the queued list without any of its jobs ever being polled
+        // as completed — but the leftovers are a few bytes each, job IDs never come round again,
+        // and a restart clears them.
+        lock (_lock)
+        {
+            foreach (var finished in jobs.Where(j =>
+                string.Equals(j.Status, "completed", StringComparison.OrdinalIgnoreCase)))
+            {
+                _dispatchAttempts.Remove(finished.Id);
+                _abandonedJobIds.Remove(finished.Id);
+            }
+        }
 
         ReconcileRunnerAssignments(repoKey, jobs);
 
@@ -509,6 +543,12 @@ public class RunnerDaemonService : IRunnerDaemonService
             if (string.IsNullOrEmpty(job.RunnerName))
                 continue;
 
+            // A runner took it, so whatever attempts came before were not wasted after all.
+            lock (_lock)
+            {
+                _dispatchAttempts.Remove(job.Id);
+            }
+
             string? note = null;
 
             lock (_lock)
@@ -527,7 +567,14 @@ public class RunnerDaemonService : IRunnerDaemonService
 
                 // The job we thought this runner would take never got one — let it be dispatched again.
                 if (strandedJobId.HasValue)
+                {
                     _dispatchedJobIds.Remove(strandedJobId.Value);
+
+                    // And do not charge it for the attempt. That dispatch produced a working runner,
+                    // it just went to a sibling job; counting it would let three swaps in a row
+                    // abandon a job the daemon is handling correctly.
+                    _dispatchAttempts.Remove(strandedJobId.Value);
+                }
                 _dispatchedJobIds.Add(job.Id);
 
                 if (_reportedRunnerSwaps.Add(job.RunnerName))
@@ -542,6 +589,50 @@ public class RunnerDaemonService : IRunnerDaemonService
                 _logger.LogInformation("{Note}", note);
                 OnStatusChanged(note);
             }
+        }
+    }
+
+    /// <summary>
+    /// Removes a JIT runner registration that nothing else will ever remove.
+    /// </summary>
+    /// <remarks>
+    /// GitHub deletes an ephemeral runner once it finishes a job, which is why a dispatch that works
+    /// needs no cleanup at all. A registration whose runner never claimed a job is never deleted and
+    /// sits in the repository's runner list as an offline entry indefinitely.
+    /// <para>
+    /// Best-effort on purpose. Every caller is already on a failure path, and failing to tidy up
+    /// must not replace the error that got us there.
+    /// </para>
+    /// </remarks>
+    private async Task TryDeleteRunnerAsync(RunnerRegistration registration, int runnerId)
+    {
+        try
+        {
+            // Not the caller's token: it may already be cancelled, and this is one short call.
+            var deleted = await _actionsService.DeleteRunnerAsync(
+                registration.Owner, registration.Repository, runnerId, CancellationToken.None);
+
+            // Checked rather than assumed, because the API client reports a refusal by returning
+            // false rather than by throwing — and a 404 is the ordinary answer when the runner did
+            // claim a job after all and GitHub has already reaped it.
+            if (deleted)
+            {
+                _logger.LogInformation(
+                    "Removed unclaimed JIT runner {RunnerId} from {Owner}/{Repo}",
+                    runnerId, registration.Owner, registration.Repository);
+            }
+            else
+            {
+                _logger.LogDebug(
+                    "JIT runner {RunnerId} was not removed from {Owner}/{Repo}; most likely already gone",
+                    runnerId, registration.Owner, registration.Repository);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex, "Could not remove unclaimed JIT runner {RunnerId} from {Owner}/{Repo}",
+                runnerId, registration.Owner, registration.Repository);
         }
     }
 
@@ -567,7 +658,7 @@ public class RunnerDaemonService : IRunnerDaemonService
         // Use a synthetic job ID based on run ID to avoid conflicts
         lock (_lock)
         {
-            if (_dispatchedJobIds.Contains(run.Id))
+            if (_dispatchedJobIds.Contains(run.Id) || _abandonedJobIds.Contains(run.Id))
                 return;
 
             if (_activeJobs.Count >= config.MaxConcurrentJobs)
@@ -613,6 +704,34 @@ public class RunnerDaemonService : IRunnerDaemonService
         _logger.LogInformation("Dispatching job {JobId} for run {RunId} on {Repo}{Container}",
             job.Id, run.Id, repoKey, containerLabel);
 
+        int attempt;
+        lock (_lock)
+        {
+            if (_abandonedJobIds.Contains(job.Id))
+                return;
+
+            attempt = _dispatchAttempts.TryGetValue(job.Id, out var previous) ? previous + 1 : 1;
+            _dispatchAttempts[job.Id] = attempt;
+
+            if (attempt > MaxDispatchAttempts)
+                _abandonedJobIds.Add(job.Id);
+        }
+
+        if (attempt > MaxDispatchAttempts)
+        {
+            _logger.LogError(
+                "Giving up on job {JobId} for run {RunId} on {Repo}: {Attempts} dispatches and no runner claimed it",
+                job.Id, run.Id, repoKey, MaxDispatchAttempts);
+            OnStatusChanged(
+                $"Gave up on '{job.Name}' ({repoKey} #{run.Id}) after {MaxDispatchAttempts} dispatches " +
+                "no runner claimed. Fix the runner or cancel the run; the daemon will not retry it.");
+            return;
+        }
+
+        // Held so a dispatch that throws after GitHub minted the registration can take it back out
+        // again. Nothing else ever will: see MaxDispatchAttempts.
+        int? jitRunnerId = null;
+
         try
         {
             // Build labels for JIT config — use the job's actual labels so GitHub matches them.
@@ -633,6 +752,8 @@ public class RunnerDaemonService : IRunnerDaemonService
                 registration.Owner, registration.Repository,
                 runnerName, labels, cancellationToken);
 
+            jitRunnerId = jitConfig.RunnerId;
+
             // Create job state
             var jobState = new RunnerJobState
             {
@@ -641,6 +762,7 @@ public class RunnerDaemonService : IRunnerDaemonService
                 WorkflowJobId = job.Id,
                 WorkflowJobName = job.Name,
                 RunnerName = runnerName,
+                JitRunnerId = jitConfig.RunnerId,
                 ContainerName = dispatchInfo.ContainerName,
                 Branch = run.HeadBranch,
                 StartedAt = DateTime.UtcNow,
@@ -672,6 +794,9 @@ public class RunnerDaemonService : IRunnerDaemonService
         {
             _logger.LogError(ex, "Failed to dispatch job {JobId} for run {RunId}", job.Id, run.Id);
             OnStatusChanged($"Failed to dispatch job for run {run.Id}: {ex.Message}");
+
+            if (jitRunnerId.HasValue)
+                await TryDeleteRunnerAsync(registration, jitRunnerId.Value);
         }
     }
 
@@ -729,11 +854,31 @@ public class RunnerDaemonService : IRunnerDaemonService
                 _dispatchedJobIds.Remove(job.Id);
                 if (jobState.WorkflowJobId.HasValue)
                     _dispatchedJobIds.Remove(jobState.WorkflowJobId.Value);
+
+                // Only a run that ended well clears the attempt counter. A container that starts and
+                // exits without the runner ever claiming the job comes back here, not through the
+                // catch block, and the job is still queued on GitHub — so clearing the counter on
+                // every outcome would leave the same unbounded loop the ceiling exists to stop,
+                // just reached through the other door. A job that did run and genuinely failed is
+                // completed on GitHub, never polled again, and has its counter dropped by the
+                // finished-job sweep in PollRegistration instead.
                 if (finalStatus == RunnerJobStatus.Failed)
+                {
                     _totalJobsFailed++;
+                }
                 else
+                {
                     _totalJobsCompleted++;
+                    _dispatchAttempts.Remove(job.Id);
+                    if (jobState.WorkflowJobId.HasValue)
+                        _dispatchAttempts.Remove(jobState.WorkflowJobId.Value);
+                }
             }
+
+            // Same reasoning for the registration: GitHub reaps an ephemeral runner itself once it
+            // finishes a job, so this only has anything to delete when no runner ever claimed one.
+            if (finalStatus == RunnerJobStatus.Failed && jobState.JitRunnerId.HasValue)
+                await TryDeleteRunnerAsync(dispatchInfo.Registration, jobState.JitRunnerId.Value);
 
             JobCompleted?.Invoke(this, jobState);
             OnStatusChanged(
@@ -757,6 +902,11 @@ public class RunnerDaemonService : IRunnerDaemonService
                     _dispatchedJobIds.Remove(jobState.WorkflowJobId.Value);
                 _totalJobsFailed++;
             }
+
+            // The counter is deliberately left standing: this is exactly the attempt
+            // MaxDispatchAttempts is counting.
+            if (jobState.JitRunnerId.HasValue)
+                await TryDeleteRunnerAsync(dispatchInfo.Registration, jobState.JitRunnerId.Value);
 
             JobCompleted?.Invoke(this, jobState);
             OnStatusChanged($"Run {run.Id} '{jobState.WorkflowJobName}' failed: {ex.Message}");

@@ -66,6 +66,18 @@ public class GitHubActionsService : IGitHubActionsService
     }
 
     /// <inheritdoc />
+    public async Task<bool> DeleteRunnerAsync(
+        string owner,
+        string repo,
+        int runnerId,
+        CancellationToken cancellationToken = default)
+    {
+        await EnsureAuthenticatedAsync();
+        var endpoint = $"repos/{owner}/{repo}/actions/runners/{runnerId}";
+        return await _apiClient.DeleteAsync(endpoint, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<List<QueuedWorkflowRun>> GetQueuedRunsAsync(
         string owner,
         string repo,

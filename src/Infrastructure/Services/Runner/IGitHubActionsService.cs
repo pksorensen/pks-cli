@@ -14,6 +14,16 @@ public interface IGitHubActionsService
     Task<GitHubJitRunnerConfig> GenerateJitConfigAsync(string owner, string repo, string name, string[] labels, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Removes a runner registration from a repository.
+    /// DELETE /repos/{owner}/{repo}/actions/runners/{runnerId}
+    /// </summary>
+    /// <remarks>
+    /// Only needed for registrations that never ran a job. GitHub deletes an ephemeral runner by
+    /// itself once it completes one, so the happy path never calls this.
+    /// </remarks>
+    Task<bool> DeleteRunnerAsync(string owner, string repo, int runnerId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Get queued workflow runs for a repository
     /// GET /repos/{owner}/{repo}/actions/runs?status=queued
     /// </summary>

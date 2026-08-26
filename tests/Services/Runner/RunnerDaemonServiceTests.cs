@@ -1161,4 +1161,171 @@ public class RunnerDaemonServiceTests : IDisposable
     }
 
     #endregion
+
+    #region Dispatch ceiling
+
+    /// <summary>
+    /// A job no runner ever claims must stop being dispatched, and every registration it minted
+    /// must be taken back off GitHub.
+    /// </summary>
+    /// <remarks>
+    /// Regression for the loop that put 86 offline runners on one repository. Every terminal path
+    /// in ExecuteAndTrackJob releases the job from _dispatchedJobIds, so a job that fails to start
+    /// is still queued on GitHub, seen by the next poll, and dispatched again. Without a ceiling
+    /// that repeats until a human cancels the run, and each pass leaves a JIT registration behind
+    /// that GitHub never reaps -- ephemeral runners are auto-deleted on job completion, and this
+    /// one never completed a job.
+    /// </remarks>
+    [Fact]
+    public async Task RunAsync_WhenDispatchAlwaysFails_StopsAtMaxAttemptsAndRemovesEveryRunner()
+    {
+        using var cts = new CancellationTokenSource();
+
+        var run = new QueuedWorkflowRun { Id = 500, Name = "CI", HeadBranch = "main" };
+
+        _mockActionsService
+            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<QueuedWorkflowRun> { run });
+
+        // Stays "queued" on every poll: this is a job that never gets picked up.
+        SetupJobsForRun(run.Id, (700L, new List<string> { "devcontainer-runner" }));
+
+        var nextRunnerId = 0;
+        _mockActionsService
+            .Setup(a => a.GenerateJitConfigAsync(
+                "testowner", "testrepo",
+                It.IsAny<string>(), It.IsAny<string[]>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new GitHubJitRunnerConfig
+            {
+                RunnerId = Interlocked.Increment(ref nextRunnerId),
+                EncodedJitConfig = "jit-config"
+            });
+
+        _mockActionsService
+            .Setup(a => a.DeleteRunnerAsync(
+                "testowner", "testrepo", It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        _mockContainerService
+            .Setup(c => c.ExecuteJobAsync(
+                It.IsAny<RunnerRegistration>(), It.IsAny<long>(), It.IsAny<string?>(),
+                It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<Action<string>?>(), It.IsAny<CancellationToken>(),
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ThrowsAsync(new InvalidOperationException("container refused to start"));
+
+        var gaveUp = new List<string>();
+        _service.StatusChanged += (_, msg) => { if (msg.Contains("Gave up on")) gaveUp.Add(msg); };
+
+        var daemon = _service.RunAsync(cts.Token);
+
+        // Wait for the ceiling to be reached rather than for a fixed number of polls, so the
+        // assertion below is about the ceiling and not about how fast the loop happens to run.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (gaveUp.Count == 0 && DateTime.UtcNow < deadline)
+            await Task.Delay(100, CancellationToken.None);
+
+        gaveUp.Should().NotBeEmpty("the daemon must say out loud that it has stopped retrying");
+
+        // Keep polling past the ceiling: the count must not move.
+        await Task.Delay(TimeSpan.FromSeconds(3), CancellationToken.None);
+
+        cts.Cancel();
+        await daemon;
+
+        _mockActionsService.Verify(
+            a => a.GenerateJitConfigAsync(
+                "testowner", "testrepo",
+                It.IsAny<string>(), It.IsAny<string[]>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(RunnerDaemonService.MaxDispatchAttempts),
+            "the job is dispatched at most MaxDispatchAttempts times, however long the daemon runs");
+
+        _mockActionsService.Verify(
+            a => a.DeleteRunnerAsync(
+                "testowner", "testrepo", It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(RunnerDaemonService.MaxDispatchAttempts),
+            "every registration minted for a dispatch that failed is removed again");
+    }
+
+    /// <summary>
+    /// The same ceiling, reached through the door that does not throw.
+    /// </summary>
+    /// <remarks>
+    /// The container starting and exiting again without the runner ever claiming the job is not an
+    /// exception -- ExecuteJobAsync returns normally with a Failed status, and the job is still
+    /// queued on GitHub. That path is at least as likely as a throw for the incident this ceiling
+    /// was written for: registrations arriving roughly forty seconds apart look much more like a
+    /// container that starts and gives up than like one that refuses to start at all.
+    /// </remarks>
+    [Fact]
+    public async Task RunAsync_WhenTheContainerExitsWithoutClaimingTheJob_StopsAtMaxAttemptsAndRemovesEveryRunner()
+    {
+        using var cts = new CancellationTokenSource();
+
+        var run = new QueuedWorkflowRun { Id = 501, Name = "CI", HeadBranch = "main" };
+
+        _mockActionsService
+            .Setup(a => a.GetQueuedRunsAsync("testowner", "testrepo", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<QueuedWorkflowRun> { run });
+
+        // Still "queued" on every poll, and with no conclusion -- so ResolveFinalStatusAsync keeps
+        // the container's own Failed verdict rather than overriding it.
+        SetupJobsForRun(run.Id, (701L, new List<string> { "devcontainer-runner" }));
+
+        var nextRunnerId = 0;
+        _mockActionsService
+            .Setup(a => a.GenerateJitConfigAsync(
+                "testowner", "testrepo",
+                It.IsAny<string>(), It.IsAny<string[]>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new GitHubJitRunnerConfig
+            {
+                RunnerId = Interlocked.Increment(ref nextRunnerId),
+                EncodedJitConfig = "jit-config"
+            });
+
+        _mockActionsService
+            .Setup(a => a.DeleteRunnerAsync(
+                "testowner", "testrepo", It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        // Returns rather than throws: the whole point of this test.
+        _mockContainerService
+            .Setup(c => c.ExecuteJobAsync(
+                It.IsAny<RunnerRegistration>(), It.IsAny<long>(), It.IsAny<string?>(),
+                It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<Action<string>?>(), It.IsAny<CancellationToken>(),
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(() => new RunnerJobState { RunId = run.Id, Status = RunnerJobStatus.Failed });
+
+        var gaveUp = new List<string>();
+        _service.StatusChanged += (_, msg) => { if (msg.Contains("Gave up on")) gaveUp.Add(msg); };
+
+        var daemon = _service.RunAsync(cts.Token);
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (gaveUp.Count == 0 && DateTime.UtcNow < deadline)
+            await Task.Delay(100, CancellationToken.None);
+
+        gaveUp.Should().NotBeEmpty("a container that exits without claiming the job must reach the ceiling too");
+
+        await Task.Delay(TimeSpan.FromSeconds(3), CancellationToken.None);
+
+        cts.Cancel();
+        await daemon;
+
+        _mockActionsService.Verify(
+            a => a.GenerateJitConfigAsync(
+                "testowner", "testrepo",
+                It.IsAny<string>(), It.IsAny<string[]>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(RunnerDaemonService.MaxDispatchAttempts),
+            "a dispatch that fails without throwing still counts against the ceiling");
+
+        _mockActionsService.Verify(
+            a => a.DeleteRunnerAsync(
+                "testowner", "testrepo", It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(RunnerDaemonService.MaxDispatchAttempts),
+            "and its registration is removed on that path as well");
+    }
+
+    #endregion
 }

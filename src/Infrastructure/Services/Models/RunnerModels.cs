@@ -57,6 +57,11 @@ public class RunnerJobState
     public string WorkflowJobName { get; set; } = string.Empty;
     /// <summary>The JIT runner name we generated, so polls can tell which job it actually got.</summary>
     public string? RunnerName { get; set; }
+    /// <summary>
+    /// The registration GitHub minted for <see cref="RunnerName"/>, so a dispatch that ends without
+    /// the runner ever claiming a job can delete it instead of leaving it in the repo forever.
+    /// </summary>
+    public int? JitRunnerId { get; set; }
     /// <summary>Last progress message from the container, shown in the live status table.</summary>
     public string? Detail { get; set; }
     public string? ContainerName { get; set; }
