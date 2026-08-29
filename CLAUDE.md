@@ -30,11 +30,30 @@ cd tests && dotnet test --filter "Category=Integration"
 ./run-tests.sh --category Unit --only-fast
 ./run-tests.sh --exclude-unstable --exclude-slow
 
-# Install as global tool for manual end-to-end testing
+# Install as global tool — only when the scenario needs a *global* `pks`
 ./install.sh
 # or force reinstall:
 FORCE_INSTALL=true ./install.sh
 ```
+
+### Do not install to try something out
+
+`cd src && dotnet run -- …` is how this repo is normally driven, including for
+manual end-to-end checks. It always runs the source in front of you, and it costs
+a rebuild rather than a tool install.
+
+`./install.sh` is for the handful of cases that genuinely need a `pks` on PATH:
+another tool shelling out to it, a devcontainer or runner image, or reproducing
+what a user with the released tool sees. Reach for it then, not to test a change.
+
+The failure that makes this a rule rather than a preference: a globally installed
+`pks` carries a version number, not a build date, so a stale install and a fresh
+source tree can both say 7.0.3 while behaving differently. Measured on
+2026-08-29 — `pks aspire run` did not set `PKS_ASPIRE_RUN`, the AppHost concluded
+it had been started by plain `aspire run`, and put a reminder banner on the
+dashboard that the source said it should not. Half an hour went into the AppHost
+half of a feature that was already correct. `dotnet run` cannot lie about which
+code it is running.
 
 ## Architecture
 
