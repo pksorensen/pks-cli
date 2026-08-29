@@ -91,7 +91,7 @@ typed into a prompt. Detail: [pks aspire](/tools/pks/aspire).
 | Command | Purpose |
 | --- | --- |
 | `pks aspire run` | Asks the AppHost what it needs via its `pks-declare` pipeline step, resolves providers and models, then starts `aspire run` with the answers injected as `Parameters__<name>`. |
-| `pks aspire init` | Writes `PksDeclare.cs` into an AppHost so it can declare what it needs. |
+| `pks aspire init` | Adds the `Agentics.Extensions.Aspire.Declare` package to an AppHost so it can declare what it needs (`--source` copies the file instead). |
 
 ### pks entra
 

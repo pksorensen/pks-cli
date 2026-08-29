@@ -183,29 +183,62 @@ public sealed class PksAspireRunCommand : AsyncCommand<PksAspireRunCommand.Setti
     /// Why the declare pass came back with nothing, in the two shapes that actually happen.
     ///
     /// They look identical from here — the step is missing either way — so the discriminator is on
-    /// disk: `PksDeclare.cs` next to the AppHost means somebody already ran `pks aspire init`, and
-    /// telling them to run it again is advice that cannot work. What is far more likely then is a
-    /// composition whose capabilities all sit behind a flag, declaring none of them for these
-    /// arguments and so never registering the step on first use.
+    /// disk: an AppHost that already carries AgenticsDeclare, as a package reference or as the copied
+    /// file, has been through `pks aspire init`, and telling them to run it again is advice that
+    /// cannot work. What is far more likely then is a composition whose capabilities all sit behind a
+    /// flag, declaring none of them for these arguments and so never registering the step on first use.
     ///
     /// Not read from the failure text: the useful line is written to Aspire's own log file, and what
     /// arrives on stderr is the pointer to that file.
     /// </summary>
     private void HintAfterFailedDeclare(Settings settings)
     {
-        if (AppHostDirectory(settings) is { } directory
-            && File.Exists(Path.Combine(directory, "PksDeclare.cs")))
+        if (AppHostDirectory(settings) is { } directory && CarriesAgenticsDeclare(directory))
         {
             _console.MarkupLine(
-                "[dim]This AppHost has PksDeclare.cs, so the step is probably missing because nothing[/]");
+                "[dim]This AppHost already has AgenticsDeclare, so the step is probably missing because nothing[/]");
             _console.MarkupLine(
                 "[dim]declared a capability for these arguments — they are usually behind a flag ([bold]-- --ai[/]).[/]");
             _console.MarkupLine(
-                "[dim]Add [bold]builder.AddPksDeclare();[/] near the top of AppHost.cs so it can also declare nothing.[/]");
+                "[dim]Add [bold]builder.AddAgenticsDeclare();[/] near the top of AppHost.cs so it can also declare nothing.[/]");
             return;
         }
 
         _console.MarkupLine("[dim]Add the `pks-declare` step with [bold]pks aspire init[/], or run [bold]aspire run[/] and answer the prompts.[/]");
+    }
+
+    /// <summary>
+    /// Whether the AppHost half is present at all. Two shapes since the package exists: the
+    /// PackageReference (the default since 2026-08-29) and the copied file — plus the pre-rename
+    /// `PksDeclare.cs`, which is still wired, just under the old names.
+    /// </summary>
+    private static bool CarriesAgenticsDeclare(string directory)
+    {
+        try
+        {
+            if (File.Exists(Path.Combine(directory, "AgenticsDeclare.cs"))
+                || File.Exists(Path.Combine(directory, "PksDeclare.cs")))
+            {
+                return true;
+            }
+
+            // The reference lives in the project file, or — for a single-file AppHost — in a
+            // `#:package` directive at the top of the .cs itself.
+            foreach (var file in Directory.EnumerateFiles(directory, "*.csproj")
+                         .Concat(Directory.EnumerateFiles(directory, "apphost.cs")))
+            {
+                if (File.ReadAllText(file).Contains(PksAspireInitCommand.PackageId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            // A directory that cannot be read just means the general advice below stands.
+        }
+
+        return false;
     }
 
     /// <summary>Where `--apphost` points, when it points somewhere this process can look at.</summary>
@@ -277,6 +310,13 @@ public sealed class PksAspireRunCommand : AsyncCommand<PksAspireRunCommand.Setti
     private static string EnvironmentVariableFor(PksParameterManifest parameter)
         => parameter.ConfigurationKey.Replace(":", "__", StringComparison.Ordinal);
 
+    /// <summary>
+    /// The other thing both halves have to agree on: the marker that says this run was started by pks.
+    /// AgenticsDeclare reads exactly this name, so changing it here silently turns the dashboard
+    /// reminder back on for every project that carries the package.
+    /// </summary>
+    internal const string StartedByPksVariable = "PKS_ASPIRE_RUN";
+
     // ---------- pass two: the run itself ----------
 
     private async Task<int> StartAspireAsync(Settings settings, IReadOnlyList<string> appHostArgs, ResolvedEnvironment? environment)
@@ -287,6 +327,13 @@ public sealed class PksAspireRunCommand : AsyncCommand<PksAspireRunCommand.Setti
         AddAppHostArgs(psi, appHostArgs);
 
         environment?.ApplyTo(psi);
+
+        // Says "pks started this one" to the AppHost side, which otherwise has no way to tell.
+        // AgenticsDeclare uses it to keep quiet: an AppHost that carries the declare step and is
+        // started with plain `aspire run` puts a reminder on the dashboard, and a run that came
+        // through here must not get one. Set on every path into this method, including the one
+        // after a failed declare pass — that run is still a pks run, it just had nothing to fill.
+        psi.Environment[StartedByPksVariable] = "1";
 
         if (environment is { Count: > 0 })
         {

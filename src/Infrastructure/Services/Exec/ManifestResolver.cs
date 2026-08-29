@@ -182,7 +182,7 @@ public sealed class ManifestResolver : IManifestResolver
 
     /// <summary>
     /// The stored app registration a capability means. The alias defaults to the capability's own id,
-    /// which is what makes <c>AddPksCapability("margin-dev")</c> + <c>pks entra app init --alias
+    /// which is what makes <c>AddAgenticsCapability("margin-dev")</c> + <c>pks entra app init --alias
     /// margin-dev</c> line up without either side naming the other twice; a binding can override it
     /// per placeholder with <c>{entra:clientid:some-alias}</c>.
     /// </summary>

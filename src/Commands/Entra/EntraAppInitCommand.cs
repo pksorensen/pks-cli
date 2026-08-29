@@ -252,7 +252,7 @@ public sealed class EntraAppInitCommand : AsyncCommand<EntraAppInitCommand.Setti
     {
         _console.WriteLine();
         _console.MarkupLine("Bind it in an AppHost, next to the parameters that receive it:");
-        _console.MarkupLine($"[dim]    builder.AddPksCapability(\"{alias.EscapeMarkup()}\", \"Signing in with Entra ID\")[/]");
+        _console.MarkupLine($"[dim]    builder.AddAgenticsCapability(\"{alias.EscapeMarkup()}\", \"Signing in with Entra ID\")[/]");
         _console.MarkupLine("[dim]           .Offers(\"entra\", \"An app registration pks provisioned\")[/]");
         _console.MarkupLine("[dim]           .Binds(tenantId,     \"{entra:tenantid}\")[/]");
         _console.MarkupLine("[dim]           .Binds(clientId,     \"{entra:clientid}\")[/]");

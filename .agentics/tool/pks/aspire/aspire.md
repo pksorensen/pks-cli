@@ -9,7 +9,7 @@ component: pks
 usage: "pks aspire <run|init> [options] [-- <apphost args>]"
 examples:
   - command: "pks aspire init src/apphost"
-    description: "Write PksDeclare.cs into an AppHost so it can say what it needs"
+    description: "Reference the declare package from an AppHost so it can say what it needs"
   - command: "pks aspire run -- --ai"
     description: "Start the AppHost, forwarding --ai to it, with its parameters resolved"
   - command: "pks aspire run --dry-run -- --ai"
@@ -29,11 +29,23 @@ It is the same two-phase handshake as [`pks exec`](../exec/exec.md), with the Ap
 
 An AppHost without the step still works. The first pass fails, `pks aspire run` says so, and the run continues exactly as `aspire run` would have.
 
+## The reminder
+
+An AppHost that carries the declare step and is started with plain `aspire run` puts a dismissible message bar on the dashboard: *Started without pks — this AppHost can fill its own parameters.* The run works; it just stops and asks for the values pks would have supplied, and Aspire's prompt cannot say why it appeared. The bar can.
+
+`pks aspire run` sets `PKS_ASPIRE_RUN=1` on the run it starts, and the reminder stays away. So does a publish, the declare pass itself, and any host with no dashboard client — which is what keeps it out of CI and out of `Aspire.Hosting.Testing`. `PKS_ASPIRE_NO_REMINDER=1` silences it on a machine that has no pks and does not want one.
+
+The logic lives in `Agentics.Extensions.Aspire.Declare`, so an AppHost wired before this existed gets the bar when it moves to the package (or after `pks aspire init --source --force` if it still carries the copy).
+
 ## Commands
 
 ### `pks aspire init [APPHOST]`
 
-Writes `PksDeclare.cs` into the AppHost project. One file, no package reference and no project reference — an AppHost cannot take a dependency on pks-cli, so the contract travels as source. The copy is then that repository's file; `--force` replaces it.
+Adds a reference to **`Agentics.Extensions.Aspire.Declare`** — `dotnet add package`, no version pinned, so a fresh init stays correct as the package moves. The package is a plain Aspire extension: it does not reference pks-cli and does not talk to it, so the AppHost still builds and runs on a machine that has never heard of pks.
+
+A single-file `apphost.cs` has no project to add to; the command prints the `#:package` line to paste instead. `--source` writes `AgenticsDeclare.cs` into the project for an AppHost that genuinely cannot take the package — the same source the package is built from, so the two cannot drift; `--force` replaces an existing copy.
+
+This shipped as a copied file until 2026-08-29. An AppHost still carrying `PksDeclare.cs` must delete it before referencing the package — otherwise `SuggestedValue` is defined twice and the step is registered twice — and rename its call sites: `AddPksDeclare` → `AddAgenticsDeclare`, `AddPksCapability` → `AddAgenticsCapability`, `PksDeclareExtensions` → `AgenticsDeclareExtensions`. The command detects the leftover file and says so.
 
 `APPHOST` is a project file or a directory containing exactly one. A directory with several is an error rather than a guess.
 
@@ -57,7 +69,7 @@ var aiBaseUrl = builder.AddParameter("ai-base-url");
 var aiApiKey  = builder.AddParameter("ai-api-key", secret: true);
 var aiModel   = builder.AddParameter("ai-model", new SuggestedValue("gpt-4o-mini"));
 
-builder.AddPksCapability("chat", "The model that writes the answer on Overview")
+builder.AddAgenticsCapability("chat", "The model that writes the answer on Overview")
        .Offers("foundry", "Azure AI Foundry — sign in once with `pks foundry init`")
        .Offers("openai-compatible", "Anything OpenAI-compatible: a local Ollama, a proxy")
        .Binds(aiBaseUrl, "{endpoint:openai}")
@@ -91,7 +103,7 @@ writes plaintext under the project; this one forgets. `--non-interactive` skips 
 
 Anything else passes through as a literal. A role is discovered from the bindings — binding `{model:default}` is how the composition says there is a role called `default` to ask about.
 
-A capability is optional by default. `AddPksCapability(name, description, required: true)` makes a missing provider stop the run instead of skipping the capability.
+A capability is optional by default. `AddAgenticsCapability(name, description, required: true)` makes a missing provider stop the run instead of skipping the capability.
 
 ## What gets reported
 
@@ -102,7 +114,7 @@ Values are never in the manifest. Names, descriptions and two booleans; the file
 ## Traps
 
 - **`AddParameter("ai-model", "gpt-4o-mini")` cannot be filled by anything.** The string overload pins the value and stops consulting configuration, so the environment variable is ignored without a word and the parameter keeps its old value while everything reports success. Use `new SuggestedValue("gpt-4o-mini")`, which is the default the reading suggests.
-- **The declare pass runs in publish mode.** `aspire do` always does, so an AppHost that branches on `ExecutionContext.IsPublishMode` — a Key Vault instead of parameters, a real tenant instead of an emulator — describes the deployment while the run that follows is a local one. The parameters missing from the manifest are then exactly the ones pks was asked to fill, and the symptom is a run that resolves nothing and reports nothing wrong. `PksDeclare.cs` exposes `PksDeclareExtensions.IsDeclaring` for this: write `builder.ExecutionContext.IsPublishMode && !declaring`, which reads as "actually publishing", and the declare pass then sees the composition the run will have.
+- **The declare pass runs in publish mode.** `aspire do` always does, so an AppHost that branches on `ExecutionContext.IsPublishMode` — a Key Vault instead of parameters, a real tenant instead of an emulator — describes the deployment while the run that follows is a local one. The parameters missing from the manifest are then exactly the ones pks was asked to fill, and the symptom is a run that resolves nothing and reports nothing wrong. The package exposes `AgenticsDeclareExtensions.IsDeclaring` for this: write `builder.ExecutionContext.IsPublishMode && !declaring`, which reads as "actually publishing", and the declare pass then sees the composition the run will have.
 - **No shell can export `Parameters__ai-base-url`.** A dash is not a legal variable name to `bash` or `zsh`. pks sets it on the child process directly, which works; a hand-written `export` does not.
 
 ## See also

@@ -95,13 +95,17 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Infrastructure\Resources\bootstrap.Dockerfile"/>
-    <!-- The AppHost half of `pks aspire run`, shipped as source because an AppHost cannot
-         take a dependency on pks-cli. `.cs.template` so this tree does not compile it.
-         WithCulture=false is load-bearing: MSBuild's AssignCulture reads the middle
-         extension of `PksDeclare.cs.template` as the culture `cs` — Czech — and routes
-         the resource into a satellite assembly, where GetManifestResourceStream will
-         never find it. The build stays green and the command fails at runtime. -->
-    <EmbeddedResource Include="Infrastructure\Resources\Aspire\PksDeclare.cs.template" LogicalName="PksDeclare.cs" WithCulture="false"/>
+    <!-- The AppHost half of `pks aspire run`. It ships as the NuGet package
+         Agentics.Extensions.Aspire.Declare, and `pks aspire init` adds a reference to it;
+         this copy is the source escape hatch, `pks aspire init` with the source flag, for
+         an AppHost that cannot take the package. Byte-identical to the package's
+         AgenticsDeclare.cs, deliberately: the two forking is the disease the package cures.
+         `.cs.template` so this tree does not compile it. WithCulture=false is
+         load-bearing: MSBuild's AssignCulture reads the middle extension of
+         `AgenticsDeclare.cs.template` as the culture `cs` — Czech — and routes the
+         resource into a satellite assembly, where GetManifestResourceStream will never
+         find it. The build stays green and the command fails at runtime. -->
+    <EmbeddedResource Include="Infrastructure\Resources\Aspire\AgenticsDeclare.cs.template" LogicalName="AgenticsDeclare.cs" WithCulture="false"/>
     <EmbeddedResource Include="Infrastructure\Resources\Brain\brain-extract.SKILL.md" LogicalName="brain-extract.SKILL.md"/>
     <EmbeddedResource Include="Infrastructure\Resources\Brain\brain-synth-cluster.SKILL.md" LogicalName="brain-synth-cluster.SKILL.md"/>
     <EmbeddedResource Include="Infrastructure\Resources\Brain\brain-synth-habits.SKILL.md" LogicalName="brain-synth-habits.SKILL.md"/>

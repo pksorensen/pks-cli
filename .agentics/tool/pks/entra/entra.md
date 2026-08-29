@@ -101,14 +101,14 @@ directory, and the command says so.
 An AppHost declares which parameters the identity fills, exactly as it does for a model:
 
 ```csharp
-builder.AddPksCapability("margin-v1", "The Entra app registration this app signs in with")
+builder.AddAgenticsCapability("margin-v1", "The Entra app registration this app signs in with")
        .Offers("entra", "An app registration provisioned by `pks entra app init`")
        .Binds(entraTenantId,     "{entra:tenantid}")
        .Binds(entraClientId,     "{entra:clientid}")
        .Binds(entraClientSecret, "{entra:clientsecret}");
 ```
 
-The alias defaults to the capability's own name, so `AddPksCapability("margin-v1")` and
+The alias defaults to the capability's own name, so `AddAgenticsCapability("margin-v1")` and
 `pks entra app init --alias margin-v1` line up without either side naming the other twice. A binding
 can override it — `{entra:clientid:some-other-alias}` — which is how one composition binds two
 registrations.
