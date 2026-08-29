@@ -49,6 +49,32 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.1.0](https://github.com/pksorensen/pks-cli/compare/v7.0.3...v7.1.0) (2026-08-29)
+
+
+### Features
+
+* **expo:** add `pks expo allow` / `revoke` for already-registered repos ([6be8877](https://github.com/pksorensen/pks-cli/commit/6be8877b804211557aada67c58ae5d547afb8611))
+* **expo:** vend the host's Expo token to release jobs over the runner socket ([2b383f4](https://github.com/pksorensen/pks-cli/commit/2b383f430c6b8de6c50bf8f97a938dc933b129fe))
+* **runner:** scope a job's vault identity to its assembly-line station ([8c388bd](https://github.com/pksorensen/pks-cli/commit/8c388bd1c78b928714bc45b537e4992f51104f7d))
+* **t3:** draft `pks t3 init` — a private T3 Code box on a VM ([5bfadb2](https://github.com/pksorensen/pks-cli/commit/5bfadb2d8d6e21e3d98a431fbfad718282c5f157))
+* **t3:** finish the box without leaving the command ([ce2d991](https://github.com/pksorensen/pks-cli/commit/ce2d9912a6083e236ef449b3d1ad71bbe08c61ae))
+* **t3:** let the operator choose which directory owns the login ([16edf37](https://github.com/pksorensen/pks-cli/commit/16edf37b38d9c5529874fff831d18e4215d3f039))
+
+
+### Bug Fixes
+
+* **github-runner:** back off at API limits ([b9371d8](https://github.com/pksorensen/pks-cli/commit/b9371d8624c5bda83e5c48bd26572f85951ceb9b))
+* **hooks:** stop the test suite from writing real Claude Code settings ([5ee0ce3](https://github.com/pksorensen/pks-cli/commit/5ee0ce39c4456bf2c2a43f828a75d850638aac06))
+* **runner:** keep injected files out of commits ([bc839cf](https://github.com/pksorensen/pks-cli/commit/bc839cf6857ee8080347a8a229b1c9259e373910))
+* **runner:** name the Node-20 claude pin and give a local credential-seeding path ([c4c3342](https://github.com/pksorensen/pks-cli/commit/c4c33421e4f54c343702faac408b257334890f85))
+* **runner:** route commit-back credentials explicitly ([a40c72b](https://github.com/pksorensen/pks-cli/commit/a40c72bb819853c881de9edcb307c2c65846fed3))
+* **runner:** stop dispatching a job no runner will take, and clean up after it ([f8913ee](https://github.com/pksorensen/pks-cli/commit/f8913ee1fe1721408551a3b61dbbeb3257fe88fb))
+* **ssh:** force LF on the stdin secret channel ([22869c9](https://github.com/pksorensen/pks-cli/commit/22869c9378f1f41cd67ed8a747a43207541db5ca))
+* **t3:** ask for the client secret instead of reading it off the command line ([b2035ee](https://github.com/pksorensen/pks-cli/commit/b2035ee3f0d2e79a87601bfd31917a00715a9b15))
+* **t3:** give codex the Foundry token, and stop the heredoc eating comments ([1f6fd12](https://github.com/pksorensen/pks-cli/commit/1f6fd12a9d8406661c428f5d71762b7ef5034ff7))
+* **t3:** resolve the tenant from Graph, and let a failing bootstrap say so ([954f6cc](https://github.com/pksorensen/pks-cli/commit/954f6cc72e005050e474de633ac2592fbef00565))
+
 ## [7.0.3](https://github.com/pksorensen/pks-cli/compare/v7.0.2...v7.0.3) (2026-08-16)
 
 
