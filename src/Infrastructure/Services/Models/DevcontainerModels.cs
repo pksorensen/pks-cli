@@ -511,6 +511,17 @@ public class DevcontainerSpawnOptions
     public string? ClaudeCredentialVolumeName { get; set; }
 
     /// <summary>
+    /// Name of the station's vault identity volume, resolved by the caller per ADR 0011. When set,
+    /// it is mounted at <c>VaultIdentityVolumes.MountTarget</c> so `vault agent run` inside the
+    /// station finds the identity it enrolled on its first run.
+    ///
+    /// Unlike the Claude volume this one is never shared: it is keyed on (owner, project, line,
+    /// station), because it holds the private keys that make the station a principal in someone's
+    /// vault. A station that declares no vault access gets no volume, and that is the default.
+    /// </summary>
+    public string? VaultIdentityVolumeName { get; set; }
+
+    /// <summary>
     /// Git URL to clone into the volume instead of copying local source files.
     /// When set, an alpine/git container clones this URL into the volume before devcontainer up.
     /// Credentials are embedded in the URL (e.g. https://x-access-token:{token}@github.com/...), which

@@ -1464,6 +1464,58 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         var claudeScope = job.AgentDef?.ClaudeCredentialsScope ?? "project";
         _console.MarkupLine($"[dim]Claude credentials volume: [cyan]{claudeVolumeName.EscapeMarkup()}[/] (scope: {claudeScope})[/]");
 
+        // The station's own vault identity (ADR 0011). Mounted only when the station actually
+        // declares a secret — a station with no vaultAccess gets no identity volume, which is what
+        // keeps the audit station of a line unable to leak a credential it was never given.
+        //
+        // Always station-scoped: no line-wide or project-wide fallback exists, deliberately, since
+        // either would hand one station's identity to every other station on the line.
+        var vaultAccess = job.AgentDef?.VaultAccess;
+        if (vaultAccess is not null)
+        {
+            var vaultVolumeName = VaultIdentityVolumes.ResolveVolumeName(
+                registration.Owner, registration.Project,
+                job.AgentDef?.AssemblyLineId, job.AgentDef?.ColumnId);
+            if (vaultVolumeName is null)
+            {
+                // A job carrying vaultAccess but no station context is a dispatch shape that
+                // predates ADR 0011. Falling back to a shared volume would hand it some other
+                // station's identity, so it gets none and says why.
+                _console.MarkupLine(
+                    "[yellow]Warning:[/] this job declares vault access but carries no assembly-line/station id, "
+                    + "so no vault identity volume can be scoped to it. `vault agent run` will find no identity.");
+            }
+            else
+            {
+                spawnOptions.VaultIdentityVolumeName = vaultVolumeName;
+                // The station reads these to enrol on its first run and to run releases afterwards.
+                // No token and no key travels here: the token is a 15-minute single-use string the
+                // owner pastes during the one attended enrolment, and the identity it produces
+                // stays on the volume.
+                spawnOptions.RemoteEnv ??= new Dictionary<string, string>();
+                // AGENTICS_VAULT_IDENTITY is the vault CLI's own override, read by
+                // `agentid.DefaultPath()` before it falls back to
+                // ~/.config/agentics/vault/identity.json. Setting it is what lets a station run
+                // the documented `vault agent run …` with no --identity flag and still find the
+                // identity on the mounted volume; get this name wrong and the CLI looks in the
+                // container's ephemeral home, finds nothing, and reports it as "no identity"
+                // rather than as a misconfigured mount.
+                spawnOptions.RemoteEnv["AGENTICS_VAULT_IDENTITY"] = VaultIdentityVolumes.IdentityPath;
+                spawnOptions.RemoteEnv["VAULT_IDENTITY_DIR"] = VaultIdentityVolumes.MountTarget;
+                // VAULT_SERVER is likewise the CLI's own (see `DefaultServer` in app.go), so the
+                // one-time `vault agent enrol` ceremony inside the station needs no --server.
+                spawnOptions.RemoteEnv["VAULT_SERVER"] = vaultAccess.Server;
+                spawnOptions.RemoteEnv["VAULT_OWNER"] = vaultAccess.Owner;
+                // The agent plane takes ids as flags and has no env fallback of its own, so a
+                // station prompt spells them as --vault "$VAULT_ID" --item "$VAULT_ITEM_ID".
+                spawnOptions.RemoteEnv["VAULT_ID"] = vaultAccess.VaultId;
+                spawnOptions.RemoteEnv["VAULT_ITEM_ID"] = vaultAccess.ItemId;
+                _console.MarkupLine(
+                    $"[dim]Vault identity volume: [cyan]{vaultVolumeName.EscapeMarkup()}[/] "
+                    + $"(item: {vaultAccess.ItemId.EscapeMarkup()})[/]");
+            }
+        }
+
         // Fingerprint = (project + task + devcontainer config + template). Per ADR 0003 each task
         // gets its own container; retries/continues of the SAME task reuse it. Different stations
         // of the same task swap plugins inside the container, not by recreating it.
@@ -6561,6 +6613,17 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         /// Anything else (or null) falls back to "project".
         /// </summary>
         public string? ClaudeCredentialsScope { get; set; }
+        /// <summary>
+        /// The station (KanbanColumn) this job runs. Already emitted by the platform; deserialized
+        /// here because it is half the key of the station-scoped vault identity volume (ADR 0011).
+        /// </summary>
+        public string? ColumnId { get; set; }
+        /// <summary>
+        /// The vault secret this station may ask for (ADR 0011). A pointer only — no key material,
+        /// no token. Its presence is what makes the runner mount a per-station vault identity
+        /// volume; absent, the station has no vault identity and cannot reach a secret.
+        /// </summary>
+        public VaultAccessDefinition? VaultAccess { get; set; }
         public List<PluginRef>? Plugins { get; set; }
         public List<AgentRef>? Agents { get; set; }
         /// <summary>
@@ -6718,6 +6781,26 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         public string Id { get; set; } = "";
         public string Name { get; set; } = "";
         public string Content { get; set; } = "";
+    }
+
+    /// <summary>
+    /// Which vault secret a station is allowed to ask for (ADR 0011). Ids, never names — the
+    /// vault's agent plane refuses names on purpose, because an agent resolving a name would be
+    /// trusting a label the server chose for it.
+    ///
+    /// Nothing here is a credential. The identity lives on the station's volume and the grant
+    /// lives in the vault; this is the pointer that tells the station what to ask about, which is
+    /// why it is safe in a job payload and safe for a public line to carry.
+    /// </summary>
+    private class VaultAccessDefinition
+    {
+        /// <summary>Vault base URL, reachable from inside the station container (a dev box needs
+        /// the tunnel here — the pinned vault port is the host's loopback, not the container's).</summary>
+        public string Server { get; set; } = "";
+        /// <summary>Vault namespace. Not the agentics handle; a different namespace that looks similar.</summary>
+        public string Owner { get; set; } = "";
+        public string VaultId { get; set; } = "";
+        public string ItemId { get; set; } = "";
     }
 
     /// <summary>

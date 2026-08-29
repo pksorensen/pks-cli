@@ -361,7 +361,8 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                     options.RemoveExistingContainer,
                     options.PluginVolumeName,
                     options.MemoryBytes,
-                    options.ClaudeCredentialVolumeName);
+                    options.ClaudeCredentialVolumeName,
+                    options.VaultIdentityVolumeName);
 
                 if (upResult.Outcome != "success")
                 {
@@ -432,6 +433,8 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
 
             await EnsureClaudeCredentialsWritableAsync(
                 result.ContainerId, result.RemoteUser, options.ClaudeCredentialVolumeName);
+            await EnsureVaultIdentityWritableAsync(
+                result.ContainerId, result.RemoteUser, options.VaultIdentityVolumeName);
 
             // Step 8: Launch VS Code
             if (options.LaunchVsCode)
@@ -2196,12 +2199,30 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
     /// The uid is read from the container itself rather than guessed from the username, because the
     /// guess is only right for the images that already work.
     /// </summary>
-    private async Task EnsureClaudeCredentialsWritableAsync(
-        string containerId, string? remoteUser, string? claudeCredentialVolumeName)
+    private Task EnsureClaudeCredentialsWritableAsync(
+        string containerId, string? remoteUser, string? claudeCredentialVolumeName) =>
+        EnsureMountedVolumeWritableAsync(containerId, remoteUser, claudeCredentialVolumeName,
+            ClaudeCredentialVolumes.MountTarget,
+            "The agent may not be able to refresh its OAuth token.");
+
+    /// <summary>
+    /// Same treatment for the station's vault identity volume (ADR 0011). It matters more here
+    /// than for the Claude volume: a fresh volume starts root-owned, and `vault agent enrol` writes
+    /// the identity file on the station's very first run. Without this the first run fails to write
+    /// and the station looks like it has no vault access rather than like it could not create one.
+    /// </summary>
+    private Task EnsureVaultIdentityWritableAsync(
+        string containerId, string? remoteUser, string? vaultIdentityVolumeName) =>
+        EnsureMountedVolumeWritableAsync(containerId, remoteUser, vaultIdentityVolumeName,
+            VaultIdentityVolumes.MountTarget,
+            "`vault agent enrol` will not be able to write this station's identity.");
+
+    private async Task EnsureMountedVolumeWritableAsync(
+        string containerId, string? remoteUser, string? volumeName, string target, string consequence)
     {
         if (string.IsNullOrEmpty(containerId) ||
             string.IsNullOrWhiteSpace(remoteUser) ||
-            string.IsNullOrWhiteSpace(claudeCredentialVolumeName))
+            string.IsNullOrWhiteSpace(volumeName))
         {
             return;
         }
@@ -2210,7 +2231,6 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
         {
             // Runs as root explicitly: on the house images `docker exec` without -u lands on `node`,
             // so a default-user chown would fail on exactly the images that otherwise work.
-            var target = ClaudeCredentialVolumes.MountTarget;
             var result = await ExecInContainerAsync(
                 containerId,
                 $"id -u {remoteUser} >/dev/null 2>&1 && chown -R \"$(id -u {remoteUser}):$(id -g {remoteUser})\" {target}",
@@ -2219,22 +2239,21 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
 
             if (result.Success)
             {
-                _logger.LogInformation("Claude credentials at {Target} are writable by '{User}'",
-                    target, remoteUser);
+                _logger.LogInformation("{Target} is writable by '{User}'", target, remoteUser);
             }
             else
             {
                 // A warning, not a failure: the volume may already carry the right ownership (the
-                // common case for a reused project-scoped volume), and the preflight in the runner
-                // is where an unusable agent environment is meant to stop the job.
+                // common case for a reused volume), and the preflight in the runner is where an
+                // unusable agent environment is meant to stop the job.
                 _logger.LogWarning(
-                    "Could not chown {Target} to '{User}' (exit {Exit}): {Error}. The agent may not be able to refresh its OAuth token.",
-                    target, remoteUser, result.ExitCode, result.Error);
+                    "Could not chown {Target} to '{User}' (exit {Exit}): {Error}. {Consequence}",
+                    target, remoteUser, result.ExitCode, result.Error, consequence);
             }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to make Claude credentials writable; continuing");
+            _logger.LogWarning(ex, "Failed to make {Target} writable; continuing", target);
         }
     }
 
@@ -2869,7 +2888,8 @@ DEVCONTAINER_EOF";
         bool removeExistingContainer = false,
         string? pluginVolumeName = null,
         long? memoryBytes = null,
-        string? claudeCredentialVolumeName = null)
+        string? claudeCredentialVolumeName = null,
+        string? vaultIdentityVolumeName = null)
     {
         _logger.LogDebug("Running devcontainer up in bootstrap container: {WorkspaceFolder}", workspaceFolder);
 
@@ -2939,6 +2959,16 @@ DEVCONTAINER_EOF";
                 claudeCredentialVolumeName, ClaudeCredentialVolumes.MountTarget);
         }
 
+        // The station's vault identity (ADR 0011). Mounted only when the platform said this
+        // station has vault access; every other station gets nothing here, which is the whole
+        // point — an identity it never receives is one it cannot leak.
+        var vaultVolumeMountArg = VaultIdentityVolumes.BuildMountArg(vaultIdentityVolumeName);
+        if (vaultVolumeMountArg.Length > 0)
+        {
+            _logger.LogInformation("Mounting vault identity volume '{Volume}' at {Target}",
+                vaultIdentityVolumeName, VaultIdentityVolumes.MountTarget);
+        }
+
         string? credentialMountArg = null;
         if (!string.IsNullOrEmpty(credentialSocketPath))
         {
@@ -3005,13 +3035,13 @@ DEVCONTAINER_EOF";
             // The override config has workspaceMount/workspaceFolder removed, and we use --mount for the volume
             // This avoids the bind mount issue while preserving feature metadata processing
             _logger.LogInformation("Using override config approach with file: {OverrideConfig}", overrideConfigPath);
-            devcontainerCommand = $"devcontainer up --config {workspaceFolder}/.devcontainer/devcontainer.json --override-config {overrideConfigPath} --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg}{proxyMountArg}{otlpMountArg}{pluginVolumeMountArg}{claudeVolumeMountArg} --update-remote-user-uid-default off --include-configuration --include-merged-configuration";
+            devcontainerCommand = $"devcontainer up --config {workspaceFolder}/.devcontainer/devcontainer.json --override-config {overrideConfigPath} --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg}{proxyMountArg}{otlpMountArg}{pluginVolumeMountArg}{claudeVolumeMountArg}{vaultVolumeMountArg} --update-remote-user-uid-default off --include-configuration --include-merged-configuration";
         }
         else
         {
             // Fallback: use workspace-folder without override-config
             _logger.LogWarning("Using fallback approach without override config");
-            devcontainerCommand = $"devcontainer up --workspace-folder {workspaceFolder} --config {workspaceFolder}/.devcontainer/devcontainer.json --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg}{proxyMountArg}{otlpMountArg}{pluginVolumeMountArg}{claudeVolumeMountArg} --update-remote-user-uid-default off --mount-workspace-git-root false --include-configuration --include-merged-configuration";
+            devcontainerCommand = $"devcontainer up --workspace-folder {workspaceFolder} --config {workspaceFolder}/.devcontainer/devcontainer.json --id-label devcontainer.local.folder={projectName} --id-label devcontainer.local.volume={volumeName}{hashLabel} --mount type=volume,source={volumeName},target=/workspaces,external=true{credentialMountArg}{proxyMountArg}{otlpMountArg}{pluginVolumeMountArg}{claudeVolumeMountArg}{vaultVolumeMountArg} --update-remote-user-uid-default off --mount-workspace-git-root false --include-configuration --include-merged-configuration";
         }
 
         // Append extra remote-env, id-labels, and ephemeral flag if provided
