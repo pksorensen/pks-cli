@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.2.0](https://github.com/pksorensen/pks-cli/compare/v7.1.0...v7.2.0) (2026-08-29)
+
+
+### Features
+
+* **aspire:** `pks aspire init` references the Declare package instead of copying it ([d06f7f0](https://github.com/pksorensen/pks-cli/commit/d06f7f0097b0eaa6cb966aed4b10e1d0071adadc))
+
 ## [7.1.0](https://github.com/pksorensen/pks-cli/compare/v7.0.3...v7.1.0) (2026-08-29)
 
 
