@@ -1620,6 +1620,19 @@ app.Configure(config =>
         .WithExample(new[] { "tts", "\"Announcing our launch\"", "--voice", "shimmer", "--output", "launch.mp3" })
         .WithExample(new[] { "tts", "--ssml-file", "dialog-da.xml", "--output", "spike-dialog-da.mp3" });
 
+    // Opskrifter på pks-agent-browser. Ingen model i afspilningen: motoren i den
+    // anden ende kører de trin der står i filen, og den her er klienten der
+    // fortæller hvad der sker undervejs.
+    config.AddBranch("browser", browser =>
+    {
+        browser.SetDescription("Drive pks-agent-browser — deterministic recipes, no model in the loop");
+
+        browser.AddCommand<PKS.Commands.Browser.BrowserRecipeCommand>("recipe")
+            .WithDescription("Run a recipe end to end and stream its progress")
+            .WithExample(["browser", "recipe", "kontoudtog.json", "--param", "mitidUserId=12345678", "--persist-profile", "bank"])
+            .WithExample(["browser", "recipe", "kontoudtog.json", "--local", "--out", "./ud", "--record"]);
+    });
+
     // Add image generation command
     config.AddCommand<ImageCommand>("image")
         .WithDescription("Generate or augment an image using Google AI or Azure Foundry (provider auto-resolved from --model)")
