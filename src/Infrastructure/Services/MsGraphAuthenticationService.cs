@@ -438,10 +438,14 @@ public class MsGraphAuthenticationService : IMsGraphAuthenticationService
             return false;
         }
 
-        // Check if token is expired
+        // An expired access token is not a signed-out user. The device-code flow asks for
+        // offline_access precisely so the hour-long access token can be renewed silently,
+        // and answering "not authenticated" here threw that away: every caller that gates
+        // on this method sent the user back through a full re-registration for a token
+        // that only needed refreshing.
         if (storedToken.ExpiresAt.HasValue && storedToken.ExpiresAt.Value <= DateTime.UtcNow)
         {
-            return false;
+            return await RefreshTokenAsync() != null;
         }
 
         // Validate token if it hasn't been validated recently (>1hr)
@@ -450,6 +454,14 @@ public class MsGraphAuthenticationService : IMsGraphAuthenticationService
             var isValid = await ValidateTokenAsync(storedToken.AccessToken);
             if (!isValid)
             {
+                // Graph rejected it before its stated expiry — revoked, or the clock lied.
+                // The refresh token may still be good, so spend it before clearing the
+                // slate; only a refusal there means the user really has to sign in again.
+                if (await RefreshTokenAsync() != null)
+                {
+                    return true;
+                }
+
                 await ClearStoredTokenAsync();
                 return false;
             }

@@ -20,6 +20,37 @@ public class RunnerDaemonService : IRunnerDaemonService
         "self-hosted", "devcontainer-runner"
     };
 
+    /// <summary>
+    /// Label prefixes that identify a GitHub-hosted runner image. A job carrying one of these and
+    /// no <c>self-hosted</c> label is run by GitHub on its own fleet.
+    /// </summary>
+    private static readonly string[] HostedRunnerLabelPrefixes = { "ubuntu-", "windows-", "macos-" };
+
+    /// <summary>
+    /// How long a dispatch may sit with its job still queued on GitHub before the daemon gives up
+    /// on it.
+    /// </summary>
+    /// <remarks>
+    /// The clock runs from <see cref="RunnerJobState.ClaimWaitStartedAt"/>, not from dispatch, so it
+    /// covers only the window between a runner that is up and idling and GitHub handing it work —
+    /// normally seconds. Everything before that is deliberately outside it: waiting on the named
+    /// container pool behind a sibling job, a cold <c>devcontainer up</c> and the runner install can
+    /// each take longer than this on their own, and none of them is evidence of a stranded dispatch.
+    /// It is emphatically not a cap on how long a job may run either: see
+    /// <see cref="ClassifyStrandedDispatch"/> for why it can only ever fire while GitHub still
+    /// reports the job as queued.
+    /// </remarks>
+    internal static readonly TimeSpan ClaimDeadline = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// The progress line <c>IRunnerContainerService</c> emits immediately before it blocks on
+    /// <c>./run.sh</c> — the moment the runner starts waiting for an assignment. Matching on the
+    /// message is the only signal the daemon gets through the <c>onProgress</c> callback; if the
+    /// wording in <c>RunnerContainerService</c> ever changes, the claim clock simply never starts
+    /// and the deadline goes dormant, which is the safe direction to fail in.
+    /// </summary>
+    internal const string ClaimWaitProgressMarker = "Starting runner with JIT config";
+
     // State tracking
     private bool _isRunning;
     private bool _shutdownRequested;
@@ -27,6 +58,9 @@ public class RunnerDaemonService : IRunnerDaemonService
     private int _totalJobsCompleted;
     private int _totalJobsFailed;
     private readonly List<RunnerJobState> _activeJobs = new();
+    /// <summary>One cancellation source per dispatch, so the watchdog can end a single stranded
+    /// dispatch without touching the daemon or its siblings. Keyed by <see cref="RunnerJobState.JobId"/>.</summary>
+    private readonly Dictionary<string, CancellationTokenSource> _jobCts = new();
     private readonly Dictionary<string, DateTime> _lastPollTimes = new();
     private readonly List<Task<RunnerJobState>> _runningTasks = new();
     private readonly HashSet<long> _dispatchedJobIds = new();
@@ -54,6 +88,9 @@ public class RunnerDaemonService : IRunnerDaemonService
     /// 2026-08-25 left 86 dead registrations on a single repository.
     /// </remarks>
     internal const int MaxDispatchAttempts = 3;
+
+    /// <summary>Prefix every JIT runner this daemon mints carries, so it can recognise its own.</summary>
+    internal const string RunnerNamePrefix = "pks-runner-";
 
     public event EventHandler<RunnerJobState>? JobStarted;
     public event EventHandler<RunnerJobState>? JobCompleted;
@@ -234,6 +271,9 @@ public class RunnerDaemonService : IRunnerDaemonService
 
                     await PollRegistration(registration, config, accessToken, cancellationToken);
                 }
+
+                // Free the slots held by dispatches that can no longer produce anything.
+                await ReconcileActiveJobsAsync(cancellationToken);
 
                 // Polling succeeded — reset auth failure counter
                 if (_consecutiveAuthFailures > 0)
@@ -427,7 +467,17 @@ public class RunnerDaemonService : IRunnerDaemonService
             ReportRunState(repoKey, run, jobs);
 
             var queuedJobs = jobs.Where(j =>
-                string.Equals(j.Status, "queued", StringComparison.OrdinalIgnoreCase)).ToList();
+                string.Equals(j.Status, "queued", StringComparison.OrdinalIgnoreCase)
+                && IsServableJob(j)).ToList();
+
+            foreach (var hosted in jobs.Where(j =>
+                string.Equals(j.Status, "queued", StringComparison.OrdinalIgnoreCase)
+                && !IsServableJob(j)))
+            {
+                _logger.LogDebug(
+                    "Ignoring GitHub-hosted job {JobId} '{Name}' in run {RunId} (labels: {Labels})",
+                    hosted.Id, hosted.Name, run.Id, string.Join(",", hosted.Labels));
+            }
 
             foreach (var job in queuedJobs)
             {
@@ -593,6 +643,284 @@ public class RunnerDaemonService : IRunnerDaemonService
     }
 
     /// <summary>
+    /// Whether this daemon should mint a runner for a queued job at all.
+    /// </summary>
+    /// <remarks>
+    /// There was no such check until 2026-08-29, and every queued job in a registered repository got
+    /// a runner — including the <c>ubuntu-latest</c> and <c>windows-latest</c> jobs GitHub runs on
+    /// its own fleet. Such a dispatch can never be claimed, because GitHub has already given the job
+    /// to a hosted runner, so <c>run.sh</c> waits for work that never arrives and the dispatch never
+    /// returns. Three of those held every concurrency slot for thirteen hours on 2026-08-28 while
+    /// real self-hosted jobs queued behind them.
+    /// A job carrying a custom label and no <c>self-hosted</c> is still ours to take: GitHub matches
+    /// a job to any runner whose labels are a superset of its own, and our JIT runners are minted
+    /// with the job's own labels.
+    /// </remarks>
+    internal static bool IsServableJob(WorkflowJob job)
+    {
+        if (job.Labels.Any(l => string.Equals(l, "self-hosted", StringComparison.OrdinalIgnoreCase)))
+            return true;
+
+        return !job.Labels.Any(l =>
+            HostedRunnerLabelPrefixes.Any(p => l.StartsWith(p, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    /// <summary>
+    /// Asks GitHub what became of every job we believe we are running, and abandons the dispatches
+    /// that can no longer produce anything.
+    /// </summary>
+    /// <remarks>
+    /// Nothing else does this. <see cref="ReportRunState"/> only ever sees runs that are still
+    /// queued, so a dispatch whose run has left that list is never looked at again — and the process
+    /// it is waiting on, <c>./run.sh</c> inside the container, blocks forever when no job is ever
+    /// assigned to it. <see cref="_activeJobs"/> is memory only, so without this pass the slot is
+    /// gone until someone restarts the daemon.
+    /// </remarks>
+    private async Task ReconcileActiveJobsAsync(CancellationToken cancellationToken)
+    {
+        List<RunnerJobState> tracked;
+        lock (_lock)
+        {
+            tracked = _activeJobs.Where(j => j.WorkflowJobId.HasValue).ToList();
+        }
+
+        if (tracked.Count == 0)
+            return;
+
+        foreach (var group in tracked.GroupBy(j =>
+            (j.Registration.Owner, j.Registration.Repository, j.RunId)))
+        {
+            if (cancellationToken.IsCancellationRequested || _shutdownRequested)
+                return;
+
+            List<WorkflowJob> jobs;
+            try
+            {
+                jobs = await _actionsService.GetJobsForRunAsync(
+                    group.Key.Owner, group.Key.Repository, group.Key.RunId, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                // An API hiccup must never read as "the job is gone" — leave the dispatch standing.
+                _logger.LogDebug(ex,
+                    "Could not reconcile active jobs for run {RunId}", group.Key.RunId);
+                continue;
+            }
+
+            var repoKey = $"{group.Key.Owner}/{group.Key.Repository}";
+
+            // Both retargets have to happen here, not only in the poller. GetQueuedRunsAsync asks
+            // GitHub for runs with status=queued, and a run leaves that list the moment its first
+            // job starts — which is exactly the moment a swap becomes visible. So ReportRunState
+            // never sees the run again and the swap detection it calls could not fire for the case
+            // it was written for. This pass is driven by our own tracked dispatches instead, so it
+            // still sees the run.
+            ReconcileRunnerAssignments(repoKey, jobs);
+            RetargetIdleDispatches(repoKey, group.ToList(), jobs);
+
+            foreach (var state in group)
+            {
+                var reason = ClassifyStrandedDispatch(state, jobs, DateTime.UtcNow, ClaimDeadline);
+                if (reason != null)
+                    CancelDispatch(state, reason);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gives a dispatch whose job was taken by one of our own runners something else to do, instead
+    /// of letting it be abandoned as "another runner claimed it".
+    /// </summary>
+    /// <remarks>
+    /// A JIT runner cannot be bound to a job — <c>generate-jitconfig</c> takes labels and nothing
+    /// else — so when two jobs in a run carry the same labels, GitHub is free to give runner A's job
+    /// to runner B. <see cref="ReconcileRunnerAssignments"/> fixes up the runner that won the race;
+    /// this fixes up the one that lost it. Without this the loser's container is thrown away while
+    /// its sibling job is still queued, and the daemon pays for a whole new dispatch — on
+    /// 2026-08-30 that cost the 'fast' job five minutes and a second container for nothing.
+    /// <para>
+    /// The subset check is load-bearing: retargeting a runner to a job whose labels it does not
+    /// carry would leave the job waiting for a runner GitHub will never give it, which is a quieter
+    /// version of the starvation this method exists to end.
+    /// </para>
+    /// </remarks>
+    private void RetargetIdleDispatches(
+        string repoKey, List<RunnerJobState> tracked, List<WorkflowJob> jobs)
+    {
+        var notes = new List<string>();
+
+        lock (_lock)
+        {
+            var unavailable = new HashSet<long>(_dispatchedJobIds);
+            unavailable.UnionWith(_abandonedJobIds);
+
+            foreach (var state in tracked)
+            {
+                var candidate = FindRetargetCandidate(state, jobs, unavailable);
+                if (candidate == null)
+                    continue;
+
+                var mine = jobs.First(j => j.Id == state.WorkflowJobId);
+                var stranded = state.WorkflowJobName;
+                state.WorkflowJobId = candidate.Id;
+                state.WorkflowJobName = candidate.Name;
+                _dispatchedJobIds.Add(candidate.Id);
+
+                // The dispatch is alive and about to serve this job, so it must not carry a strike
+                // for the job it was originally minted for.
+                _dispatchAttempts.Remove(candidate.Id);
+
+                // Two dispatches in the same pass must not both be given the same job.
+                unavailable.Add(candidate.Id);
+
+                notes.Add(
+                    $"{repoKey}: '{stranded}' went to {mine.RunnerName}, so runner {state.RunnerName} " +
+                    $"takes '{candidate.Name}' instead — no new container needed");
+            }
+        }
+
+        foreach (var note in notes)
+        {
+            _logger.LogInformation("{Note}", note);
+            OnStatusChanged(note);
+        }
+    }
+
+    /// <summary>
+    /// The job an idle dispatch should be retargeted to, or null when it should be left alone.
+    /// </summary>
+    /// <param name="unavailableJobIds">
+    /// Jobs another dispatch is already tracking, or that have been given up on.
+    /// </param>
+    internal static WorkflowJob? FindRetargetCandidate(
+        RunnerJobState state, List<WorkflowJob> jobs, ISet<long> unavailableJobIds)
+    {
+        if (string.IsNullOrEmpty(state.RunnerName))
+            return null;
+
+        // Our runner is busy somewhere in this run — leave it alone.
+        if (jobs.Any(j => string.Equals(j.RunnerName, state.RunnerName, StringComparison.OrdinalIgnoreCase)))
+            return null;
+
+        // Only a job lost to one of our own runners frees this dispatch up. A job claimed by
+        // anything else — a hosted runner, someone else's box — says nothing about what our idle
+        // runner may take, and the existing stranding rules should decide that case.
+        var mine = jobs.FirstOrDefault(j => j.Id == state.WorkflowJobId);
+        if (mine == null || !IsOurRunnerName(mine.RunnerName))
+            return null;
+
+        return jobs.FirstOrDefault(j =>
+            string.Equals(j.Status, "queued", StringComparison.OrdinalIgnoreCase)
+            && IsServableJob(j)
+            && !unavailableJobIds.Contains(j.Id)
+            && CanServe(state.RunnerLabels, j.Labels));
+    }
+
+    /// <summary>Whether a runner name is one this daemon minted.</summary>
+    internal static bool IsOurRunnerName(string? runnerName) =>
+        !string.IsNullOrEmpty(runnerName)
+        && runnerName.StartsWith(RunnerNamePrefix, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// GitHub's own matching rule: a runner may take a job when it carries every label the job asks
+    /// for. Extra labels on the runner do not disqualify it.
+    /// </summary>
+    internal static bool CanServe(IReadOnlyList<string> runnerLabels, IReadOnlyList<string> jobLabels)
+    {
+        if (jobLabels.Count == 0)
+            return false;
+
+        return jobLabels.All(needed =>
+            runnerLabels.Any(have => string.Equals(have, needed, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    /// <summary>
+    /// Decides whether a dispatch has been stranded, given what GitHub says about the jobs in its
+    /// run. Returns null when the dispatch is healthy or the answer is not yet knowable.
+    /// </summary>
+    internal static string? ClassifyStrandedDispatch(
+        RunnerJobState state, List<WorkflowJob> jobs, DateTime utcNow, TimeSpan claimDeadline)
+    {
+        // A JIT runner is not bound to the job it was minted for, so before reading anything into
+        // that job's state, check whether our runner is off running a sibling in the same run. If it
+        // is, the container is doing real work and must not be touched however long it takes — this
+        // is what keeps every branch below from being able to kill a live job.
+        if (!string.IsNullOrEmpty(state.RunnerName) && jobs.Any(j =>
+                string.Equals(j.RunnerName, state.RunnerName, StringComparison.OrdinalIgnoreCase)))
+            return null;
+
+        var job = jobs.FirstOrDefault(j => j.Id == state.WorkflowJobId);
+        if (job == null)
+            return null;
+
+        if (string.Equals(job.Status, "completed", StringComparison.OrdinalIgnoreCase))
+            return $"GitHub already finished it ({job.Conclusion ?? "completed"})";
+
+        if (string.Equals(job.Status, "in_progress", StringComparison.OrdinalIgnoreCase))
+        {
+            // Claimed by something that is not one of our runners for this run.
+            return string.IsNullOrEmpty(job.RunnerName)
+                ? null
+                : $"another runner claimed it ({job.RunnerName})";
+        }
+
+        // Still queued, and the check above has ruled out our runner working anywhere in this run.
+        // This is the only state in which a clock is allowed to end a dispatch — and only once our
+        // runner is actually online and idle. While the dispatch is still queuing for the container
+        // pool or building, there is nothing that could have claimed the job yet, so there is no
+        // deadline to have missed.
+        if (state.ClaimWaitStartedAt is not { } waitingSince)
+            return null;
+
+        return utcNow - waitingSince > claimDeadline
+            ? $"no runner claimed it within {claimDeadline.TotalMinutes:0} min of coming online"
+            : null;
+    }
+
+    /// <summary>
+    /// Ends one stranded dispatch. Cancelling unblocks the <c>docker exec ./run.sh</c> await, which
+    /// lands in the catch in <see cref="ExecuteAndTrackJob"/>: the job leaves
+    /// <see cref="_activeJobs"/>, the slot is freed and the unclaimed JIT registration is deleted.
+    /// The container is left to the reaper, which finds it by its <c>pks.runner.name</c> label.
+    /// </summary>
+    private void CancelDispatch(RunnerJobState state, string reason)
+    {
+        CancellationTokenSource? cts;
+        lock (_lock)
+        {
+            _jobCts.TryGetValue(state.JobId, out cts);
+        }
+
+        if (cts == null || cts.IsCancellationRequested)
+            return;
+
+        var note = $"Run {state.RunId} '{state.WorkflowJobName}': abandoning dispatch — {reason}";
+        _logger.LogWarning("{Note}", note);
+        OnStatusChanged(note);
+
+        try
+        {
+            cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Raced a dispatch that finished on its own; nothing to abandon.
+        }
+    }
+
+    private void DisposeDispatchCancellation(RunnerJobState state)
+    {
+        CancellationTokenSource? cts;
+        lock (_lock)
+        {
+            if (!_jobCts.Remove(state.JobId, out cts))
+                return;
+        }
+
+        cts?.Dispose();
+    }
+
+    /// <summary>
     /// Removes a JIT runner registration that nothing else will ever remove.
     /// </summary>
     /// <remarks>
@@ -747,7 +1075,7 @@ public class RunnerDaemonService : IRunnerDaemonService
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
-            var runnerName = $"pks-runner-{job.Id}-{DateTime.UtcNow:yyyyMMddHHmmss}";
+            var runnerName = $"{RunnerNamePrefix}{job.Id}-{DateTime.UtcNow:yyyyMMddHHmmss}";
             var jitConfig = await _actionsService.GenerateJitConfigAsync(
                 registration.Owner, registration.Repository,
                 runnerName, labels, cancellationToken);
@@ -764,15 +1092,19 @@ public class RunnerDaemonService : IRunnerDaemonService
                 RunnerName = runnerName,
                 JitRunnerId = jitConfig.RunnerId,
                 ContainerName = dispatchInfo.ContainerName,
+                RunnerLabels = labels,
                 Branch = run.HeadBranch,
                 StartedAt = DateTime.UtcNow,
                 Status = RunnerJobStatus.Running
             };
 
+            var dispatchCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
             lock (_lock)
             {
                 _activeJobs.Add(jobState);
                 _dispatchedJobIds.Add(job.Id);
+                _jobCts[jobState.JobId] = dispatchCts;
             }
 
             // Raise JobStarted event
@@ -783,7 +1115,7 @@ public class RunnerDaemonService : IRunnerDaemonService
 
             // Fire-and-forget with tracking
             var task = ExecuteAndTrackJob(
-                dispatchInfo, accessToken, jitConfig.EncodedJitConfig, jobState, cancellationToken);
+                dispatchInfo, accessToken, jitConfig.EncodedJitConfig, jobState, dispatchCts.Token);
 
             lock (_lock)
             {
@@ -798,6 +1130,24 @@ public class RunnerDaemonService : IRunnerDaemonService
             if (jitRunnerId.HasValue)
                 await TryDeleteRunnerAsync(registration, jitRunnerId.Value);
         }
+    }
+
+    /// <summary>
+    /// Records one progress line from the container service against the dispatch it belongs to and
+    /// forwards it to the status feed. Starts <see cref="RunnerJobState.ClaimWaitStartedAt"/> the
+    /// first time the runner reports that it is up and waiting for work.
+    /// </summary>
+    private void NoteProgress(RunnerJobState jobState, string progress, string note)
+    {
+        jobState.Detail = progress;
+
+        if (jobState.ClaimWaitStartedAt == null
+            && progress.Contains(ClaimWaitProgressMarker, StringComparison.OrdinalIgnoreCase))
+        {
+            jobState.ClaimWaitStartedAt = DateTime.UtcNow;
+        }
+
+        OnStatusChanged(note);
     }
 
     private async Task<RunnerJobState> ExecuteAndTrackJob(
@@ -817,7 +1167,7 @@ public class RunnerDaemonService : IRunnerDaemonService
             if (dispatchInfo.ContainerName != null)
             {
                 result = await ExecuteNamedContainerJob(
-                    dispatchInfo, accessToken, encodedJitConfig, cancellationToken);
+                    dispatchInfo, accessToken, encodedJitConfig, jobState, cancellationToken);
             }
             else
             {
@@ -826,11 +1176,9 @@ public class RunnerDaemonService : IRunnerDaemonService
                     // Revealed here because IRunnerContainerService puts the token into the
                     // container's git credential environment; the daemon itself never holds a string.
                     accessToken.Reveal()!, encodedJitConfig,
-                    progress =>
-                    {
-                        jobState.Detail = progress;
-                        OnStatusChanged($"Run {run.Id} '{jobState.WorkflowJobName}': {progress}");
-                    },
+                    progress => NoteProgress(
+                        jobState, progress,
+                        $"Run {run.Id} '{jobState.WorkflowJobName}': {progress}"),
                     cancellationToken,
                     credentialSocketPath: _credentialSocketPath,
                     environment: job.Environment,
@@ -889,6 +1237,35 @@ public class RunnerDaemonService : IRunnerDaemonService
 
             return jobState;
         }
+        catch (OperationCanceledException) when (!_shutdownRequested)
+        {
+            // CancelDispatch got here first: the dispatch was called off before it ran anything,
+            // because its job went to another of our runners or GitHub had already finished it.
+            // Nothing was attempted and nothing broke, so this must not read as a failed job — it
+            // used to print "Job Failed: <repo> run #<id>" for a run that was green on GitHub, and
+            // cost a morning of diagnosis on 2026-08-30.
+            jobState.Status = RunnerJobStatus.Abandoned;
+
+            lock (_lock)
+            {
+                _activeJobs.Remove(jobState);
+                _dispatchedJobIds.Remove(job.Id);
+                if (jobState.WorkflowJobId.HasValue)
+                    _dispatchedJobIds.Remove(jobState.WorkflowJobId.Value);
+            }
+
+            if (jobState.JitRunnerId.HasValue)
+                await TryDeleteRunnerAsync(dispatchInfo.Registration, jobState.JitRunnerId.Value);
+
+            JobCompleted?.Invoke(this, jobState);
+            OnStatusChanged(
+                $"Run {run.Id} '{jobState.WorkflowJobName}': dispatch abandoned — the GitHub job " +
+                "itself is unaffected");
+
+            _coolifyTokenStore?.Remove(job.Id.ToString());
+
+            return jobState;
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Job failed for run {RunId}", run.Id);
@@ -915,6 +1292,10 @@ public class RunnerDaemonService : IRunnerDaemonService
             _coolifyTokenStore?.Remove(job.Id.ToString());
 
             return jobState;
+        }
+        finally
+        {
+            DisposeDispatchCancellation(jobState);
         }
     }
 
@@ -961,6 +1342,7 @@ public class RunnerDaemonService : IRunnerDaemonService
         JobDispatchInfo dispatchInfo,
         SecretValue accessToken,
         string encodedJitConfig,
+        RunnerJobState jobState,
         CancellationToken cancellationToken)
     {
         var containerName = dispatchInfo.ContainerName!;
@@ -968,10 +1350,13 @@ public class RunnerDaemonService : IRunnerDaemonService
         var job = dispatchInfo.Job;
         var registration = dispatchInfo.Registration;
 
-        // Acquire exclusive access to this named container
-        using var containerLock = await _containerPool.AcquireAsync(containerName, cancellationToken);
+        // Acquire exclusive access to this named container. Scoped by repository: the name is
+        // just the runner label from `runs-on`, and several repositories reuse the same label,
+        // so a name-only pool lends one repository's devcontainer out to another.
+        using var containerLock = await _containerPool.AcquireAsync(
+            registration.Owner, registration.Repository, containerName, cancellationToken);
 
-        var existing = _containerPool.TryGet(containerName);
+        var existing = _containerPool.TryGet(registration.Owner, registration.Repository, containerName);
 
         if (existing != null)
         {
@@ -986,7 +1371,7 @@ public class RunnerDaemonService : IRunnerDaemonService
                     registration, run.Id, job.Id, run.HeadBranch,
                     existing.ContainerId, existing.ClonePath, containerName,
                     encodedJitConfig,
-                    progress => OnStatusChanged($"Run {run.Id}: {progress}"),
+                    progress => NoteProgress(jobState, progress, $"Run {run.Id}: {progress}"),
                     cancellationToken,
                     credentialSocketPath: _credentialSocketPath,
                     lookupBranch: run.GetCoolifyLookupBranch());
@@ -995,7 +1380,7 @@ public class RunnerDaemonService : IRunnerDaemonService
             // Container is dead — remove from pool and create fresh
             _logger.LogWarning("Named container '{Name}' ({ContainerId}) is no longer running, creating fresh",
                 containerName, existing.ContainerId);
-            _containerPool.Remove(containerName);
+            _containerPool.Remove(registration.Owner, registration.Repository, containerName);
             OnStatusChanged($"Run {run.Id}: Named container '{containerName}' was dead, creating fresh");
         }
         else
@@ -1007,7 +1392,7 @@ public class RunnerDaemonService : IRunnerDaemonService
         var result = await _containerService.ExecuteJobAsync(
             registration, run.Id, run.HeadBranch,
             accessToken.Reveal()!, encodedJitConfig,
-            progress => OnStatusChanged($"Run {run.Id}: {progress}"),
+            progress => NoteProgress(jobState, progress, $"Run {run.Id}: {progress}"),
             cancellationToken,
             containerName: containerName,
             credentialSocketPath: _credentialSocketPath,

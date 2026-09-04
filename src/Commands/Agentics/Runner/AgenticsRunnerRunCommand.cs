@@ -2293,23 +2293,50 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             "bash -c 'which npx && npx --version && echo npx-ok || echo npx-missing'", timeoutSeconds: 10, user: agentUser);
         var ttydCheck = await _spawnerService.ExecInContainerAsync(containerId,
             "bash -c 'which ttyd && echo ttyd-ok || echo ttyd-missing'", timeoutSeconds: 10, user: agentUser);
+        // The agent binary itself. vibecast resolves it with exec.LookPath and, when that
+        // fails, opens a bash pane with "claude not found - using bash" instead of stopping —
+        // so the job broadcasts an idle shell until its wall rather than failing. The binary
+        // name equals the agent kind for all three adapters; an empty value means vibecast's
+        // default, which is claude.
+        //
+        // Matched against the known kinds rather than interpolated as given: this string comes
+        // off the wire from the station config, and an unknown value is vibecast's own fail-fast
+        // (it refuses to start), not something to probe the container for.
+        var agentKind = (job.AgentDef?.OperatorConfig?.Agent ?? "").Trim().ToLowerInvariant();
+        var agentBinary = agentKind switch
+        {
+            "" or "claude" => "claude",
+            "codex" => "codex",
+            "pi" => "pi",
+            _ => null
+        };
+        string? agentCheckOutput = null;
+        if (agentBinary is not null)
+        {
+            var agentCheck = await _spawnerService.ExecInContainerAsync(containerId,
+                $"bash -c 'which {agentBinary} && echo agent-ok || echo agent-missing'", timeoutSeconds: 10, user: agentUser);
+            agentCheckOutput = agentCheck.Output;
+        }
         var reachCheck = await _spawnerService.ExecInContainerAsync(containerId,
             $"bash -c 'curl -sf --max-time 5 {serverUri.Scheme}://{agenticServerForContainer}/api/healthz -o /dev/null && echo reachable || echo unreachable'",
             timeoutSeconds: 15, user: agentUser);
         _console.MarkupLine($"[grey]tmux: {preFlight.Output.Trim()}[/]");
         _console.MarkupLine($"[grey]npx:  {npxCheck.Output.Trim()}[/]");
         _console.MarkupLine($"[grey]ttyd: {ttydCheck.Output.Trim()}[/]");
+        if (agentCheckOutput != null)
+            _console.MarkupLine($"[grey]{agentBinary}: {agentCheckOutput.Trim().EscapeMarkup()}[/]");
         _console.MarkupLine($"[grey]agentic server ({agenticServerForContainer}): {reachCheck.Output.Trim()}[/]");
 
         var missingTools = new List<string>();
         if (preFlight.Output.Contains("tmux-missing")) missingTools.Add("tmux");
         if (npxCheck.Output.Contains("npx-missing")) missingTools.Add("npx");
         if (ttydCheck.Output.Contains("ttyd-missing")) missingTools.Add("ttyd");
+        if (agentCheckOutput?.Contains("agent-missing") == true) missingTools.Add(agentBinary!);
         if (missingTools.Count > 0)
         {
             var missing = string.Join(", ", missingTools);
             _console.MarkupLine($"[red]Missing required tool(s) in container: {missing}. Cannot start the agent.[/]");
-            _console.MarkupLine("[yellow]Hint:[/] [dim]install them in the devcontainer's postCreateCommand — the built-in fallback devcontainer installs tmux and ttyd.[/]");
+            _console.MarkupLine("[yellow]Hint:[/] [dim]install them in the devcontainer's postCreateCommand — the built-in fallback devcontainer installs tmux, ttyd and claude.[/]");
             await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "failure", ct);
             await ReportJobResultAsync(registration, "failed", $"missing in container: {missing}", ct);
             return;

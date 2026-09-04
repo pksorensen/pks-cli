@@ -3279,21 +3279,29 @@ DEVCONTAINER_EOF";
         // Default fallback used only when:
         //   1) the cloned repo has no .devcontainer/devcontainer.json, AND
         //   2) no template was provided via InlineDevcontainerFiles by the server.
-        // Installs both tools the runner pre-flights before starting the agent: tmux,
-        // which vibecast owns the session in, and ttyd, which broadcasts it. A container
-        // missing either fails the job at pre-flight, which is what a repo with no
-        // devcontainer config used to do. Prefer a server-provided template via
-        // assembly-line settings for richer setups.
+        // Installs the three tools the runner pre-flights before starting the agent:
+        // tmux, which vibecast owns the session in; ttyd, which broadcasts it; and the
+        // claude CLI, which is what actually runs. A container missing any of them fails
+        // the job at pre-flight, which is what a repo with no devcontainer config used to
+        // do. Prefer a server-provided template via assembly-line settings for richer
+        // setups — and note this covers only vibecast's default agent, so a station set
+        // to codex or pi still needs its own devcontainer.
         //
         // ttyd comes from its GitHub release rather than apt: Debian bookworm has no
         // ttyd package, and the release assets are named for `uname -m` exactly
         // (ttyd.x86_64, ttyd.aarch64), so one command covers both architectures.
+        //
+        // claude installs without sudo on purpose. postCreateCommand runs as the remote
+        // user, whose npm prefix (/usr/local/share/npm-global) is group-writable and on
+        // the image's PATH; `sudo npm install -g` would put a root-owned tree under
+        // root's prefix instead, which vibecast's `claude update` on every first spawn
+        // then fails to write to.
         const string defaultConfig = """
             {
               "name": "Agentics Runner",
               "image": "mcr.microsoft.com/devcontainers/typescript-node:20",
               "features": {},
-              "postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends tmux && sudo rm -rf /var/lib/apt/lists/* && sudo curl -fsSL -o /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.$(uname -m) && sudo chmod 755 /usr/local/bin/ttyd",
+              "postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends tmux && sudo rm -rf /var/lib/apt/lists/* && sudo curl -fsSL -o /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.$(uname -m) && sudo chmod 755 /usr/local/bin/ttyd && npm install -g @anthropic-ai/claude-code",
               "remoteEnv": {}
             }
             """;

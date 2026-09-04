@@ -432,6 +432,9 @@ services.AddHttpClient<PKS.Infrastructure.Services.IAzureVmService, PKS.Infrastr
 
 // Azure billing + Cost Management (used by `pks azure usage` and `pks foundry usage`)
 services.AddHttpClient<PKS.Infrastructure.Services.IAzureBillingService, PKS.Infrastructure.Services.AzureBillingService>();
+
+// Azure SQL server/database discovery (used by `pks sqlserver init`)
+services.AddHttpClient<PKS.Infrastructure.Services.IAzureSqlDiscoveryService, PKS.Infrastructure.Services.AzureSqlDiscoveryService>();
 services.AddSingleton<PKS.Infrastructure.Services.IAzureVmMetadataService, PKS.Infrastructure.Services.AzureVmMetadataService>();
 services.AddSingleton<PKS.Infrastructure.Services.ISshExecutor, PKS.Infrastructure.Services.SshExecutor>();
 
@@ -482,6 +485,28 @@ services.AddHttpClient<AzureFileShareProvider>();
 services.AddSingleton<IFileShareProvider>(sp => sp.GetRequiredService<AzureFileShareProvider>());
 services.AddSingleton<FileShareProviderRegistry>();
 
+// Transcription — `pks transcribe` / `pks diarize`. Same registry shape as the VM and
+// file-share providers above: an interface per engine, one registry that resolves by key.
+// Nothing here is hardcoded to Foundry — openai-compatible speaks to anything on
+// /v1/audio/transcriptions, which is what makes swapping the engine a config change.
+services.AddSingleton<PKS.Infrastructure.Services.Transcription.IFoundrySpeechCredentials,
+    PKS.Infrastructure.Services.Transcription.FoundrySpeechCredentials>();
+services.AddHttpClient<PKS.Infrastructure.Services.Transcription.FoundryFastTranscriptionProvider>();
+services.AddHttpClient<PKS.Infrastructure.Services.Transcription.FoundryEnhancedTranscriptionProvider>();
+services.AddHttpClient<PKS.Infrastructure.Services.Transcription.FoundryDiarizeShadowProvider>();
+services.AddHttpClient<PKS.Infrastructure.Services.Transcription.OpenAiCompatibleTranscriptionProvider>();
+services.AddSingleton<PKS.Infrastructure.Services.Transcription.ITranscriptionProvider>(sp =>
+    sp.GetRequiredService<PKS.Infrastructure.Services.Transcription.FoundryFastTranscriptionProvider>());
+services.AddSingleton<PKS.Infrastructure.Services.Transcription.ITranscriptionProvider>(sp =>
+    sp.GetRequiredService<PKS.Infrastructure.Services.Transcription.FoundryEnhancedTranscriptionProvider>());
+services.AddSingleton<PKS.Infrastructure.Services.Transcription.ITranscriptionProvider>(sp =>
+    sp.GetRequiredService<PKS.Infrastructure.Services.Transcription.FoundryDiarizeShadowProvider>());
+services.AddSingleton<PKS.Infrastructure.Services.Transcription.ITranscriptionProvider>(sp =>
+    sp.GetRequiredService<PKS.Infrastructure.Services.Transcription.OpenAiCompatibleTranscriptionProvider>());
+services.AddSingleton<PKS.Infrastructure.Services.Transcription.TranscriptionProviderRegistry>();
+services.AddSingleton<PKS.Infrastructure.Services.Transcription.TranscriptionPipeline>();
+services.AddSingleton<PKS.Infrastructure.Services.Transcription.MeetingFolderWriter>();
+
 // Configure Jira integration
 services.AddSingleton<PKS.Infrastructure.Services.Models.JiraAuthConfig>();
 services.AddHttpClient<IJiraService, JiraService>();
@@ -514,6 +539,10 @@ services.AddSingleton<EnhancedGitHubService>();
 
 // Register GitHub Runner services
 services.AddSingleton<IRegistryConfigurationService, RegistryConfigurationService>();
+// The Expo robot token and the rule for who may spend it. ISecretResolver is a required ctor
+// dependency, so this cannot silently construct its own store.
+services.AddSingleton<PKS.Infrastructure.Services.Expo.IExpoCredentialService,
+    PKS.Infrastructure.Services.Expo.ExpoCredentialService>();
 services.AddSingleton<ICoolifyConfigurationService, CoolifyConfigurationService>();
 services.AddSingleton<ICoolifyLookupService, CoolifyLookupService>();
 services.AddSingleton<ICoolifyApiService, CoolifyApiService>();
@@ -535,6 +564,7 @@ services.AddSingleton<IFirecrackerService, FirecrackerService>();
 services.AddSingleton<FirecrackerNetworkManager>();
 services.AddSingleton<IGitHubActionsService, GitHubActionsService>();
 services.AddSingleton<IProcessRunner, ProcessRunner>();
+services.AddSingleton<IRunnerReaper, RunnerReaper>();
 services.AddSingleton<IInteractiveProcessLauncher, InteractiveProcessLauncher>();
 services.AddSingleton<IRunnerContainerService, RunnerContainerService>();
 services.AddSingleton<INamedContainerPool, NamedContainerPool>();
@@ -782,7 +812,7 @@ app.Configure(config =>
                 .WithExample(new[] { "agentics", "runner", "list" });
 
             runner.AddCommand<AgenticsRunnerCleanupCommand>("cleanup")
-                .WithDescription("Remove devcontainers from previous runner instances (see ADR 0002)")
+                .WithDescription("Remove devcontainers and volumes left behind by finished jobs")
                 .WithExample(new[] { "agentics", "runner", "cleanup" })
                 .WithExample(new[] { "agentics", "runner", "cleanup", "--dry-run" })
                 .WithExample(new[] { "agentics", "runner", "cleanup", "--all" });
@@ -895,6 +925,14 @@ app.Configure(config =>
             runner.AddCommand<RunnerPruneCommand>("prune")
                 .WithDescription("Remove duplicate registrations, keeping only the most recent per repo")
                 .WithExample(new[] { "github", "runner", "prune" });
+
+            // Note the split: `prune` removes duplicate *registrations* from config and never touches
+            // Docker; `cleanup` is the one that reclaims disk. Same command as the agentics surface.
+            runner.AddCommand<PKS.Commands.GitHub.Runner.GitHubRunnerCleanupCommand>("cleanup")
+                .WithDescription("Remove devcontainers and volumes left behind by finished jobs")
+                .WithExample(new[] { "github", "runner", "cleanup" })
+                .WithExample(new[] { "github", "runner", "cleanup", "--dry-run" })
+                .WithExample(new[] { "github", "runner", "cleanup", "--all" });
         });
     });
 
@@ -1093,6 +1131,29 @@ app.Configure(config =>
             .WithDescription("Remove a registered registry");
     });
 
+    // Add expo branch command
+    config.AddBranch<PKS.Commands.Expo.ExpoSettings>("expo", expo =>
+    {
+        expo.SetDescription("Manage the Expo access token this runner vends to release jobs");
+
+        expo.AddCommand<PKS.Commands.Expo.ExpoInitCommand>("init")
+            .WithDescription("Store an Expo access token on this host (prompted, never in argv)")
+            .WithExample(new[] { "expo", "init" });
+
+        expo.AddCommand<PKS.Commands.Expo.ExpoStatusCommand>("status")
+            .WithDescription("Show whether a token is stored and which repositories may fetch it");
+
+        expo.AddCommand<PKS.Commands.Expo.ExpoAllowCommand>("allow")
+            .WithDescription("Let an already-registered repository fetch the token")
+            .WithExample(new[] { "expo", "allow", "pksorensen/commuteconnects" });
+
+        expo.AddCommand<PKS.Commands.Expo.ExpoRevokeCommand>("revoke")
+            .WithDescription("Stop a repository from fetching the token");
+
+        expo.AddCommand<PKS.Commands.Expo.ExpoRemoveCommand>("remove")
+            .WithDescription("Delete the stored Expo token from this host");
+    });
+
     // Add Azure DevOps branch command
     config.AddBranch<AdoSettings>("ado", ado =>
     {
@@ -1250,6 +1311,30 @@ app.Configure(config =>
             .WithDescription("Show Azure cost and sponsorship credit balance for a subscription")
             .WithExample(new[] { "azure", "usage" });
     });
+
+    // Azure SQL: the login lives under `sqlserver`, the query is `pks sql` on its own, because a
+    // branch with a default command cannot take positional arguments.
+    config.AddBranch<PKS.Commands.Sql.SqlSettings>("sqlserver", sqlserver =>
+    {
+        sqlserver.SetDescription("Manage the Azure SQL sign-in used by `pks sql`");
+        sqlserver.AddCommand<PKS.Commands.Sql.SqlInitCommand>("init")
+            .WithDescription("Sign in to Azure SQL (kept separate from `pks azure init`)")
+            .WithExample(["sqlserver", "init", "--email", "you@example.com"])
+            .WithExample(["sqlserver", "init", "--tenant", "00000000-0000-0000-0000-000000000000"]);
+        sqlserver.AddCommand<PKS.Commands.Sql.SqlAllowIpCommand>("allow-ip")
+            .WithDescription("Allow this machine's IP through the server firewall")
+            .WithExample(["sqlserver", "allow-ip"])
+            .WithExample(["sqlserver", "allow-ip", "--remove"]);
+        sqlserver.AddCommand<PKS.Commands.Sql.SqlStatusCommand>("status")
+            .WithDescription("Show which account and tenant `pks sql` will use")
+            .WithExample(["sqlserver", "status"]);
+    });
+
+    config.AddCommand<PKS.Commands.Sql.SqlQueryCommand>("sql")
+        .WithDescription("Run a query against an Azure SQL database")
+        .WithExample(["sql", "select top 10 * from dbo.Payments"])
+        .WithExample(["sql", "sql-mc-weu-prd", "mydb", "select top 10 * from dbo.Payments"])
+        .WithExample(["sql", "-f", "query.sql", "-o", "csv"]);
 
     // Add Scaleway branch command
     config.AddBranch<PKS.Commands.Scaleway.ScalewaySettings>("scaleway", scaleway =>
@@ -1545,10 +1630,22 @@ app.Configure(config =>
         email.SetDescription("Email management and export");
 
         email.AddCommand<PKS.Commands.Email.EmailExportCommand>("export")
-            .WithDescription("Export emails from Microsoft Graph to markdown files")
+            .WithDescription("Export emails from Microsoft Graph to markdown files, one directory per thread")
             .WithExample(new[] { "email", "export" })
             .WithExample(new[] { "email", "export", "--after", "2026-01-01", "--folder", "inbox" })
+            .WithExample(new[] { "email", "export", "--mailbox", "info@example.com", "--folder", "sentitems" })
             .WithExample(new[] { "email", "export", "-o", "./my-emails", "--max", "100" });
+
+        email.AddCommand<PKS.Commands.Email.EmailDraftCommand>("draft")
+            .WithDescription("Create Outlook drafts from markdown letters with front matter. Composes only — never sends")
+            .WithExample(new[] { "email", "draft", "./udbakke", "--dry-run" })
+            .WithExample(new[] { "email", "draft", "./udbakke", "--mailbox", "info@example.com" })
+            .WithExample(new[] { "email", "draft", "./udbakke/01-letter.md" });
+
+        email.AddCommand<PKS.Commands.Email.EmailSentCommand>("sent")
+            .WithDescription("Match letters against Sent Items, stamp them with the send date and archive them")
+            .WithExample(new[] { "email", "sent", "./udbakke", "--dry-run" })
+            .WithExample(new[] { "email", "sent", "./udbakke", "--mailbox", "info@example.com" });
     });
 
     // Add voice push-to-talk command (heypoul + Azure Speech)
@@ -1569,14 +1666,27 @@ app.Configure(config =>
         voice.AddCommand<VoiceSettingsCommand>("settings")
             .WithDescription("Open the heypoul settings window (microphone, language, push-to-talk key)")
             .WithExample(new[] { "voice", "settings" });
+        // Was top-level `pks transcribe` until pks-cli took ownership of transcription.
+        // It lives here now because it is heypoul — blind 60-second chunks, no speakers —
+        // and heypoul's other verbs are its neighbours. Kept as the offline path: it can
+        // run parakeet-v3 locally, which the native pipeline cannot yet.
+        voice.AddCommand<VoiceTranscribeCommand>("transcribe")
+            .WithDescription("Transcribe a file with heypoul (chunked; supports local engines)")
+            .WithExample(new[] { "voice", "transcribe", "recording.mp4" })
+            .WithExample(new[] { "voice", "transcribe", "recording.mp4", "--engines", "cloud,parakeet-v3" });
     });
 
-    // Top-level: pks transcribe <file>. Same Foundry creds path as `pks voice start`,
-    // but runs heypoul in file-transcribe mode instead of the PTT daemon.
-    config.AddCommand<VoiceTranscribeCommand>("transcribe")
-        .WithDescription("Transcribe an audio/video file (heypoul + Azure AI Foundry Speech)")
+    // Top-level transcription. Native, two engines merged word by word, meeting folder out.
+    config.AddCommand<PKS.Commands.Transcribe.TranscribeCommand>("transcribe")
+        .WithDescription("Transcribe a recording into a meeting folder (verbatim text + speakers)")
         .WithExample(new[] { "transcribe", "recording.mp4" })
-        .WithExample(new[] { "transcribe", "recording.mp4", "--engines", "cloud,parakeet-v3" });
+        .WithExample(new[] { "transcribe", "raw/audio.wav", "--speakers", "1=Poul,2=Naja" })
+        .WithExample(new[] { "transcribe", "recording.m4a", "--words-only", "--locale", "en-US" });
+
+    config.AddCommand<PKS.Commands.Transcribe.DiarizeCommand>("diarize")
+        .WithDescription("Detect who spoke when, without transcribing the words")
+        .WithExample(new[] { "diarize", "recording.mp4" })
+        .WithExample(new[] { "diarize", "recording.mp4", "--max-speakers", "3" });
 
     // Local AI models — pks model <name> <verb>
     config.AddBranch<PKS.Commands.Model.ModelSettings>("model", model =>

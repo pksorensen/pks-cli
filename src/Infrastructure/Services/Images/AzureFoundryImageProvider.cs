@@ -111,13 +111,17 @@ public class AzureFoundryImageProvider : IImageProvider
         else
         {
             var (w, h) = ResolveSize(request.AspectRatio, request.Resolution);
-            var body = new
+            // quality is optional: omitting it lets the deployment pick its default
+            // (the top tier), which is ~30x the cost of "low" for draft sweeps.
+            var body = new Dictionary<string, object>
             {
-                prompt = request.Prompt,
-                size = $"{w}x{h}",
-                n = 1,
-                output_format = "png",
+                ["prompt"] = request.Prompt,
+                ["size"] = $"{w}x{h}",
+                ["n"] = 1,
+                ["output_format"] = "png",
             };
+            if (!string.IsNullOrWhiteSpace(request.Quality))
+                body["quality"] = request.Quality!;
             req.Content = new StringContent(
                 JsonSerializer.Serialize(body),
                 Encoding.UTF8,

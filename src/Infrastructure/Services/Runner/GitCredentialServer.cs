@@ -154,23 +154,30 @@ public class GitCredentialServer : IAsyncDisposable
             if (app == null)
                 return Results.Json(new { error = "app not found" }, statusCode: 404);
 
-            _onLog?.Invoke($"Proxying deploy for app {claims.AppUuid} (job {claims.JobId})");
+            // claims.AppUuid is only set when the job named an app outright; the usual path resolves
+            // it from the environment, so log what we are actually deploying, not the empty claim.
+            _onLog?.Invoke($"Proxying deploy for app {app.Name} (uuid={app.Uuid}, job {claims.JobId})");
 
             try
             {
                 using var httpClient = new HttpClient();
                 var deployUrl = app.WebhookUrl;
-                using var deployRequest = new HttpRequestMessage(HttpMethod.Get, deployUrl);
+
+                // POST, not GET. Coolify 4.3.14 moved every action endpoint (/deploy, and the
+                // application start/restart/stop routes) to POST and answers GET with a 405 and
+                // `Allow: POST` from OtherController::post_required. The uuid stays in the query
+                // string — deploy() reads it with $request->input(), which covers both.
+                using var deployRequest = new HttpRequestMessage(HttpMethod.Post, deployUrl);
                 deployRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", app.Token);
                 var response = await httpClient.SendAsync(deployRequest);
                 var body = await response.Content.ReadAsStringAsync();
 
-                _onLog?.Invoke($"Deploy proxy response: {(int)response.StatusCode} for app {claims.AppUuid}");
+                _onLog?.Invoke($"Deploy proxy response: {(int)response.StatusCode} for app {app.Uuid}");
                 return Results.Text(body, "application/json", statusCode: (int)response.StatusCode);
             }
             catch (Exception ex)
             {
-                _onLog?.Invoke($"Deploy proxy error for app {claims.AppUuid}: {ex.Message}");
+                _onLog?.Invoke($"Deploy proxy error for app {app.Uuid}: {ex.Message}");
                 return Results.Json(new { error = $"proxy error: {ex.Message}" }, statusCode: 502);
             }
         });

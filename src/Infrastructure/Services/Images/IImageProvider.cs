@@ -5,7 +5,8 @@ public record ImageGenerationRequest(
     string Model,
     string AspectRatio,
     string? Resolution,
-    string? InputImagePath);
+    string? InputImagePath,
+    string? Quality = null);
 
 public record ImageModelInfo(string Name, string DisplayName, string Description);
 

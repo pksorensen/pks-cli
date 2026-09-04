@@ -49,6 +49,7 @@
          Microsoft.Data.Sqlite 10.0.10 brings in, which carries NU1903
          (GHSA-2m69-gcr7-jv3q). -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10"/>
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.1"/>
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5"/>
     <!-- ASF chunk compression. A pure-managed zstd port: no native asset, so the
          global tool still ships as a single portable package. -->

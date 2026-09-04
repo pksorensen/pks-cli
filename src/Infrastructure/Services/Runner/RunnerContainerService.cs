@@ -626,12 +626,19 @@ public class RunnerContainerService : IRunnerContainerService
 
         _logger.LogInformation("Cleaning up job {JobId}", job.JobId);
 
+        // Recover the devcontainerId from the container's mounts BEFORE removing it. The devcontainer
+        // CLI derives that id by hashing the --id-label set, and never reports it back, so the only
+        // remaining trace is the names of the feature volumes it created — and those disappear from
+        // reach the moment the container is gone. Missing this step is what left 231 orphaned
+        // dind-var-lib-docker-* volumes, 319 GB, on the si14agents host.
+        var featureVolumes = await ResolveFeatureVolumesAsync(job.ContainerId, cancellationToken);
+
         // Remove the Docker container (ignore errors)
         if (!string.IsNullOrEmpty(job.ContainerId))
         {
             try
             {
-                var rmResult = await _processRunner.RunAsync("docker", $"rm -f {job.ContainerId}", null, cancellationToken);
+                var rmResult = await _processRunner.RunAsync("docker", $"rm -f -v {job.ContainerId}", null, cancellationToken);
                 if (rmResult.ExitCode != 0)
                 {
                     _logger.LogWarning("docker rm failed for container {ContainerId}: {StdErr}",
@@ -678,6 +685,76 @@ public class RunnerContainerService : IRunnerContainerService
             {
                 _logger.LogWarning(ex, "Failed to remove Docker volume {VolumeName}", job.VolumeName);
             }
+        }
+
+        // Remove the devcontainerId-keyed feature volumes. job.VolumeName above covers only the
+        // workspace volume; the inner Docker daemon's image store lives in dind-var-lib-docker-*,
+        // which is where the tens of gigabytes per job actually accumulate.
+        foreach (var volume in featureVolumes)
+        {
+            try
+            {
+                var result = await _processRunner.RunAsync("docker", $"volume rm {volume}", null, cancellationToken);
+                if (result.ExitCode == 0)
+                {
+                    _logger.LogInformation("Removed feature volume {VolumeName}", volume);
+                }
+                else if (!result.StandardError.Contains("no such volume", StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogWarning("docker volume rm failed for {VolumeName}: {StdErr}",
+                        volume, result.StandardError.Trim());
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to remove feature volume {VolumeName}", volume);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The devcontainerId-keyed volumes attached to <paramref name="containerId"/> that this job owns
+    /// and may delete once the container is gone.
+    ///
+    /// <para>Session transcripts (<c>claude-code-config-*</c>) are deliberately left behind: Brain/ASF
+    /// ingests them, and reclaiming their ~1 MB per job is not worth losing a session recording.</para>
+    /// </summary>
+    private async Task<IReadOnlyList<string>> ResolveFeatureVolumesAsync(string? containerId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(containerId))
+        {
+            return Array.Empty<string>();
+        }
+
+        try
+        {
+            var inspect = await _processRunner.RunAsync(
+                "docker",
+                RunnerReaperParsing.InspectArguments(containerId),
+                null,
+                cancellationToken);
+
+            if (inspect.ExitCode != 0)
+            {
+                _logger.LogWarning("docker inspect failed for {ContainerId}; feature volumes may leak: {StdErr}",
+                    containerId, inspect.StandardError.Trim());
+                return Array.Empty<string>();
+            }
+
+            var info = RunnerReaperParsing.ParseInspectLine(inspect.StandardOutput.Trim());
+            if (info is null)
+            {
+                return Array.Empty<string>();
+            }
+
+            // IncludeWorkspaces stays false here: the workspace volume is removed separately, by the
+            // name the job recorded, so it is never guessed at from a prefix.
+            return RunnerReaperParsing.ReapableVolumes(info, new ReapOptions());
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to resolve feature volumes for container {ContainerId}", containerId);
+            return Array.Empty<string>();
         }
     }
 

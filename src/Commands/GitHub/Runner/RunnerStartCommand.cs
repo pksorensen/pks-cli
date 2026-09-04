@@ -21,6 +21,8 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
     private readonly ICoolifyTokenStore _coolifyTokenStore;
     private readonly IRegistryConfigurationService _registryConfig;
     private readonly ICertStore _certStore;
+    private readonly PKS.Infrastructure.Services.Runner.IRunnerReaper _reaper;
+    private readonly PKS.Infrastructure.Services.Expo.IExpoCredentialService _expoCredentials;
 
     public RunnerStartCommand(
         IRunnerDaemonService daemonService,
@@ -31,6 +33,8 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
         ICoolifyTokenStore coolifyTokenStore,
         IRegistryConfigurationService registryConfig,
         ICertStore certStore,
+        PKS.Infrastructure.Services.Runner.IRunnerReaper reaper,
+        PKS.Infrastructure.Services.Expo.IExpoCredentialService expoCredentials,
         IAnsiConsole console)
         : base(console)
     {
@@ -42,6 +46,8 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
         _coolifyTokenStore = coolifyTokenStore ?? throw new ArgumentNullException(nameof(coolifyTokenStore));
         _registryConfig = registryConfig ?? throw new ArgumentNullException(nameof(registryConfig));
         _certStore = certStore ?? throw new ArgumentNullException(nameof(certStore));
+        _reaper = reaper ?? throw new ArgumentNullException(nameof(reaper));
+        _expoCredentials = expoCredentials ?? throw new ArgumentNullException(nameof(expoCredentials));
     }
 
     public class Settings : RunnerSettings
@@ -61,6 +67,10 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
         try
         {
             DisplayBanner("Start");
+
+            // 0. Reap what the previous runner could not. A runner killed by a reboot never reaches
+            // its job-end cleanup, so startup is the only moment its leftovers get collected.
+            await PKS.Commands.Runner.RunnerStartupSweep.RunAsync(_reaper, Console);
 
             // 1. Pre-flight: authentication (with auto-refresh)
             DisplayInfo("Running pre-flight checks...");
@@ -221,7 +231,8 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
                 _jobTokenService,
                 _coolifyTokenStore,
                 _registryConfig,
-                _certStore);
+                _certStore,
+                _expoCredentials);
             await credentialServer.StartAsync();
             DisplaySuccess($"Credential server started: {credentialServer.SocketPath}");
             DisplayInfo($"Detailed logs: {logPath}");
@@ -255,9 +266,16 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
 
             _daemonService.JobCompleted += (_, job) =>
             {
-                var color = job.Status == RunnerJobStatus.Completed ? "green" : "red";
+                // Abandoned is neither: the dispatch was called off, the GitHub job is fine.
+                var color = job.Status switch
+                {
+                    RunnerJobStatus.Completed => "green",
+                    RunnerJobStatus.Abandoned => "yellow",
+                    _ => "red"
+                };
+                var what = job.Status == RunnerJobStatus.Abandoned ? "Dispatch abandoned" : $"Job {job.Status}";
                 AddEvent(
-                    $"Job {job.Status}: {job.Registration.Owner}/{job.Registration.Repository} run #{job.RunId}",
+                    $"{what}: {job.Registration.Owner}/{job.Registration.Repository} run #{job.RunId}",
                     color);
             };
 

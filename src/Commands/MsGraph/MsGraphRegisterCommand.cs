@@ -86,7 +86,21 @@ public class MsGraphRegisterCommand : Command<MsGraphRegisterCommand.Settings>
         if (settings.Verbose)
             _console.MarkupLine($"[dim]Config stored: clientId={clientId}, tenantId={tenantId}[/]");
 
-        var scopes = new[] { "https://graph.microsoft.com/User.Read", "https://graph.microsoft.com/Mail.Read", "https://graph.microsoft.com/Mail.ReadBasic", "offline_access" };
+        // Mail.Read covers the signed-in user's own mailbox only. Mail.Read.Shared is what
+        // makes /users/{upn}/messages work for a mailbox they hold FullAccess on.
+        // Mail.ReadWrite (+ .Shared) is what lets 'pks email draft' put a message in the
+        // Drafts folder. Mail.Send is deliberately absent and must stay absent: without it
+        // nothing signed in through this CLI can put mail on the wire, only compose it.
+        var scopes = new[]
+        {
+            "https://graph.microsoft.com/User.Read",
+            "https://graph.microsoft.com/Mail.Read",
+            "https://graph.microsoft.com/Mail.Read.Shared",
+            "https://graph.microsoft.com/Mail.ReadBasic",
+            "https://graph.microsoft.com/Mail.ReadWrite",
+            "https://graph.microsoft.com/Mail.ReadWrite.Shared",
+            "offline_access"
+        };
 
         // Step 1: Get device code (separate from polling so we can display it)
         MsGraphDeviceCodeResponse deviceCode;

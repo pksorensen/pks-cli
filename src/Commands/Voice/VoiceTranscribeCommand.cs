@@ -11,12 +11,18 @@ using PKS.Infrastructure.Services.Security;
 namespace PKS.Commands.Voice;
 
 /// <summary>
-/// Transcribes an audio or video file to text using heypoul + Azure AI Foundry Speech
-/// (and optionally a local engine like parakeet-v3 in compare mode). Mirrors
-/// <see cref="VoiceStartCommand"/>'s Foundry-creds handoff but runs heypoul in
+/// <c>pks voice transcribe</c> — a file through heypoul, which is where it belongs.
+///
+/// This used to be top-level <c>pks transcribe</c>. It is not any more: that verb is now a
+/// native two-engine pipeline (<see cref="PKS.Commands.Transcribe.TranscribeCommand"/>) that
+/// produces speaker labels and a meeting folder, which this cannot. What heypoul still has
+/// and the native path does not is a <em>local</em> engine — parakeet-v3, no network — so
+/// this stays as the offline route, under the branch that owns the rest of heypoul.
+///
+/// Mirrors <see cref="VoiceStartCommand"/>'s Foundry-creds handoff but runs heypoul in
 /// file-transcribe mode instead of the push-to-talk daemon.
 /// </summary>
-[Description("Transcribe an audio/video file using heypoul + Azure AI Foundry Speech")]
+[Description("Transcribe a file through heypoul (local engine, or Foundry) — no speaker labels")]
 public class VoiceTranscribeCommand : AsyncCommand<VoiceTranscribeCommand.Settings>
 {
     private readonly IAzureFoundryAuthService _authService;
@@ -30,7 +36,7 @@ public class VoiceTranscribeCommand : AsyncCommand<VoiceTranscribeCommand.Settin
         _console = console;
     }
 
-    public class Settings : CommandSettings
+    public class Settings : VoiceSettings
     {
         [CommandArgument(0, "<file>")]
         [Description("Path to audio or video file (mp4, m4a, wav, mp3, …) to transcribe")]

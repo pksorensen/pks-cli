@@ -69,6 +69,19 @@ public class RunnerJobState
     public string ClonePath { get; set; } = string.Empty;
     public string? VolumeName { get; set; }
     public DateTime StartedAt { get; set; }
+    /// <summary>
+    /// When the runner process inside the container came up and began waiting for GitHub to hand it
+    /// a job, or null while the dispatch is still acquiring a container, building or installing.
+    /// Only this window can be measured against a claim deadline — see
+    /// <see cref="PKS.Infrastructure.Services.Runner.RunnerDaemonService.ClaimDeadline"/>.
+    /// </summary>
+    public DateTime? ClaimWaitStartedAt { get; set; }
+    /// <summary>
+    /// The labels this dispatch's JIT runner was minted with. GitHub hands a runner any queued job
+    /// whose labels are a subset of these, so this — not <see cref="WorkflowJobId"/> — is what
+    /// decides which other jobs the dispatch could still serve if its own job goes elsewhere.
+    /// </summary>
+    public IReadOnlyList<string> RunnerLabels { get; set; } = Array.Empty<string>();
     public RunnerJobStatus Status { get; set; }
 }
 
@@ -82,7 +95,13 @@ public enum RunnerJobStatus
     Running,
     Completed,
     Failed,
-    Cleaning
+    Cleaning,
+    /// <summary>
+    /// The dispatch was called off before it ran anything — its job went to another of our runners,
+    /// or GitHub finished it elsewhere. Not a failure: nothing was attempted and nothing broke, so
+    /// it is counted as neither Done nor Failed.
+    /// </summary>
+    Abandoned
 }
 
 /// <summary>

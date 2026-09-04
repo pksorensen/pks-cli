@@ -43,6 +43,10 @@ public class ImageCommand : Command<ImageCommand.Settings>
         [Description("Output resolution, e.g. 512, 1024, 2048, 4096 (default: model decides)")]
         public string? Resolution { get; set; }
 
+        [CommandOption("--quality")]
+        [Description("Render quality for models that support it: low, medium, high (default: model decides). Foundry/gpt-image only.")]
+        public string? Quality { get; set; }
+
         [CommandOption("--input|-i")]
         [Description("Input image to augment or edit (path to jpg/png). When set, prompt becomes an editing instruction.")]
         public string? InputImage { get; set; }
@@ -118,7 +122,8 @@ public class ImageCommand : Command<ImageCommand.Settings>
             settings.Model,
             settings.AspectRatio,
             settings.Resolution,
-            settings.InputImage);
+            settings.InputImage,
+            settings.Quality);
 
         try
         {

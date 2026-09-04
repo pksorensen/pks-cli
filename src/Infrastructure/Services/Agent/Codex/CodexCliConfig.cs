@@ -39,12 +39,16 @@ public static class CodexCliConfig
             var endIdx = existing.IndexOf(EndMarker, beginIdx, StringComparison.Ordinal);
             if (endIdx >= 0)
             {
+                var managedBodyStart = beginIdx + BeginMarker.Length;
+                var displacedToml = FindDisplacedToml(existing[managedBodyStart..endIdx]);
                 endIdx += EndMarker.Length;
                 var before = existing[..beginIdx].TrimEnd();
                 var after = existing[endIdx..].TrimStart('\r', '\n');
                 var sb = new StringBuilder();
                 if (before.Length > 0) sb.Append(before).Append("\n\n");
                 sb.Append(managed).Append('\n');
+                if (displacedToml.Length > 0)
+                    sb.Append('\n').Append(displacedToml).Append('\n');
                 if (after.Length > 0) sb.Append('\n').Append(after);
                 return sb.ToString();
             }
@@ -53,6 +57,37 @@ public static class CodexCliConfig
         // No existing managed block — append after the user's content.
         return existing.TrimEnd() + "\n\n" + managed + "\n";
     }
+
+    /// <summary>
+    /// Codex rewrites TOML structurally and can move our trailing end-marker comment below tables
+    /// it adds later (for example <c>[projects]</c> and <c>[marketplaces]</c>). Those tables are not
+    /// pks-owned even though they then appear between our markers, so retain everything beginning
+    /// with the first table that is not part of the pks provider.
+    /// </summary>
+    private static string FindDisplacedToml(string managedRegion)
+    {
+        var lineStart = 0;
+        while (lineStart < managedRegion.Length)
+        {
+            var lineEnd = managedRegion.IndexOf('\n', lineStart);
+            if (lineEnd < 0) lineEnd = managedRegion.Length;
+            var line = managedRegion[lineStart..lineEnd].Trim();
+
+            if (IsTomlTableHeader(line) && !IsPksProviderTable(line))
+                return managedRegion[lineStart..].Trim();
+
+            lineStart = lineEnd + 1;
+        }
+
+        return string.Empty;
+    }
+
+    private static bool IsTomlTableHeader(string line) =>
+        line.Length >= 3 && line[0] == '[' && line[^1] == ']';
+
+    private static bool IsPksProviderTable(string line) =>
+        line.Equals($"[model_providers.{ProviderName}]", StringComparison.Ordinal) ||
+        line.StartsWith($"[model_providers.{ProviderName}.", StringComparison.Ordinal);
 
     public const string ApiKeyEnvVar = "PKS_CODEX_FOUNDRY_API_KEY";
 

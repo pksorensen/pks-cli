@@ -4,25 +4,24 @@ using PKS.Infrastructure.Services.Runner;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
-namespace PKS.Commands.Agentics.Runner;
+namespace PKS.Commands.GitHub.Runner;
 
 /// <summary>
-/// Removes the devcontainers and volumes left behind by Agentics runner jobs.
+/// Removes the devcontainers and volumes left behind by GitHub Actions runner jobs.
 ///
-/// <para>Superseded the ADR 0002 runner-instance heuristic, which asked <c>pgrep</c> whether any
-/// runner process was alive and spared every labelled container if one was. The container's own
-/// state answers that better: a running container is never touched, and an exited one cannot be the
-/// warm container a live runner is about to reuse. The real work now happens in
-/// <see cref="IRunnerReaper"/>, which also removes the volumes the old command left behind.</para>
+/// <para>New in this surface. <c>pks github runner</c> previously had no cleanup at all — only
+/// <c>prune</c>, which removes duplicate <i>registrations</i> and never touched Docker — so a runner
+/// killed by a reboot left its containers and their volumes on disk permanently. Identical behaviour
+/// to <c>pks agentics runner cleanup</c>: both are thin subclasses of the same base.</para>
 /// </summary>
-public sealed class AgenticsRunnerCleanupCommand : RunnerCleanupCommandBase<AgenticsRunnerCleanupCommand.Settings>
+public sealed class GitHubRunnerCleanupCommand : RunnerCleanupCommandBase<GitHubRunnerCleanupCommand.Settings>
 {
-    public AgenticsRunnerCleanupCommand(IAnsiConsole console, IRunnerReaper reaper)
+    public GitHubRunnerCleanupCommand(IAnsiConsole console, IRunnerReaper reaper)
         : base(console, reaper)
     {
     }
 
-    public sealed class Settings : AgenticsRunnerSettings, IRunnerCleanupSettings
+    public sealed class Settings : GitHubSettings, IRunnerCleanupSettings
     {
         [Description("Show what would be removed without removing anything.")]
         [CommandOption("-n|--dry-run")]

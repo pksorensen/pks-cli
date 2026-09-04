@@ -47,12 +47,24 @@ public interface IAzureAuthService
 {
     Task<string?> DiscoverTenantAsync(string email, CancellationToken cancellationToken = default);
     Task<AzureAuthResult> InitiateLoginAsync(string tenantId, string? loginHint = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Log in for one specific resource. A resource login keeps its refresh token under its own
+    /// <paramref name="storageKey"/>, so signing in to, say, Azure SQL in one tenant does not throw
+    /// away the subscription login `pks azure init` stored for another.
+    /// </summary>
+    Task<AzureAuthResult> InitiateLoginAsync(string tenantId, string? loginHint, string scope, CancellationToken cancellationToken = default);
+
     Task<string?> GetAccessTokenAsync(string scope, CancellationToken cancellationToken = default);
+    Task<string?> GetAccessTokenAsync(string scope, string storageKey, CancellationToken cancellationToken = default);
     Task<List<AzureSubscription>> ListSubscriptionsAsync(string accessToken, CancellationToken cancellationToken = default);
     Task<bool> IsAuthenticatedAsync();
     Task<AzureStoredCredentials?> GetStoredCredentialsAsync();
+    Task<AzureStoredCredentials?> GetStoredCredentialsAsync(string storageKey);
     Task StoreCredentialsAsync(AzureStoredCredentials credentials);
+    Task StoreCredentialsAsync(AzureStoredCredentials credentials, string storageKey);
     Task ClearCredentialsAsync();
+    Task ClearCredentialsAsync(string storageKey);
 }
 
 /// <summary>
@@ -61,7 +73,8 @@ public interface IAzureAuthService
 /// </summary>
 public class AzureAuthService : IAzureAuthService
 {
-    private const string StorageKey = "azure.auth.credentials";
+    /// <summary>Where the subscription login from `pks azure init` is kept.</summary>
+    public const string StorageKey = "azure.auth.credentials";
 
     private readonly HttpClient _httpClient;
     private readonly IConfigurationService _configurationService;
@@ -135,9 +148,11 @@ public class AzureAuthService : IAzureAuthService
         }
     }
 
-    public async Task<AzureAuthResult> InitiateLoginAsync(string tenantId, string? loginHint = null, CancellationToken cancellationToken = default)
+    public Task<AzureAuthResult> InitiateLoginAsync(string tenantId, string? loginHint = null, CancellationToken cancellationToken = default)
+        => InitiateLoginAsync(tenantId, loginHint, _config.ManagementScope, cancellationToken);
+
+    public async Task<AzureAuthResult> InitiateLoginAsync(string tenantId, string? loginHint, string scope, CancellationToken cancellationToken = default)
     {
-        var scope = _config.ManagementScope;
         var pkce = GeneratePkce();
         var state = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         var port = GetFreePort();
@@ -175,9 +190,12 @@ public class AzureAuthService : IAzureAuthService
         };
     }
 
-    public async Task<string?> GetAccessTokenAsync(string scope, CancellationToken cancellationToken = default)
+    public Task<string?> GetAccessTokenAsync(string scope, CancellationToken cancellationToken = default)
+        => GetAccessTokenAsync(scope, StorageKey, cancellationToken);
+
+    public async Task<string?> GetAccessTokenAsync(string scope, string storageKey, CancellationToken cancellationToken = default)
     {
-        var credentials = await GetStoredCredentialsAsync();
+        var credentials = await GetStoredCredentialsAsync(storageKey);
         if (credentials == null || string.IsNullOrEmpty(credentials.RefreshToken))
         {
             _logger.LogWarning("Cannot refresh Azure token: no stored credentials or refresh token");
@@ -219,7 +237,7 @@ public class AzureAuthService : IAzureAuthService
             credentials.LastRefreshedAt = DateTime.UtcNow;
 
             var json = JsonSerializer.Serialize(credentials);
-            await _configurationService.SetAsync(StorageKey, json, global: true);
+            await _configurationService.SetAsync(storageKey, json, global: true);
 
             return tokenResponse.AccessToken;
         }
@@ -249,11 +267,14 @@ public class AzureAuthService : IAzureAuthService
         return credentials != null && !string.IsNullOrEmpty(credentials.RefreshToken);
     }
 
-    public async Task<AzureStoredCredentials?> GetStoredCredentialsAsync()
+    public Task<AzureStoredCredentials?> GetStoredCredentialsAsync()
+        => GetStoredCredentialsAsync(StorageKey);
+
+    public async Task<AzureStoredCredentials?> GetStoredCredentialsAsync(string storageKey)
     {
         try
         {
-            var json = await _secrets.RevealAsync(StorageKey);
+            var json = await _secrets.RevealAsync(storageKey);
             if (string.IsNullOrEmpty(json))
                 return null;
 
@@ -265,15 +286,20 @@ public class AzureAuthService : IAzureAuthService
         }
     }
 
-    public async Task StoreCredentialsAsync(AzureStoredCredentials credentials)
+    public Task StoreCredentialsAsync(AzureStoredCredentials credentials)
+        => StoreCredentialsAsync(credentials, StorageKey);
+
+    public async Task StoreCredentialsAsync(AzureStoredCredentials credentials, string storageKey)
     {
         var json = JsonSerializer.Serialize(credentials);
-        await _configurationService.SetAsync(StorageKey, json, global: true);
+        await _configurationService.SetAsync(storageKey, json, global: true);
     }
 
-    public async Task ClearCredentialsAsync()
+    public Task ClearCredentialsAsync() => ClearCredentialsAsync(StorageKey);
+
+    public async Task ClearCredentialsAsync(string storageKey)
     {
-        await _configurationService.DeleteAsync(StorageKey);
+        await _configurationService.DeleteAsync(storageKey);
     }
 
     private static PkceChallenge GeneratePkce()
