@@ -773,6 +773,69 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
     }
 
     /// <summary>
+    /// Records the job's workspace as trusted in the credential volume's <c>.claude.json</c>, so
+    /// Claude Code never raises its "Quick safety check" dialog for it.
+    /// <para>
+    /// The dialog is not a hypothetical: in 2.1.260 it renders unnumbered with <c>No, exit</c>
+    /// selected, and vibecast answered it by pressing Enter on whatever was selected — which quit
+    /// Claude before the job's first turn and left the session parked in the lobby (sessions
+    /// 7adi5pt7 and 3y59cys8, 2026-09-04). vibecast now navigates to the option by name, so this is
+    /// the second lock on the same door rather than the only one: a dialog that never appears
+    /// cannot be answered wrong by the next layout change either.
+    /// </para>
+    /// <para>
+    /// Trust is the runner's to grant. It created the volume, cloned the repo into it and wrote the
+    /// job's own config there — there is no third party whose code is being trusted on the user's
+    /// behalf.
+    /// </para>
+    /// <para>
+    /// Merged in-container as the agent user, never written from here: the credential volume is the
+    /// one place where a root-owned file is actively harmful. A file root leaves behind comes back
+    /// as <c>Permission denied</c> when Claude refreshes its token, and surfaces in the job as
+    /// "OAuth session expired" (see <c>ClaudeLoginCommandBuilder</c>). Best-effort throughout —
+    /// an image without node, or an unreadable config, leaves the dialog to vibecast.
+    /// </para>
+    /// </summary>
+    private async Task SeedWorkspaceTrustAsync(string containerId, string workspaceFolder, string? agentUser, CancellationToken ct)
+    {
+        var cfgDir = ClaudeCredentialVolumes.MountTarget;
+        // Paths go in as JSON string literals so a workspace name never terminates the script.
+        var script =
+            "const fs=require('fs');" +
+            $"const p={System.Text.Json.JsonSerializer.Serialize(cfgDir + "/.claude.json")};" +
+            $"const w={System.Text.Json.JsonSerializer.Serialize(workspaceFolder)};" +
+            "let j={};try{j=JSON.parse(fs.readFileSync(p,'utf8'))||{}}catch(e){}" +
+            "j.projects=j.projects||{};" +
+            "j.projects[w]=Object.assign({},j.projects[w],{hasTrustDialogAccepted:true});" +
+            "fs.writeFileSync(p,JSON.stringify(j,null,2),{mode:0o600});" +
+            "console.log('trust-seeded');";
+
+        try
+        {
+            var result = await _spawnerService.ExecInContainerAsync(
+                containerId,
+                $"node -e {ShellQuote(script)}",
+                timeoutSeconds: 20,
+                user: agentUser);
+
+            if (result.Output?.Contains("trust-seeded") == true)
+                _console.MarkupLine($"[dim]Workspace trusted for Claude Code: {workspaceFolder.EscapeMarkup()}[/]");
+            else
+                _console.MarkupLine("[dim]Could not pre-trust the workspace — vibecast will answer the dialog instead.[/]");
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[dim]Workspace pre-trust skipped: {ex.Message.EscapeMarkup()}[/]");
+        }
+    }
+
+    /// <summary>
+    /// Wraps a string in single quotes for <c>/bin/sh -c</c>, escaping any single quote it contains
+    /// the only way POSIX sh allows: close the quote, emit an escaped one, reopen.
+    /// </summary>
+    private static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''") + "'";
+
+    /// <summary>
     /// Phase 5 work item 3 (docs/remote-runner-targets-plan.md, decision D3): opt-in, per-file
     /// credential forwarding. The GitHub token and Foundry credentials are offered as two separate
     /// consents -- declining one never silently declines the other -- and each raw already-serialized
@@ -1942,11 +2005,13 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         // settings.local.json write. Mirrors the in-process pre-flight at line 2071-2128.
         var workspaceClaudeDir = $"{workspaceFolder}/.claude";
         await WriteContainerFileAsync($"{workspaceClaudeDir}/settings.json", "{}\n");
+        // No Write(.claude/**) rule: Claude Code refuses it on startup ("not matched by file
+        // permission checks — only Edit(path) rules are"), so it was a no-op that cost a
+        // warning on every job. Edit(.claude/**) already covers writing these files.
         await WriteContainerFileAsync($"{workspaceClaudeDir}/settings.local.json", """
             {
               "permissions": {
                 "allow": [
-                  "Write(.claude/**)",
                   "Edit(.claude/**)",
                   "Bash(mkdir**)"
                 ]
@@ -1956,6 +2021,8 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
             """);
         await WriteContainerFileAsync($"{workspaceClaudeDir}/.gitignore",
             "# Runner-injected — never commit\nsettings.local.json\n");
+
+        await SeedWorkspaceTrustAsync(containerId, workspaceFolder, agentUser, ct);
         await WriteContainerFileAsync($"{workspaceFolder}/CLAUDE.md", $"""
             # Job Environment
 
