@@ -183,9 +183,13 @@ public class AgenticsRunnerStartCommand : AsyncCommand<AgenticsRunnerStartComman
     {
         if (!string.IsNullOrEmpty(settings.Project))
         {
+            // Registration happens here, in the parent, before StartDetachedAsync — so a
+            // first-run `runner start` can still sign the operator in even though the
+            // runner it launches has no terminal of its own.
             return await RunnerRegistrar.ResolveOrRegisterAsync(
                 _configService, settings.Project, settings.Server,
-                msg => _console.MarkupLine($"[dim]{msg.EscapeMarkup()}[/]"));
+                msg => _console.MarkupLine($"[dim]{msg.EscapeMarkup()}[/]"),
+                canPrompt: _console.Profile.Capabilities.Interactive);
         }
 
         var registrations = await _configService.ListRegistrationsAsync();

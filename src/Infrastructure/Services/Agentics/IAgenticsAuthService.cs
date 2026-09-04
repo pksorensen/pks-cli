@@ -25,6 +25,17 @@ public interface IAgenticsAuthService
     Task<string?> GetTokenAsync(string audience, string? explicitToken, string owner, string project);
 
     /// <summary>
+    /// The same chain minus the runner-token fallback: explicit token, GitHub Actions
+    /// OIDC, then the stored user credential — a token that says who the human is.
+    ///
+    /// Separate because "no credential at all" and "a runner token that this endpoint
+    /// refuses" are the same answer from <see cref="GetTokenAsync"/> and different
+    /// problems: only the first one is fixed by signing in. Runner registration asks
+    /// this before deciding whether to offer the device grant.
+    /// </summary>
+    Task<string?> GetUserTokenAsync(string audience, string? explicitToken);
+
+    /// <summary>
     /// Redeems the stored refresh token even when the access token still looks
     /// valid locally, and saves the result. Returns null when there is nothing
     /// to refresh or the provider refused.

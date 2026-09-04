@@ -23,6 +23,10 @@ public class AgenticsAuthService(
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     public async Task<string?> GetTokenAsync(string audience, string? explicitToken, string owner, string project)
+        => await GetUserTokenAsync(audience, explicitToken)
+           ?? await RunnerTokenAsync(owner, project);
+
+    public async Task<string?> GetUserTokenAsync(string audience, string? explicitToken)
     {
         // 1. Explicit override
         if (!string.IsNullOrEmpty(explicitToken)) return explicitToken;
@@ -34,25 +38,25 @@ public class AgenticsAuthService(
         // 3. Stored Keycloak token from `pks agentics init`. Refresh in place
         //    when access token has expired but refresh token is still valid.
         var creds = await authConfig.LoadAsync();
-        if (creds != null && !string.IsNullOrEmpty(creds.AccessToken))
-        {
-            if (creds.IsExpired && !string.IsNullOrEmpty(creds.RefreshToken))
-            {
-                var refreshed = await TryRefreshAsync(creds);
-                if (refreshed != null)
-                {
-                    await authConfig.SaveAsync(refreshed);
-                    return refreshed.AccessToken;
-                }
-                // Refresh failed; fall through to runner-token back-compat.
-            }
-            else if (!creds.IsExpired)
-            {
-                return creds.AccessToken;
-            }
-        }
+        if (creds == null || string.IsNullOrEmpty(creds.AccessToken)) return null;
 
-        // 4. Stored runner registration (back-compat)
+        if (!creds.IsExpired) return creds.AccessToken;
+        if (string.IsNullOrEmpty(creds.RefreshToken)) return null;
+
+        var refreshed = await TryRefreshAsync(creds);
+        if (refreshed == null) return null;
+
+        await authConfig.SaveAsync(refreshed);
+        return refreshed.AccessToken;
+    }
+
+    /// <summary>
+    /// 4. Stored runner registration (back-compat). Still accepted for polling and job
+    /// updates; registration itself refuses it, which is what stops one runner token
+    /// from minting another.
+    /// </summary>
+    private async Task<string?> RunnerTokenAsync(string owner, string project)
+    {
         var registrations = await runnerConfig.LoadAsync();
         var registration = registrations.Registrations
             .Where(r => string.Equals(r.Owner, owner, StringComparison.OrdinalIgnoreCase)

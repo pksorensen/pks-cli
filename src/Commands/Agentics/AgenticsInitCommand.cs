@@ -67,32 +67,17 @@ public class AgenticsInitCommand : AgenticsCommand<AgenticsInitCommand.Settings>
     {
         DisplayBanner("Login");
 
-        var candidates = ResolveKeycloakBases(settings.Keycloak, settings.Server, settings.Realm);
-
-        // Ask each candidate where its endpoints are before assuming Keycloak's
-        // layout. Discovery is also how the right host is picked: every Keycloak
-        // serves it, so the first candidate that answers is the identity
-        // provider and the others are subdomains that do not exist.
-        OidcEndpoints? endpoints = null;
-        foreach (var candidate in candidates)
-        {
-            endpoints = await _discovery.EndpointsAsync(candidate);
-            if (endpoints is not null) break;
-        }
-        // Nothing answered. Guess the paths on the first candidate so the error
-        // names the host we would have used, not the last one we tried.
-        endpoints ??= KeycloakConvention(candidates[0]);
-
         OidcLoginResult result = default!;
         await _console.Status().Spinner(Spinner.Known.Dots).StartAsync("Requesting device code...", async ctx =>
         {
-            result = await _deviceLogin.LoginAsync(new DeviceLoginRequest(
-                endpoints,
+            result = await AgenticsSignIn.SignInAsync(
+                _discovery,
+                _deviceLogin,
+                _authConfig,
+                settings.Server,
+                settings.Keycloak,
+                settings.Realm,
                 settings.ClientId,
-                "openid offline_access",
-                // No `resource`: this credential is the CLI's general-purpose
-                // login, not a token bound to one API.
-                null,
                 prompt =>
                 {
                     // Spectre renders console writes above the running spinner,
@@ -108,7 +93,7 @@ public class AgenticsInitCommand : AgenticsCommand<AgenticsInitCommand.Settings>
 
                     if (!settings.NoBrowser && prompt.BestUri.Length > 0) TryOpenBrowser(prompt.BestUri);
                     ctx.Status("Waiting for authorization...");
-                }));
+                });
         });
 
         if (!result.Ok)
@@ -118,66 +103,12 @@ public class AgenticsInitCommand : AgenticsCommand<AgenticsInitCommand.Settings>
             return 1;
         }
 
-        // 4. Persist credentials.
-        await _authConfig.SaveAsync(new AgenticsAuthCredentials
-        {
-            Server = settings.Server,
-            // Recorded so refresh does not have to re-derive it — and it is the
-            // discovered issuer, not a guessed host. Without this, refresh falls
-            // back to the login.<server> convention, which holds for agentics.dk
-            // and nowhere else; a self-hosted instance that passed --keycloak
-            // would silently lose its refresh path.
-            Issuer = endpoints.Issuer,
-            Realm = settings.Realm,
-            ClientId = settings.ClientId,
-            AccessToken = result.AccessToken!,
-            RefreshToken = result.RefreshToken,
-            IdToken = result.IdToken,
-            ExpiresAt = result.ExpiresAtUnix,
-        });
-
         _console.WriteLine();
         DisplaySuccess($"Logged in to {settings.Server}.");
         DisplayInfo("Credentials saved to ~/.pks-cli/agentics-auth.json (mode 0600).");
         DisplayInfo("`pks agentics task submit` and `runner register` will now authenticate as you.");
         return 0;
     }
-
-    /// Where the realm might live, best guess first.
-    ///
-    /// An explicit --keycloak is the only answer; otherwise we probe, because
-    /// there is no one convention. Ours is `login.agentics.dk` — `keycloak.`
-    /// never resolved, which surfaced as a TLS handshake error rather than a
-    /// 404 and read like a broken server instead of a wrong hostname. It stays
-    /// in the list for installs that do use it, and the bare host is last for
-    /// a server that fronts its own identity provider.
-    private static string[] ResolveKeycloakBases(string? explicitUrl, string serverHost, string realm)
-    {
-        static bool IsUrl(string value)
-            => value.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-            || value.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
-
-        string Realm(string host) => $"{host.TrimEnd('/')}/realms/{realm}";
-
-        if (!string.IsNullOrWhiteSpace(explicitUrl)) return [Realm(explicitUrl)];
-        if (IsUrl(serverHost)) return [Realm(serverHost)];
-
-        return
-        [
-            Realm($"https://login.{serverHost}"),
-            Realm($"https://keycloak.{serverHost}"),
-            Realm($"https://{serverHost}"),
-        ];
-    }
-
-    /// What Keycloak's paths are, for an issuer that serves no discovery
-    /// document. Our own dev realm has answered `/.well-known/openid-configuration`
-    /// all along, so this is the fallback for someone else's install.
-    private static OidcEndpoints KeycloakConvention(string issuer) => new(
-        issuer,
-        $"{issuer}/protocol/openid-connect/token",
-        $"{issuer}/protocol/openid-connect/auth/device",
-        $"{issuer}/protocol/openid-connect/auth");
 
     private static void TryOpenBrowser(string url)
     {

@@ -153,6 +153,9 @@ public class BrainTokenResolverTests : IDisposable
         public Task<string?> GetTokenAsync(string audience, string? explicitToken, string owner, string project)
             => Task.FromResult<string?>(null);
 
+        public Task<string?> GetUserTokenAsync(string audience, string? explicitToken)
+            => Task.FromResult<string?>(null);
+
         public Task<string?> ForceRefreshAsync(CancellationToken ct = default)
         {
             ForceRefreshCalls++;

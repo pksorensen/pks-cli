@@ -208,6 +208,10 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         public bool Configure { get; set; }
     }
 
+    /// <summary>Optional so the many existing test call sites keep compiling; when DI supplies it,
+    /// the runner sweeps its predecessor's leftovers at startup.</summary>
+    private readonly PKS.Infrastructure.Services.Runner.IRunnerReaper? _reaper;
+
     public AgenticsRunnerRunCommand(
         IAgenticsRunnerConfigurationService configService,
         IDevcontainerSpawnerService spawnerService,
@@ -222,7 +226,8 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         IAgenticsRunnerSshHandoffService? sshHandoffService = null,
         PKS.Infrastructure.Services.Security.IActionGuard? guard = null,
         PKS.Infrastructure.Services.Security.ITotpSeedStore? totpStore = null,
-        PKS.Infrastructure.IConfigurationService? configurationService = null)
+        PKS.Infrastructure.IConfigurationService? configurationService = null,
+        PKS.Infrastructure.Services.Runner.IRunnerReaper? reaper = null)
     {
         _configService = configService ?? throw new ArgumentNullException(nameof(configService));
         _spawnerService = spawnerService ?? throw new ArgumentNullException(nameof(spawnerService));
@@ -238,6 +243,7 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         _guard = guard;
         _totpStore = totpStore;
         _configurationService = configurationService;
+        _reaper = reaper;
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -250,6 +256,13 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         try
         {
             DisplayBanner();
+
+            // Reap what the previous runner could not. A runner killed by a reboot never reaches its
+            // job-end cleanup, so startup is the only moment its leftovers get collected.
+            if (_reaper is not null)
+            {
+                await PKS.Commands.Runner.RunnerStartupSweep.RunAsync(_reaper, _console);
+            }
 
             // ── OTEL startup diagnostics ──────────────────────────────────────────────
             {
@@ -284,7 +297,9 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
             AgenticsRunnerRegistration registration;
             if (!string.IsNullOrEmpty(settings.Project))
             {
-                registration = await ResolveOrRegisterAsync(settings.Project, settings.Server, settings.Verbose);
+                registration = await ResolveOrRegisterAsync(
+                    settings.Project, settings.Server, settings.Verbose,
+                    canPrompt: _console.Profile.Capabilities.Interactive && !settings.NoPrompt);
             }
             else
             {
@@ -618,13 +633,17 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
     }
 
     private async Task<AgenticsRunnerRegistration> ResolveOrRegisterAsync(
-        string ownerProject, string? serverOverride, bool verbose)
+        string ownerProject, string? serverOverride, bool verbose, bool canPrompt)
     {
         // Shared with the detached `runner start` (see RunnerRegistrar) so the two entry points
         // cannot drift on what "resolve or register" means -- they used to be the same code and
         // would have diverged the first time either grew a rule.
         var registration = await RunnerRegistrar.ResolveOrRegisterAsync(
-            _configService, ownerProject, serverOverride, DisplayInfo);
+            _configService, ownerProject, serverOverride, DisplayInfo,
+            // Same gate the configure prompts use, --no-prompt included: the detached
+            // `runner start` sets that flag precisely because its tmux pane has a TTY
+            // nobody is watching, and a device code printed there would wait forever.
+            canPrompt: canPrompt);
 
         if (verbose)
             DisplayInfo($"Using registration for {registration.Owner}/{registration.Project} (id: {registration.Id})");
