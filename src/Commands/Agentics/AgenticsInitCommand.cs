@@ -42,8 +42,9 @@ public class AgenticsInitCommand : AgenticsCommand<AgenticsInitCommand.Settings>
         public string Server { get; set; } = "agentics.dk";
 
         [CommandOption("--keycloak <URL>")]
-        [Description("Keycloak base URL. Default: https://keycloak.<server>. Needed when the "
-                   + "identity provider does not sit on that subdomain — self-hosted and local dev.")]
+        [Description("Keycloak base URL. Default: https://login.<server>, then https://keycloak.<server>, "
+                   + "then the server itself — whichever answers discovery first. Needed when the "
+                   + "identity provider sits on none of those — self-hosted and local dev.")]
         public string? Keycloak { get; set; }
 
         [CommandOption("--realm <REALM>")]
@@ -66,14 +67,21 @@ public class AgenticsInitCommand : AgenticsCommand<AgenticsInitCommand.Settings>
     {
         DisplayBanner("Login");
 
-        var keycloakBase = ResolveKeycloakBase(settings.Keycloak ?? settings.Server, settings.Realm);
+        var candidates = ResolveKeycloakBases(settings.Keycloak, settings.Server, settings.Realm);
 
-        // Ask the issuer where its endpoints are before assuming Keycloak's
-        // layout. The convention below is right for our realm and wrong for
-        // anything else, and a self-hosted server that answers discovery should
-        // not need `--keycloak` to be a Keycloak at all.
-        var endpoints = await _discovery.EndpointsAsync(keycloakBase)
-                        ?? KeycloakConvention(keycloakBase);
+        // Ask each candidate where its endpoints are before assuming Keycloak's
+        // layout. Discovery is also how the right host is picked: every Keycloak
+        // serves it, so the first candidate that answers is the identity
+        // provider and the others are subdomains that do not exist.
+        OidcEndpoints? endpoints = null;
+        foreach (var candidate in candidates)
+        {
+            endpoints = await _discovery.EndpointsAsync(candidate);
+            if (endpoints is not null) break;
+        }
+        // Nothing answered. Guess the paths on the first candidate so the error
+        // names the host we would have used, not the last one we tried.
+        endpoints ??= KeycloakConvention(candidates[0]);
 
         OidcLoginResult result = default!;
         await _console.Status().Spinner(Spinner.Known.Dots).StartAsync("Requesting device code...", async ctx =>
@@ -114,10 +122,11 @@ public class AgenticsInitCommand : AgenticsCommand<AgenticsInitCommand.Settings>
         await _authConfig.SaveAsync(new AgenticsAuthCredentials
         {
             Server = settings.Server,
-            // Recorded so refresh does not have to re-derive it. The
-            // keycloak.<server> convention holds for agentics.dk and nowhere
-            // else; a self-hosted instance that passed --keycloak would silently
-            // lose its refresh path without this.
+            // Recorded so refresh does not have to re-derive it — and it is the
+            // discovered issuer, not a guessed host. Without this, refresh falls
+            // back to the login.<server> convention, which holds for agentics.dk
+            // and nowhere else; a self-hosted instance that passed --keycloak
+            // would silently lose its refresh path.
             Issuer = endpoints.Issuer,
             Realm = settings.Realm,
             ClientId = settings.ClientId,
@@ -134,14 +143,31 @@ public class AgenticsInitCommand : AgenticsCommand<AgenticsInitCommand.Settings>
         return 0;
     }
 
-    private static string ResolveKeycloakBase(string serverHost, string realm)
+    /// Where the realm might live, best guess first.
+    ///
+    /// An explicit --keycloak is the only answer; otherwise we probe, because
+    /// there is no one convention. Ours is `login.agentics.dk` — `keycloak.`
+    /// never resolved, which surfaced as a TLS handshake error rather than a
+    /// 404 and read like a broken server instead of a wrong hostname. It stays
+    /// in the list for installs that do use it, and the bare host is last for
+    /// a server that fronts its own identity provider.
+    private static string[] ResolveKeycloakBases(string? explicitUrl, string serverHost, string realm)
     {
-        // Convention: Keycloak lives at https://keycloak.<server>/realms/<realm>.
-        var host = serverHost.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-                   serverHost.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-            ? serverHost
-            : $"https://keycloak.{serverHost}";
-        return $"{host.TrimEnd('/')}/realms/{realm}";
+        static bool IsUrl(string value)
+            => value.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+
+        string Realm(string host) => $"{host.TrimEnd('/')}/realms/{realm}";
+
+        if (!string.IsNullOrWhiteSpace(explicitUrl)) return [Realm(explicitUrl)];
+        if (IsUrl(serverHost)) return [Realm(serverHost)];
+
+        return
+        [
+            Realm($"https://login.{serverHost}"),
+            Realm($"https://keycloak.{serverHost}"),
+            Realm($"https://{serverHost}"),
+        ];
     }
 
     /// What Keycloak's paths are, for an issuer that serves no discovery

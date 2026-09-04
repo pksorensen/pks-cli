@@ -28,7 +28,7 @@ public class AgenticsAuthCredentials
 
     /// <summary>
     /// Keycloak realm base URL the token came from, e.g.
-    /// "https://keycloak.agentics.dk/realms/agentics". Absent on credentials
+    /// "https://login.agentics.dk/realms/agentics". Absent on credentials
     /// written before this field existed — read it through
     /// <see cref="IssuerOrConvention"/>, never directly.
     /// </summary>
@@ -38,10 +38,14 @@ public class AgenticsAuthCredentials
     /// The issuer to talk to, falling back to the subdomain convention that
     /// holds for agentics.dk. Self-hosted and local instances store an explicit
     /// <see cref="Issuer"/> because the convention does not describe them.
+    ///
+    /// `login.`, not `keycloak.` — the latter has never resolved for
+    /// agentics.dk and a credential that fell back to it lost its refresh path
+    /// with a TLS error rather than an HTTP one.
     /// </summary>
     public string IssuerOrConvention()
         => string.IsNullOrEmpty(Issuer)
-            ? $"https://keycloak.{Server.TrimEnd('/')}/realms/{Realm}"
+            ? $"https://login.{Server.TrimEnd('/')}/realms/{Realm}"
             : Issuer.TrimEnd('/');
 
     /// <summary>OAuth client_id the token was issued to.</summary>
