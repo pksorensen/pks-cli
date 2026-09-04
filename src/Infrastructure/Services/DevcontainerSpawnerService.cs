@@ -3279,14 +3279,21 @@ DEVCONTAINER_EOF";
         // Default fallback used only when:
         //   1) the cloned repo has no .devcontainer/devcontainer.json, AND
         //   2) no template was provided via InlineDevcontainerFiles by the server.
-        // Includes tmux because vibecast (the agent host) requires it. Prefer a
-        // server-provided template via assembly-line settings for richer setups.
+        // Installs both tools the runner pre-flights before starting the agent: tmux,
+        // which vibecast owns the session in, and ttyd, which broadcasts it. A container
+        // missing either fails the job at pre-flight, which is what a repo with no
+        // devcontainer config used to do. Prefer a server-provided template via
+        // assembly-line settings for richer setups.
+        //
+        // ttyd comes from its GitHub release rather than apt: Debian bookworm has no
+        // ttyd package, and the release assets are named for `uname -m` exactly
+        // (ttyd.x86_64, ttyd.aarch64), so one command covers both architectures.
         const string defaultConfig = """
             {
               "name": "Agentics Runner",
               "image": "mcr.microsoft.com/devcontainers/typescript-node:20",
               "features": {},
-              "postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends tmux && sudo rm -rf /var/lib/apt/lists/*",
+              "postCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends tmux && sudo rm -rf /var/lib/apt/lists/* && sudo curl -fsSL -o /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.$(uname -m) && sudo chmod 755 /usr/local/bin/ttyd",
               "remoteEnv": {}
             }
             """;

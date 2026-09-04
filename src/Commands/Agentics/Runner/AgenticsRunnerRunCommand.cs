@@ -2309,7 +2309,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         {
             var missing = string.Join(", ", missingTools);
             _console.MarkupLine($"[red]Missing required tool(s) in container: {missing}. Cannot start the agent.[/]");
-            _console.MarkupLine("[yellow]Hint:[/] [dim]install them in the devcontainer's postCreateCommand — the built-in fallback devcontainer installs tmux only.[/]");
+            _console.MarkupLine("[yellow]Hint:[/] [dim]install them in the devcontainer's postCreateCommand — the built-in fallback devcontainer installs tmux and ttyd.[/]");
             await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "failure", ct);
             await ReportJobResultAsync(registration, "failed", $"missing in container: {missing}", ct);
             return;
