@@ -49,6 +49,23 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.3.0](https://github.com/pksorensen/pks-cli/compare/v7.2.0...v7.3.0) (2026-09-04)
+
+
+### Features
+
+* **agentics:** sign in from the runner instead of sending the operator away ([99c5093](https://github.com/pksorensen/pks-cli/commit/99c5093863e2fcc8ee02f71dcb2dc8cd72fffc06))
+* **browser:** pks browser recipe — kør en opskrift end to end uden model ([ca64d07](https://github.com/pksorensen/pks-cli/commit/ca64d0724fdb8c913b89ec033cea070c8580e365))
+
+
+### Bug Fixes
+
+* **agentics:** find the realm by asking, not by assuming keycloak.&lt;server&gt; ([b979904](https://github.com/pksorensen/pks-cli/commit/b979904c07648a2377bd8cf91994718b1167fddc))
+* **runner:** clone a project whose repo has never been pushed to ([a4601e1](https://github.com/pksorensen/pks-cli/commit/a4601e12823019ae1d8cdf359ed8805ea7c5956c))
+* **runner:** install claude in the fallback devcontainer, and pre-flight it ([cdef848](https://github.com/pksorensen/pks-cli/commit/cdef8487f84b85b4b767aafe51e962e5724d7b1b))
+* **runner:** install ttyd in the fallback devcontainer ([8974dcd](https://github.com/pksorensen/pks-cli/commit/8974dcd63a7fa3d815d41ac12e87b795490797d0))
+* **runner:** stol på jobbets workspace før claude når at spørge ([ac25c6e](https://github.com/pksorensen/pks-cli/commit/ac25c6eab352e6a28b50f6f6245cb636104f98d7))
+
 ## [7.2.0](https://github.com/pksorensen/pks-cli/compare/v7.1.0...v7.2.0) (2026-08-29)
 
 
