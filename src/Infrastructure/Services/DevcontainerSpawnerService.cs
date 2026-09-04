@@ -3352,6 +3352,39 @@ DEVCONTAINER_EOF";
         }
     }
 
+    /// <summary>
+    /// Runs in an ephemeral alpine/git container. Two paths, because a project whose
+    /// repository exists but has never been pushed to is a normal state, not a fault:
+    /// pks-agent-git's <c>InitBareRepo</c> points HEAD at the default branch and leaves
+    /// the ref itself to be created by the first push, so <c>--branch main</c> against a
+    /// brand-new project fails with "Remote branch main not found in upstream origin".
+    ///
+    /// The fallback tolerates exactly one cause — a remote advertising no heads at all.
+    /// A non-empty repository that genuinely lacks the branch still fails, because
+    /// inventing the branch there would silently start the job from the wrong history.
+    ///
+    /// No --depth=1: pks-agent-git's Smart-HTTP server never advertises the "shallow"
+    /// capability and explicitly rejects shallow requests (see upload_pack.go), so a
+    /// shallow clone fails outright rather than falling back to a full one.
+    /// </summary>
+    private const string CloneScript = """
+        export GIT_TERMINAL_PROMPT=0
+        url=$1; branch=$2; dest=$3
+
+        git clone --branch "$branch" "$url" "$dest" && exec git -C "$dest" rev-parse HEAD
+
+        # The clone was refused. A failed clone removes $dest itself, so there is
+        # nothing to clean up before trying again.
+        refs=$(git ls-remote --heads "$url") || exit 128
+        [ -z "$refs" ] || exit 128
+
+        git clone "$url" "$dest" || exit 128
+        # Do not trust the server to advertise symref=HEAD: on an empty repository —
+        # name the branch here so the first push creates the one the job asked for.
+        git -C "$dest" symbolic-ref HEAD "refs/heads/$branch" || exit 128
+        echo "empty repository - first push will create $branch"
+        """;
+
     private async Task CloneIntoVolumeAsync(
         string volumeName,
         string gitUrl,
@@ -3406,12 +3439,14 @@ DEVCONTAINER_EOF";
             Cmd = new[]
             {
                 "-c",
-                // No --depth=1: pks-agent-git's Smart-HTTP server never advertises the
-                // "shallow" capability and explicitly rejects shallow requests (see
-                // upload_pack.go), so a shallow clone against it fails outright with
-                // "Server does not support shallow clients" rather than falling back
-                // to a full clone.
-                $"GIT_TERMINAL_PROMPT=0 git clone --branch {branch} {gitUrl} /workspace/{projectName} && git -C /workspace/{projectName} rev-parse HEAD"
+                CloneScript,
+                // $0 is a label only; the three that follow are $1..$3, passed as
+                // arguments rather than interpolated so a token or a branch name
+                // with shell metacharacters cannot escape into the command line.
+                "pks-clone",
+                gitUrl,
+                branch,
+                $"/workspace/{projectName}"
             },
             HostConfig = new HostConfig
             {
