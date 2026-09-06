@@ -416,6 +416,21 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
                 DisplayInfo("Project does not use GitHub — skipping GitHub auth preflight.");
             }
 
+            // Refuse before the vault, not after. Reading the key can page a human for approval and
+            // always spends one of the grant's finite uses -- doing that and then exiting because
+            // this runner has no spawn mode would burn budget and wake someone up to no purpose.
+            var declaresApp = repoInfo.GitHubApp != null
+                || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(GitHubAppConfigResolver.AppIdVariable));
+            if (declaresApp && (settings.InProcess || !spawnModeAvailable))
+            {
+                DisplayError(
+                    "This project acts as a GitHub App, but this runner has no devcontainer spawn mode " +
+                    "(--inprocess, or Docker unavailable). App tokens are served through the per-job " +
+                    "credential server, which only spawn mode starts. Refusing to start rather than " +
+                    "falling back to the operator's own GitHub token.");
+                return 1;
+            }
+
             GitHubAppConfig? appConfig;
             try
             {
@@ -434,16 +449,6 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
 
             if (appConfig != null)
             {
-                if (settings.InProcess || !spawnModeAvailable)
-                {
-                    DisplayError(
-                        $"{GitHubAppConfigResolver.AppIdVariable} is set, but this runner has no devcontainer " +
-                        "spawn mode (--inprocess, or Docker unavailable). App tokens are served through the " +
-                        "per-job credential server, which only spawn mode starts. Refusing to start rather than " +
-                        "falling back to the operator's own GitHub token.");
-                    return 1;
-                }
-
                 _githubAppTokens = new GitHubAppTokenService(
                     appConfig, onLog: message => { if (settings.Verbose) DisplayInfo(message); });
                 DisplayInfo(

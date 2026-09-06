@@ -196,6 +196,57 @@ public class GitHubAppProvisionerTests
     }
 
     [Fact]
+    public async Task The_grant_line_carries_every_flag_the_vault_actually_requires()
+    {
+        // Each of these was verified against the vault CLI's own flagset, and each omission is a
+        // dead end the operator only discovers at the moment this feature promised to guide them:
+        //   --allow-unprotected-host  the server refuses every release to a `--protection none`
+        //                             identity without it, and blames the host list when it does.
+        //   --expires 720h            the CLI documents 720h as the maximum.
+        //   --max-uses                the default is 20, and each restart spends one read.
+        var vault = new FakeVaultCli { Identity = Enrolled() };
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new GitHubAppProvisioner(vault).ResolveAsync(Pointer, "/id.json", readVariable: NoEnvironment));
+
+        Assert.Contains("--allow-unprotected-host", ex.Message);
+        Assert.Contains("--expires 720h", ex.Message);
+        Assert.Contains("--max-uses", ex.Message);
+        Assert.DoesNotContain("8760h", ex.Message);
+    }
+
+    [Fact]
+    public async Task The_enrolment_ceremony_passes_the_name_agent_add_demands()
+    {
+        // `vault agent add` errors with "needs --name" when it is omitted, so a ceremony without
+        // it fails on its own first line.
+        var vault = new FakeVaultCli { Identity = null };
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new GitHubAppProvisioner(vault).ResolveAsync(Pointer, "/id.json", readVariable: NoEnvironment));
+
+        Assert.Contains("--name", ex.Message);
+    }
+
+    [Fact]
+    public async Task A_host_refusal_is_read_as_the_unprotected_identity_it_usually_is()
+    {
+        // The vault says "this host is not permitted by the policy" for a missing
+        // --allow-unprotected-host, which sends the owner to look at --hosts instead.
+        var vault = new FakeVaultCli { Identity = Enrolled() };
+        vault.Grants.Add(new VaultGrant
+        {
+            VaultId = "vlt_1", ItemId = "itm_2", Usable = false,
+            Reason = "this host is not permitted by the policy",
+        });
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new GitHubAppProvisioner(vault).ResolveAsync(Pointer, "/id.json", readVariable: NoEnvironment));
+
+        Assert.Contains("--allow-unprotected-host", ex.Message);
+    }
+
+    [Fact]
     public async Task An_unusable_grant_reports_the_vault_s_own_reason()
     {
         var vault = new FakeVaultCli { Identity = Enrolled() };

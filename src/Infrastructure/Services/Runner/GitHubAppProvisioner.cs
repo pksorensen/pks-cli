@@ -176,7 +176,8 @@ public sealed class GitHubAppProvisioner
                 + $"{pointer.VaultServer}. This runner has no vault identity yet.\n\n"
                 + "Enrolment cannot be self-served: it needs a one-shot token that only the vault's "
                 + "owner can mint, on their own machine. Ask them to run:\n\n"
-                + $"  vault agent add --owner {pointer.VaultOwner} --host-label \"<this host>\"\n\n"
+                + $"  vault agent add --owner {pointer.VaultOwner} --name \"runner for <project>\" \\\n"
+                + "      --kind runner --host-label \"<this host>\"\n\n"
                 + "then run the `vault agent enrol …` line it prints, here, with:\n\n"
                 + $"  --identity {identityPath} --protection none\n\n"
                 + "`--protection none` is deliberate for a headless runner: a passphrase-protected "
@@ -224,9 +225,17 @@ public sealed class GitHubAppProvisioner
                 + $"{pointer.Slug}'s private key.\n\n"
                 + "Ask the vault's owner to run, on their own machine:\n\n"
                 + $"  vault agent grant {pointer.VaultId} {pointer.ItemId} --agent {identity?.AgentId ?? "<this agent>"} \\\n"
-                + $"      --purpose \"GitHub App {pointer.Slug} for the runner\" --consent never --expires 8760h\n\n"
-                + "`--consent never` is the right choice here: the key is read at startup, and a grant that "
-                + "pages a human means every restart waits for someone to tap approve.");
+                + $"      --purpose \"GitHub App {pointer.Slug} for the runner\" --consent never \\\n"
+                + "      --expires 720h --max-uses 200 --allow-unprotected-host\n\n"
+                + "Every flag on that second line is load-bearing:\n"
+                + "  --consent never          the key is read at startup, so a grant that pages a human\n"
+                + "                           means every restart waits for someone to tap approve.\n"
+                + "  --expires 720h           the CLI documents 720h as the maximum; a longer value is\n"
+                + "                           not a longer grant, and this one has to be renewed monthly.\n"
+                + "  --max-uses 200           the default is 20, and every runner restart spends one read.\n"
+                + "  --allow-unprotected-host required, because a headless runner enrols with\n"
+                + "                           `--protection none`. Without it the server refuses every\n"
+                + "                           release, and reports it as a host that is not permitted.");
         }
 
         if (!match.Usable)
@@ -234,8 +243,13 @@ public sealed class GitHubAppProvisioner
             throw new InvalidOperationException(
                 $"This runner's grant on {pointer.ItemId} (GitHub App {pointer.Slug}'s private key) is not "
                 + $"usable: {(string.IsNullOrEmpty(match.Reason) ? "no reason given" : match.Reason)}.\n\n"
-                + $"It expires {match.ExpiresAt} and has {match.UsesLeft} of {match.MaxUses} reads left. "
-                + "Ask the vault's owner to re-grant it.");
+                + $"It expires {match.ExpiresAt} and has {match.UsesLeft} of {match.MaxUses} reads left.\n\n"
+                + (match.Reason?.Contains("host", StringComparison.OrdinalIgnoreCase) == true
+                    ? "That reason usually means the grant is missing `--allow-unprotected-host`, not that "
+                      + "the host list is wrong: a headless runner enrols with `--protection none`, and the "
+                      + "server refuses a release to an unprotected identity unless the grant opted in. Ask "
+                      + "the vault's owner to re-grant with that flag.\n"
+                    : "Ask the vault's owner to re-grant it.\n"));
         }
 
         // Said out loud rather than discovered. A grant whose consent mode is not `never` pages a

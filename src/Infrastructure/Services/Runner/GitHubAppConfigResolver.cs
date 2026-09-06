@@ -53,8 +53,9 @@ public static class GitHubAppConfigResolver
         var pem = ReadPrivateKey(read)
             ?? throw new InvalidOperationException(
                 $"{AppIdVariable}={appId} declares that this runner should act as a GitHub App, but no " +
-                $"private key was provided. Set {PrivateKeyFileVariable} to a path (a vault " +
-                $"'agent run --file' fd is the intended source) or {PrivateKeyVariable} to the PEM itself. " +
+                $"private key was provided. Configure the App on the project at agentics.dk and let the " +
+                $"runner fetch the key itself (the ordinary path), or set {PrivateKeyFileVariable} to a " +
+                $"path or {PrivateKeyVariable} to the PEM itself. " +
                 "Refusing to start: falling back to the operator's personal token here would silently " +
                 "attribute the App's work to a human.");
 
