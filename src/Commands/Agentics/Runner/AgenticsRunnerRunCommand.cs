@@ -1591,10 +1591,20 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
                 // The agent plane takes ids as flags and has no env fallback of its own, so a
                 // station prompt spells them as --vault "$VAULT_ID" --item "$VAULT_ITEM_ID".
                 spawnOptions.RemoteEnv["VAULT_ID"] = vaultAccess.VaultId;
-                spawnOptions.RemoteEnv["VAULT_ITEM_ID"] = vaultAccess.ItemId;
+                // VAULT_ITEM_ID plus one VAULT_ITEM_<NAME> per grant, so a station that reads two
+                // secrets can name them apart instead of positioning them.
+                var (itemEnv, itemWarnings) = BuildVaultItemEnvironment(vaultAccess);
+                foreach (var (key, value) in itemEnv)
+                    spawnOptions.RemoteEnv[key] = value;
+                foreach (var warning in itemWarnings)
+                    _console.MarkupLine($"[yellow]Warning:[/] {warning.EscapeMarkup()}");
+                var itemSummary = string.Join(", ", itemEnv
+                    .Where(kv => kv.Key.StartsWith("VAULT_ITEM_", StringComparison.Ordinal) && kv.Key != "VAULT_ITEM_ID" && kv.Key != "VAULT_ITEMS")
+                    .Select(kv => $"{kv.Key}={kv.Value}"));
+                if (itemSummary.Length == 0) itemSummary = itemEnv.GetValueOrDefault("VAULT_ITEM_ID", "none");
                 _console.MarkupLine(
                     $"[dim]Vault identity volume: [cyan]{vaultVolumeName.EscapeMarkup()}[/] "
-                    + $"(item: {vaultAccess.ItemId.EscapeMarkup()})[/]");
+                    + $"(items: {itemSummary.EscapeMarkup()})[/]");
             }
         }
 
@@ -6905,7 +6915,101 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
     /// lives in the vault; this is the pointer that tells the station what to ask about, which is
     /// why it is safe in a job payload and safe for a public line to carry.
     /// </summary>
-    private class VaultAccessDefinition
+    /// <summary>
+    /// The env var name a named grant is exported as: <c>mitid</c> → <c>VAULT_ITEM_MITID</c>.
+    /// </summary>
+    /// <remarks>
+    /// Duplicated by design in www-site's <c>src/lib/vault/station-requests.ts</c>
+    /// (<c>itemEnvName</c>) — the runner cannot import TypeScript, and the derivation is three
+    /// lines. A test on each side pins the same examples; if the two drift, a station's prompt
+    /// spells a variable nobody sets, which fails as an empty flag rather than as an error.
+    ///
+    /// Returns null for a name that sanitises to nothing. That item has no legible variable and
+    /// is reachable as <c>$VAULT_ITEM_ID</c> only if it happens to be the first.
+    /// </remarks>
+    internal static string? VaultItemEnvName(string? name)
+    {
+        var slug = new StringBuilder();
+        var pendingSeparator = false;
+        foreach (var ch in (name ?? "").ToUpperInvariant())
+        {
+            if (char.IsAsciiLetterOrDigit(ch))
+            {
+                // Held back rather than appended eagerly, which is what keeps a trailing run of
+                // punctuation from leaving a trailing underscore.
+                if (pendingSeparator && slug.Length > 0) slug.Append('_');
+                pendingSeparator = false;
+                slug.Append(ch);
+            }
+            else
+            {
+                pendingSeparator = true;
+            }
+        }
+
+        return slug.Length > 0 ? "VAULT_ITEM_" + slug : null;
+    }
+
+    /// <summary>
+    /// The vault item variables a station's container gets, plus anything worth telling the
+    /// operator about the shape they were derived from.
+    /// </summary>
+    /// <remarks>
+    /// <c>VAULT_ITEM_ID</c> is always set when there is any item at all, because every line repo
+    /// written so far spells it. <c>VAULT_ITEMS</c> carries the <em>slugs</em> — the part after
+    /// <c>VAULT_ITEM_</c>, not the original names — so a station can loop over them:
+    /// <code>for n in $VAULT_ITEMS; do eval "id=\$VAULT_ITEM_$n"; done</code>
+    ///
+    /// Two names that sanitise to the same slug are a collision the platform cannot catch: it
+    /// deduplicates by name, and <c>bank-login</c> and <c>bank_login</c> are two names. The second
+    /// is dropped with a warning rather than silently overwriting the first, because overwriting
+    /// would hand the station the wrong item id under the right variable name.
+    /// </remarks>
+    internal static (Dictionary<string, string> Env, List<string> Warnings) BuildVaultItemEnvironment(
+        VaultAccessDefinition access)
+    {
+        var env = new Dictionary<string, string>(StringComparer.Ordinal);
+        var warnings = new List<string>();
+
+        var items = access.Items is { Count: > 0 }
+            ? access.Items
+            : new List<VaultItemDefinition> { new() { Name = "", ItemId = access.ItemId } };
+
+        items = items.Where(i => !string.IsNullOrWhiteSpace(i.ItemId)).ToList();
+        if (items.Count == 0) return (env, warnings);
+
+        // The scalar wins when the platform sent one: it is the field the platform mirrors from
+        // items[0], and trusting it here keeps the two from disagreeing if a hand-edited station
+        // ever lists its items in a different order than it names its first.
+        env["VAULT_ITEM_ID"] = string.IsNullOrWhiteSpace(access.ItemId) ? items[0].ItemId : access.ItemId;
+
+        var slugs = new List<string>();
+        foreach (var item in items)
+        {
+            var variable = VaultItemEnvName(item.Name);
+            if (variable is null)
+            {
+                // Normal for the legacy scalar, which never had a name. Only worth a word when
+                // there are several, where an unnamed one is unreachable rather than implicit.
+                if (items.Count > 1)
+                    warnings.Add($"vault item {item.ItemId} has no usable name, so it gets no VAULT_ITEM_<NAME> variable");
+                continue;
+            }
+            if (env.ContainsKey(variable))
+            {
+                warnings.Add($"two vault items both resolve to {variable}; '{item.Name}' was dropped");
+                continue;
+            }
+            env[variable] = item.ItemId;
+            slugs.Add(variable["VAULT_ITEM_".Length..]);
+        }
+
+        if (slugs.Count > 0) env["VAULT_ITEMS"] = string.Join(' ', slugs);
+
+        return (env, warnings);
+    }
+
+    internal class VaultAccessDefinition
     {
         /// <summary>Vault base URL, reachable from inside the station container (a dev box needs
         /// the tunnel here — the pinned vault port is the host's loopback, not the container's).</summary>
@@ -6913,6 +7017,28 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         /// <summary>Vault namespace. Not the agentics handle; a different namespace that looks similar.</summary>
         public string Owner { get; set; } = "";
         public string VaultId { get; set; } = "";
+        /// <summary>
+        /// The first granted item, and the only one a station written before <see cref="Items"/>
+        /// existed knows about. Every such station spells <c>--item "$VAULT_ITEM_ID"</c> in its
+        /// system.md, so this stays a scalar forever and mirrors <c>Items[0]</c>.
+        /// </summary>
+        public string ItemId { get; set; } = "";
+        /// <summary>
+        /// Every item this station may ask for, when it needs more than one. One station is one
+        /// agent identity on one volume, so a second item is a second <em>grant</em> to the same
+        /// agent — which is why this is a list of items and not a list of vaults.
+        /// </summary>
+        public List<VaultItemDefinition>? Items { get; set; }
+    }
+
+    /// <summary>
+    /// One named grant. The name is a label for the station's own environment — it comes from the
+    /// line repo's <c>vaultRequests</c> and is resolved to an id at import; the agent plane never
+    /// sees it.
+    /// </summary>
+    internal class VaultItemDefinition
+    {
+        public string Name { get; set; } = "";
         public string ItemId { get; set; } = "";
     }
 
