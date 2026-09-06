@@ -2419,6 +2419,52 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             return;
         }
 
+        // 7b. Give the station its vault identity, if it has none and the platform sent an
+        // enrolment. Non-fatal: a station that fails to enrol still runs and says so itself when
+        // it reaches for a secret, which is a better failure than a job that never starts.
+        if (job.AgentDef?.VaultAccess is { } enrolAccess && job.AgentDef?.VaultEnrolment is { } enrolment
+            && spawnOptions.VaultIdentityVolumeName is not null)
+        {
+            var enrolScript = "/tmp/.pks-vault-enrol.sh";
+            try
+            {
+                await _spawnerService.CopyFileToContainerAsync(containerId, enrolScript,
+                    System.Text.Encoding.UTF8.GetBytes(BuildVaultEnrolmentScript(
+                        enrolAccess, enrolment, VaultIdentityVolumes.IdentityPath,
+                        Environment.GetEnvironmentVariable("VAULT_CLIENT_ID"),
+                        Environment.GetEnvironmentVariable("VAULT_CLIENT_SECRET"))),
+                    mode: 493 /* 0o755 — the station's own user has to run it, and the copy lands
+                                 as root; the script deletes itself when it is done. */,
+                    ct: ct);
+                var enrolRes = await _spawnerService.ExecInContainerAsync(containerId,
+                    $"sh {enrolScript}", timeoutSeconds: 120, user: agentUser);
+                var enrolOut = (enrolRes.Output + enrolRes.Error).Trim();
+                if (enrolOut.Contains("vault-identity-present"))
+                {
+                    _console.MarkupLine("[grey]vault: this station already has an identity[/]");
+                }
+                else if (enrolRes.Success)
+                {
+                    // Printed in full on purpose. The fingerprint is the one thing the owner has to
+                    // compare, and the job log is a different channel than the vault API they would
+                    // otherwise read it from — which is the whole reason the comparison means
+                    // anything.
+                    _console.MarkupLine("[green]vault: this station enrolled itself.[/]");
+                    _console.WriteLine(enrolOut);
+                }
+                else
+                {
+                    _console.MarkupLine($"[yellow]Warning:[/] vault enrolment failed (exit {enrolRes.ExitCode}). "
+                        + "The station will run without a vault identity.");
+                    if (enrolOut.Length > 0) _console.WriteLine(enrolOut);
+                }
+            }
+            catch (Exception ex)
+            {
+                _console.MarkupLine($"[yellow]Warning:[/] vault enrolment could not run: {ex.Message.EscapeMarkup()}");
+            }
+        }
+
         // The agent cannot run as root: claude refuses --dangerously-skip-permissions with euid 0
         // and exits 0, so the pane dies at launch and the job looks idle rather than broken. Say so
         // now rather than 60 minutes from now.
@@ -6747,6 +6793,11 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         /// volume; absent, the station has no vault identity and cannot reach a secret.
         /// </summary>
         public VaultAccessDefinition? VaultAccess { get; set; }
+        /// <summary>
+        /// A one-shot enrolment for a station that has no vault identity yet. Present only until
+        /// the station has enrolled once; absent for every station that already has one.
+        /// </summary>
+        public VaultEnrolmentDefinition? VaultEnrolment { get; set; }
         public List<PluginRef>? Plugins { get; set; }
         public List<AgentRef>? Agents { get; set; }
         /// <summary>
@@ -6916,6 +6967,86 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
     /// why it is safe in a job payload and safe for a public line to carry.
     /// </summary>
     /// <summary>
+    /// The shell script that gives a station its vault identity, run once inside the container.
+    /// </summary>
+    /// <remarks>
+    /// It exists because the alternative is a human with a terminal inside someone else's
+    /// container: <c>vault agent enrol</c> has to run where the identity will live, and that is a
+    /// volume mounted into a container the operator never sees.
+    ///
+    /// Three properties are deliberate.
+    ///
+    /// <b>It is idempotent.</b> <c>enrol</c> refuses to overwrite an existing identity file, and
+    /// the check for one has to happen inside the container — a volume can be non-empty on the
+    /// host and still be a different path in here.
+    ///
+    /// <b>It installs the CLI if it is missing</b>, from the same URL the station's own prompt
+    /// names. A repo's devcontainer has no reason to carry a tool the platform decided to use.
+    ///
+    /// <b>The secrets are in a file, not in argv.</b> The caller writes this to a 0700 file and
+    /// deletes it afterwards, so neither the enrolment token nor the service-account secret is
+    /// visible to <c>ps</c> inside the container.
+    ///
+    /// <c>--protection none</c> is not a shortcut. A passphrase for an unattended host would have
+    /// to travel with the job and sit in the same environment as the file it protects, which is
+    /// protection in name only. The identity's real protection is the volume: one station, one
+    /// mount, per ADR 0011.
+    /// </remarks>
+    internal static string BuildVaultEnrolmentScript(
+        VaultAccessDefinition access,
+        VaultEnrolmentDefinition enrolment,
+        string identityPath,
+        string? clientId,
+        string? clientSecret)
+    {
+        var sb = new StringBuilder();
+        sb.Append("#!/bin/sh\n");
+        sb.Append("set -u\n");
+        sb.Append("export PATH=\"$HOME/.local/bin:$PATH\"\n");
+        sb.Append($"IDENTITY={ShellQuote(identityPath)}\n");
+        sb.Append("if [ ! -f \"$IDENTITY\" ]; then\n");
+        sb.Append("  if ! command -v vault >/dev/null 2>&1; then\n");
+        sb.Append("    curl -fsSL https://agentics.dk/install/vault.sh | sh >/dev/null 2>&1 || true\n");
+        sb.Append("  fi\n");
+        sb.Append("  if ! command -v vault >/dev/null 2>&1; then\n");
+        sb.Append("    echo 'vault-cli-missing'; exit 3\n");
+        sb.Append("  fi\n");
+        sb.Append("  vault agent enrol \\\n");
+        sb.Append($"    --server {ShellQuote(access.Server)} \\\n");
+        sb.Append($"    --owner {ShellQuote(access.Owner)} \\\n");
+        sb.Append($"    --agent {ShellQuote(enrolment.AgentId)} \\\n");
+        sb.Append($"    --owner-holder {ShellQuote(enrolment.OwnerHolder)} \\\n");
+        sb.Append($"    --owner-sign-pub {ShellQuote(enrolment.OwnerSignPub)} \\\n");
+        sb.Append($"    --owner-recipient {ShellQuote(enrolment.OwnerRecipient)} \\\n");
+        sb.Append($"    --anchor {ShellQuote(enrolment.Anchor)} \\\n");
+        sb.Append($"    --token {ShellQuote(enrolment.Token)} \\\n");
+        sb.Append($"    --host-label {ShellQuote(enrolment.HostLabel ?? "agentics station")} \\\n");
+        sb.Append("    --identity \"$IDENTITY\" \\\n");
+        sb.Append("    --protection none || exit 4\n");
+        sb.Append("else\n");
+        sb.Append("  echo 'vault-identity-present'\n");
+        sb.Append("fi\n");
+        // Stored on the volume rather than exported into the station's environment: the agent
+        // running in this container can read its own environment trivially, and a service-account
+        // secret sitting there is one `env` away from a transcript. It is run outside the
+        // enrolment branch on purpose — a station enrolled before the runner had credentials still
+        // needs them, and storing the same pair twice is a no-op.
+        if (!string.IsNullOrWhiteSpace(clientId) && !string.IsNullOrWhiteSpace(clientSecret))
+        {
+            sb.Append("vault agent credentials \\\n");
+            sb.Append($"  --client-id {ShellQuote(clientId!)} \\\n");
+            sb.Append($"  --client-secret {ShellQuote(clientSecret!)} \\\n");
+            sb.Append("  --identity \"$IDENTITY\" >/dev/null || echo 'vault-credentials-failed'\n");
+        }
+        // Self-deleting: the file is readable by the station's own user for as long as it exists,
+        // and the caller's cleanup does not run if the exec times out.
+        sb.Append("rm -f -- \"$0\"\n");
+        sb.Append("exit 0\n");
+
+        return sb.ToString();
+    }
+
+    /// <summary>
     /// The env var name a named grant is exported as: <c>mitid</c> → <c>VAULT_ITEM_MITID</c>.
     /// </summary>
     /// <remarks>
@@ -7029,6 +7160,35 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         /// agent — which is why this is a list of items and not a list of vaults.
         /// </summary>
         public List<VaultItemDefinition>? Items { get; set; }
+    }
+
+    /// <summary>
+    /// Everything a station needs to enrol itself as an agent on its first run: the public halves
+    /// of the owner's key, carried out of band, plus a one-shot token.
+    /// </summary>
+    /// <remarks>
+    /// The token is single-use and valid for fifteen minutes, which is what makes it safe to put
+    /// in a job payload at all. No key material travels here: the identity is generated inside the
+    /// container and its private half never leaves the station's own volume.
+    ///
+    /// Enrolment is only the first of three steps. The owner still has to compare the fingerprint
+    /// this produces and run <c>vault agent approve</c> and <c>vault agent grant</c> from their own
+    /// machine — those need their private key, and moving them here would mean the platform could
+    /// grant itself a secret.
+    /// </remarks>
+    internal class VaultEnrolmentDefinition
+    {
+        public string AgentId { get; set; } = "";
+        public string Token { get; set; } = "";
+        /// <summary>The owner's keyholder id, from their own keyholder record.</summary>
+        public string OwnerHolder { get; set; } = "";
+        public string OwnerSignPub { get; set; } = "";
+        public string OwnerRecipient { get; set; } = "";
+        /// <summary>Checksum over the two public halves. Catches a truncated paste before anything
+        /// is written; it is not an independent check of the server, because the platform read the
+        /// halves from that same server.</summary>
+        public string Anchor { get; set; } = "";
+        public string? HostLabel { get; set; }
     }
 
     /// <summary>

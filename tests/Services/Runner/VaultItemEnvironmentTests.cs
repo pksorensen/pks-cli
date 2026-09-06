@@ -156,4 +156,95 @@ public class VaultItemEnvironmentTests
 
         env["VAULT_ITEM_ID"].Should().Be("itm_9");
     }
+
+    private static AgenticsRunnerRunCommand.VaultEnrolmentDefinition Enrolment() => new()
+    {
+        AgentId = "agt_1",
+        Token = "tok_secret",
+        OwnerHolder = "usr_1",
+        OwnerSignPub = "sign+pub",
+        OwnerRecipient = "age1abc",
+        Anchor = "anch",
+        HostLabel = "station 01",
+    };
+
+    /// <summary>
+    /// <c>vault agent enrol</c> refuses to overwrite an identity, so a second run would fail the
+    /// script rather than skip it. The guard is what makes this safe to attempt on every dispatch.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public void EnrolmentScript_SkipsItselfWhenTheIdentityIsAlreadyThere()
+    {
+        var script = AgenticsRunnerRunCommand.BuildVaultEnrolmentScript(
+            Access("itm_1"), Enrolment(), "/vault/identity.json", null, null);
+
+        script.Should().Contain("if [ ! -f \"$IDENTITY\" ]; then");
+        script.Should().Contain("vault-identity-present");
+        script.Should().Contain("IDENTITY='/vault/identity.json'");
+    }
+
+    /// <summary>
+    /// A passphrase would have to travel with the job and live in the same place as the file it
+    /// protects. The volume is the protection here, not a secret nobody types.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public void EnrolmentScript_EnrolsUnattended()
+    {
+        var script = AgenticsRunnerRunCommand.BuildVaultEnrolmentScript(
+            Access("itm_1"), Enrolment(), "/vault/identity.json", null, null);
+
+        script.Should().Contain("--protection none");
+        script.Should().Contain("--agent 'agt_1'");
+        script.Should().Contain("--token 'tok_secret'");
+        script.Should().Contain("--host-label 'station 01'");
+        // Installed from the same place the station's own prompt names, because a repo's
+        // devcontainer has no reason to carry it.
+        script.Should().Contain("https://agentics.dk/install/vault.sh");
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public void EnrolmentScript_StoresAServiceAccountOnlyWhenItHasBothHalves()
+    {
+        var without = AgenticsRunnerRunCommand.BuildVaultEnrolmentScript(
+            Access("itm_1"), Enrolment(), "/vault/identity.json", "vault-agent", null);
+        without.Should().NotContain("vault agent credentials");
+
+        var with = AgenticsRunnerRunCommand.BuildVaultEnrolmentScript(
+            Access("itm_1"), Enrolment(), "/vault/identity.json", "vault-agent", "s3cret");
+        with.Should().Contain("vault agent credentials");
+        with.Should().Contain("--client-secret 's3cret'");
+    }
+
+    /// <summary>
+    /// The station's user can read the file while it exists, so it does not outlive the exec — and
+    /// the caller's own cleanup does not run when the exec times out.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public void EnrolmentScript_DeletesItself()
+    {
+        AgenticsRunnerRunCommand.BuildVaultEnrolmentScript(
+                Access("itm_1"), Enrolment(), "/vault/identity.json", null, null)
+            .Should().Contain("rm -f -- \"$0\"");
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public void EnrolmentScript_QuotesAValueThatWouldOtherwiseCloseTheQuote()
+    {
+        var enrolment = Enrolment();
+        enrolment.HostLabel = "it's a station";
+
+        AgenticsRunnerRunCommand.BuildVaultEnrolmentScript(
+                Access("itm_1"), enrolment, "/vault/identity.json", null, null)
+            .Should().Contain("--host-label 'it'\\''s a station'");
+    }
 }
