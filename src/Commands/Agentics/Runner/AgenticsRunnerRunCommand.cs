@@ -1584,6 +1584,10 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
                 // rather than as a misconfigured mount.
                 spawnOptions.RemoteEnv["AGENTICS_VAULT_IDENTITY"] = VaultIdentityVolumes.IdentityPath;
                 spawnOptions.RemoteEnv["VAULT_IDENTITY_DIR"] = VaultIdentityVolumes.MountTarget;
+                // The owner pin belongs on the volume for the same reason the identity does — see
+                // VaultIdentityVolumes.PinsPath. Without it the pin is re-learned in every task
+                // container, which turns a substituted-owner-key check into a no-op.
+                spawnOptions.RemoteEnv["VAULT_PINS_FILE"] = VaultIdentityVolumes.PinsPath;
                 // VAULT_SERVER is likewise the CLI's own (see `DefaultServer` in app.go), so the
                 // one-time `vault agent enrol` ceremony inside the station needs no --server.
                 spawnOptions.RemoteEnv["VAULT_SERVER"] = vaultAccess.Server;
@@ -2431,14 +2435,24 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                 await _spawnerService.CopyFileToContainerAsync(containerId, enrolScript,
                     System.Text.Encoding.UTF8.GetBytes(BuildVaultEnrolmentScript(
                         enrolAccess, enrolment, VaultIdentityVolumes.IdentityPath,
+                        VaultIdentityVolumes.PinsPath,
                         Environment.GetEnvironmentVariable("VAULT_CLIENT_ID"),
                         Environment.GetEnvironmentVariable("VAULT_CLIENT_SECRET"))),
                     mode: 493 /* 0o755 — the station's own user has to run it, and the copy lands
-                                 as root; the script deletes itself when it is done. */,
+                                 root-owned; the finally below is what actually removes it. */,
                     ct: ct);
                 var enrolRes = await _spawnerService.ExecInContainerAsync(containerId,
                     $"sh {enrolScript}", timeoutSeconds: 120, user: agentUser);
                 var enrolOut = (enrolRes.Output + enrolRes.Error).Trim();
+                // Checked before the identity marker, not after: a station that already had an
+                // identity still runs the credentials step, so both lines can be present, and the
+                // one that matters is the failure. Reported without failing the job — the station
+                // runs and says so itself when it reaches for a secret.
+                if (enrolOut.Contains("vault-credentials-failed"))
+                {
+                    _console.MarkupLine("[yellow]Warning:[/] vault: this station could not store its "
+                        + "service account. Reads from an oidc-mode vault will come back unauthorized.");
+                }
                 if (enrolOut.Contains("vault-identity-present"))
                 {
                     _console.MarkupLine("[grey]vault: this station already has an identity[/]");
@@ -2462,6 +2476,24 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             catch (Exception ex)
             {
                 _console.MarkupLine($"[yellow]Warning:[/] vault enrolment could not run: {ex.Message.EscapeMarkup()}");
+            }
+            finally
+            {
+                // As root, because that is who owns it. CopyFileToContainerAsync writes its tar
+                // entries with uid 0 and /tmp is sticky (1777), so the station's own user cannot
+                // unlink the file — and `rm -f` exits 0 while failing to. Left behind, it is a
+                // world-readable file holding the enrolment token and, worse, the service-account
+                // secret, for the life of the container.
+                try
+                {
+                    await _spawnerService.ExecInContainerAsync(containerId,
+                        $"rm -f -- {enrolScript}", timeoutSeconds: 15, user: "root");
+                }
+                catch (Exception ex)
+                {
+                    _console.MarkupLine("[yellow]Warning:[/] could not remove the vault enrolment "
+                        + $"script from the container: {ex.Message.EscapeMarkup()}");
+                }
             }
         }
 
@@ -6983,9 +7015,11 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
     /// <b>It installs the CLI if it is missing</b>, from the same URL the station's own prompt
     /// names. A repo's devcontainer has no reason to carry a tool the platform decided to use.
     ///
-    /// <b>The secrets are in a file, not in argv.</b> The caller writes this to a 0700 file and
-    /// deletes it afterwards, so neither the enrolment token nor the service-account secret is
-    /// visible to <c>ps</c> inside the container.
+    /// <b>The secrets are in a file, not in argv.</b> Neither the enrolment token nor the
+    /// service-account secret is visible to <c>ps</c> inside the container. The file itself is
+    /// short-lived: the script unlinks itself, and the caller deletes it again as root afterwards,
+    /// because the copy lands root-owned in a sticky <c>/tmp</c> where the station's own user
+    /// cannot unlink it — and <c>rm -f</c> reports that failure as success.
     ///
     /// <c>--protection none</c> is not a shortcut. A passphrase for an unattended host would have
     /// to travel with the job and sit in the same environment as the file it protects, which is
@@ -6996,6 +7030,7 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         VaultAccessDefinition access,
         VaultEnrolmentDefinition enrolment,
         string identityPath,
+        string pinsPath,
         string? clientId,
         string? clientSecret)
     {
@@ -7004,6 +7039,9 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         sb.Append("set -u\n");
         sb.Append("export PATH=\"$HOME/.local/bin:$PATH\"\n");
         sb.Append($"IDENTITY={ShellQuote(identityPath)}\n");
+        // Pin beside the identity, not under the container's home: enrolment pins the owner's key
+        // and a later task runs in a different container, where the default path is empty.
+        sb.Append($"export VAULT_PINS_FILE={ShellQuote(pinsPath)}\n");
         sb.Append("if [ ! -f \"$IDENTITY\" ]; then\n");
         sb.Append("  if ! command -v vault >/dev/null 2>&1; then\n");
         sb.Append("    curl -fsSL https://agentics.dk/install/vault.sh | sh >/dev/null 2>&1 || true\n");

@@ -56,6 +56,19 @@ public static class VaultIdentityVolumes
     public const string IdentityPath = MountTarget + "/identity.json";
 
     /// <summary>
+    /// Where the owner's pinned key lives, exported as <c>VAULT_PINS_FILE</c>.
+    ///
+    /// It has to sit beside the identity rather than in the CLI's default
+    /// <c>$XDG_STATE_HOME/agentics/vault/pins.json</c>, because that resolves under the
+    /// container's home — and per ADR 0003 each task gets its own container. Enrolment pins the
+    /// owner's signing key in container A; the release that verifies a grant against that pin runs
+    /// in container B, where the default path is an empty file. The identity survives on the
+    /// volume and the pin does not, so the check that exists to catch a substituted owner key
+    /// would quietly re-learn whatever the server offered.
+    /// </summary>
+    public const string PinsPath = MountTarget + "/pins.json";
+
+    /// <summary>
     /// The <c>--mount</c> fragment that puts <paramref name="volumeName"/> at
     /// <see cref="MountTarget"/>, with its own leading space so it composes with the other
     /// optional mount fragments. Empty string when no volume was resolved, so the caller can

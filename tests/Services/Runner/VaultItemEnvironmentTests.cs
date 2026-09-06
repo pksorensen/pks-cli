@@ -178,7 +178,7 @@ public class VaultItemEnvironmentTests
     public void EnrolmentScript_SkipsItselfWhenTheIdentityIsAlreadyThere()
     {
         var script = AgenticsRunnerRunCommand.BuildVaultEnrolmentScript(
-            Access("itm_1"), Enrolment(), "/vault/identity.json", null, null);
+            Access("itm_1"), Enrolment(), "/vault/identity.json", "/vault/pins.json", null, null);
 
         script.Should().Contain("if [ ! -f \"$IDENTITY\" ]; then");
         script.Should().Contain("vault-identity-present");
@@ -195,7 +195,7 @@ public class VaultItemEnvironmentTests
     public void EnrolmentScript_EnrolsUnattended()
     {
         var script = AgenticsRunnerRunCommand.BuildVaultEnrolmentScript(
-            Access("itm_1"), Enrolment(), "/vault/identity.json", null, null);
+            Access("itm_1"), Enrolment(), "/vault/identity.json", "/vault/pins.json", null, null);
 
         script.Should().Contain("--protection none");
         script.Should().Contain("--agent 'agt_1'");
@@ -212,18 +212,19 @@ public class VaultItemEnvironmentTests
     public void EnrolmentScript_StoresAServiceAccountOnlyWhenItHasBothHalves()
     {
         var without = AgenticsRunnerRunCommand.BuildVaultEnrolmentScript(
-            Access("itm_1"), Enrolment(), "/vault/identity.json", "vault-agent", null);
+            Access("itm_1"), Enrolment(), "/vault/identity.json", "/vault/pins.json", "vault-agent", null);
         without.Should().NotContain("vault agent credentials");
 
         var with = AgenticsRunnerRunCommand.BuildVaultEnrolmentScript(
-            Access("itm_1"), Enrolment(), "/vault/identity.json", "vault-agent", "s3cret");
+            Access("itm_1"), Enrolment(), "/vault/identity.json", "/vault/pins.json", "vault-agent", "s3cret");
         with.Should().Contain("vault agent credentials");
         with.Should().Contain("--client-secret 's3cret'");
     }
 
     /// <summary>
-    /// The station's user can read the file while it exists, so it does not outlive the exec — and
-    /// the caller's own cleanup does not run when the exec times out.
+    /// Best-effort only, and the caller deletes it again as root: the copy lands root-owned and
+    /// <c>/tmp</c> is sticky, so the station's own user cannot unlink it — and <c>rm -f</c> exits 0
+    /// while failing to.
     /// </summary>
     [Fact]
     [Trait("Category", "Unit")]
@@ -231,8 +232,49 @@ public class VaultItemEnvironmentTests
     public void EnrolmentScript_DeletesItself()
     {
         AgenticsRunnerRunCommand.BuildVaultEnrolmentScript(
-                Access("itm_1"), Enrolment(), "/vault/identity.json", null, null)
+                Access("itm_1"), Enrolment(), "/vault/identity.json", "/vault/pins.json", null, null)
             .Should().Contain("rm -f -- \"$0\"");
+    }
+
+    /// <summary>
+    /// The pin has to live on the identity volume, not under the container's home.
+    ///
+    /// Enrolment pins the owner's signing key; the release that verifies a grant against it runs
+    /// in a *different* container (ADR 0003 — one container per task). With the CLI's default
+    /// path, that second container starts with an empty pin file and re-learns whatever the server
+    /// offers, which is exactly the substitution the pin exists to catch.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public void EnrolmentScript_PinsOnTheVolumeRatherThanInTheContainersHome()
+    {
+        AgenticsRunnerRunCommand.BuildVaultEnrolmentScript(
+                Access("itm_1"), Enrolment(), "/vault/identity.json", "/vault/pins.json", null, null)
+            .Should().Contain("export VAULT_PINS_FILE='/vault/pins.json'");
+    }
+
+    /// <summary>
+    /// The credentials step runs whether or not the identity was just created, so a station that
+    /// already had one produces both markers. The reader has to check the failure first — which is
+    /// only testable here to the extent that the marker exists at all; the ordering lives at the
+    /// call site.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public void EnrolmentScript_StoresCredentialsEvenWhenTheIdentityAlreadyExisted()
+    {
+        var script = AgenticsRunnerRunCommand.BuildVaultEnrolmentScript(
+            Access("itm_1"), Enrolment(), "/vault/identity.json", "/vault/pins.json",
+            "vault-agent", "s3cret");
+
+        // Outside the `if [ ! -f "$IDENTITY" ]` block: the fi comes first.
+        var fi = script.IndexOf("\nfi\n", StringComparison.Ordinal);
+        var creds = script.IndexOf("vault agent credentials", StringComparison.Ordinal);
+        fi.Should().BeGreaterThan(0);
+        creds.Should().BeGreaterThan(fi);
+        script.Should().Contain("vault-credentials-failed");
     }
 
     [Fact]
@@ -244,7 +286,7 @@ public class VaultItemEnvironmentTests
         enrolment.HostLabel = "it's a station";
 
         AgenticsRunnerRunCommand.BuildVaultEnrolmentScript(
-                Access("itm_1"), enrolment, "/vault/identity.json", null, null)
+                Access("itm_1"), enrolment, "/vault/identity.json", "/vault/pins.json", null, null)
             .Should().Contain("--host-label 'it'\\''s a station'");
     }
 }
