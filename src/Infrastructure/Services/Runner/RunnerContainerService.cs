@@ -830,38 +830,31 @@ public class RunnerContainerService : IRunnerContainerService
     {
         // The askpass script fetches credentials from the Unix socket and extracts the password.
         // We base64-encode it to avoid all shell escaping issues with nested quotes and special chars.
-        // The socket is at /var/run/pks-creds/creds.sock (directory mount, survives runner restarts).
-        const string askpassScript =
-            "#!/bin/sh\n" +
-            "curl -s --unix-socket /var/run/pks-creds/creds.sock \"http://localhost/git-credential?host=github.com\" " +
-            "| sed -n 's/.*\"password\":\"\\([^\"]*\\)\".*/\\1/p'\n";
-
-        var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(askpassScript));
-        var writeAskpassArgs = $"exec {containerId} sh -c \"echo {base64} | base64 -d > /tmp/git-askpass.sh && chmod +x /tmp/git-askpass.sh\"";
+        // Both scripts come from GitCredentialHelperScript so this path and the agentics spawner
+        // stay in step -- they had already drifted into two subtly different copies.
+        var base64 = GitCredentialHelperScript.Encode(GitCredentialHelperScript.Askpass);
+        var writeAskpassArgs = $"exec {containerId} sh -c \"echo {base64} | base64 -d > {GitCredentialHelperScript.AskpassPath} && chmod +x {GitCredentialHelperScript.AskpassPath}\"";
         var askpassResult = await _processRunner.RunAsync("docker", writeAskpassArgs, null, cancellationToken);
 
         if (askpassResult.ExitCode == 0)
         {
-            onProgress?.Invoke("GIT_ASKPASS script written to /tmp/git-askpass.sh");
+            onProgress?.Invoke($"GIT_ASKPASS script written to {GitCredentialHelperScript.AskpassPath}");
             _logger.LogInformation("Wrote git-askpass.sh to container {ContainerId}", containerId);
 
             // Set core.askpass in git config
-            var gitConfigArgs = $"exec {containerId} git config --global core.askpass /tmp/git-askpass.sh";
+            var gitConfigArgs = $"exec {containerId} git config --global core.askpass {GitCredentialHelperScript.AskpassPath}";
             await _processRunner.RunAsync("docker", gitConfigArgs, null, cancellationToken);
 
             // Write a proper git credential helper that speaks the git-credential protocol
-            const string credHelperScript =
-                "#!/bin/sh\n" +
-                "# Read stdin (git sends host/protocol info)\n" +
-                "while read line; do [ -z \"$line\" ] && break; done\n" +
-                "TOKEN=$(curl -s --unix-socket /var/run/pks-creds/creds.sock " +
-                "\"http://localhost/git-credential?host=github.com\" " +
-                "| sed -n 's/.*\"password\":\"\\([^\"]*\\)\".*/\\1/p')\n" +
-                "echo \"username=x-access-token\"\n" +
-                "echo \"password=$TOKEN\"\n";
-            var credBase64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(credHelperScript));
-            var writeCredHelper = $"exec {containerId} sh -c \"echo {credBase64} | base64 -d > /tmp/git-credential-pks.sh && chmod +x /tmp/git-credential-pks.sh\"";
+            var credBase64 = GitCredentialHelperScript.Encode(GitCredentialHelperScript.CredentialHelper);
+            var writeCredHelper = $"exec {containerId} sh -c \"echo {credBase64} | base64 -d > {GitCredentialHelperScript.HelperPath} && chmod +x {GitCredentialHelperScript.HelperPath}\"";
             await _processRunner.RunAsync("docker", writeCredHelper, null, cancellationToken);
+
+            // Make git send the repository path along with the host. Without it every repo on
+            // github.com looks the same to the credential server, and a GitHub App token -- which
+            // is scoped to one repository -- cannot be narrowed to the right one.
+            await _processRunner.RunAsync(
+                "docker", $"exec {containerId} git {GitCredentialHelperScript.UseHttpPathConfigArgs}", null, cancellationToken);
 
             // Unset any system-level credential helpers (e.g. git-credential-manager from /etc/gitconfig)
             // that would run before ours and hang waiting for interactive input
@@ -875,11 +868,11 @@ public class RunnerContainerService : IRunnerContainerService
 
             // Set the credential helper globally — this is the most reliable method as it
             // speaks the proper git-credential protocol and won't be overridden by the runner
-            var credHelperConfig = $"exec {containerId} git config --global credential.helper /tmp/git-credential-pks.sh";
+            var credHelperConfig = $"exec {containerId} git config --global credential.helper {GitCredentialHelperScript.HelperPath}";
             var credResult = await _processRunner.RunAsync("docker", credHelperConfig, null, cancellationToken);
             if (credResult.ExitCode == 0)
             {
-                onProgress?.Invoke("git credential helper configured: /tmp/git-credential-pks.sh");
+                onProgress?.Invoke($"git credential helper configured: {GitCredentialHelperScript.HelperPath}");
                 _logger.LogInformation("Set git credential.helper in container {ContainerId}", containerId);
             }
         }

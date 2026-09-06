@@ -2985,19 +2985,39 @@ DEVCONTAINER_EOF";
                 : Path.GetDirectoryName(normalizedSocketPath) ?? normalizedSocketPath;
             credentialMountArg = $" --mount type=bind,source={socketDir},target=/var/run/pks-creds";
 
-            // Write the askpass script inside the bootstrap container
-            const string askpassScript = "#!/bin/sh\ncurl -s --unix-socket /var/run/pks-creds/creds.sock \"http://localhost/git-credential?host=github.com\" | sed -n 's/.*\"password\":\"\\([^\"]*\\)\".*/\\1/p'\n";
-            var writeAskpassCmd = $"printf '%s' '{askpassScript.Replace("'", "'\\''")}' > /tmp/git-askpass.sh && chmod +x /tmp/git-askpass.sh";
+            // Write the askpass script inside the bootstrap container. Base64 rather than a quoted
+            // printf: the scripts contain both single quotes and backslashes, and the shared
+            // definitions in GitCredentialHelperScript should not have to be written around this
+            // call site's escaping.
+            var askpassB64 = GitCredentialHelperScript.Encode(GitCredentialHelperScript.Askpass);
+            var writeAskpassCmd =
+                $"echo {askpassB64} | base64 -d > {GitCredentialHelperScript.AskpassPath} && chmod +x {GitCredentialHelperScript.AskpassPath}";
             var askpassResult = await ExecuteInBootstrapAsync(bootstrapContainerId, writeAskpassCmd, workingDir: null, timeoutSeconds: 10);
             if (!askpassResult.Success)
             {
                 _logger.LogWarning("Failed to write askpass script: {Error}", askpassResult.Error);
             }
 
+            // A real credential helper alongside it. Askpass is handed only a prompt string, so it
+            // can never say which repository it wants; the helper reads git's stdin and forwards
+            // the path. That is what lets the credential server mint a token scoped to one repo
+            // rather than one that works everywhere.
+            var helperB64 = GitCredentialHelperScript.Encode(GitCredentialHelperScript.CredentialHelper);
+            var writeHelperCmd =
+                $"echo {helperB64} | base64 -d > {GitCredentialHelperScript.HelperPath} && chmod +x {GitCredentialHelperScript.HelperPath} && " +
+                $"git config --global credential.helper {GitCredentialHelperScript.HelperPath} && " +
+                $"git {GitCredentialHelperScript.UseHttpPathConfigArgs}";
+            var helperResult = await ExecuteInBootstrapAsync(bootstrapContainerId, writeHelperCmd, workingDir: null, timeoutSeconds: 10);
+            if (!helperResult.Success)
+            {
+                // Not fatal: askpass above still serves credentials, just without repository scope.
+                _logger.LogWarning("Failed to write git credential helper: {Error}", helperResult.Error);
+            }
+
             // Patch override config to include GIT_ASKPASS in remoteEnv
             if (overrideConfigPath != null)
             {
-                await InjectRemoteEnvIntoOverrideConfigAsync(bootstrapContainerId, overrideConfigPath, "GIT_ASKPASS", "/tmp/git-askpass.sh");
+                await InjectRemoteEnvIntoOverrideConfigAsync(bootstrapContainerId, overrideConfigPath, "GIT_ASKPASS", GitCredentialHelperScript.AskpassPath);
             }
         }
 

@@ -8,8 +8,24 @@ using PKS.Infrastructure.Services.Expo;
 namespace PKS.Infrastructure.Services.Runner;
 
 /// <summary>
-/// Lightweight HTTP server running on a Unix socket that serves the locally stored
-/// device-code OAuth token as a git credential.
+/// Lightweight HTTP server running on a Unix socket that serves git credentials to job
+/// containers.
+///
+/// It serves one of two things, and which one is a deliberate configuration choice rather
+/// than an accident of what happens to be available:
+///
+///   * <b>GitHub App mode</b> — when an <see cref="IGitHubAppTokenService"/> is supplied, every
+///     request is answered with an installation token scoped to the single repository being
+///     cloned, valid for an hour, able to write only contents and pull requests. The App's
+///     private key never leaves the runner process.
+///   * <b>Operator mode</b> — otherwise, the locally stored device-code OAuth token. This is
+///     the operator's own identity with the operator's full scope, so everything the job does
+///     is attributed to a person and reaches every repo that person can reach.
+///
+/// App mode never silently degrades to operator mode. If the App is configured and a token
+/// cannot be minted, the request fails: falling back would attribute the App's work to a human
+/// and hand a job far more access than it asked for, which is the outcome App mode exists to
+/// prevent.
 /// </summary>
 public class GitCredentialServer : IAsyncDisposable
 {
@@ -22,7 +38,19 @@ public class GitCredentialServer : IAsyncDisposable
     private readonly IRegistryConfigurationService? _registryConfig;
     private readonly ICertStore? _certStore;
     private readonly IExpoCredentialService? _expoCredentials;
+    private readonly IGitHubAppTokenService? _appTokens;
     private WebApplication? _app;
+
+    /// <summary>
+    /// The repository App-mode tokens are scoped to when a request does not name one itself.
+    ///
+    /// It exists because the two ways a container asks for a credential carry different amounts
+    /// of information. A git credential helper is handed the host and path on stdin and can say
+    /// which repository it wants; GIT_ASKPASS is handed a prompt string and cannot. The runner
+    /// sets this when it resolves a job's git URL, so the askpass path still gets a narrowed
+    /// token instead of a broad one.
+    /// </summary>
+    private volatile Tuple<string, string>? _defaultRepository;
 
     public GitCredentialServer(
         IGitHubAuthenticationService githubAuth,
@@ -32,7 +60,8 @@ public class GitCredentialServer : IAsyncDisposable
         ICoolifyTokenStore? tokenStore = null,
         IRegistryConfigurationService? registryConfig = null,
         ICertStore? certStore = null,
-        IExpoCredentialService? expoCredentials = null)
+        IExpoCredentialService? expoCredentials = null,
+        IGitHubAppTokenService? appTokens = null)
     {
         // Use a stable directory so we can bind-mount the directory (not the file).
         // Directory mounts survive socket file recreation across runner restarts.
@@ -45,6 +74,41 @@ public class GitCredentialServer : IAsyncDisposable
         _registryConfig = registryConfig;
         _certStore = certStore;
         _expoCredentials = expoCredentials;
+        _appTokens = appTokens;
+    }
+
+    /// <summary>True when this server issues GitHub App tokens rather than the operator's own.</summary>
+    public bool ActsAsGitHubApp => _appTokens != null;
+
+    /// <summary>
+    /// Names the repository that App-mode credentials default to. Called by the runner once a
+    /// job's git URL is known. Ignored entirely in operator mode.
+    /// </summary>
+    public void SetDefaultRepository(string owner, string repo)
+    {
+        _defaultRepository = string.IsNullOrWhiteSpace(owner) || string.IsNullOrWhiteSpace(repo)
+            ? null
+            : Tuple.Create(owner, repo);
+    }
+
+    /// <summary>
+    /// Works out which repository a credential request is for.
+    ///
+    /// Git hands a credential helper a <c>path</c> like <c>pksorensen/commuteconnects.git</c>
+    /// when <c>credential.useHttpPath</c> is set; the helper forwards it as <c>repo</c>. Anything
+    /// deeper than owner/name (or shallower) is not a repository path and is refused rather than
+    /// guessed at, because a wrong guess here mints a token for the wrong repository.
+    /// </summary>
+    internal static Tuple<string, string>? ParseRepository(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+
+        var trimmed = value.Trim().Trim('/');
+        if (trimmed.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+            trimmed = trimmed[..^4];
+
+        var parts = trimmed.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length == 2 ? Tuple.Create(parts[0], parts[1]) : null;
     }
 
     /// <summary>
@@ -54,6 +118,50 @@ public class GitCredentialServer : IAsyncDisposable
     public string SocketDirectory => _socketDir;
 
     public string SocketPath => _socketPath;
+
+    /// <summary>
+    /// Answers a credential request with a GitHub App installation token scoped to one repository.
+    ///
+    /// Every failure path here returns an error rather than the operator's token. That is the
+    /// whole point of the mode, and it is why "which repository?" is answered from the request or
+    /// from a repository the runner explicitly named, never from a default that happens to be
+    /// lying around.
+    /// </summary>
+    private async Task<IResult> ServeAppCredentialAsync(HttpRequest request, string host)
+    {
+        var repository = ParseRepository(request.Query["repo"].FirstOrDefault()) ?? _defaultRepository;
+        if (repository == null)
+        {
+            _onLog?.Invoke($"Credential unavailable (503) for host {host}: App mode is on but the request named no repository");
+            return Results.Problem(
+                "This runner acts as a GitHub App, which issues tokens scoped to a single repository, " +
+                "but the request did not say which one. The credential helper sends it as 'repo=owner/name' " +
+                "(git supplies the path when credential.useHttpPath is set).",
+                statusCode: (int)HttpStatusCode.ServiceUnavailable);
+        }
+
+        var (owner, repo) = (repository.Item1, repository.Item2);
+        try
+        {
+            var token = await _appTokens!.GetInstallationTokenAsync(owner, repo);
+            _onLog?.Invoke($"Credential served for {owner}/{repo} as GitHub App (expires {token.ExpiresAt:u})");
+            // Revealed for the same reason as the operator token below: this response *is* the handoff.
+            return Results.Json(new { username = "x-access-token", password = token.Token });
+        }
+        catch (GitHubAppNotInstalledException ex)
+        {
+            // Actionable and not our failure to fix: someone has to install the App on this repo.
+            _onLog?.Invoke($"Credential unavailable for {owner}/{repo}: the App is not installed. {ex.InstallUrl}");
+            return Results.Problem(ex.Message, statusCode: (int)HttpStatusCode.ServiceUnavailable);
+        }
+        catch (Exception ex)
+        {
+            _onLog?.Invoke($"Credential unavailable for {owner}/{repo}: {ex.Message}");
+            return Results.Problem(
+                $"Could not mint a GitHub App token for {owner}/{repo}: {ex.Message}",
+                statusCode: (int)HttpStatusCode.ServiceUnavailable);
+        }
+    }
 
     private JobTokenClaims? ValidateRequest(HttpRequest request)
     {
@@ -99,6 +207,9 @@ public class GitCredentialServer : IAsyncDisposable
         {
             var host = request.Query["host"].FirstOrDefault() ?? "unknown";
             _onLog?.Invoke($"Credential request received for host: {host}");
+
+            if (_appTokens != null)
+                return await ServeAppCredentialAsync(request, host);
 
             var storedToken = await _githubAuth.GetStoredTokenAsync();
             if (storedToken is { IsValid: true, AccessToken.HasValue: true })

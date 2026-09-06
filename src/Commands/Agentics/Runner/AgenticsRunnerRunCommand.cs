@@ -51,6 +51,13 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
     private readonly PKS.Infrastructure.Services.Security.ITotpSeedStore? _totpStore;
     private readonly PKS.Infrastructure.IConfigurationService? _configurationService;
 
+    /// <summary>
+    /// Mints GitHub App installation tokens when this runner acts as an App. Null in the ordinary
+    /// case, where jobs use the operator's own device-code token. Built during startup from the
+    /// environment; see <see cref="GitHubAppConfigResolver"/>.
+    /// </summary>
+    private GitHubAppTokenService? _githubAppTokens;
+
     /// <summary>Job ids already logged as "declined -- devcontainer spawning unavailable".
     /// Rate-limits the pre-claim-refusal grey line to once per job id instead of once per
     /// poll cycle -- the same queued job keeps coming back every cycle until Phase 2's
@@ -475,7 +482,21 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
                 // credentialServer.SocketPath, so it's safe to leave unconstructed (null) whenever
                 // spawn mode is unavailable -- git_push/git_distribute/chat_llm resolve credentials
                 // independently and never touch it.
-                credentialServer = new GitCredentialServer(_githubAuth, registration.Id);
+                // GITHUB_APP_ID declares that this runner should act as a GitHub App rather than as
+                // the operator. Resolve() throws when it is set without a usable key, and that is
+                // deliberate: a quiet fallback here would run every job under Poul's own token and
+                // attribute the App's commits to him.
+                var appConfig = GitHubAppConfigResolver.Resolve();
+                if (appConfig != null)
+                {
+                    _githubAppTokens = new GitHubAppTokenService(
+                        appConfig, onLog: message => { if (settings.Verbose) DisplayInfo(message); });
+                    DisplayInfo(
+                        $"Acting as GitHub App [cyan]{appConfig.Slug}[/] (app id {appConfig.AppId}). Jobs receive " +
+                        "hour-long tokens scoped to one repository; the private key stays in this process.");
+                }
+
+                credentialServer = new GitCredentialServer(_githubAuth, registration.Id, appTokens: _githubAppTokens);
                 await credentialServer.StartAsync();
 
                 if (settings.Verbose)
@@ -1525,9 +1546,12 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         // 2. Check for a warm container via Docker labels (survives pks-cli restarts).
         // Per ADR 0003 the fingerprint includes taskId, so each task gets its own dedicated
         // container. taskId may be empty for ad-hoc/legacy dispatches → falls back to project-scoped.
-        var storedToken = await _githubAuth.GetStoredTokenAsync();
-        var spawnOptions = BuildSpawnOptions(job, credentialServer.SocketPath, registration,
-            storedToken?.AccessToken ?? SecretValue.None);
+        // The clone is a second path into GitHub that does not go through the credential server --
+        // GitCloneUrl embeds a token straight into the URL -- so App mode has to be honoured here
+        // too. Without this the initial clone would run as the operator while every later fetch
+        // inside the container ran as the App.
+        var jobGitToken = await ResolveJobGitTokenAsync(job, credentialServer, ct);
+        var spawnOptions = BuildSpawnOptions(job, credentialServer.SocketPath, registration, jobGitToken);
         var taskId = job.AgentDef?.TaskId;
         spawnOptions.AgenticsProxySocketDir = agenticsProxy.SocketDir;
         spawnOptions.OtlpProxySocketDir = otlpProxy.SocketDir;
@@ -6667,6 +6691,52 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         }
         catch { return null; }
     }
+
+    /// <summary>
+    /// The token a job's clone URL is built with, and — in App mode — the repository the credential
+    /// server should scope its answers to for the rest of the job.
+    ///
+    /// Only github.com repositories can be served by an App. A self-hosted project (its repo on the
+    /// agentics server) keeps using the operator's token, because there is no App there to install;
+    /// that is a normal configuration, not a degradation, so it does not warn.
+    /// </summary>
+    private async Task<SecretValue> ResolveJobGitTokenAsync(RunnerJob job, GitCredentialServer credentialServer, CancellationToken ct)
+    {
+        var repository = job.AgentDef?.Repository;
+
+        if (_githubAppTokens != null && IsGitHubRepository(repository))
+        {
+            var parsed = GitCredentialServer.ParseRepository(ExtractOwnerAndName(repository!));
+            if (parsed == null)
+                throw new InvalidOperationException(
+                    $"This runner acts as a GitHub App, but the job's repository ('{repository}') could not be " +
+                    "read as owner/name, so no scoped token can be minted for it.");
+
+            var (owner, name) = (parsed.Item1, parsed.Item2);
+
+            // Also serves the askpass path, which cannot name a repository itself.
+            credentialServer.SetDefaultRepository(owner, name);
+
+            var token = await _githubAppTokens.GetInstallationTokenAsync(owner, name, ct);
+            return SecretValue.From(token.Token);
+        }
+
+        var storedToken = await _githubAuth.GetStoredTokenAsync();
+        return storedToken?.AccessToken ?? SecretValue.None;
+    }
+
+    /// <summary>True for "owner/name" and for any https URL on github.com.</summary>
+    private static bool IsGitHubRepository(string? repository)
+    {
+        if (string.IsNullOrWhiteSpace(repository)) return false;
+        if (!repository.Contains("://")) return true;   // bare owner/name is always GitHub here
+        return Uri.TryCreate(repository, UriKind.Absolute, out var uri)
+            && uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Reduces either "owner/name" or "https://github.com/owner/name.git" to "owner/name".</summary>
+    private static string ExtractOwnerAndName(string repository) =>
+        Uri.TryCreate(repository, UriKind.Absolute, out var uri) ? uri.AbsolutePath : repository;
 
     private static DevcontainerSpawnOptions BuildSpawnOptions(RunnerJob job, string credentialSocketPath, AgenticsRunnerRegistration registration, SecretValue gitToken)
     {
