@@ -19,7 +19,17 @@ namespace PKS.Infrastructure.Services.Runner;
 /// so a typo here produces a working token and a 404 install link.
 /// </param>
 /// <param name="PrivateKeyPem">PEM-encoded RSA private key, PKCS#1 or PKCS#8.</param>
-public sealed record GitHubAppConfig(string AppId, string Slug, string PrivateKeyPem);
+public sealed record GitHubAppConfig(string AppId, string Slug, string PrivateKeyPem)
+{
+    /// <summary>
+    /// Redacts the key. A record's generated <c>ToString</c> prints every property, so without
+    /// this override a single interpolated log line — <c>$"app config: {config}"</c>, the most
+    /// natural thing anyone would write while debugging — puts the App's signing key in a job log
+    /// forever. The doc comment above says the key must never be logged; this is what makes that
+    /// true rather than merely stated.
+    /// </summary>
+    public override string ToString() => $"GitHubAppConfig {{ AppId = {AppId}, Slug = {Slug}, PrivateKeyPem = <redacted> }}";
+}
 
 /// <summary>An installation access token and the moment GitHub says it dies.</summary>
 public sealed record InstallationToken(string Token, DateTimeOffset ExpiresAt);

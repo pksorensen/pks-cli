@@ -218,6 +218,7 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
     /// <summary>Optional so the many existing test call sites keep compiling; when DI supplies it,
     /// the runner sweeps its predecessor's leftovers at startup.</summary>
     private readonly PKS.Infrastructure.Services.Runner.IRunnerReaper? _reaper;
+    private readonly IVaultCliService _vaultCli;
 
     public AgenticsRunnerRunCommand(
         IAgenticsRunnerConfigurationService configService,
@@ -234,7 +235,8 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         PKS.Infrastructure.Services.Security.IActionGuard? guard = null,
         PKS.Infrastructure.Services.Security.ITotpSeedStore? totpStore = null,
         PKS.Infrastructure.IConfigurationService? configurationService = null,
-        PKS.Infrastructure.Services.Runner.IRunnerReaper? reaper = null)
+        PKS.Infrastructure.Services.Runner.IRunnerReaper? reaper = null,
+        IVaultCliService? vaultCli = null)
     {
         _configService = configService ?? throw new ArgumentNullException(nameof(configService));
         _spawnerService = spawnerService ?? throw new ArgumentNullException(nameof(spawnerService));
@@ -251,6 +253,9 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         _totpStore = totpStore;
         _configurationService = configurationService;
         _reaper = reaper;
+        // Constructed rather than injected when absent: the vault CLI is an external binary this
+        // service only shells out to, so there is nothing to register and nothing to configure.
+        _vaultCli = vaultCli ?? new VaultCliService();
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -398,7 +403,35 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
             // git_push/git_distribute would then quietly run under the operator's own token --
             // exactly the silent fallback GitHubAppConfigResolver exists to prevent. Resolve()
             // likewise throws when the variable is set without a usable key, for the same reason.
-            var appConfig = GitHubAppConfigResolver.Resolve();
+            // repo-info answers both questions at once -- "does this project use GitHub" and "as
+            // whom" -- so it is fetched unconditionally, above the spawn-mode branch. Gating it on
+            // spawn mode would mean an --inprocess runner never learns the project declares an App,
+            // and git_push would then quietly run as the operator: the exact silent fallback the
+            // rest of this block exists to prevent.
+            var repoInfo = await ProjectRepoInfoAsync(registration);
+            var requiresGitHub = repoInfo.RequiresGitHub;
+            var projectGitUrl = repoInfo.GitUrl;
+            if (!settings.InProcess && spawnModeAvailable && !requiresGitHub && settings.Verbose)
+            {
+                DisplayInfo("Project does not use GitHub — skipping GitHub auth preflight.");
+            }
+
+            GitHubAppConfig? appConfig;
+            try
+            {
+                appConfig = await new GitHubAppProvisioner(_vaultCli).ResolveAsync(
+                    repoInfo.GitHubApp,
+                    RunnerVaultIdentity.ResolvePath(registration.Owner, registration.Project),
+                    onNotice: notice => DisplayInfo($"vault: {notice.EscapeMarkup()}"));
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or VaultCliException)
+            {
+                // Every message this throws names the missing step and the command that fixes it.
+                // Printing and exiting is the whole contract: App mode does not degrade.
+                DisplayError(ex.Message);
+                return 1;
+            }
+
             if (appConfig != null)
             {
                 if (settings.InProcess || !spawnModeAvailable)
@@ -416,19 +449,6 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
                 DisplayInfo(
                     $"Acting as GitHub App [cyan]{appConfig.Slug}[/] (app id {appConfig.AppId}). Jobs receive " +
                     "hour-long tokens scoped to one repository; the private key stays in this process.");
-            }
-
-            var requiresGitHub = false;
-            string? projectGitUrl = null;
-            if (!settings.InProcess && spawnModeAvailable)
-            {
-                var repoInfo = await ProjectRepoInfoAsync(registration);
-                requiresGitHub = repoInfo.RequiresGitHub;
-                projectGitUrl = repoInfo.GitUrl;
-                if (!requiresGitHub && settings.Verbose)
-                {
-                    DisplayInfo("Project does not use GitHub — skipping GitHub auth preflight.");
-                }
             }
 
             // In App mode the App *is* the credentials provider, so the operator's device-code login
@@ -1274,7 +1294,7 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
     /// GitHub App installation check possible at startup: the job's own repository is not known
     /// until one is claimed, but the project's is known as soon as the runner registers.
     /// </summary>
-    private sealed record ProjectRepoInfo(bool RequiresGitHub, string? GitUrl);
+    private sealed record ProjectRepoInfo(bool RequiresGitHub, string? GitUrl, GitHubAppPointer? GitHubApp);
 
     private async Task<ProjectRepoInfo> ProjectRepoInfoAsync(AgenticsRunnerRegistration registration)
     {
@@ -1289,16 +1309,16 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
             // direction: it costs an unnecessary auth preflight, where the opposite would skip a
             // necessary one and fail later at the clone.
             if (!response.IsSuccessStatusCode)
-                return new ProjectRepoInfo(true, null);
+                return new ProjectRepoInfo(true, null, null);
             var json = await response.Content.ReadAsStringAsync();
             using var doc = JsonDocument.Parse(json);
             var requires = doc.RootElement.TryGetProperty("requiresGitHub", out var v) && v.GetBoolean();
             var gitUrl = doc.RootElement.TryGetProperty("gitUrl", out var g) ? g.GetString() : null;
-            return new ProjectRepoInfo(requires, gitUrl);
+            return new ProjectRepoInfo(requires, gitUrl, GitHubAppPointer.FromRepoInfo(doc.RootElement));
         }
         catch
         {
-            return new ProjectRepoInfo(true, null);
+            return new ProjectRepoInfo(true, null, null);
         }
     }
 
