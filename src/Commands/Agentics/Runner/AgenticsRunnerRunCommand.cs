@@ -1552,6 +1552,21 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         // inside the container ran as the App.
         var jobGitToken = await ResolveJobGitTokenAsync(job, credentialServer, ct);
         var spawnOptions = BuildSpawnOptions(job, credentialServer.SocketPath, registration, jobGitToken);
+
+        // `gh` does not use git's credential helper, so the socket above does nothing for it. Left
+        // alone it authenticates from whatever happens to be in the container, which is why PRs
+        // opened by a station have been showing up authored by the operator rather than by the App.
+        // GH_TOKEN is how `gh` takes an explicit identity, and in App mode the value is the same
+        // hour-long, single-repository token git is using.
+        //
+        // Only in App mode. In operator mode this is deliberately left unset: injecting the
+        // operator's full-scope device token into every job's environment would widen what a job
+        // can reach, which is the opposite of the point.
+        if (credentialServer.ActsAsGitHubApp && jobGitToken.HasValue)
+        {
+            spawnOptions.RemoteEnv ??= new Dictionary<string, string>();
+            spawnOptions.RemoteEnv["GH_TOKEN"] = jobGitToken.Reveal();
+        }
         var taskId = job.AgentDef?.TaskId;
         spawnOptions.AgenticsProxySocketDir = agenticsProxy.SocketDir;
         spawnOptions.OtlpProxySocketDir = otlpProxy.SocketDir;
