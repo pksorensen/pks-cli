@@ -49,6 +49,19 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.4.0](https://github.com/pksorensen/pks-cli/compare/v7.3.0...v7.4.0) (2026-09-06)
+
+
+### Features
+
+* **runner:** give a station one variable per vault grant ([5584359](https://github.com/pksorensen/pks-cli/commit/55843592667f99febad2b299b873d8e8567aa698))
+* **runner:** let a station enrol its own vault identity ([1374954](https://github.com/pksorensen/pks-cli/commit/1374954e44bafb7adf6383638ddb0d0ef88071c8))
+
+
+### Bug Fixes
+
+* **runner:** the enrolment script's secrets outlived it, and the owner pin did not ([e7bcc5e](https://github.com/pksorensen/pks-cli/commit/e7bcc5e7e9633f0bb6e8fa53771323339e895be0))
+
 ## [7.3.0](https://github.com/pksorensen/pks-cli/compare/v7.2.0...v7.3.0) (2026-09-04)
 
 
