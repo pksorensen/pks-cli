@@ -52,4 +52,18 @@ public static class GitCloneUrl
         => url.HasValue
             ? Regex.Replace(url.Reveal()!, @"(https?://)([^@]+)@", "$1***@")
             : string.Empty;
+
+    /// <summary>
+    /// The same URL with the credential <em>removed</em> rather than masked, so the result is an
+    /// ordinary string safe to write into a checkout's <c>.git/config</c>.
+    ///
+    /// This is what <c>origin</c> is reset to once a clone finishes. Leaving the authenticated URL in
+    /// place is wrong twice: it stores a live credential on disk inside the job's volume, and it pins
+    /// the checkout to that one token, because git does not consult a credential helper while the
+    /// remote URL already supplies a password. The second half is what actually bites — a GitHub App
+    /// installation token is valid for one hour, so a job still running after that pushes with a dead
+    /// token and gets a 403 no retry can fix.
+    /// </summary>
+    public static string WithoutCredentials(string url)
+        => string.IsNullOrEmpty(url) ? string.Empty : Regex.Replace(url, @"^(https?://)[^/@]*@", "$1");
 }

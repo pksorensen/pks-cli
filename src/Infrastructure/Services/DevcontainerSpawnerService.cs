@@ -3404,9 +3404,20 @@ DEVCONTAINER_EOF";
     /// </summary>
     private const string CloneScript = """
         export GIT_TERMINAL_PROMPT=0
-        url=$1; branch=$2; dest=$3
+        url=$1; branch=$2; dest=$3; clean=${4:-}
 
-        git clone --branch "$branch" "$url" "$dest" && exec git -C "$dest" rev-parse HEAD
+        # $url may carry credentials (x-access-token:<token>@...). git writes whatever URL it
+        # was handed straight into .git/config, which is wrong twice over: it leaves a live
+        # credential on disk inside the volume, and it PINS the checkout to that one token --
+        # git does not consult a credential helper while the remote URL already supplies a
+        # password. A GitHub App token lasts one hour, so without this reset the first push
+        # after the hour mark fails with a 403 on a job that was otherwise healthy.
+        scrub() { [ -n "$clean" ] && git -C "$dest" remote set-url origin "$clean"; return 0; }
+
+        if git clone --branch "$branch" "$url" "$dest"; then
+          scrub
+          exec git -C "$dest" rev-parse HEAD
+        fi
 
         # The clone was refused. A failed clone removes $dest itself, so there is
         # nothing to clean up before trying again.
@@ -3414,6 +3425,7 @@ DEVCONTAINER_EOF";
         [ -z "$refs" ] || exit 128
 
         git clone "$url" "$dest" || exit 128
+        scrub
         # Do not trust the server to advertise symref=HEAD: on an empty repository —
         # name the branch here so the first push creates the one the job asked for.
         git -C "$dest" symbolic-ref HEAD "refs/heads/$branch" || exit 128
@@ -3428,6 +3440,14 @@ DEVCONTAINER_EOF";
         Action<string>? onProgress,
         string? credentialSocketDir = null)
     {
+        // The URL `origin` is reset to once the clone succeeds, so the credential never lands in
+        // the volume's .git/config and later fetches go back through the credential helper. It is
+        // stripped rather than merely captured here because the caller may ALREADY have embedded a
+        // token (RunnerContainerService builds its GitUrl with GitCloneUrl.ForRepository), so a
+        // plain copy of the incoming value would carry the credential straight back in. See
+        // CloneScript's scrub().
+        var cleanUrl = PKS.Infrastructure.Services.Runner.GitCloneUrl.WithoutCredentials(gitUrl);
+
         // If a credential socket is available, fetch the token and embed it in the URL.
         // This handles private repos without requiring the caller to supply the token.
         if (!string.IsNullOrEmpty(credentialSocketDir))
@@ -3475,13 +3495,14 @@ DEVCONTAINER_EOF";
             {
                 "-c",
                 CloneScript,
-                // $0 is a label only; the three that follow are $1..$3, passed as
+                // $0 is a label only; the four that follow are $1..$4, passed as
                 // arguments rather than interpolated so a token or a branch name
                 // with shell metacharacters cannot escape into the command line.
                 "pks-clone",
                 gitUrl,
                 branch,
-                $"/workspace/{projectName}"
+                $"/workspace/{projectName}",
+                cleanUrl
             },
             HostConfig = new HostConfig
             {

@@ -392,16 +392,56 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
             // Self-hosted projects (repo on the agentics server) never need GitHub credentials,
             // so prompting would be both unnecessary and surprising. The runner queries the
             // server to find out.
+            // GITHUB_APP_ID declares that this runner acts as a GitHub App rather than as the
+            // operator. Resolved HERE, above the spawn-mode branch, and not inside it: a runner
+            // started with --inprocess or on a Docker-less box would skip the call entirely, and
+            // git_push/git_distribute would then quietly run under the operator's own token --
+            // exactly the silent fallback GitHubAppConfigResolver exists to prevent. Resolve()
+            // likewise throws when the variable is set without a usable key, for the same reason.
+            var appConfig = GitHubAppConfigResolver.Resolve();
+            if (appConfig != null)
+            {
+                if (settings.InProcess || !spawnModeAvailable)
+                {
+                    DisplayError(
+                        $"{GitHubAppConfigResolver.AppIdVariable} is set, but this runner has no devcontainer " +
+                        "spawn mode (--inprocess, or Docker unavailable). App tokens are served through the " +
+                        "per-job credential server, which only spawn mode starts. Refusing to start rather than " +
+                        "falling back to the operator's own GitHub token.");
+                    return 1;
+                }
+
+                _githubAppTokens = new GitHubAppTokenService(
+                    appConfig, onLog: message => { if (settings.Verbose) DisplayInfo(message); });
+                DisplayInfo(
+                    $"Acting as GitHub App [cyan]{appConfig.Slug}[/] (app id {appConfig.AppId}). Jobs receive " +
+                    "hour-long tokens scoped to one repository; the private key stays in this process.");
+            }
+
             var requiresGitHub = false;
+            string? projectGitUrl = null;
             if (!settings.InProcess && spawnModeAvailable)
             {
-                requiresGitHub = await ProjectRequiresGitHubAsync(registration);
+                var repoInfo = await ProjectRepoInfoAsync(registration);
+                requiresGitHub = repoInfo.RequiresGitHub;
+                projectGitUrl = repoInfo.GitUrl;
                 if (!requiresGitHub && settings.Verbose)
                 {
                     DisplayInfo("Project does not use GitHub — skipping GitHub auth preflight.");
                 }
             }
-            if (!settings.InProcess && spawnModeAvailable && requiresGitHub)
+
+            // In App mode the App *is* the credentials provider, so the operator's device-code login
+            // below would authenticate the wrong identity and is skipped. What must happen first is
+            // the installation, and only the repository's owner can do that in a browser -- an App
+            // cannot install itself. Hence detect-and-block: print the install URL and refuse to
+            // start, rather than starting and failing the first job that tries to push.
+            if (_githubAppTokens != null && requiresGitHub)
+            {
+                if (!await VerifyAppInstallationAsync(projectGitUrl))
+                    return 1;
+            }
+            else if (!settings.InProcess && spawnModeAvailable && requiresGitHub)
             {
                 var isAuthenticated = await _githubAuth.IsAuthenticatedAsync();
 
@@ -482,20 +522,6 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
                 // credentialServer.SocketPath, so it's safe to leave unconstructed (null) whenever
                 // spawn mode is unavailable -- git_push/git_distribute/chat_llm resolve credentials
                 // independently and never touch it.
-                // GITHUB_APP_ID declares that this runner should act as a GitHub App rather than as
-                // the operator. Resolve() throws when it is set without a usable key, and that is
-                // deliberate: a quiet fallback here would run every job under Poul's own token and
-                // attribute the App's commits to him.
-                var appConfig = GitHubAppConfigResolver.Resolve();
-                if (appConfig != null)
-                {
-                    _githubAppTokens = new GitHubAppTokenService(
-                        appConfig, onLog: message => { if (settings.Verbose) DisplayInfo(message); });
-                    DisplayInfo(
-                        $"Acting as GitHub App [cyan]{appConfig.Slug}[/] (app id {appConfig.AppId}). Jobs receive " +
-                        "hour-long tokens scoped to one repository; the private key stays in this process.");
-                }
-
                 credentialServer = new GitCredentialServer(_githubAuth, registration.Id, appTokens: _githubAppTokens);
                 await credentialServer.StartAsync();
 
@@ -1243,7 +1269,14 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
     /// access. Falls back to <c>true</c> on any error so we keep the historical behavior
     /// of prompting (better to ask once than fail a job mid-clone).
     /// </summary>
-    private async Task<bool> ProjectRequiresGitHubAsync(AgenticsRunnerRegistration registration)
+    /// <summary>
+    /// What the platform knows about the project's repository. <c>GitUrl</c> is what makes the
+    /// GitHub App installation check possible at startup: the job's own repository is not known
+    /// until one is claimed, but the project's is known as soon as the runner registers.
+    /// </summary>
+    private sealed record ProjectRepoInfo(bool RequiresGitHub, string? GitUrl);
+
+    private async Task<ProjectRepoInfo> ProjectRepoInfoAsync(AgenticsRunnerRegistration registration)
     {
         try
         {
@@ -1252,16 +1285,65 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
                 new AuthenticationHeaderValue("Bearer", registration.Token);
             var url = $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}/repo-info";
             using var response = await client.GetAsync(url);
+            // Unreachable or unparseable answers assume GitHub is required. That is the safe
+            // direction: it costs an unnecessary auth preflight, where the opposite would skip a
+            // necessary one and fail later at the clone.
             if (!response.IsSuccessStatusCode)
-                return true;
+                return new ProjectRepoInfo(true, null);
             var json = await response.Content.ReadAsStringAsync();
             using var doc = JsonDocument.Parse(json);
-            return doc.RootElement.TryGetProperty("requiresGitHub", out var v) && v.GetBoolean();
+            var requires = doc.RootElement.TryGetProperty("requiresGitHub", out var v) && v.GetBoolean();
+            var gitUrl = doc.RootElement.TryGetProperty("gitUrl", out var g) ? g.GetString() : null;
+            return new ProjectRepoInfo(requires, gitUrl);
         }
         catch
         {
+            return new ProjectRepoInfo(true, null);
+        }
+    }
+
+    /// <summary>
+    /// Refuses to start when the GitHub App is not yet installed on the project's repository,
+    /// printing the install URL instead. Returns true when the runner may proceed.
+    /// </summary>
+    private async Task<bool> VerifyAppInstallationAsync(string? gitUrl)
+    {
+        var parsed = GitCredentialServer.ParseRepository(ExtractOwnerAndName(gitUrl ?? string.Empty));
+        if (parsed == null)
+        {
+            // "Could not tell" is not "not installed", and blocking on it would strand a runner
+            // whose project simply has no gitUrl recorded. Each job re-derives the repository from
+            // its own AgentDef and verifies again there, so this degrades to a later check.
+            _console.MarkupLine(
+                $"[yellow]No owner/repo could be read from the project's git URL, so the GitHub App " +
+                $"installation was not verified at startup. Jobs will verify it when they claim.[/]");
             return true;
         }
+
+        var (owner, name) = (parsed.Item1, parsed.Item2);
+        try
+        {
+            var installationId = await _githubAppTokens!.FindInstallationIdAsync(owner, name);
+            if (installationId != null)
+            {
+                DisplayInfo($"GitHub App is installed on [cyan]{owner}/{name}[/] (installation {installationId}).");
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            // A network or key problem is not a missing installation, and telling the operator to
+            // go install an App that is already installed would send them down the wrong path.
+            DisplayError($"Could not check the GitHub App installation for {owner}/{name}: {ex.Message}");
+            return false;
+        }
+
+        _console.WriteLine();
+        DisplayError($"The GitHub App is not installed on {owner}/{name}.");
+        _console.MarkupLine("An App cannot install itself — open this, grant it that repository, then start the runner again:");
+        _console.MarkupLine($"  [link]{_githubAppTokens!.InstallUrl}[/]");
+        _console.WriteLine();
+        return false;
     }
 
     private async Task<RunnerJob?> PollForJobAsync(AgenticsRunnerRegistration registration, IReadOnlyList<string> capabilities, CancellationToken ct)
