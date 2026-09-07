@@ -86,20 +86,33 @@ public class GitCredentialServer : IAsyncDisposable
     /// Whether a credential request that is not covered by a job token is refused rather than
     /// served-and-logged.
     ///
-    /// It is off by default and read from the environment on purpose. We do not yet know how
-    /// spread the legitimate use is — a station that clones a repo and then fetches a submodule
-    /// asks for two repositories under one job — so the honest order is to log the mismatches
-    /// first and refuse them once the log says which ones are real. An environment variable can
-    /// be turned on, and back off, on the box without cutting a release.
+    /// **On by default.** A door that logs who walked through is not a door. The observation
+    /// phase existed to find out which legitimate shapes ask for a repository they were not
+    /// scoped to — a station cloning a repo and then fetching a submodule is the obvious one —
+    /// and the two structural sources of a false refusal are now closed at the source rather
+    /// than tolerated at the door: the current job's token is exported into every job, warm
+    /// container or cold, and an ALP token outlives the job that carries it.
+    ///
+    /// Setting <c>PKS_CREDENTIAL_ENFORCE_ENTITLEMENT</c> to 0/false/no turns refusal back off,
+    /// which is the escape hatch for a shape nobody enumerated: it un-breaks a runner with an
+    /// environment variable instead of a release. It is scaffolding and is meant to be deleted
+    /// once a release has gone by without anyone reaching for it.
     /// </summary>
     public bool EnforceEntitlement { get; set; } =
-        IsTruthy(System.Environment.GetEnvironmentVariable(EnforceEntitlementVariable));
+        EnforcementFrom(System.Environment.GetEnvironmentVariable(EnforceEntitlementVariable));
 
-    private static bool IsTruthy(string? value) =>
+    /// <summary>
+    /// Unset means enforce. Only an explicit 0/false/no/off opts out — a typo'd value enforces,
+    /// which is the safe direction for a variable whose whole job is to weaken the door.
+    /// </summary>
+    internal static bool EnforcementFrom(string? value) => !IsFalsy(value);
+
+    private static bool IsFalsy(string? value) =>
         value is not null &&
-        (value == "1" ||
-         value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
-         value.Equals("yes", StringComparison.OrdinalIgnoreCase));
+        (value == "0" ||
+         value.Equals("false", StringComparison.OrdinalIgnoreCase) ||
+         value.Equals("no", StringComparison.OrdinalIgnoreCase) ||
+         value.Equals("off", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Names the repository that App-mode credentials default to. Called by the runner once a
@@ -178,9 +191,9 @@ public class GitCredentialServer : IAsyncDisposable
         var (owner, repo) = (repository.Item1, repository.Item2);
 
         var entitled = claims != null && claims.IsEntitledTo(owner, repo);
-        // Deliberately one line and deliberately loud: this is the entire yield of the
-        // observation phase, and someone has to read weeks of it before enforcement is turned
-        // on. It never carries the token itself, only what the token said.
+        // Deliberately one line and deliberately loud. It is what makes a refusal diagnosable
+        // after the fact — and, when enforcement is off, what says which shapes would have been
+        // refused. It never carries the token itself, only what the token said.
         _onLog?.Invoke(
             $"Credential entitlement: auth={auth.ToString().ToLowerInvariant()} " +
             $"job={(claims == null ? "(none)" : claims.JobId)} requested={owner}/{repo} " +
@@ -188,7 +201,9 @@ public class GitCredentialServer : IAsyncDisposable
             $"match={(claims == null ? "n/a" : entitled.ToString().ToLowerInvariant())} " +
             $"enforce={EnforceEntitlement.ToString().ToLowerInvariant()}");
 
-        if (EnforceEntitlement && !entitled)
+        // A server built without a token service cannot tell a valid caller from an invalid one,
+        // so it has nothing to enforce with and refusing everything would be the wrong answer.
+        if (EnforceEntitlement && _tokenService != null && !entitled)
         {
             var why = claims == null
                 ? $"the request carried no valid job token ({auth.ToString().ToLowerInvariant()})"

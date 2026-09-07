@@ -2244,6 +2244,15 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         scriptLines.AppendLine($"export AGENTIC_SERVER={agenticServerForContainer}"); // deprecated, kept for backwards compat
         scriptLines.AppendLine($"export AGENTICS_PROJECT={registration.Owner}/{registration.Project}");
         scriptLines.AppendLine($"export AGENTICS_JOB_ID={job.Id}");
+        // The bearer for this job's credential socket. The helper and askpass scripts read
+        // PKS_TOKEN first and fall back to a value baked in when they were generated — and those
+        // scripts are written by `devcontainer up`, which a *warm* container skips entirely. A
+        // reused container therefore carries the previous job's baked token, and after a runner
+        // restart carries one nobody can verify, since the signing key is per process. This line
+        // is what makes the current job's token the one that is actually sent: start.sh is
+        // rewritten for every job, warm or cold, and everything vibecast spawns inherits it.
+        if (jobToken is not null)
+            scriptLines.AppendLine($"export PKS_TOKEN='{jobToken}'");
         scriptLines.AppendLine($"export AGENTICS_TOKEN='{registration.Token}'");
         scriptLines.AppendLine($"export AGENTICS_OWNER='{registration.Owner}'");
         scriptLines.AppendLine($"export AGENTICS_PROJECT_NAME='{registration.Project}'");
@@ -6918,7 +6927,13 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             environment: string.Empty,
             appUuid: string.Empty,
             jobId: job.Id,
-            entitledRepos: parsed == null ? Array.Empty<string>() : new[] { $"{owner}/{name}" });
+            entitledRepos: parsed == null ? Array.Empty<string>() : new[] { $"{owner}/{name}" },
+            // A station is a Claude Code session working a task, and the long ones run past four
+            // hours. An expired token reads as `rejected`, which under enforcement is a 403 in the
+            // middle of a job that was doing nothing wrong. The expiry buys little here anyway:
+            // the token is only ever presented to a unix socket that exists while this runner
+            // process does, and the signing key dies with it.
+            ttl: TimeSpan.FromHours(24));
     }
 
     private static string CredentialLogPath()

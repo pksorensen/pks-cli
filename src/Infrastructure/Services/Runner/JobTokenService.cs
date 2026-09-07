@@ -35,6 +35,12 @@ public interface IJobTokenService
     /// <param name="entitledRepos">
     /// Repositories this token may fetch credentials for. Null means "just the one this
     /// token names", which is what the GitHub Actions path wants and why it never passes it.
+    /// An empty list means entitled to nothing, which is a statement rather than an omission.
+    /// </param>
+    /// <param name="ttl">
+    /// Overrides the service-wide lifetime for this one token. The ALP path uses it because a
+    /// station can outlive the default, and an expired token is indistinguishable from a forged
+    /// one at the door.
     /// </param>
     string CreateToken(
         string owner,
@@ -43,7 +49,8 @@ public interface IJobTokenService
         string environment,
         string appUuid,
         string jobId,
-        IReadOnlyList<string>? entitledRepos = null);
+        IReadOnlyList<string>? entitledRepos = null,
+        TimeSpan? ttl = null);
 
     JobTokenClaims? ValidateToken(string token);
 }
@@ -67,7 +74,8 @@ public class JobTokenService : IJobTokenService
         string environment,
         string appUuid,
         string jobId,
-        IReadOnlyList<string>? entitledRepos = null)
+        IReadOnlyList<string>? entitledRepos = null,
+        TimeSpan? ttl = null)
     {
         var header = Base64UrlEncode(JsonSerializer.SerializeToUtf8Bytes(new { alg = "HS256", typ = "JWT" }));
 
@@ -80,7 +88,7 @@ public class JobTokenService : IJobTokenService
             ? new[] { $"{owner}/{repo}" }
             : entitledRepos.ToArray();
 
-        var exp = new DateTimeOffset(DateTime.UtcNow.Add(_ttl)).ToUnixTimeSeconds();
+        var exp = new DateTimeOffset(DateTime.UtcNow.Add(ttl ?? _ttl)).ToUnixTimeSeconds();
         var payload = Base64UrlEncode(JsonSerializer.SerializeToUtf8Bytes(new
         {
             owner,
