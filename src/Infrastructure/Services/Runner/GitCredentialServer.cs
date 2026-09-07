@@ -80,6 +80,27 @@ public class GitCredentialServer : IAsyncDisposable
     /// <summary>True when this server issues GitHub App tokens rather than the operator's own.</summary>
     public bool ActsAsGitHubApp => _appTokens != null;
 
+    public const string EnforceEntitlementVariable = "PKS_CREDENTIAL_ENFORCE_ENTITLEMENT";
+
+    /// <summary>
+    /// Whether a credential request that is not covered by a job token is refused rather than
+    /// served-and-logged.
+    ///
+    /// It is off by default and read from the environment on purpose. We do not yet know how
+    /// spread the legitimate use is — a station that clones a repo and then fetches a submodule
+    /// asks for two repositories under one job — so the honest order is to log the mismatches
+    /// first and refuse them once the log says which ones are real. An environment variable can
+    /// be turned on, and back off, on the box without cutting a release.
+    /// </summary>
+    public bool EnforceEntitlement { get; set; } =
+        IsTruthy(System.Environment.GetEnvironmentVariable(EnforceEntitlementVariable));
+
+    private static bool IsTruthy(string? value) =>
+        value is not null &&
+        (value == "1" ||
+         value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+         value.Equals("yes", StringComparison.OrdinalIgnoreCase));
+
     /// <summary>
     /// Names the repository that App-mode credentials default to. Called by the runner once a
     /// job's git URL is known. Ignored entirely in operator mode.
@@ -129,7 +150,21 @@ public class GitCredentialServer : IAsyncDisposable
     /// </summary>
     private async Task<IResult> ServeAppCredentialAsync(HttpRequest request, string host)
     {
-        var repository = ParseRepository(request.Query["repo"].FirstOrDefault()) ?? _defaultRepository;
+        var (auth, claims) = ClassifyRequest(request);
+
+        var repository = ParseRepository(request.Query["repo"].FirstOrDefault());
+        if (repository == null)
+        {
+            // A job token answers the askpass case — the one that cannot name a repository —
+            // without consulting _defaultRepository at all. That field is a single slot on a
+            // server shared by every concurrent job, so one job's SetDefaultRepository overwrites
+            // another's; entitlement that travels with the request cannot be raced. The default
+            // stays as the fallback for requests that carry no token.
+            repository = claims != null
+                ? (claims.Repos.Count == 1 ? ParseRepository(claims.Repos[0]) : null)
+                : _defaultRepository;
+        }
+
         if (repository == null)
         {
             _onLog?.Invoke($"Credential unavailable (503) for host {host}: App mode is on but the request named no repository");
@@ -141,6 +176,30 @@ public class GitCredentialServer : IAsyncDisposable
         }
 
         var (owner, repo) = (repository.Item1, repository.Item2);
+
+        var entitled = claims != null && claims.IsEntitledTo(owner, repo);
+        // Deliberately one line and deliberately loud: this is the entire yield of the
+        // observation phase, and someone has to read weeks of it before enforcement is turned
+        // on. It never carries the token itself, only what the token said.
+        _onLog?.Invoke(
+            $"Credential entitlement: auth={auth.ToString().ToLowerInvariant()} " +
+            $"job={(claims == null ? "(none)" : claims.JobId)} requested={owner}/{repo} " +
+            $"entitled=[{(claims == null ? "" : string.Join(" ", claims.Repos))}] " +
+            $"match={(claims == null ? "n/a" : entitled.ToString().ToLowerInvariant())} " +
+            $"enforce={EnforceEntitlement.ToString().ToLowerInvariant()}");
+
+        if (EnforceEntitlement && !entitled)
+        {
+            var why = claims == null
+                ? $"the request carried no valid job token ({auth.ToString().ToLowerInvariant()})"
+                : $"{owner}/{repo} is not among the repositories job {claims.JobId} was entitled to";
+            _onLog?.Invoke($"Credential refused (403) for {owner}/{repo}: {why}");
+
+            return Results.Problem(
+                $"This runner refuses credentials outside a job's entitlement, and {why}.",
+                statusCode: (int)HttpStatusCode.Forbidden);
+        }
+
         try
         {
             var token = await _appTokens!.GetInstallationTokenAsync(owner, repo);
@@ -163,14 +222,36 @@ public class GitCredentialServer : IAsyncDisposable
         }
     }
 
-    private JobTokenClaims? ValidateRequest(HttpRequest request)
+    /// <summary>
+    /// Why a request has no claims, kept separate from whether it has any.
+    ///
+    /// "No header at all" and "a header we rejected" are different failures with different
+    /// fixes, and both will occur in production: the signing key is generated per process, so a
+    /// container that outlives a runner restart presents a token signed with a key that no
+    /// longer exists, and a job running longer than the token's four hours presents an expired
+    /// one. Collapsing them into a single null makes the observation logs uninterpretable.
+    /// </summary>
+    private enum CredentialAuth
     {
-        if (_tokenService == null) return null;
+        None,
+        Rejected,
+        Ok
+    }
+
+    private (CredentialAuth Outcome, JobTokenClaims? Claims) ClassifyRequest(HttpRequest request)
+    {
+        if (_tokenService == null) return (CredentialAuth.None, null);
+
         var authHeader = request.Headers.Authorization.FirstOrDefault();
         if (authHeader == null || !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            return null;
-        return _tokenService.ValidateToken(authHeader["Bearer ".Length..]);
+            return (CredentialAuth.None, null);
+
+        var claims = _tokenService.ValidateToken(authHeader["Bearer ".Length..]);
+
+        return claims == null ? (CredentialAuth.Rejected, null) : (CredentialAuth.Ok, claims);
     }
+
+    private JobTokenClaims? ValidateRequest(HttpRequest request) => ClassifyRequest(request).Claims;
 
     private CoolifyAppMatch? ResolveApp(JobTokenClaims claims, HttpRequest request)
     {

@@ -220,6 +220,11 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
     private readonly PKS.Infrastructure.Services.Runner.IRunnerReaper? _reaper;
     private readonly IVaultCliService _vaultCli;
 
+    /// <summary>Optional for the same reason as the reaper above: the existing tests construct
+    /// this command directly. When DI supplies it, every dispatched job gets its own bearer for
+    /// the credential socket instead of the socket trusting whoever can reach it.</summary>
+    private readonly PKS.Infrastructure.Services.Runner.IJobTokenService? _jobTokens;
+
     public AgenticsRunnerRunCommand(
         IAgenticsRunnerConfigurationService configService,
         IDevcontainerSpawnerService spawnerService,
@@ -236,7 +241,8 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         PKS.Infrastructure.Services.Security.ITotpSeedStore? totpStore = null,
         PKS.Infrastructure.IConfigurationService? configurationService = null,
         PKS.Infrastructure.Services.Runner.IRunnerReaper? reaper = null,
-        IVaultCliService? vaultCli = null)
+        IVaultCliService? vaultCli = null,
+        PKS.Infrastructure.Services.Runner.IJobTokenService? jobTokens = null)
     {
         _configService = configService ?? throw new ArgumentNullException(nameof(configService));
         _spawnerService = spawnerService ?? throw new ArgumentNullException(nameof(spawnerService));
@@ -256,6 +262,7 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         // Constructed rather than injected when absent: the vault CLI is an external binary this
         // service only shells out to, so there is nothing to register and nothing to configure.
         _vaultCli = vaultCli ?? new VaultCliService();
+        _jobTokens = jobTokens;
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -547,13 +554,26 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
                 // credentialServer.SocketPath, so it's safe to leave unconstructed (null) whenever
                 // spawn mode is unavailable -- git_push/git_distribute/chat_llm resolve credentials
                 // independently and never touch it.
-                credentialServer = new GitCredentialServer(_githubAuth, registration.Id, appTokens: _githubAppTokens);
+                // onLog has been null here since this path was written, which made every
+                // _onLog?.Invoke in the credential server a no-op in agentics mode — including the
+                // ones that name why a credential was refused. It goes to a file rather than to
+                // this console because the console is Spectre markup and an entitlement line
+                // contains square brackets, and because the question these lines answer ("is every
+                // request carrying a token yet?") is asked days later, not while watching.
+                var credentialLogPath = CredentialLogPath();
+                credentialServer = new GitCredentialServer(
+                    _githubAuth,
+                    registration.Id,
+                    onLog: msg => AppendCredentialLog(credentialLogPath, msg),
+                    tokenService: _jobTokens,
+                    appTokens: _githubAppTokens);
                 await credentialServer.StartAsync();
 
                 if (settings.Verbose)
                 {
                     DisplayInfo($"Credential server started at: {credentialServer.SocketPath}");
                 }
+                DisplayInfo($"Credential log: [dim]{credentialLogPath}[/]");
             }
             else if (settings.InProcess)
             {
@@ -1658,7 +1678,11 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         // too. Without this the initial clone would run as the operator while every later fetch
         // inside the container ran as the App.
         var jobGitToken = await ResolveJobGitTokenAsync(job, credentialServer, ct);
-        var spawnOptions = BuildSpawnOptions(job, credentialServer.SocketPath, registration, jobGitToken);
+        // Minted for every job, in both modes: the credential socket is only one of eight routes
+        // behind it, and the other seven have been rejecting agentics jobs outright because no
+        // token service was wired in for them to validate against.
+        var jobToken = MintJobToken(job, registration);
+        var spawnOptions = BuildSpawnOptions(job, credentialServer.SocketPath, registration, jobGitToken, jobToken);
 
         // `gh` does not use git's credential helper, so the socket above does nothing for it. Left
         // alone it authenticates from whatever happens to be in the container, which is why PRs
@@ -6860,7 +6884,83 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
     private static string ExtractOwnerAndName(string repository) =>
         Uri.TryCreate(repository, UriKind.Absolute, out var uri) ? uri.AbsolutePath : repository;
 
-    private static DevcontainerSpawnOptions BuildSpawnOptions(RunnerJob job, string credentialSocketPath, AgenticsRunnerRegistration registration, SecretValue gitToken)
+    /// <summary>
+    /// Mints the bearer a job's container presents to the credential socket.
+    ///
+    /// The entitled list is the job's own repository and nothing else. That is deliberately
+    /// narrow and deliberately not yet enforced: a station that clones a repository and then
+    /// fetches a submodule legitimately asks for a second one, and the observation log is how we
+    /// find out how often that actually happens before refusing anything.
+    /// </summary>
+    private string? MintJobToken(RunnerJob job, AgenticsRunnerRegistration registration)
+    {
+        if (_jobTokens == null)
+            return null;
+
+        var repository = job.AgentDef?.Repository;
+        var parsed = string.IsNullOrWhiteSpace(repository)
+            ? null
+            : GitCredentialServer.ParseRepository(ExtractOwnerAndName(repository));
+
+        // A self-hosted URL is .../{owner}/{project}/repo.git — three segments, so it does not
+        // parse as owner/name and carries no entitlement. The token is still minted, because the
+        // Coolify, registry, cert and expo routes need one whatever the git host is.
+        var owner = parsed?.Item1 ?? registration.Owner;
+        var name = parsed?.Item2 ?? registration.Project;
+
+        return _jobTokens.CreateToken(
+            owner,
+            name,
+            job.AgentDef?.Branch ?? "main",
+            environment: string.Empty,
+            appUuid: string.Empty,
+            jobId: job.Id,
+            entitledRepos: parsed == null ? Array.Empty<string>() : new[] { $"{owner}/{name}" });
+    }
+
+    private static string CredentialLogPath()
+    {
+        var dir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".pks-cli");
+        Directory.CreateDirectory(dir);
+
+        return Path.Combine(dir, "agentics-runner-credentials.log");
+    }
+
+    private static readonly object CredentialLogLock = new();
+    private const long MaxCredentialLogBytes = 16 * 1024 * 1024;
+
+    /// <summary>
+    /// One timestamped line per credential event, rotating at 16 MB — the same shape and the same
+    /// bound as the daemon log in 'pks github runner start', which had grown to 131 MB before it
+    /// got one.
+    /// </summary>
+    private static void AppendCredentialLog(string logPath, string message)
+    {
+        try
+        {
+            lock (CredentialLogLock)
+            {
+                var info = new FileInfo(logPath);
+                if (info.Exists && info.Length > MaxCredentialLogBytes)
+                {
+                    var rotated = logPath + ".1";
+                    if (File.Exists(rotated))
+                        File.Delete(rotated);
+                    File.Move(logPath, rotated);
+                }
+
+                File.AppendAllText(logPath, $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}] {message}\n");
+            }
+        }
+        catch
+        {
+            // A credential must not fail to be served because a log line could not be written.
+        }
+    }
+
+    private static DevcontainerSpawnOptions BuildSpawnOptions(RunnerJob job, string credentialSocketPath, AgenticsRunnerRegistration registration, SecretValue gitToken, string? jobToken = null)
     {
         // Determine the git URL and branch from the job's agent definition.
         // Always clone from AgentDef.Repository (the GitHub source repo). StageGitUrl is the
@@ -6891,6 +6991,7 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             CopySourceFiles = false,
             UseBootstrapContainer = true,
             CredentialSocketPath = credentialSocketPath,
+            JobToken = jobToken,
             GitUrl = gitUrl,
             GitBranch = gitBranch,
             RemoveExistingContainer = true,

@@ -1,35 +1,51 @@
+using System.Text.RegularExpressions;
+
 namespace PKS.Infrastructure.Services.Runner;
 
 /// <summary>
-/// The shell scripts written into a job container so git can reach
-/// <see cref="GitCredentialServer"/> over its bind-mounted Unix socket.
-///
-/// These live here rather than inline at the two call sites because they had drifted into two
-/// near-identical copies, and because the important detail is easy to lose: the credential
-/// helper must forward the repository git asks about. A GitHub App token is scoped to a single
-/// repository, so a helper that throws git's stdin away — as both copies did — leaves the
-/// server unable to mint anything narrower than "whatever the runner last guessed".
+/// The two shell scripts that let a job container ask the runner for a git credential, and
+/// the fixed paths they are written to. Both are generated per container at spawn, which is
+/// what makes it safe to bake a job-scoped bearer token straight into the text.
 /// </summary>
 public static class GitCredentialHelperScript
 {
-    /// <summary>Where the credential socket's directory is bind-mounted inside a job container.</summary>
     public const string SocketPath = "/var/run/pks-creds/creds.sock";
-
     public const string AskpassPath = "/tmp/git-askpass.sh";
     public const string HelperPath = "/tmp/git-credential-pks.sh";
 
     /// <summary>
-    /// A git credential helper, speaking git's credential protocol properly.
-    ///
-    /// Git writes <c>protocol=</c>, <c>host=</c> and — when <c>credential.useHttpPath</c> is set —
-    /// <c>path=owner/repo.git</c> on stdin, then a blank line. We read those instead of discarding
-    /// them, and pass the host and path on so the server can scope the token it mints.
-    ///
-    /// <c>username</c> comes from the server when it offers one (a GitHub App installation token
-    /// must be used as <c>x-access-token</c>), and falls back to that same value, which is also
-    /// correct for the operator's OAuth token.
+    /// A JWT out of <see cref="JobTokenService"/> is base64url plus two dots and nothing else.
+    /// Anything outside that alphabet is not a token we minted, and baking it into a shell
+    /// script would be an injection rather than an authorisation.
     /// </summary>
-    public const string CredentialHelper =
+    private static readonly Regex TokenShape = new(@"\A[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\z");
+
+    /// <summary>
+    /// Prefers the environment over the baked value, so the GitHub Actions path — which
+    /// already passes <c>-e PKS_TOKEN</c> on <c>docker run</c> — gets the header without
+    /// having to mint anything twice. The ALP path bakes instead, because remoteEnv is not
+    /// visible to the <c>docker exec</c> the job actually runs under.
+    /// </summary>
+    private static string TokenPreamble(string? jobToken)
+    {
+        var baked = "";
+        if (!string.IsNullOrWhiteSpace(jobToken))
+        {
+            if (!TokenShape.IsMatch(jobToken))
+                throw new ArgumentException("Job token is not a base64url JWT.", nameof(jobToken));
+            baked = jobToken;
+        }
+
+        // set -- rather than ${TOKEN:+-H "..."}: dash honours the inner quotes, busybox ash
+        // is not guaranteed to, and a split header would read as an invalid token rather
+        // than as an absent one.
+        return
+            $"TOKEN=\"${{PKS_TOKEN:-{baked}}}\"\n" +
+            "set --\n" +
+            "[ -n \"$TOKEN\" ] && set -- -H \"Authorization: Bearer $TOKEN\"\n";
+    }
+
+    public static string CredentialHelperFor(string? jobToken) =>
         "#!/bin/sh\n" +
         "# Read git's credential request from stdin: protocol=, host=, path=, then a blank line.\n" +
         "HOST=github.com\n" +
@@ -41,7 +57,8 @@ public static class GitCredentialHelperScript
         "    path=*) REPO=${line#path=} ;;\n" +
         "  esac\n" +
         "done\n" +
-        "RESPONSE=$(curl -s --unix-socket " + SocketPath + " \"http://localhost/git-credential?host=$HOST&repo=$REPO\")\n" +
+        TokenPreamble(jobToken) +
+        "RESPONSE=$(curl -s \"$@\" --unix-socket " + SocketPath + " \"http://localhost/git-credential?host=$HOST&repo=$REPO\")\n" +
         "TOKEN=$(printf '%s' \"$RESPONSE\" | sed -n 's/.*\"password\":\"\\([^\"]*\\)\".*/\\1/p')\n" +
         "USER=$(printf '%s' \"$RESPONSE\" | sed -n 's/.*\"username\":\"\\([^\"]*\\)\".*/\\1/p')\n" +
         "[ -z \"$USER\" ] && USER=x-access-token\n" +
@@ -49,25 +66,22 @@ public static class GitCredentialHelperScript
         "echo \"password=$TOKEN\"\n";
 
     /// <summary>
-    /// The GIT_ASKPASS fallback, for the paths that set <c>core.askpass</c> rather than a helper.
-    ///
-    /// Askpass is handed a human prompt string and nothing else, so it cannot say which repository
-    /// it wants. In GitHub App mode the server answers these from the repository the runner named
-    /// for the job. The credential helper above is the better path and is preferred wherever both
-    /// are configured.
+    /// GIT_ASKPASS is handed a prompt, never a repository, so this one cannot name what it
+    /// wants. It still carries the bearer: the server resolves the repository from the
+    /// token's own entitlement when the request names none.
     /// </summary>
-    public const string Askpass =
+    public static string AskpassFor(string? jobToken) =>
         "#!/bin/sh\n" +
-        "curl -s --unix-socket " + SocketPath + " \"http://localhost/git-credential?host=github.com\" " +
+        TokenPreamble(jobToken) +
+        "curl -s \"$@\" --unix-socket " + SocketPath + " \"http://localhost/git-credential?host=github.com\" " +
         "| sed -n 's/.*\"password\":\"\\([^\"]*\\)\".*/\\1/p'\n";
 
-    /// <summary>
-    /// Makes git send the repository path to the credential helper. Without this git sends only
-    /// the host, and every repository on github.com looks identical to the server.
-    /// </summary>
+    public static string CredentialHelper => CredentialHelperFor(null);
+
+    public static string Askpass => AskpassFor(null);
+
     public const string UseHttpPathConfigArgs = "config --global credential.useHttpPath true";
 
-    /// <summary>Base64 of a script, for handing to <c>docker exec … base64 -d</c> without quoting grief.</summary>
     public static string Encode(string script) =>
         Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(script));
 }

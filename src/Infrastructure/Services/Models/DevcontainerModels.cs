@@ -479,6 +479,17 @@ public class DevcontainerSpawnOptions
     public string? CredentialSocketPath { get; set; }
 
     /// <summary>
+    /// A job-scoped bearer token for the credential socket, baked into the helper scripts at
+    /// spawn.
+    ///
+    /// It is baked rather than passed as an environment variable because remoteEnv is not
+    /// visible to the <c>docker exec</c> the job runs under — the same trap that already bit
+    /// GIT_ASKPASS. The scripts are generated per container anyway, so the token travels with
+    /// the only thing that is already per-job.
+    /// </summary>
+    public string? JobToken { get; set; }
+
+    /// <summary>
     /// Directory containing the AgenticsProxy Unix socket (proxy.sock).
     /// When set, the directory is bind-mounted into the devcontainer at /var/run/pks-agentics.
     /// </summary>

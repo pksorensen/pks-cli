@@ -95,4 +95,44 @@ public class JobTokenServiceTests
 
         token1.Should().NotBe(token2);
     }
+
+    [Fact]
+    public void A_token_that_names_no_entitlement_is_entitled_to_its_own_repository()
+    {
+        // The GitHub Actions path passes six arguments and always will; its job is scoped to the
+        // registration's repo and nothing else, so the list it never sets has to mean that.
+        var sut = CreateService();
+
+        var claims = sut.ValidateToken(sut.CreateToken("pksorensen", "commuteconnects", "main", "", "", "job-1"));
+
+        claims!.Repos.Should().Equal("pksorensen/commuteconnects");
+        claims.IsEntitledTo("pksorensen", "commuteconnects").Should().BeTrue();
+        claims.IsEntitledTo("pksorensen", "commuteconnects-landing").Should().BeFalse();
+    }
+
+    [Fact]
+    public void An_entitlement_list_survives_the_round_trip()
+    {
+        var sut = CreateService();
+        var token = sut.CreateToken("pksorensen", "commuteconnects", "main", "", "", "job-1",
+            ["pksorensen/commuteconnects", "pksorensen/commuteconnects-landing"]);
+
+        var claims = sut.ValidateToken(token);
+
+        claims!.Repos.Should().Equal("pksorensen/commuteconnects", "pksorensen/commuteconnects-landing");
+        claims.IsEntitledTo("pksorensen", "commuteconnects-landing").Should().BeTrue();
+    }
+
+    [Fact]
+    public void Entitlement_is_case_insensitive_the_way_GitHub_is()
+    {
+        // A clone URL's casing is whatever the person who wrote it typed, and GitHub does not
+        // care. Refusing on case would be a false mismatch in the observation log and, later, a
+        // false 403.
+        var sut = CreateService();
+
+        var claims = sut.ValidateToken(sut.CreateToken("PKSorensen", "CommuteConnects", "main", "", "", "job-1"));
+
+        claims!.IsEntitledTo("pksorensen", "commuteconnects").Should().BeTrue();
+    }
 }

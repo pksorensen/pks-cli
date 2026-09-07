@@ -13,11 +13,38 @@ public class JobTokenClaims
     public string AppUuid { get; set; } = "";
     public string JobId { get; set; } = "";
     public DateTime ExpiresAt { get; set; }
+
+    /// <summary>
+    /// Every repository this job is allowed to ask for a credential for, as "owner/name".
+    /// A single job legitimately touches more than one — a station that clones a repo and
+    /// then fetches its submodules needs one entry per remote — so entitlement is a list
+    /// rather than the single <see cref="Repo"/> the token was minted around.
+    /// </summary>
+    public IReadOnlyList<string> Repos { get; set; } = [];
+
+    /// <summary>
+    /// Case-insensitive, because GitHub treats owner and repository names that way and a
+    /// clone URL's casing is whatever the person who wrote it typed.
+    /// </summary>
+    public bool IsEntitledTo(string owner, string repo) =>
+        Repos.Any(r => string.Equals(r, $"{owner}/{repo}", StringComparison.OrdinalIgnoreCase));
 }
 
 public interface IJobTokenService
 {
-    string CreateToken(string owner, string repo, string branch, string environment, string appUuid, string jobId);
+    /// <param name="entitledRepos">
+    /// Repositories this token may fetch credentials for. Null means "just the one this
+    /// token names", which is what the GitHub Actions path wants and why it never passes it.
+    /// </param>
+    string CreateToken(
+        string owner,
+        string repo,
+        string branch,
+        string environment,
+        string appUuid,
+        string jobId,
+        IReadOnlyList<string>? entitledRepos = null);
+
     JobTokenClaims? ValidateToken(string token);
 }
 
@@ -33,9 +60,20 @@ public class JobTokenService : IJobTokenService
         RandomNumberGenerator.Fill(_key);
     }
 
-    public string CreateToken(string owner, string repo, string branch, string environment, string appUuid, string jobId)
+    public string CreateToken(
+        string owner,
+        string repo,
+        string branch,
+        string environment,
+        string appUuid,
+        string jobId,
+        IReadOnlyList<string>? entitledRepos = null)
     {
         var header = Base64UrlEncode(JsonSerializer.SerializeToUtf8Bytes(new { alg = "HS256", typ = "JWT" }));
+
+        var repos = entitledRepos is { Count: > 0 }
+            ? entitledRepos.ToArray()
+            : new[] { $"{owner}/{repo}" };
 
         var exp = new DateTimeOffset(DateTime.UtcNow.Add(_ttl)).ToUnixTimeSeconds();
         var payload = Base64UrlEncode(JsonSerializer.SerializeToUtf8Bytes(new
@@ -46,6 +84,7 @@ public class JobTokenService : IJobTokenService
             env = environment,
             app_uuid = appUuid,
             job_id = jobId,
+            repos,
             exp
         }));
 
@@ -78,14 +117,18 @@ public class JobTokenService : IJobTokenService
             if (DateTime.UtcNow >= expiresAt)
                 return null;
 
+            var owner = root.GetProperty("owner").GetString() ?? "";
+            var repo = root.GetProperty("repo").GetString() ?? "";
+
             return new JobTokenClaims
             {
-                Owner = root.GetProperty("owner").GetString() ?? "",
-                Repo = root.GetProperty("repo").GetString() ?? "",
+                Owner = owner,
+                Repo = repo,
                 Branch = root.GetProperty("branch").GetString() ?? "",
                 Environment = root.GetProperty("env").GetString() ?? "",
                 AppUuid = root.GetProperty("app_uuid").GetString() ?? "",
                 JobId = root.GetProperty("job_id").GetString() ?? "",
+                Repos = ReadRepos(root, owner, repo),
                 ExpiresAt = expiresAt
             };
         }
@@ -93,6 +136,25 @@ public class JobTokenService : IJobTokenService
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// A token minted before the claim existed still validates; it is entitled to exactly
+    /// the repository it names. Tokens do not survive a runner restart — the signing key is
+    /// per-process — so this is belt-and-braces rather than a wire-compatibility promise.
+    /// </summary>
+    private static IReadOnlyList<string> ReadRepos(JsonElement root, string owner, string repo)
+    {
+        if (!root.TryGetProperty("repos", out var repos) || repos.ValueKind != JsonValueKind.Array)
+            return [$"{owner}/{repo}"];
+
+        var list = repos.EnumerateArray()
+            .Select(r => r.GetString())
+            .Where(r => !string.IsNullOrWhiteSpace(r))
+            .Select(r => r!)
+            .ToArray();
+
+        return list.Length > 0 ? list : [$"{owner}/{repo}"];
     }
 
     private string Sign(string input)

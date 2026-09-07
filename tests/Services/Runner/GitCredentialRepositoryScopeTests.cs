@@ -137,4 +137,116 @@ public class GitCredentialRepositoryScopeTests
         field.Should().NotBeNull("CloneScript is the contract under test");
         return (string)field!.GetRawConstantValue()!;
     }
+
+    [Fact]
+    public void The_helper_sends_no_authorization_header_when_there_is_nothing_to_send()
+    {
+        // An empty "Bearer " would be read as a rejected token rather than an absent one, and
+        // would poison exactly the count the observation phase exists to produce.
+        var script = GitCredentialHelperScript.CredentialHelperFor(null);
+
+        script.Should().Contain("TOKEN=\"${PKS_TOKEN:-}\"", "the env is still consulted");
+        script.Should().Contain("[ -n \"$TOKEN\" ] && set -- -H", "an empty token adds no argument");
+    }
+
+    [Fact]
+    public void The_helper_prefers_the_environment_over_the_baked_token()
+    {
+        // That is what lets the GitHub Actions path — which already passes -e PKS_TOKEN on
+        // docker run — carry the header without minting anything a second time.
+        var token = new JobTokenService().CreateToken("pksorensen", "commuteconnects", "main", "", "", "job-42");
+
+        var script = GitCredentialHelperScript.CredentialHelperFor(token);
+
+        script.Should().Contain($"TOKEN=\"${{PKS_TOKEN:-{token}}}\"");
+        script.Should().Contain("curl -s \"$@\"", "set -- carries the header as separate argv entries");
+    }
+
+    [Fact]
+    public void Askpass_carries_the_bearer_too_even_though_it_cannot_name_a_repository()
+    {
+        // Without this, every askpass fetch would log as unauthenticated and the observation
+        // phase would read as "the header is not deployed" when it is.
+        var token = new JobTokenService().CreateToken("pksorensen", "commuteconnects", "main", "", "", "job-42");
+
+        GitCredentialHelperScript.AskpassFor(token).Should().Contain(token);
+    }
+
+    [Fact]
+    public void A_token_that_is_not_ours_is_refused_rather_than_baked_into_a_shell_script()
+    {
+        var bake = () => GitCredentialHelperScript.CredentialHelperFor("\"; rm -rf / #");
+
+        bake.Should().Throw<ArgumentException>();
+    }
+
+    /// <summary>
+    /// Runs the generated script against a stub curl that prints its own argv. Everything else
+    /// here asserts on the script's text, which cannot tell the difference between a header that
+    /// arrives as one argument and one that arrives split across four — and a split header reads
+    /// to the server as an invalid token, not as an absent one.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    [Trait("Speed", "Fast")]
+    public void The_generated_helper_passes_the_header_as_one_argument()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var token = new JobTokenService().CreateToken("pksorensen", "commuteconnects", "main", "", "", "job-42");
+        var dir = Directory.CreateTempSubdirectory("pks-helper-argv").FullName;
+        try
+        {
+            // A curl that records its arguments instead of making a request, one per line. It
+            // writes to a file rather than stdout because the helper captures curl's stdout into
+            // a command substitution and parses it as the credential response.
+            var argv = Path.Combine(dir, "argv.txt");
+            var curl = Path.Combine(dir, "curl");
+            File.WriteAllText(curl, $"#!/bin/sh\nfor a in \"$@\"; do echo \"ARG=$a\" >> {argv}; done\n");
+            Run("/bin/chmod", $"+x {curl}", dir, null);
+
+            var helper = Path.Combine(dir, "helper.sh");
+            File.WriteAllText(helper, GitCredentialHelperScript.CredentialHelperFor(token));
+            Run("/bin/chmod", $"+x {helper}", dir, null);
+
+            Run("/bin/sh", helper, dir, "protocol=https\nhost=github.com\npath=pksorensen/commuteconnects.git\n\n");
+
+            var recorded = File.ReadAllText(argv);
+            recorded.Should().Contain("ARG=-H");
+            recorded.Should().Contain($"ARG=Authorization: Bearer {token}",
+                "the header must survive as a single argv entry, quotes and space intact");
+            recorded.Should().Contain("ARG=http://localhost/git-credential?host=github.com&repo=pksorensen/commuteconnects.git",
+                "and the repository git named must still reach the server");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    private static string Run(string fileName, string arguments, string workingDir, string? stdin)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo(fileName, arguments)
+        {
+            WorkingDirectory = workingDir,
+            RedirectStandardOutput = true,
+            RedirectStandardInput = stdin != null,
+            UseShellExecute = false
+        };
+        // So the stub curl is the one the script finds.
+        psi.Environment["PATH"] = $"{workingDir}:{psi.Environment["PATH"]}";
+        psi.Environment.Remove("PKS_TOKEN");
+
+        using var process = System.Diagnostics.Process.Start(psi)!;
+        if (stdin != null)
+        {
+            process.StandardInput.Write(stdin);
+            process.StandardInput.Close();
+        }
+        var output = process.StandardOutput.ReadToEnd();
+        process.WaitForExit(10_000);
+
+        return output;
+    }
 }

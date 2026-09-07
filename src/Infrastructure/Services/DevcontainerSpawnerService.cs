@@ -362,7 +362,8 @@ public class DevcontainerSpawnerService : IDevcontainerSpawnerService
                     options.PluginVolumeName,
                     options.MemoryBytes,
                     options.ClaudeCredentialVolumeName,
-                    options.VaultIdentityVolumeName);
+                    options.VaultIdentityVolumeName,
+                    options.JobToken);
 
                 if (upResult.Outcome != "success")
                 {
@@ -2889,7 +2890,8 @@ DEVCONTAINER_EOF";
         string? pluginVolumeName = null,
         long? memoryBytes = null,
         string? claudeCredentialVolumeName = null,
-        string? vaultIdentityVolumeName = null)
+        string? vaultIdentityVolumeName = null,
+        string? jobToken = null)
     {
         _logger.LogDebug("Running devcontainer up in bootstrap container: {WorkspaceFolder}", workspaceFolder);
 
@@ -2989,7 +2991,7 @@ DEVCONTAINER_EOF";
             // printf: the scripts contain both single quotes and backslashes, and the shared
             // definitions in GitCredentialHelperScript should not have to be written around this
             // call site's escaping.
-            var askpassB64 = GitCredentialHelperScript.Encode(GitCredentialHelperScript.Askpass);
+            var askpassB64 = GitCredentialHelperScript.Encode(GitCredentialHelperScript.AskpassFor(jobToken));
             var writeAskpassCmd =
                 $"echo {askpassB64} | base64 -d > {GitCredentialHelperScript.AskpassPath} && chmod +x {GitCredentialHelperScript.AskpassPath}";
             var askpassResult = await ExecuteInBootstrapAsync(bootstrapContainerId, writeAskpassCmd, workingDir: null, timeoutSeconds: 10);
@@ -3002,7 +3004,7 @@ DEVCONTAINER_EOF";
             // can never say which repository it wants; the helper reads git's stdin and forwards
             // the path. That is what lets the credential server mint a token scoped to one repo
             // rather than one that works everywhere.
-            var helperB64 = GitCredentialHelperScript.Encode(GitCredentialHelperScript.CredentialHelper);
+            var helperB64 = GitCredentialHelperScript.Encode(GitCredentialHelperScript.CredentialHelperFor(jobToken));
             var writeHelperCmd =
                 $"echo {helperB64} | base64 -d > {GitCredentialHelperScript.HelperPath} && chmod +x {GitCredentialHelperScript.HelperPath} && " +
                 $"git config --global credential.helper {GitCredentialHelperScript.HelperPath} && " +
