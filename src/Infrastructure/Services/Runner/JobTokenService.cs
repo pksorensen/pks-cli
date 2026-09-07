@@ -71,9 +71,14 @@ public class JobTokenService : IJobTokenService
     {
         var header = Base64UrlEncode(JsonSerializer.SerializeToUtf8Bytes(new { alg = "HS256", typ = "JWT" }));
 
-        var repos = entitledRepos is { Count: > 0 }
-            ? entitledRepos.ToArray()
-            : new[] { $"{owner}/{repo}" };
+        // null means "not stated" and defaults to the job's own repository. An *empty* list is a
+        // statement: this job is entitled to nothing, which is what the caller says when it could
+        // not work out which repositories the job legitimately needs. Collapsing the two would
+        // fabricate an entitlement to a GitHub repository that merely shares its name with a
+        // self-hosted one, and log it as a match.
+        var repos = entitledRepos is null
+            ? new[] { $"{owner}/{repo}" }
+            : entitledRepos.ToArray();
 
         var exp = new DateTimeOffset(DateTime.UtcNow.Add(_ttl)).ToUnixTimeSeconds();
         var payload = Base64UrlEncode(JsonSerializer.SerializeToUtf8Bytes(new
@@ -148,13 +153,13 @@ public class JobTokenService : IJobTokenService
         if (!root.TryGetProperty("repos", out var repos) || repos.ValueKind != JsonValueKind.Array)
             return [$"{owner}/{repo}"];
 
-        var list = repos.EnumerateArray()
+        // An empty array is a deliberate "entitled to nothing" — see CreateToken. Only an absent
+        // claim falls back to the repository the token names.
+        return repos.EnumerateArray()
             .Select(r => r.GetString())
             .Where(r => !string.IsNullOrWhiteSpace(r))
             .Select(r => r!)
             .ToArray();
-
-        return list.Length > 0 ? list : [$"{owner}/{repo}"];
     }
 
     private string Sign(string input)

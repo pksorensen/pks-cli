@@ -124,6 +124,23 @@ public class JobTokenServiceTests
     }
 
     [Fact]
+    public void An_empty_entitlement_list_means_nothing_not_everything()
+    {
+        // The ALP path passes an empty list when it cannot work out which repositories the job
+        // legitimately needs — a self-hosted clone URL, which does not parse as owner/name. If
+        // that collapsed back to the default, a Gitea-backed project called
+        // "pksorensen/commuteconnects" would be logged as entitled to the *GitHub* repository of
+        // the same name, and Phase B would later hand it a token on the strength of it.
+        var sut = CreateService();
+
+        var claims = sut.ValidateToken(
+            sut.CreateToken("pksorensen", "commuteconnects", "main", "", "", "job-1", []));
+
+        claims!.Repos.Should().BeEmpty();
+        claims.IsEntitledTo("pksorensen", "commuteconnects").Should().BeFalse();
+    }
+
+    [Fact]
     public void Entitlement_is_case_insensitive_the_way_GitHub_is()
     {
         // A clone URL's casing is whatever the person who wrote it typed, and GitHub does not

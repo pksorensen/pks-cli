@@ -2599,7 +2599,11 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         if (job.AgentDef?.VaultAccess is { } enrolAccess && job.AgentDef?.VaultEnrolment is { } enrolment
             && spawnOptions.VaultIdentityVolumeName is not null)
         {
-            var enrolScript = "/tmp/.pks-vault-enrol.sh";
+            // Under $HOME, never /tmp: the spawned devcontainer runs under dind, where /tmp is
+            // tmpfs and Docker's archive endpoint writes into it silently without landing a file
+            // (ADR 0006). The ceremony would then fail with "no such file" and every station
+            // would report itself unenrolled. AdrComplianceTests guards this line.
+            var enrolScript = $"{vibecastHome}/.pks-vault-enrol.sh";
             try
             {
                 await _spawnerService.CopyFileToContainerAsync(containerId, enrolScript,
@@ -2649,11 +2653,10 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             }
             finally
             {
-                // As root, because that is who owns it. CopyFileToContainerAsync writes its tar
-                // entries with uid 0 and /tmp is sticky (1777), so the station's own user cannot
-                // unlink the file — and `rm -f` exits 0 while failing to. Left behind, it is a
-                // world-readable file holding the enrolment token and, worse, the service-account
-                // secret, for the life of the container.
+                // As root, because that is who owns it: CopyFileToContainerAsync writes its tar
+                // entries with uid 0. Left behind, it is a world-readable file holding the
+                // enrolment token and, worse, the service-account secret, for the life of the
+                // container — so the removal is not best-effort housekeeping.
                 try
                 {
                     await _spawnerService.ExecInContainerAsync(containerId,
