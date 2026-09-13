@@ -2292,6 +2292,9 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         var openaiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
         if (!string.IsNullOrEmpty(openaiKey))
             scriptLines.AppendLine($"export OPENAI_API_KEY='{openaiKey}'");
+        var codexBaseUrl = Environment.GetEnvironmentVariable("VIBECAST_CODEX_BASE_URL");
+        if (!string.IsNullOrEmpty(codexBaseUrl))
+            scriptLines.AppendLine($"export VIBECAST_CODEX_BASE_URL='{codexBaseUrl}'");
 
         // If a vibecast binary was embedded at build time (local dev only, -p:EmbedVibecast=true),
         // extract it into the container and point VIBECAST_BIN at it so the hooks also pick it up.
@@ -4268,7 +4271,8 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                             {
                                 case ChatCompletionRoute.Forward:
                                     await ForwardChatCompletionRequestAsync(
-                                        ws, backendClient, backendUrl!, backendKey, jobId, requestId, bodyProp, verbose, ct);
+                                        ws, backendClient, backendUrl!, backendKey, jobId, requestId,
+                                        bodyProp, decision.ModelId, verbose, ct);
                                     break;
                                 case ChatCompletionRoute.Rejected:
                                     await SendChatFrameAsync(ws, new
@@ -4290,16 +4294,22 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                     case "chat.models.request":
                     {
                         var requestId = frame.TryGetProperty("requestId", out var ridProp) ? ridProp.GetString() ?? "" : "";
-                        IReadOnlyList<string> models = Array.Empty<string>();
-                        // Literal-forward mode bypasses the factory entirely, so its model list would be
-                        // misleading — respond with an empty list rather than querying it.
+                        IReadOnlyList<string> models;
+                        // Literal-forward mode cannot ask the provider factory what the remote backend
+                        // exposes. A persisted runner-profile allowlist is authoritative discovery data,
+                        // though (for example deployments found through Azure ARM by a managed Sandbox),
+                        // so advertise that list directly. Preserve the historical empty response when
+                        // neither the factory nor an explicit profile list can describe the backend.
                         if (string.IsNullOrEmpty(backendUrl))
                         {
+                            models = Array.Empty<string>();
                             try { models = await _chatProviderFactory.ListAvailableModelsAsync(ct); }
                             catch { /* empty list on failure */ }
-                            // Allowlist (Phase 3): only applies to the provider path -- the
-                            // literal-forward "empty on backendUrl" behavior above is preserved as-is.
                             models = FilterModelsByAllowlist(models, chatModelAllowlist);
+                        }
+                        else
+                        {
+                            models = ModelsForLiteralBackend(chatModelAllowlist);
                         }
                         await SendChatFrameAsync(ws, new { type = "chat.models.response", jobId, requestId, models }, verbose, ct);
                         break;
@@ -4353,7 +4363,9 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
     }
 
     /// <summary>
-    /// Forwards one chat.completion.request body verbatim to the configured OpenAI-compatible backend
+    /// Forwards one chat.completion.request body to the configured OpenAI-compatible backend.
+    /// When the caller deliberately omitted <c>model</c> to mean "Runner default", materialize
+    /// that default before forwarding because OpenAI-compatible backends require a deployment name.
     /// (HttpCompletionOption.ResponseHeadersRead, no response buffering) and translates its SSE stream
     /// into chat.completion.chunk frames the instant each event is parsed — no batching across events,
     /// mirroring pks-agent-gateway's FlushInterval=-1 unbuffered-streaming guarantee
@@ -4368,6 +4380,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         string jobId,
         string requestId,
         JsonElement body,
+        string? defaultModelId,
         bool verbose,
         CancellationToken ct)
     {
@@ -4375,7 +4388,10 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         {
             using var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{backendUrl}/chat/completions")
             {
-                Content = new StringContent(body.GetRawText(), Encoding.UTF8, "application/json"),
+                Content = new StringContent(
+                    PrepareLiteralBackendBody(body, defaultModelId),
+                    Encoding.UTF8,
+                    "application/json"),
             };
             if (!string.IsNullOrEmpty(backendKey))
                 httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", backendKey);
@@ -4475,13 +4491,32 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
     internal static ChatCompletionDecision DecideChatCompletionRoute(
         string? backendUrl, string? requestedModel, string? defaultModelId, IReadOnlyList<string>? allowlist)
     {
-        if (!string.IsNullOrEmpty(backendUrl))
-            return new ChatCompletionDecision(ChatCompletionRoute.Forward, null);
-
         var effectiveModelId = string.IsNullOrWhiteSpace(requestedModel) ? defaultModelId : requestedModel;
+        if (!string.IsNullOrEmpty(backendUrl))
+            return new ChatCompletionDecision(ChatCompletionRoute.Forward, effectiveModelId);
+
         return IsChatModelAllowed(effectiveModelId, allowlist)
             ? new ChatCompletionDecision(ChatCompletionRoute.Provider, effectiveModelId)
             : new ChatCompletionDecision(ChatCompletionRoute.Rejected, effectiveModelId);
+    }
+
+    internal static string PrepareLiteralBackendBody(JsonElement body, string? defaultModelId)
+    {
+        if (body.TryGetProperty("model", out var model)
+            && model.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(model.GetString()))
+        {
+            return body.GetRawText();
+        }
+
+        if (string.IsNullOrWhiteSpace(defaultModelId))
+            return body.GetRawText();
+
+        var forwarded = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(body.GetRawText(), JsonOptions)
+            ?? new Dictionary<string, JsonElement>();
+        forwarded["model"] = JsonSerializer.SerializeToElement(defaultModelId, JsonOptions);
+
+        return JsonSerializer.Serialize(forwarded, JsonOptions);
     }
 
     internal static bool IsChatModelAllowed(string? modelId, IReadOnlyList<string>? allowlist)
@@ -4502,6 +4537,21 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         if (allowlist is null || allowlist.Count == 0)
             return models;
         return models.Where(m => allowlist.Contains(m, StringComparer.OrdinalIgnoreCase)).ToList();
+    }
+
+    /// <summary>
+    /// Returns models explicitly discovered/configured for a literal OpenAI-compatible backend.
+    /// Unlike the provider path there is no local provider catalogue to intersect with, so the
+    /// runner profile is the source of truth. Empty still means "backend did not publish models".
+    /// </summary>
+    internal static IReadOnlyList<string> ModelsForLiteralBackend(IReadOnlyList<string>? configuredModels)
+    {
+        if (configuredModels is null || configuredModels.Count == 0)
+            return Array.Empty<string>();
+        return configuredModels
+            .Where(model => !string.IsNullOrWhiteSpace(model))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     /// <summary>

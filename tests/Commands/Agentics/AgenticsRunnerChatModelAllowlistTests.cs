@@ -113,6 +113,22 @@ public class AgenticsRunnerChatModelAllowlistTests
         result.Should().BeEquivalentTo(new[] { "gpt-5.5" });
     }
 
+    [Fact]
+    public void ModelsForLiteralBackend_UsesExplicitDiscoveredModels()
+    {
+        var result = AgenticsRunnerRunCommand.ModelsForLiteralBackend(
+            new List<string> { "gpt-5.6-luna", "gpt-5.6-luna", "gpt-6-astra" });
+
+        result.Should().Equal("gpt-5.6-luna", "gpt-6-astra");
+    }
+
+    [Fact]
+    public void ModelsForLiteralBackend_WithoutConfiguredModels_RemainsEmpty()
+    {
+        AgenticsRunnerRunCommand.ModelsForLiteralBackend(null).Should().BeEmpty();
+        AgenticsRunnerRunCommand.ModelsForLiteralBackend(new List<string>()).Should().BeEmpty();
+    }
+
     // ── DecideChatCompletionRoute: the ENFORCEMENT WIRING, not just the truth table ──────
     //
     // These are the tests that actually fail if a future refactor of the
@@ -178,5 +194,40 @@ public class AgenticsRunnerChatModelAllowlistTests
             defaultModelId: "gpt-5.5", allowlist: new List<string> { "gpt-5.5" });
 
         decision.Route.Should().Be(AgenticsRunnerRunCommand.ChatCompletionRoute.Forward);
+        decision.ModelId.Should().Be("not-in-allowlist");
+    }
+
+    [Fact]
+    public void DecideChatCompletionRoute_LiteralBackendWithoutRequestedModel_UsesRunnerDefault()
+    {
+        var decision = AgenticsRunnerRunCommand.DecideChatCompletionRoute(
+            backendUrl: "https://foundry.example/openai/v1", requestedModel: null,
+            defaultModelId: "gpt-5.6-luna", allowlist: new List<string> { "gpt-5.6-luna" });
+
+        decision.Route.Should().Be(AgenticsRunnerRunCommand.ChatCompletionRoute.Forward);
+        decision.ModelId.Should().Be("gpt-5.6-luna");
+    }
+
+    [Fact]
+    public void PrepareLiteralBackendBody_AddsRunnerDefaultWhenRequestOmittedModel()
+    {
+        using var request = System.Text.Json.JsonDocument.Parse("""{"messages":[],"stream":true}""");
+
+        var body = AgenticsRunnerRunCommand.PrepareLiteralBackendBody(request.RootElement, "gpt-5.6-luna");
+        using var forwarded = System.Text.Json.JsonDocument.Parse(body);
+
+        forwarded.RootElement.GetProperty("model").GetString().Should().Be("gpt-5.6-luna");
+        forwarded.RootElement.GetProperty("stream").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public void PrepareLiteralBackendBody_PreservesExplicitModel()
+    {
+        using var request = System.Text.Json.JsonDocument.Parse("""{"model":"gpt-6-astra","messages":[]}""");
+
+        var body = AgenticsRunnerRunCommand.PrepareLiteralBackendBody(request.RootElement, "gpt-5.6-luna");
+        using var forwarded = System.Text.Json.JsonDocument.Parse(body);
+
+        forwarded.RootElement.GetProperty("model").GetString().Should().Be("gpt-6-astra");
     }
 }
