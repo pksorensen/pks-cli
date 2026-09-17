@@ -584,6 +584,7 @@ services.AddSingleton<ISystemInformationService, SystemInformationService>();
 services.AddSingleton<ITemplatePackagingService, TemplatePackagingService>();
 
 // Register Application Insights services
+services.AddSingleton<PKS.Infrastructure.Services.Azure.IAzureResourceRegistry, PKS.Infrastructure.Services.Azure.AzureResourceRegistry>();
 services.AddSingleton<IAppInsightsConfigService, AppInsightsConfigService>();
 services.AddHttpClient<IAppInsightsHttpAdapter, DefaultAppInsightsHttpAdapter>();
 services.AddSingleton<IAppInsightsQueryService, AppInsightsQueryService>();

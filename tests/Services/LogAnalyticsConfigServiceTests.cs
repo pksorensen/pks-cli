@@ -1,55 +1,93 @@
 using FluentAssertions;
 using Moq;
+using PKS.CLI.Tests.Security;
 using PKS.Infrastructure;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Azure;
 using Xunit;
 
 namespace PKS.CLI.Tests.Services;
 
+/// <summary>
+/// <see cref="LogAnalyticsConfigService"/> is a facade over <see cref="IAzureResourceRegistry"/>:
+/// <c>KustoCommand</c> and <c>LogAnalyticsQueryService</c> keep the single-workspace interface,
+/// while the data lives as <see cref="AzureResourceKind.LogAnalytics"/> entries with an enabled flag.
+/// </summary>
+[Trait("Category", "Unit")]
 [Trait("Category", "LogAnalytics")]
-public class LogAnalyticsConfigServiceTests
+public sealed class LogAnalyticsConfigServiceTests : IDisposable
 {
-    private static Mock<IConfigurationService> CreateConfigMock(Dictionary<string, string?>? data = null)
+    private const string ResourceId =
+        "/subscriptions/sub-999/resourceGroups/rg/providers/Microsoft.OperationalInsights/workspaces/law-prod";
+
+    private readonly string _testDirectory;
+    private readonly AzureResourceRegistry _registry;
+
+    public LogAnalyticsConfigServiceTests()
     {
-        var store = data != null
-            ? new Dictionary<string, string?>(data)
-            : new Dictionary<string, string?>();
+        _testDirectory = Path.Combine(Path.GetTempPath(), $"pks-cli-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_testDirectory);
 
-        var mock = new Mock<IConfigurationService>();
+        var config = new Mock<IConfigurationService>();
+        config.Setup(m => m.GetAsync(It.IsAny<string>())).ReturnsAsync((string?)null);
+        config.Setup(m => m.DeleteAsync(It.IsAny<string>())).Returns(Task.CompletedTask);
 
-        mock.Setup(m => m.GetAsync(It.IsAny<string>()))
-            .ReturnsAsync((string key) => store.TryGetValue(key, out var v) ? v : null);
-
-        mock.Setup(m => m.SetAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<bool>()))
-            .Callback<string, string, bool, bool>((key, value, global, encrypt) => store[key] = value)
-            .Returns(Task.CompletedTask);
-
-        mock.Setup(m => m.DeleteAsync(It.IsAny<string>()))
-            .Callback<string>(key => store.Remove(key))
-            .Returns(Task.CompletedTask);
-
-        return mock;
+        _registry = new AzureResourceRegistry(
+            config.Object,
+            FakeSecretResolver.Empty,
+            Path.Combine(_testDirectory, "azure-resources.json"));
     }
 
-    private static LogAnalyticsConfigService CreateService(Mock<IConfigurationService>? configMock = null)
-        => new((configMock ?? CreateConfigMock()).Object);
+    public void Dispose()
+    {
+        try { Directory.Delete(_testDirectory, recursive: true); } catch { /* best effort */ }
+    }
+
+    private LogAnalyticsConfigService CreateService() => new(_registry);
+
+    private static AzureResourceEntry Entry(string key, string name, bool enabled = true) => new()
+    {
+        Kind = AzureResourceKind.LogAnalytics,
+        Key = key,
+        Name = name,
+        ResourceId = $"/subscriptions/sub-999/resourceGroups/rg/providers/Microsoft.OperationalInsights/workspaces/{name}",
+        SubscriptionId = "sub-999",
+        Enabled = enabled,
+        DiscoveredAt = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc)
+    };
 
     [Fact]
-    public async Task IsConfiguredAsync_ReturnsFalse_WhenNoConfig()
+    public async Task IsConfiguredAsync_ReturnsFalse_WhenNoEntries()
     {
         var svc = CreateService();
         (await svc.IsConfiguredAsync()).Should().BeFalse();
     }
 
     [Fact]
-    public async Task IsConfiguredAsync_ReturnsTrue_WhenWorkspaceIdPresent()
+    public async Task IsConfiguredAsync_ReturnsTrue_WhenAnEnabledEntryExists()
     {
-        var mock = CreateConfigMock(new Dictionary<string, string?>
-        {
-            ["loganalytics.workspace_id"] = "e8d8a461-f63b-464d-ae40-8771bcb46140"
-        });
-        var svc = CreateService(mock);
+        await _registry.UpsertAsync(new[] { Entry("e8d8a461-f63b-464d-ae40-8771bcb46140", "law-prod") });
+        var svc = CreateService();
         (await svc.IsConfiguredAsync()).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task IsConfiguredAsync_ReturnsFalse_WhenTheOnlyEntryIsDisabled()
+    {
+        await _registry.UpsertAsync(new[] { Entry("ws-guid", "law-prod", enabled: false) });
+        var svc = CreateService();
+        (await svc.IsConfiguredAsync()).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task IsConfiguredAsync_IgnoresOtherKinds()
+    {
+        await _registry.UpsertAsync(new[]
+        {
+            new AzureResourceEntry { Kind = AzureResourceKind.AppInsights, Key = "app", Name = "app", Enabled = true }
+        });
+        var svc = CreateService();
+        (await svc.IsConfiguredAsync()).Should().BeFalse();
     }
 
     [Fact]
@@ -60,17 +98,14 @@ public class LogAnalyticsConfigServiceTests
     }
 
     [Fact]
-    public async Task GetConfigAsync_ReturnsConfig_WhenConfigured()
+    public async Task GetConfigAsync_MapsTheFirstEnabledEntry()
     {
-        var mock = CreateConfigMock(new Dictionary<string, string?>
+        await _registry.UpsertAsync(new[]
         {
-            ["loganalytics.workspace_id"] = "ws-guid",
-            ["loganalytics.workspace_name"] = "law-prod",
-            ["loganalytics.resource_id"] = "/subscriptions/sub-999/resourceGroups/rg/providers/Microsoft.OperationalInsights/workspaces/law-prod",
-            ["loganalytics.subscription_id"] = "sub-999",
-            ["loganalytics.registered_at"] = DateTime.UtcNow.ToString("O")
+            Entry("disabled-ws", "law-old", enabled: false),
+            Entry("ws-guid", "law-prod")
         });
-        var svc = CreateService(mock);
+        var svc = CreateService();
 
         var result = await svc.GetConfigAsync();
 
@@ -78,48 +113,65 @@ public class LogAnalyticsConfigServiceTests
         result!.WorkspaceId.Should().Be("ws-guid");
         result.WorkspaceName.Should().Be("law-prod");
         result.SubscriptionId.Should().Be("sub-999");
-        result.ResourceId.Should().Contain("law-prod");
+        result.ResourceId.Should().Be(ResourceId);
+        result.RegisteredAt.Should().Be(new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc));
     }
 
     [Fact]
-    public async Task StoreConfigAsync_PersistsAllKeys()
+    public async Task StoreConfigAsync_UpsertsAnEnabledEntry()
     {
-        var mock = CreateConfigMock();
-        var svc = CreateService(mock);
+        var svc = CreateService();
 
         await svc.StoreConfigAsync("ws-guid", "law-prod", "/subscriptions/sub-456/x", "sub-456");
 
-        mock.Verify(m => m.SetAsync("loganalytics.workspace_id", "ws-guid", true, false), Times.Once);
-        mock.Verify(m => m.SetAsync("loganalytics.workspace_name", "law-prod", true, false), Times.Once);
-        mock.Verify(m => m.SetAsync("loganalytics.resource_id", "/subscriptions/sub-456/x", true, false), Times.Once);
-        mock.Verify(m => m.SetAsync("loganalytics.subscription_id", "sub-456", true, false), Times.Once);
-        mock.Verify(m => m.SetAsync("loganalytics.registered_at", It.IsAny<string>(), true, false), Times.Once);
+        var entries = await _registry.ListAsync(AzureResourceKind.LogAnalytics);
+        entries.Should().ContainSingle();
+        entries[0].Key.Should().Be("ws-guid");
+        entries[0].Name.Should().Be("law-prod");
+        entries[0].ResourceId.Should().Be("/subscriptions/sub-456/x");
+        entries[0].SubscriptionId.Should().Be("sub-456");
+        entries[0].Enabled.Should().BeTrue();
+        entries[0].DiscoveredAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromMinutes(1));
     }
 
     [Fact]
-    public async Task StoreConfigAsync_HandlesNullOptionalValues()
+    public async Task StoreConfigAsync_ReEnablesAnEntryTheUserHadSwitchedOff()
     {
-        var mock = CreateConfigMock();
-        var svc = CreateService(mock);
+        await _registry.UpsertAsync(new[] { Entry("ws-guid", "law-prod", enabled: false) });
+        var svc = CreateService();
+
+        await svc.StoreConfigAsync("ws-guid", "law-prod", ResourceId, "sub-999");
+
+        (await _registry.ListEnabledAsync(AzureResourceKind.LogAnalytics)).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task StoreConfigAsync_UsesWorkspaceIdAsName_WhenOptionalValuesAreNull()
+    {
+        var svc = CreateService();
 
         await svc.StoreConfigAsync("ws-guid", null, null, null);
 
-        mock.Verify(m => m.SetAsync("loganalytics.workspace_name", string.Empty, true, false), Times.Once);
-        mock.Verify(m => m.SetAsync("loganalytics.resource_id", string.Empty, true, false), Times.Once);
+        var entry = (await _registry.ListAsync(AzureResourceKind.LogAnalytics)).Single();
+        entry.Name.Should().Be("ws-guid");
+        entry.ResourceId.Should().BeNull();
+        entry.SubscriptionId.Should().BeNull();
     }
 
     [Fact]
-    public async Task ClearConfigAsync_DeletesAllKeys()
+    public async Task ClearConfigAsync_RemovesAllLogAnalyticsEntries_ButNothingElse()
     {
-        var mock = CreateConfigMock();
-        var svc = CreateService(mock);
+        await _registry.UpsertAsync(new[]
+        {
+            Entry("a", "a"),
+            Entry("b", "b", enabled: false),
+            new AzureResourceEntry { Kind = AzureResourceKind.AppInsights, Key = "app", Name = "app", Enabled = true }
+        });
+        var svc = CreateService();
 
         await svc.ClearConfigAsync();
 
-        mock.Verify(m => m.DeleteAsync("loganalytics.workspace_id"), Times.Once);
-        mock.Verify(m => m.DeleteAsync("loganalytics.workspace_name"), Times.Once);
-        mock.Verify(m => m.DeleteAsync("loganalytics.resource_id"), Times.Once);
-        mock.Verify(m => m.DeleteAsync("loganalytics.subscription_id"), Times.Once);
-        mock.Verify(m => m.DeleteAsync("loganalytics.registered_at"), Times.Once);
+        (await _registry.ListAsync(AzureResourceKind.LogAnalytics)).Should().BeEmpty();
+        (await _registry.ListAsync(AzureResourceKind.AppInsights)).Should().ContainSingle();
     }
 }

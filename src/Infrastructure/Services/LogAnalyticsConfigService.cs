@@ -1,3 +1,4 @@
+using PKS.Infrastructure.Services.Azure;
 using PKS.Infrastructure.Services.Models;
 
 namespace PKS.Infrastructure.Services;
@@ -10,59 +11,61 @@ public interface ILogAnalyticsConfigService
     Task ClearConfigAsync();
 }
 
+/// <summary>
+/// Single-workspace facade over <see cref="IAzureResourceRegistry"/> for the callers that still
+/// think in terms of "the" workspace (<c>KustoCommand</c>, <c>LogAnalyticsQueryService</c>): the
+/// first enabled <see cref="AzureResourceKind.LogAnalytics"/> entry is the configured one.
+/// </summary>
 public class LogAnalyticsConfigService : ILogAnalyticsConfigService
 {
-    private const string KeyWorkspaceId = "loganalytics.workspace_id";
-    private const string KeyWorkspaceName = "loganalytics.workspace_name";
-    private const string KeyResourceId = "loganalytics.resource_id";
-    private const string KeySubscriptionId = "loganalytics.subscription_id";
-    private const string KeyRegisteredAt = "loganalytics.registered_at";
+    private readonly IAzureResourceRegistry _registry;
 
-    private readonly IConfigurationService _config;
-
-    public LogAnalyticsConfigService(IConfigurationService config)
+    public LogAnalyticsConfigService(IAzureResourceRegistry registry)
     {
-        _config = config;
+        _registry = registry;
     }
 
     public async Task<bool> IsConfiguredAsync()
-    {
-        var workspaceId = await _config.GetAsync(KeyWorkspaceId);
-        return !string.IsNullOrWhiteSpace(workspaceId);
-    }
+        => (await _registry.ListEnabledAsync(AzureResourceKind.LogAnalytics)).Count > 0;
 
     public async Task<LogAnalyticsConfig?> GetConfigAsync()
     {
-        var workspaceId = await _config.GetAsync(KeyWorkspaceId);
-        if (string.IsNullOrWhiteSpace(workspaceId))
+        var entry = (await _registry.ListEnabledAsync(AzureResourceKind.LogAnalytics)).FirstOrDefault();
+        if (entry == null)
             return null;
 
         return new LogAnalyticsConfig
         {
-            WorkspaceId = workspaceId,
-            WorkspaceName = await _config.GetAsync(KeyWorkspaceName),
-            ResourceId = await _config.GetAsync(KeyResourceId),
-            SubscriptionId = await _config.GetAsync(KeySubscriptionId),
-            RegisteredAt = DateTime.TryParse(
-                await _config.GetAsync(KeyRegisteredAt), out var dt) ? dt : DateTime.MinValue
+            WorkspaceId = entry.Key,
+            WorkspaceName = entry.Name,
+            ResourceId = entry.ResourceId,
+            SubscriptionId = entry.SubscriptionId,
+            RegisteredAt = entry.DiscoveredAt
         };
     }
 
     public async Task StoreConfigAsync(string workspaceId, string? workspaceName, string? resourceId, string? subscriptionId)
     {
-        await _config.SetAsync(KeyWorkspaceId, workspaceId, global: true);
-        await _config.SetAsync(KeyWorkspaceName, workspaceName ?? string.Empty, global: true);
-        await _config.SetAsync(KeyResourceId, resourceId ?? string.Empty, global: true);
-        await _config.SetAsync(KeySubscriptionId, subscriptionId ?? string.Empty, global: true);
-        await _config.SetAsync(KeyRegisteredAt, DateTime.UtcNow.ToString("O"), global: true);
+        await _registry.UpsertAsync(new[]
+        {
+            new AzureResourceEntry
+            {
+                Kind = AzureResourceKind.LogAnalytics,
+                Key = workspaceId,
+                Name = string.IsNullOrWhiteSpace(workspaceName) ? workspaceId : workspaceName,
+                ResourceId = string.IsNullOrWhiteSpace(resourceId) ? null : resourceId,
+                SubscriptionId = string.IsNullOrWhiteSpace(subscriptionId) ? null : subscriptionId,
+                Enabled = true,
+                DiscoveredAt = DateTime.UtcNow
+            }
+        });
+        // Upsert preserves a user's "off" — but registering is an explicit "on".
+        await _registry.SetEnabledAsync(AzureResourceKind.LogAnalytics, workspaceId, true);
     }
 
     public async Task ClearConfigAsync()
     {
-        await _config.DeleteAsync(KeyWorkspaceId);
-        await _config.DeleteAsync(KeyWorkspaceName);
-        await _config.DeleteAsync(KeyResourceId);
-        await _config.DeleteAsync(KeySubscriptionId);
-        await _config.DeleteAsync(KeyRegisteredAt);
+        foreach (var entry in await _registry.ListAsync(AzureResourceKind.LogAnalytics))
+            await _registry.RemoveAsync(AzureResourceKind.LogAnalytics, entry.Key);
     }
 }
