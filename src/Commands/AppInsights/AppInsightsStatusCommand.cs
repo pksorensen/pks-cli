@@ -42,7 +42,7 @@ public class AppInsightsStatusCommand : Command<AppInsightsStatusCommand.Setting
             {
                 var result = await _console.Status().StartAsync(
                     $"Testing {entry.Name.EscapeMarkup()}...",
-                    _ => _queryService.TestConnectionAsync(entry.Key));
+                    _ => _queryService.TestConnectionAsync(entry));
                 if (result.Success)
                     _console.MarkupLine($"[green]Connected[/] - {(result.ResourceName ?? entry.Name).EscapeMarkup()}");
                 else

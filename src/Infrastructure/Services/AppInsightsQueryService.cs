@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using PKS.Infrastructure.Services.Azure;
 using PKS.Infrastructure.Services.Models;
 
 namespace PKS.Infrastructure.Services;
@@ -75,15 +76,28 @@ internal class DefaultAppInsightsHttpAdapter : IAppInsightsHttpAdapter
 
 public interface IAppInsightsQueryService
 {
+    /// <summary>Probe the first enabled resource (what <c>pks appinsights status</c> shows).</summary>
     Task<AppInsightsConnectionResult> TestConnectionAsync(CancellationToken ct = default);
 
-    /// <summary>Tests one resource by app id instead of the configured one — the status command runs
-    /// this for every enabled entry.</summary>
-    Task<AppInsightsConnectionResult> TestConnectionAsync(string appIdOverride, CancellationToken ct = default);
-    Task<List<OtelError>> QueryErrorsAsync(TimeSpan since, int limit, string? appName = null, string? operationId = null, CancellationToken ct = default);
-    Task<List<OtelTrace>> QueryTracesAsync(TimeSpan since, int limit, bool? hasError = null, string? appName = null, CancellationToken ct = default);
-    Task<List<OtelLog>> QueryLogsAsync(TimeSpan since, string? severity = null, string? traceId = null, string? appName = null, CancellationToken ct = default);
-    Task<List<OtelSpan>> QuerySpansAsync(string operationId, CancellationToken ct = default);
+    /// <summary>Probe one registered resource with its own tenant's token.</summary>
+    Task<AppInsightsConnectionResult> TestConnectionAsync(AzureResourceEntry resource, CancellationToken ct = default);
+
+    // Single-resource queries. <c>appIdOverride</c> targets that App Insights application id
+    // instead of the first enabled one; the returned rows carry the resource's registry name.
+    Task<List<OtelError>> QueryErrorsAsync(TimeSpan since, int limit, string? appName = null, string? operationId = null, string? appIdOverride = null, CancellationToken ct = default);
+    Task<List<OtelTrace>> QueryTracesAsync(TimeSpan since, int limit, bool? hasError = null, string? appName = null, string? appIdOverride = null, CancellationToken ct = default);
+    Task<List<OtelLog>> QueryLogsAsync(TimeSpan since, string? severity = null, string? traceId = null, string? appName = null, string? appIdOverride = null, CancellationToken ct = default);
+    Task<List<OtelSpan>> QuerySpansAsync(string operationId, string? appIdOverride = null, CancellationToken ct = default);
+
+    // Fan-out over several resources in parallel, each with a token for its own tenant. Rows are
+    // merged in the same order the single-resource query uses (newest first; spans oldest first),
+    // every row stamped with its resource's registry name. A resource that fails is reported in
+    // <see cref="OtelQueryResult{T}.Errors"/> and never stops the others.
+    Task<OtelQueryResult<OtelError>> QueryErrorsManyAsync(IReadOnlyList<AzureResourceEntry> resources, TimeSpan since, int limit, string? appName = null, string? operationId = null, CancellationToken ct = default);
+    Task<OtelQueryResult<OtelTrace>> QueryTracesManyAsync(IReadOnlyList<AzureResourceEntry> resources, TimeSpan since, int limit, bool? hasError = null, string? appName = null, CancellationToken ct = default);
+    Task<OtelQueryResult<OtelLog>> QueryLogsManyAsync(IReadOnlyList<AzureResourceEntry> resources, TimeSpan since, string? severity = null, string? traceId = null, string? appName = null, CancellationToken ct = default);
+    Task<OtelQueryResult<OtelSpan>> QuerySpansManyAsync(IReadOnlyList<AzureResourceEntry> resources, string operationId, CancellationToken ct = default);
+
     Task<string?> GetConfiguredAppIdAsync(CancellationToken ct = default);
 }
 
@@ -100,54 +114,47 @@ public class AppInsightsQueryService : IAppInsightsQueryService
     };
 
     private const string QueryScope = "https://api.applicationinsights.io/.default";
+    private const string InitCommand = "pks appinsights init";
 
     private readonly IAppInsightsConfigService _configService;
     private readonly IAppInsightsHttpAdapter _httpAdapter;
-    private readonly IAzureFoundryAuthService _authService;
+    private readonly IAzureResourceRegistry _registry;
+    private readonly AzureQueryTokenProvider _tokens;
 
     public AppInsightsQueryService(
         IAppInsightsConfigService configService,
         IAppInsightsHttpAdapter httpAdapter,
-        IAzureFoundryAuthService authService)
+        IAzureFoundryAuthService authService,
+        IAzureTenantCredentialStore tenantStore,
+        IAzureResourceRegistry registry)
     {
         _configService = configService;
         _httpAdapter = httpAdapter;
-        _authService = authService;
+        _registry = registry;
+        _tokens = new AzureQueryTokenProvider(tenantStore, authService, InitCommand);
     }
 
     public async Task<AppInsightsConnectionResult> TestConnectionAsync(CancellationToken ct = default)
     {
-        try
-        {
-            var config = await _configService.GetConfigAsync();
-            if (config is null)
-                return new AppInsightsConnectionResult { Success = false, ErrorMessage = "Not configured" };
-            return await TestResourceAsync(config.AppId, config.ResourceName, ct);
-        }
-        catch (Exception ex)
-        {
-            return new AppInsightsConnectionResult { Success = false, ErrorMessage = ex.Message };
-        }
+        var config = await _configService.GetConfigAsync();
+        if (config is null)
+            return new AppInsightsConnectionResult { Success = false, ErrorMessage = "Not configured" };
+
+        return await TestConnectionAsync(await ResolveEntryAsync(config.AppId, config.ResourceName), ct);
     }
 
-    public Task<AppInsightsConnectionResult> TestConnectionAsync(string appIdOverride, CancellationToken ct = default)
-        => TestResourceAsync(appIdOverride, null, ct);
-
-    private async Task<AppInsightsConnectionResult> TestResourceAsync(string appId, string? resourceName, CancellationToken ct)
+    public async Task<AppInsightsConnectionResult> TestConnectionAsync(AzureResourceEntry resource, CancellationToken ct = default)
     {
         try
         {
-            var token = await _authService.GetAccessTokenAsync(QueryScope, ct);
-            if (string.IsNullOrEmpty(token))
-                return new AppInsightsConnectionResult { Success = false, ErrorMessage = "Not authenticated. Run 'pks foundry init' first." };
-
+            var token = await _tokens.GetTokenAsync(resource, QueryScope, ct);
             var kql = "requests | take 1 | project cloud_RoleName";
-            var response = await _httpAdapter.QueryAsync(appId, token, kql, ct);
+            var response = await _httpAdapter.QueryAsync(resource.Key, token, kql, ct);
 
-            var discoveredName = response.Tables.FirstOrDefault()?.Rows.FirstOrDefault()
+            var resourceName = response.Tables.FirstOrDefault()?.Rows.FirstOrDefault()
                 ?.ElementAtOrDefault(0).GetString();
 
-            return new AppInsightsConnectionResult { Success = true, ResourceName = discoveredName ?? resourceName };
+            return new AppInsightsConnectionResult { Success = true, ResourceName = resourceName ?? resource.Name };
         }
         catch (Exception ex)
         {
@@ -156,35 +163,35 @@ public class AppInsightsQueryService : IAppInsightsQueryService
     }
 
     public async Task<List<OtelError>> QueryErrorsAsync(
-        TimeSpan since, int limit, string? appName = null, string? operationId = null, CancellationToken ct = default)
-    {
-        var (config, token) = await RequireConfigAndTokenAsync(ct);
-        var response = await _httpAdapter.QueryAsync(config.AppId, token, BuildErrorsKql(since, limit, appName, operationId), ct);
-        return MapErrors(response);
-    }
+        TimeSpan since, int limit, string? appName = null, string? operationId = null, string? appIdOverride = null, CancellationToken ct = default)
+        => await QueryOneAsync(await RequireEntryAsync(appIdOverride), BuildErrorsKql(since, limit, appName, operationId), MapErrors, ct);
 
     public async Task<List<OtelTrace>> QueryTracesAsync(
-        TimeSpan since, int limit, bool? hasError = null, string? appName = null, CancellationToken ct = default)
-    {
-        var (config, token) = await RequireConfigAndTokenAsync(ct);
-        var response = await _httpAdapter.QueryAsync(config.AppId, token, BuildTracesKql(since, limit, hasError, appName), ct);
-        return MapTraces(response);
-    }
+        TimeSpan since, int limit, bool? hasError = null, string? appName = null, string? appIdOverride = null, CancellationToken ct = default)
+        => await QueryOneAsync(await RequireEntryAsync(appIdOverride), BuildTracesKql(since, limit, hasError, appName), MapTraces, ct);
 
     public async Task<List<OtelLog>> QueryLogsAsync(
-        TimeSpan since, string? severity = null, string? traceId = null, string? appName = null, CancellationToken ct = default)
-    {
-        var (config, token) = await RequireConfigAndTokenAsync(ct);
-        var response = await _httpAdapter.QueryAsync(config.AppId, token, BuildLogsKql(since, severity, traceId, appName), ct);
-        return MapLogs(response);
-    }
+        TimeSpan since, string? severity = null, string? traceId = null, string? appName = null, string? appIdOverride = null, CancellationToken ct = default)
+        => await QueryOneAsync(await RequireEntryAsync(appIdOverride), BuildLogsKql(since, severity, traceId, appName), MapLogs, ct);
 
-    public async Task<List<OtelSpan>> QuerySpansAsync(string operationId, CancellationToken ct = default)
-    {
-        var (config, token) = await RequireConfigAndTokenAsync(ct);
-        var response = await _httpAdapter.QueryAsync(config.AppId, token, BuildSpansKql(operationId), ct);
-        return MapSpans(response);
-    }
+    public async Task<List<OtelSpan>> QuerySpansAsync(string operationId, string? appIdOverride = null, CancellationToken ct = default)
+        => await QueryOneAsync(await RequireEntryAsync(appIdOverride), BuildSpansKql(operationId), MapSpans, ct);
+
+    public Task<OtelQueryResult<OtelError>> QueryErrorsManyAsync(
+        IReadOnlyList<AzureResourceEntry> resources, TimeSpan since, int limit, string? appName = null, string? operationId = null, CancellationToken ct = default)
+        => QueryManyAsync(resources, BuildErrorsKql(since, limit, appName, operationId), MapErrors, newestFirst: true, ct);
+
+    public Task<OtelQueryResult<OtelTrace>> QueryTracesManyAsync(
+        IReadOnlyList<AzureResourceEntry> resources, TimeSpan since, int limit, bool? hasError = null, string? appName = null, CancellationToken ct = default)
+        => QueryManyAsync(resources, BuildTracesKql(since, limit, hasError, appName), MapTraces, newestFirst: true, ct);
+
+    public Task<OtelQueryResult<OtelLog>> QueryLogsManyAsync(
+        IReadOnlyList<AzureResourceEntry> resources, TimeSpan since, string? severity = null, string? traceId = null, string? appName = null, CancellationToken ct = default)
+        => QueryManyAsync(resources, BuildLogsKql(since, severity, traceId, appName), MapLogs, newestFirst: true, ct);
+
+    public Task<OtelQueryResult<OtelSpan>> QuerySpansManyAsync(
+        IReadOnlyList<AzureResourceEntry> resources, string operationId, CancellationToken ct = default)
+        => QueryManyAsync(resources, BuildSpansKql(operationId), MapSpans, newestFirst: false, ct);
 
     public async Task<string?> GetConfiguredAppIdAsync(CancellationToken ct = default)
     {
@@ -192,14 +199,73 @@ public class AppInsightsQueryService : IAppInsightsQueryService
         return config?.AppId;
     }
 
-    private async Task<(AppInsightsConfig config, string token)> RequireConfigAndTokenAsync(CancellationToken ct)
+    /// <summary>One resource's rows, each stamped with the resource's registry name.</summary>
+    private async Task<List<T>> QueryOneAsync<T>(
+        AzureResourceEntry resource, string kql, Func<AppInsightsQueryResponse, List<T>> map, CancellationToken ct)
+        where T : IOtelRecord
     {
-        var config = await _configService.GetConfigAsync()
-            ?? throw new InvalidOperationException("Application Insights not configured. Run 'pks appinsights init' first.");
-        var token = await _authService.GetAccessTokenAsync(QueryScope, ct)
-            ?? throw new InvalidOperationException("Not authenticated. Run 'pks foundry init' to sign in.");
-        return (config, token);
+        var token = await _tokens.GetTokenAsync(resource, QueryScope, ct);
+        var rows = map(await _httpAdapter.QueryAsync(resource.Key, token, kql, ct));
+        foreach (var row in rows)
+            row.Resource = resource.Name;
+        return rows;
     }
+
+    /// <summary>
+    /// The same query against every resource at once. Each resource's failure lands in
+    /// <see cref="OtelQueryResult{T}.Errors"/> (in input order) instead of aborting the batch,
+    /// and the surviving rows are merged into one timestamp-ordered list.
+    /// </summary>
+    private async Task<OtelQueryResult<T>> QueryManyAsync<T>(
+        IReadOnlyList<AzureResourceEntry> resources, string kql, Func<AppInsightsQueryResponse, List<T>> map,
+        bool newestFirst, CancellationToken ct)
+        where T : IOtelRecord
+    {
+        var outcomes = await Task.WhenAll(resources.Select(async resource =>
+        {
+            try
+            {
+                return (rows: await QueryOneAsync(resource, kql, map, ct), error: (OtelResourceError?)null);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                return (rows: new List<T>(), error: new OtelResourceError { Resource = resource, Error = ex });
+            }
+        }));
+
+        var items = outcomes.SelectMany(o => o.rows);
+        return new OtelQueryResult<T>
+        {
+            Attempted = resources.Count,
+            Items = (newestFirst ? items.OrderByDescending(r => r.Timestamp) : items.OrderBy(r => r.Timestamp)).ToList(),
+            Errors = outcomes.Where(o => o.error is not null).Select(o => o.error!).ToList()
+        };
+    }
+
+    private async Task<AzureResourceEntry> RequireEntryAsync(string? appIdOverride)
+    {
+        if (!string.IsNullOrWhiteSpace(appIdOverride))
+            return await ResolveEntryAsync(appIdOverride, null);
+
+        var config = await _configService.GetConfigAsync()
+            ?? throw new InvalidOperationException($"Application Insights not configured. Run '{InitCommand}' first.");
+        return await ResolveEntryAsync(config.AppId, config.ResourceName);
+    }
+
+    /// <summary>
+    /// The registry entry for an application id — it carries the tenant the token must come from.
+    /// An id the registry does not know becomes a tenant-less entry, which the token provider
+    /// resolves to the only signed-in tenant.
+    /// </summary>
+    private async Task<AzureResourceEntry> ResolveEntryAsync(string appId, string? name)
+        => await _registry.FindAsync(AzureResourceKind.AppInsights, appId)
+           ?? new AzureResourceEntry
+           {
+               Kind = AzureResourceKind.AppInsights,
+               Key = appId,
+               Name = name ?? appId,
+               Enabled = true
+           };
 
     private static string FormatSince(TimeSpan since)
     {

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using PKS.Infrastructure.Services.Azure;
 
 namespace PKS.Infrastructure.Services.Models;
 
@@ -80,4 +81,17 @@ public class KustoColumn
 
     [JsonPropertyName("type")]
     public string Type { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// One workspace's share of a fan-out query. Exactly one of <see cref="Response"/> and
+/// <see cref="Error"/> is set: a workspace that fails never stops the others, so the caller
+/// gets every outcome and decides how to render the mix.
+/// </summary>
+public sealed class WorkspaceQueryResult
+{
+    public required AzureResourceEntry Workspace { get; init; }
+    public KustoQueryResponse? Response { get; init; }
+    public Exception? Error { get; init; }
+    public bool Succeeded => Error is null && Response is not null;
 }

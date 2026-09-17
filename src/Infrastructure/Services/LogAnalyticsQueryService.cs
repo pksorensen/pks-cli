@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Xml;
+using PKS.Infrastructure.Services.Azure;
 using PKS.Infrastructure.Services.Models;
 
 namespace PKS.Infrastructure.Services;
@@ -62,14 +63,14 @@ internal class DefaultLogAnalyticsHttpAdapter : ILogAnalyticsHttpAdapter
 
 public interface ILogAnalyticsQueryService
 {
+    /// <summary>Probe the first enabled workspace (what <c>pks loganalytics status</c> shows).</summary>
     Task<LogAnalyticsConnectionResult> TestConnectionAsync(CancellationToken ct = default);
 
-    /// <summary>Tests one workspace by id instead of the configured one — the status command runs
-    /// this for every enabled entry.</summary>
-    Task<LogAnalyticsConnectionResult> TestConnectionAsync(string workspaceIdOverride, CancellationToken ct = default);
+    /// <summary>Probe one registered workspace with its own tenant's token.</summary>
+    Task<LogAnalyticsConnectionResult> TestConnectionAsync(AzureResourceEntry workspace, CancellationToken ct = default);
 
     /// <summary>
-    /// Run raw KQL. <paramref name="since"/> maps to the API's <c>timespan</c>
+    /// Run raw KQL against one workspace. <paramref name="since"/> maps to the API's <c>timespan</c>
     /// property, so it applies without rewriting the query; pass null to let the
     /// query decide its own time range.
     /// </summary>
@@ -79,56 +80,59 @@ public interface ILogAnalyticsQueryService
         string? workspaceIdOverride = null,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// Run the same KQL against several workspaces in parallel, each with a token for its own
+    /// tenant. One result per workspace, in input order; a failure is captured in that
+    /// workspace's result and never stops the others.
+    /// </summary>
+    Task<IReadOnlyList<WorkspaceQueryResult>> QueryManyAsync(
+        IReadOnlyList<AzureResourceEntry> workspaces,
+        string kql,
+        TimeSpan? since = null,
+        CancellationToken ct = default);
+
     Task<string?> GetConfiguredWorkspaceIdAsync(CancellationToken ct = default);
 }
 
 public class LogAnalyticsQueryService : ILogAnalyticsQueryService
 {
     private const string QueryScope = "https://api.loganalytics.io/.default";
+    private const string InitCommand = "pks loganalytics init";
 
     private readonly ILogAnalyticsConfigService _configService;
     private readonly ILogAnalyticsHttpAdapter _httpAdapter;
-    private readonly IAzureFoundryAuthService _authService;
+    private readonly IAzureResourceRegistry _registry;
+    private readonly AzureQueryTokenProvider _tokens;
 
     public LogAnalyticsQueryService(
         ILogAnalyticsConfigService configService,
         ILogAnalyticsHttpAdapter httpAdapter,
-        IAzureFoundryAuthService authService)
+        IAzureFoundryAuthService authService,
+        IAzureTenantCredentialStore tenantStore,
+        IAzureResourceRegistry registry)
     {
         _configService = configService;
         _httpAdapter = httpAdapter;
-        _authService = authService;
+        _registry = registry;
+        _tokens = new AzureQueryTokenProvider(tenantStore, authService, InitCommand);
     }
 
     public async Task<LogAnalyticsConnectionResult> TestConnectionAsync(CancellationToken ct = default)
     {
-        try
-        {
-            var config = await _configService.GetConfigAsync();
-            if (config is null)
-                return new LogAnalyticsConnectionResult { Success = false, ErrorMessage = "Not configured" };
-            return await TestWorkspaceAsync(config.WorkspaceId, config.WorkspaceName, ct);
-        }
-        catch (Exception ex)
-        {
-            return new LogAnalyticsConnectionResult { Success = false, ErrorMessage = ex.Message };
-        }
+        var config = await _configService.GetConfigAsync();
+        if (config is null)
+            return new LogAnalyticsConnectionResult { Success = false, ErrorMessage = "Not configured" };
+
+        return await TestConnectionAsync(await ResolveEntryAsync(config.WorkspaceId, config.WorkspaceName), ct);
     }
 
-    public Task<LogAnalyticsConnectionResult> TestConnectionAsync(string workspaceIdOverride, CancellationToken ct = default)
-        => TestWorkspaceAsync(workspaceIdOverride, null, ct);
-
-    private async Task<LogAnalyticsConnectionResult> TestWorkspaceAsync(string workspaceId, string? workspaceName, CancellationToken ct)
+    public async Task<LogAnalyticsConnectionResult> TestConnectionAsync(AzureResourceEntry workspace, CancellationToken ct = default)
     {
         try
         {
-            var token = await _authService.GetAccessTokenAsync(QueryScope, ct);
-            if (string.IsNullOrEmpty(token))
-                return new LogAnalyticsConnectionResult { Success = false, ErrorMessage = "Not authenticated. Run 'pks loganalytics init' first." };
-
-            await _httpAdapter.QueryAsync(workspaceId, token, "print ok = 1", null, ct);
-
-            return new LogAnalyticsConnectionResult { Success = true, WorkspaceName = workspaceName };
+            var token = await _tokens.GetTokenAsync(workspace, QueryScope, ct);
+            await _httpAdapter.QueryAsync(workspace.Key, token, "print ok = 1", null, ct);
+            return new LogAnalyticsConnectionResult { Success = true, WorkspaceName = workspace.Name };
         }
         catch (Exception ex)
         {
@@ -142,18 +146,42 @@ public class LogAnalyticsQueryService : ILogAnalyticsQueryService
         if (string.IsNullOrWhiteSpace(kql))
             throw new ArgumentException("Query must not be empty.", nameof(kql));
 
-        var workspaceId = workspaceIdOverride;
-        if (string.IsNullOrWhiteSpace(workspaceId))
+        AzureResourceEntry workspace;
+        if (!string.IsNullOrWhiteSpace(workspaceIdOverride))
+        {
+            workspace = await ResolveEntryAsync(workspaceIdOverride, null);
+        }
+        else
         {
             var config = await _configService.GetConfigAsync()
-                ?? throw new InvalidOperationException("Log Analytics not configured. Run 'pks loganalytics init' first.");
-            workspaceId = config.WorkspaceId;
+                ?? throw new InvalidOperationException($"Log Analytics not configured. Run '{InitCommand}' first.");
+            workspace = await ResolveEntryAsync(config.WorkspaceId, config.WorkspaceName);
         }
 
-        var token = await _authService.GetAccessTokenAsync(QueryScope, ct)
-            ?? throw new InvalidOperationException("Not authenticated. Run 'pks loganalytics init' to sign in.");
+        return await QueryOneAsync(workspace, kql, FormatTimespan(since), ct);
+    }
 
-        return await _httpAdapter.QueryAsync(workspaceId, token, kql, FormatTimespan(since), ct);
+    public async Task<IReadOnlyList<WorkspaceQueryResult>> QueryManyAsync(
+        IReadOnlyList<AzureResourceEntry> workspaces, string kql, TimeSpan? since = null, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(kql))
+            throw new ArgumentException("Query must not be empty.", nameof(kql));
+        if (workspaces.Count == 0)
+            return Array.Empty<WorkspaceQueryResult>();
+
+        var timespan = FormatTimespan(since);
+        return await Task.WhenAll(workspaces.Select(async workspace =>
+        {
+            try
+            {
+                var response = await QueryOneAsync(workspace, kql, timespan, ct);
+                return new WorkspaceQueryResult { Workspace = workspace, Response = response };
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                return new WorkspaceQueryResult { Workspace = workspace, Error = ex };
+            }
+        }));
     }
 
     public async Task<string?> GetConfiguredWorkspaceIdAsync(CancellationToken ct = default)
@@ -161,6 +189,27 @@ public class LogAnalyticsQueryService : ILogAnalyticsQueryService
         var config = await _configService.GetConfigAsync();
         return config?.WorkspaceId;
     }
+
+    private async Task<KustoQueryResponse> QueryOneAsync(AzureResourceEntry workspace, string kql, string? timespan, CancellationToken ct)
+    {
+        var token = await _tokens.GetTokenAsync(workspace, QueryScope, ct);
+        return await _httpAdapter.QueryAsync(workspace.Key, token, kql, timespan, ct);
+    }
+
+    /// <summary>
+    /// The registry entry for a workspace GUID — it carries the tenant the token must come from.
+    /// A GUID the registry does not know (an ad-hoc <c>--workspace</c>) becomes a tenant-less
+    /// entry, which the token provider resolves to the only signed-in tenant.
+    /// </summary>
+    private async Task<AzureResourceEntry> ResolveEntryAsync(string workspaceId, string? name)
+        => await _registry.FindAsync(AzureResourceKind.LogAnalytics, workspaceId)
+           ?? new AzureResourceEntry
+           {
+               Kind = AzureResourceKind.LogAnalytics,
+               Key = workspaceId,
+               Name = name ?? workspaceId,
+               Enabled = true
+           };
 
     /// <summary>ISO 8601 duration for the API's <c>timespan</c> property (1h → PT1H).</summary>
     internal static string? FormatTimespan(TimeSpan? since)

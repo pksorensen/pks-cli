@@ -1,14 +1,17 @@
 using System.ComponentModel;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using PKS.Commands.Azure;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Azure;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
 namespace PKS.Commands.Kusto;
 
-[Description("Run a KQL query against the configured Log Analytics workspace")]
+[Description("Run a KQL query against every enabled Log Analytics workspace")]
 public class KustoCommand : Command<KustoCommand.Settings>
 {
     public class Settings : CommandSettings
@@ -25,17 +28,17 @@ public class KustoCommand : Command<KustoCommand.Settings>
         [Description("Time window applied as the API timespan: 30m, 1h, 24h, 7d (default: whatever the query says)")]
         public string? Since { get; set; }
 
-        [CommandOption("-w|--workspace <GUID>")]
-        [Description("Query this workspace GUID instead of the configured one")]
+        [CommandOption("-w|--workspace <NAME_OR_GUID>")]
+        [Description("Query only this workspace: a registered name, or a workspace GUID (queried directly, registered or not)")]
         public string? Workspace { get; set; }
 
         [CommandOption("--format <FORMAT>")]
-        [Description("Output format: Table, Json or Csv (default: Table)")]
+        [Description("Output format: Table, Json or Csv (default: Table). Json and Csv rows carry a leading 'workspace' field.")]
         [DefaultValue("Table")]
         public string Format { get; set; } = "Table";
 
         [CommandOption("-v|--verbose")]
-        [Description("Show workspace, timespan and the KQL that was sent")]
+        [Description("Show the target workspaces, timespan and the KQL that was sent")]
         public bool Verbose { get; set; }
 
         public TimeSpan? ParsedSince
@@ -56,33 +59,35 @@ public class KustoCommand : Command<KustoCommand.Settings>
     }
 
     private const int MaxCellWidth = 80;
+    private const string WorkspaceColumn = "workspace";
+    private const string InitCommand = "pks loganalytics init";
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = false };
 
-    private readonly ILogAnalyticsConfigService _configService;
+    private readonly IAzureResourceRegistry _registry;
     private readonly ILogAnalyticsQueryService _queryService;
     private readonly IAnsiConsole _console;
 
     public KustoCommand(
-        ILogAnalyticsConfigService configService,
+        IAzureResourceRegistry registry,
         ILogAnalyticsQueryService queryService,
         IAnsiConsole console)
     {
-        _configService = configService;
+        _registry = registry;
         _queryService = queryService;
         _console = console;
     }
+
+    /// <summary>Where per-workspace failures go: stderr, so Json/Csv on stdout stay parseable. Tests inject a capture.</summary>
+    internal IAnsiConsole? ErrorConsole { get; init; }
 
     public override int Execute(CommandContext context, Settings settings)
         => ExecuteAsync(settings).GetAwaiter().GetResult();
 
     private async Task<int> ExecuteAsync(Settings settings)
     {
-        if (string.IsNullOrWhiteSpace(settings.Workspace) && !await _configService.IsConfiguredAsync())
-        {
-            _console.MarkupLine("[yellow]Log Analytics is not configured.[/]");
-            _console.MarkupLine("[dim]Run [cyan]pks loganalytics init[/] to configure, or pass [cyan]--workspace <GUID>[/].[/]");
+        var targets = await ResolveTargetsAsync(settings.Workspace);
+        if (targets is null)
             return 1;
-        }
 
         var kql = ReadQuery(settings);
         if (string.IsNullOrWhiteSpace(kql))
@@ -94,30 +99,58 @@ public class KustoCommand : Command<KustoCommand.Settings>
 
         if (settings.Verbose)
         {
-            var workspaceId = settings.Workspace ?? await _queryService.GetConfiguredWorkspaceIdAsync();
-            _console.MarkupLine($"[dim]Workspace: {(workspaceId ?? "?").EscapeMarkup()}[/]");
+            _console.MarkupLine($"[dim]Workspaces ({targets.Count}):[/]");
+            foreach (var t in targets)
+                _console.MarkupLine($"[dim]  {t.Name.EscapeMarkup()}  {t.Key.EscapeMarkup()}{(t.TenantId is null ? "" : "  tenant " + t.TenantId.EscapeMarkup())}[/]");
             _console.MarkupLine($"[dim]Timespan:  {(LogAnalyticsQueryService.FormatTimespan(settings.ParsedSince) ?? "(from query)").EscapeMarkup()}[/]");
             _console.MarkupLine($"[dim]KQL:       {kql.EscapeMarkup()}[/]");
             _console.WriteLine();
         }
 
-        KustoQueryResponse response;
-        try
+        var results = await _queryService.QueryManyAsync(targets, kql, settings.ParsedSince);
+
+        var errorConsole = ErrorConsole ?? AzureQueryTargets.StderrConsole();
+        foreach (var failed in results.Where(r => !r.Succeeded))
+            AzureQueryTargets.ReportFailure(errorConsole, "Workspace", failed.Workspace, failed.Error ?? new InvalidOperationException("No response"), InitCommand);
+
+        var succeeded = results.Where(r => r.Succeeded).ToList();
+        switch (settings.Format.ToLowerInvariant())
         {
-            response = await _queryService.QueryAsync(kql, settings.ParsedSince, settings.Workspace);
-        }
-        catch (Exception ex) when (ex is LogAnalyticsQueryException or InvalidOperationException)
-        {
-            _console.MarkupLine($"[red]{ex.Message.EscapeMarkup()}[/]");
-            return 1;
+            case "json": WriteJson(succeeded); break;
+            case "csv": WriteCsv(succeeded); break;
+            default: WriteTable(succeeded, showHeadings: targets.Count > 1); break;
         }
 
-        return settings.Format.ToLowerInvariant() switch
+        return succeeded.Count == 0 ? 1 : 0;
+    }
+
+    /// <summary>
+    /// Which workspaces to query. No <c>--workspace</c> ⇒ every enabled one. A bare GUID ⇒ that
+    /// workspace directly, registered or not (a registered entry, even a disabled one, lends its
+    /// name and tenant). Anything else ⇒ an enabled entry by name or key, or an error.
+    /// </summary>
+    private async Task<IReadOnlyList<AzureResourceEntry>?> ResolveTargetsAsync(string? workspace)
+    {
+        var requested = workspace?.Trim();
+        if (!string.IsNullOrEmpty(requested) && Guid.TryParse(requested, out _))
         {
-            "json" => WriteJson(response),
-            "csv" => WriteCsv(response),
-            _ => WriteTable(response)
-        };
+            var registered = await _registry.FindAsync(AzureResourceKind.LogAnalytics, requested);
+            return
+            [
+                registered ?? new AzureResourceEntry
+                {
+                    Kind = AzureResourceKind.LogAnalytics,
+                    Key = requested,
+                    Name = requested,
+                    Enabled = true
+                }
+            ];
+        }
+
+        return await AzureQueryTargets.ResolveAsync(
+            _registry, AzureResourceKind.LogAnalytics,
+            string.IsNullOrEmpty(requested) ? null : [requested],
+            _console, "Log Analytics workspaces", InitCommand);
     }
 
     private string? ReadQuery(Settings settings)
@@ -138,71 +171,83 @@ public class KustoCommand : Command<KustoCommand.Settings>
         return Console.IsInputRedirected ? Console.In.ReadToEnd() : null;
     }
 
-    private int WriteTable(KustoQueryResponse response)
+    private void WriteTable(IReadOnlyList<WorkspaceQueryResult> results, bool showHeadings)
     {
-        if (response.Tables.Count == 0 || response.Tables.All(t => t.Rows.Count == 0))
+        foreach (var result in results)
         {
-            _console.MarkupLine("[dim]No rows returned.[/]");
-            return 0;
-        }
+            var response = result.Response!;
+            if (showHeadings)
+                _console.Write(new Rule($"[bold]Workspace {result.Workspace.Name.EscapeMarkup()}[/]").LeftJustified());
 
-        foreach (var t in response.Tables)
-        {
-            if (response.Tables.Count > 1)
-                _console.MarkupLine($"[bold]{t.Name.EscapeMarkup()}[/]");
-
-            var table = new Table().Border(TableBorder.Rounded);
-            foreach (var c in t.Columns)
-                table.AddColumn(c.Name.EscapeMarkup());
-
-            foreach (var row in t.Rows)
+            if (response.Tables.Count == 0 || response.Tables.All(t => t.Rows.Count == 0))
             {
-                var cells = new string[t.Columns.Count];
-                for (var i = 0; i < t.Columns.Count; i++)
-                    cells[i] = Truncate(CellText(row, i)).EscapeMarkup();
-                table.AddRow(cells);
+                _console.MarkupLine("[dim]No rows returned.[/]");
+                continue;
             }
 
-            _console.Write(table);
-            _console.MarkupLine($"[dim]{t.Rows.Count} row(s)[/]");
-        }
+            foreach (var t in response.Tables)
+            {
+                if (response.Tables.Count > 1)
+                    _console.MarkupLine($"[bold]{t.Name.EscapeMarkup()}[/]");
 
-        return 0;
+                var table = new Table().Border(TableBorder.Rounded);
+                foreach (var c in t.Columns)
+                    table.AddColumn(c.Name.EscapeMarkup());
+
+                foreach (var row in t.Rows)
+                {
+                    var cells = new string[t.Columns.Count];
+                    for (var i = 0; i < t.Columns.Count; i++)
+                        cells[i] = Truncate(CellText(row, i)).EscapeMarkup();
+                    table.AddRow(cells);
+                }
+
+                _console.Write(table);
+                _console.MarkupLine($"[dim]{t.Rows.Count} row(s)[/]");
+            }
+        }
     }
 
-    private static int WriteJson(KustoQueryResponse response)
+    /// <summary>One flat array across every workspace; each row leads with the workspace name.</summary>
+    private static void WriteJson(IReadOnlyList<WorkspaceQueryResult> results)
     {
-        var table = response.Tables.FirstOrDefault();
-        if (table is null)
+        var rows = new JsonArray();
+        foreach (var result in results)
         {
-            Console.WriteLine("[]");
-            return 0;
+            var table = result.Response!.Tables.FirstOrDefault();
+            if (table is null) continue;
+
+            foreach (var row in table.Rows)
+            {
+                var obj = new JsonObject { [WorkspaceColumn] = result.Workspace.Name };
+                for (var i = 0; i < table.Columns.Count; i++)
+                    obj[table.Columns[i].Name] = i < row.Count ? JsonNode.Parse(row[i].GetRawText()) : null;
+                rows.Add(obj);
+            }
         }
 
-        var rows = table.Rows.Select(row =>
-        {
-            var obj = new Dictionary<string, JsonElement>();
-            for (var i = 0; i < table.Columns.Count; i++)
-                obj[table.Columns[i].Name] = i < row.Count ? row[i] : default;
-            return obj;
-        }).ToList();
-
-        Console.WriteLine(JsonSerializer.Serialize(rows, JsonOpts));
-        return 0;
+        Console.WriteLine(rows.ToJsonString(JsonOpts));
     }
 
-    private static int WriteCsv(KustoQueryResponse response)
+    /// <summary>One header (from the first workspace that answered) with a leading workspace column, then every row.</summary>
+    private static void WriteCsv(IReadOnlyList<WorkspaceQueryResult> results)
     {
-        var table = response.Tables.FirstOrDefault();
-        if (table is null) return 0;
+        var first = results.Select(r => r.Response!.Tables.FirstOrDefault()).FirstOrDefault(t => t is not null);
+        if (first is null) return;
 
         var sb = new StringBuilder();
-        sb.AppendLine(string.Join(",", table.Columns.Select(c => CsvEscape(c.Name))));
-        foreach (var row in table.Rows)
-            sb.AppendLine(string.Join(",", Enumerable.Range(0, table.Columns.Count).Select(i => CsvEscape(CellText(row, i)))));
+        sb.AppendLine(string.Join(",", new[] { WorkspaceColumn }.Concat(first.Columns.Select(c => CsvEscape(c.Name)))));
+        foreach (var result in results)
+        {
+            var table = result.Response!.Tables.FirstOrDefault();
+            if (table is null) continue;
+            foreach (var row in table.Rows)
+                sb.AppendLine(string.Join(",",
+                    new[] { CsvEscape(result.Workspace.Name) }
+                        .Concat(Enumerable.Range(0, table.Columns.Count).Select(i => CsvEscape(CellText(row, i))))));
+        }
 
         Console.Write(sb.ToString());
-        return 0;
     }
 
     internal static string CellText(List<JsonElement> row, int index)

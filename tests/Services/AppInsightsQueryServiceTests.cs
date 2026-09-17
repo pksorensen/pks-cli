@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Moq;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Azure;
 using PKS.Infrastructure.Services.Models;
 using Xunit;
 
@@ -44,15 +45,58 @@ public class AppInsightsQueryServiceTests
         return mock;
     }
 
+    /// <summary>A tenant store that knows the given tenants and hands out "token-{tenant}" for each.</summary>
+    private static Mock<IAzureTenantCredentialStore> CreateTenantStoreMock(params string[] tenantIds)
+    {
+        var mock = new Mock<IAzureTenantCredentialStore>();
+        mock.Setup(m => m.ListTenantsAsync())
+            .ReturnsAsync(tenantIds.Select(t => new AzureTenantInfo(t, t + "-name", "user@example.com", DateTime.UtcNow, DateTime.UtcNow)).ToList());
+        mock.Setup(m => m.ResolveTenantAsync(It.IsAny<string?>()))
+            .Returns<string?>(t => t is not null
+                ? Task.FromResult(t)
+                : tenantIds.Length == 1
+                    ? Task.FromResult(tenantIds[0])
+                    : Task.FromException<string>(new InvalidOperationException("Several Azure tenants are signed in. Pass --tenant <id>.")));
+        mock.Setup(m => m.GetAccessTokenAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns<string, string, CancellationToken>((t, _, _) => Task.FromResult("token-" + t));
+        return mock;
+    }
+
+    private static Mock<IAzureResourceRegistry> CreateRegistryMock(params AzureResourceEntry[] entries)
+    {
+        var mock = new Mock<IAzureResourceRegistry>();
+        mock.Setup(m => m.ListEnabledAsync(It.IsAny<AzureResourceKind>()))
+            .Returns<AzureResourceKind>(k => Task.FromResult<IReadOnlyList<AzureResourceEntry>>(
+                entries.Where(e => e.Kind == k && e.Enabled).ToList()));
+        mock.Setup(m => m.FindAsync(It.IsAny<AzureResourceKind>(), It.IsAny<string>()))
+            .Returns<AzureResourceKind, string>((k, n) => Task.FromResult(entries.FirstOrDefault(e =>
+                e.Kind == k && (string.Equals(e.Name, n, StringComparison.OrdinalIgnoreCase)
+                                || string.Equals(e.Key, n, StringComparison.OrdinalIgnoreCase)))));
+        return mock;
+    }
+
+    private static AzureResourceEntry Resource(string name, string appId, string? tenant, bool enabled = true) => new()
+    {
+        Kind = AzureResourceKind.AppInsights,
+        Name = name,
+        Key = appId,
+        TenantId = tenant,
+        Enabled = enabled
+    };
+
     private static AppInsightsQueryService CreateService(
         Mock<IAppInsightsConfigService>? configMock = null,
         Mock<IAppInsightsHttpAdapter>? httpMock = null,
-        Mock<IAzureFoundryAuthService>? authMock = null)
+        Mock<IAzureFoundryAuthService>? authMock = null,
+        Mock<IAzureTenantCredentialStore>? tenantMock = null,
+        Mock<IAzureResourceRegistry>? registryMock = null)
     {
         return new AppInsightsQueryService(
             (configMock ?? CreateConfigMock()).Object,
             (httpMock ?? CreateHttpMock()).Object,
-            (authMock ?? CreateAuthMock()).Object);
+            (authMock ?? CreateAuthMock()).Object,
+            (tenantMock ?? CreateTenantStoreMock()).Object,
+            (registryMock ?? CreateRegistryMock()).Object);
     }
 
     // Helper to build a mock AppInsightsQueryResponse with given rows
@@ -285,5 +329,158 @@ public class AppInsightsQueryServiceTests
         var result = await svc.TestConnectionAsync();
         result.Success.Should().BeFalse();
         result.ErrorMessage.Should().Contain("Connection refused");
+    }
+
+    // ── Token source ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task QueryErrorsAsync_UsesTenantStoreToken_WhenResourceRegisteredWithTenant()
+    {
+        var http = CreateHttpMock();
+        var auth = CreateAuthMock();
+        var tenants = CreateTenantStoreMock("t1");
+        var registry = CreateRegistryMock(Resource("Test Resource", "test-app-id", "t1"));
+        var svc = CreateService(httpMock: http, authMock: auth, tenantMock: tenants, registryMock: registry);
+
+        await svc.QueryErrorsAsync(TimeSpan.FromHours(1), 20);
+
+        http.Verify(m => m.QueryAsync("test-app-id", "token-t1", It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+        tenants.Verify(m => m.GetAccessTokenAsync("t1", "https://api.applicationinsights.io/.default", It.IsAny<CancellationToken>()), Times.Once);
+        auth.Verify(m => m.GetAccessTokenAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task QueryErrorsAsync_FallsBackToFoundry_WhenTenantStoreIsEmpty()
+    {
+        var http = CreateHttpMock();
+        var auth = CreateAuthMock("foundry-token");
+        var tenants = CreateTenantStoreMock();
+        var svc = CreateService(httpMock: http, authMock: auth, tenantMock: tenants);
+
+        await svc.QueryErrorsAsync(TimeSpan.FromHours(1), 20);
+
+        http.Verify(m => m.QueryAsync("test-app-id", "foundry-token", It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+        tenants.Verify(m => m.GetAccessTokenAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task QueryErrorsAsync_PrefersAppIdOverride_WithoutReadingConfig()
+    {
+        var config = CreateConfigMock();
+        var http = CreateHttpMock();
+        var svc = CreateService(config, http);
+
+        await svc.QueryErrorsAsync(TimeSpan.FromHours(1), 20, appIdOverride: "other-app");
+
+        http.Verify(m => m.QueryAsync("other-app", It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+        config.Verify(m => m.GetConfigAsync(), Times.Never);
+    }
+
+    // ── Fan-out ──────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task QueryErrorsManyAsync_QueriesEveryResource_WithItsOwnTenantToken_AndStampsResource()
+    {
+        var ts = DateTimeOffset.UtcNow;
+        var http = new Mock<IAppInsightsHttpAdapter>();
+        http.Setup(m => m.QueryAsync("app-a", It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MakeResponse(
+                ["timestamp", "type", "outerMessage", "innermostMessage", "operation_Id", "cloud_RoleName"],
+                [[ts.AddMinutes(-10), "A.Ex", "o", "older", "op-a", "svc-a"]]));
+        http.Setup(m => m.QueryAsync("app-b", It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MakeResponse(
+                ["timestamp", "type", "outerMessage", "innermostMessage", "operation_Id", "cloud_RoleName"],
+                [[ts, "B.Ex", "o", "newer", "op-b", "svc-b"]]));
+        var svc = CreateService(httpMock: http, tenantMock: CreateTenantStoreMock("t1", "t2"));
+        var targets = new[] { Resource("ai-a", "app-a", "t1"), Resource("ai-b", "app-b", "t2") };
+
+        var result = await svc.QueryErrorsManyAsync(targets, TimeSpan.FromHours(1), 20);
+
+        result.Errors.Should().BeEmpty();
+        result.Attempted.Should().Be(2);
+        result.Items.Should().HaveCount(2);
+        // Merged newest-first across resources, each row carrying the registry name it came from.
+        result.Items.Select(e => e.Message).Should().Equal("newer", "older");
+        result.Items.Select(e => e.Resource).Should().Equal("ai-b", "ai-a");
+        http.Verify(m => m.QueryAsync("app-a", "token-t1", It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+        http.Verify(m => m.QueryAsync("app-b", "token-t2", It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task QueryTracesManyAsync_CapturesOneResourceFailure_AndStillReturnsTheOther()
+    {
+        var http = new Mock<IAppInsightsHttpAdapter>();
+        http.Setup(m => m.QueryAsync("app-a", It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Response status code does not indicate success: 500"));
+        http.Setup(m => m.QueryAsync("app-b", It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MakeResponse(
+                ["timestamp", "operation_Id", "name", "cloud_RoleName", "duration", "success", "resultCode"],
+                [[DateTimeOffset.UtcNow, "op-b", "GET /b", "svc-b", 1.0, true, "200"]]));
+        var svc = CreateService(httpMock: http, tenantMock: CreateTenantStoreMock("t1"));
+        var targets = new[] { Resource("ai-a", "app-a", "t1"), Resource("ai-b", "app-b", "t1") };
+
+        var result = await svc.QueryTracesManyAsync(targets, TimeSpan.FromHours(1), 20);
+
+        result.AllFailed.Should().BeFalse();
+        result.Errors.Should().ContainSingle().Which.Resource.Name.Should().Be("ai-a");
+        result.Errors[0].Error.Message.Should().Contain("500");
+        result.Items.Should().ContainSingle().Which.Resource.Should().Be("ai-b");
+    }
+
+    [Fact]
+    public async Task QueryLogsManyAsync_SurfacesAuthExpired_PerResource()
+    {
+        var tenants = CreateTenantStoreMock("t1", "t2");
+        tenants.Setup(m => m.GetAccessTokenAsync("t2", It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new AzureAuthExpiredException("t2"));
+        var svc = CreateService(tenantMock: tenants);
+        var targets = new[] { Resource("ai-a", "app-a", "t1"), Resource("ai-b", "app-b", "t2") };
+
+        var result = await svc.QueryLogsManyAsync(targets, TimeSpan.FromHours(1));
+
+        result.Errors.Should().ContainSingle();
+        result.Errors[0].Resource.Name.Should().Be("ai-b");
+        result.Errors[0].Error.Should().BeOfType<AzureAuthExpiredException>().Which.TenantId.Should().Be("t2");
+    }
+
+    [Fact]
+    public async Task QuerySpansManyAsync_MergesOldestFirst_AndReportsAllFailed()
+    {
+        var ts = DateTimeOffset.UtcNow;
+        var http = new Mock<IAppInsightsHttpAdapter>();
+        http.Setup(m => m.QueryAsync("app-a", It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MakeResponse(
+                ["timestamp", "id", "target", "type", "name", "duration", "success"],
+                [[ts, "span-late", "db", "SQL", "later", 1.0, true]]));
+        http.Setup(m => m.QueryAsync("app-b", It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MakeResponse(
+                ["timestamp", "id", "target", "type", "name", "duration", "success"],
+                [[ts.AddSeconds(-5), "span-early", "db", "SQL", "earlier", 1.0, true]]));
+        var svc = CreateService(httpMock: http, tenantMock: CreateTenantStoreMock("t1"));
+        var targets = new[] { Resource("ai-a", "app-a", "t1"), Resource("ai-b", "app-b", "t1") };
+
+        var merged = await svc.QuerySpansManyAsync(targets, "op-1");
+        merged.Items.Select(s => s.SpanId).Should().Equal("span-early", "span-late");
+
+        var failing = new Mock<IAppInsightsHttpAdapter>();
+        failing.Setup(m => m.QueryAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("down"));
+        var allFailed = await CreateService(httpMock: failing, tenantMock: CreateTenantStoreMock("t1"))
+            .QuerySpansManyAsync(targets, "op-1");
+        allFailed.AllFailed.Should().BeTrue();
+        allFailed.Items.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task TestConnectionAsync_ForEntry_UsesThatResourceAndTenant()
+    {
+        var http = CreateHttpMock(MakeResponse(["cloud_RoleName"], [["role-b"]]));
+        var svc = CreateService(httpMock: http, tenantMock: CreateTenantStoreMock("t1", "t2"));
+
+        var result = await svc.TestConnectionAsync(Resource("ai-b", "app-b", "t2"));
+
+        result.Success.Should().BeTrue();
+        result.ResourceName.Should().Be("role-b");
+        http.Verify(m => m.QueryAsync("app-b", "token-t2", It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 }

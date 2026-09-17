@@ -198,8 +198,8 @@ public sealed class LogAnalyticsCommandTests : IDisposable
                 .Select(id => new AzureTenantInfo(id, "Tenant " + id[..8], null, DateTime.UtcNow, DateTime.UtcNow)).ToList());
             Tenants.Setup(t => t.GetAccessTokenAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync("token");
-            Query.Setup(q => q.TestConnectionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync((string id, CancellationToken _) => new LogAnalyticsConnectionResult { Success = true, WorkspaceName = "ws-" + id });
+            Query.Setup(q => q.TestConnectionAsync(It.IsAny<AzureResourceEntry>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((AzureResourceEntry e, CancellationToken _) => new LogAnalyticsConnectionResult { Success = true, WorkspaceName = "ws-" + e.Key });
         }
 
         public LogAnalyticsStatusCommand Command => new(Registry.Object, Tenants.Object, Query.Object, Console);
@@ -229,8 +229,8 @@ public sealed class LogAnalyticsCommandTests : IDisposable
 
         result.Should().Be(0);
         f.Console.Output.Should().Contain("law-prod").And.Contain("law-dev").And.Contain("✓").And.Contain("✗");
-        f.Query.Verify(q => q.TestConnectionAsync("aaaaaaaa-0000-0000-0000-000000000001", It.IsAny<CancellationToken>()), Times.Once);
-        f.Query.Verify(q => q.TestConnectionAsync("aaaaaaaa-0000-0000-0000-000000000002", It.IsAny<CancellationToken>()), Times.Never);
+        f.Query.Verify(q => q.TestConnectionAsync(It.Is<AzureResourceEntry>(e => e.Key == "aaaaaaaa-0000-0000-0000-000000000001"), It.IsAny<CancellationToken>()), Times.Once);
+        f.Query.Verify(q => q.TestConnectionAsync(It.Is<AzureResourceEntry>(e => e.Key == "aaaaaaaa-0000-0000-0000-000000000002"), It.IsAny<CancellationToken>()), Times.Never);
         f.Console.Output.Should().ContainAny("connected", "Connected");
     }
 

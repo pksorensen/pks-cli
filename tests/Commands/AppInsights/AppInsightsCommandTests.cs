@@ -50,8 +50,8 @@ public class AppInsightsCommandTests
                 .Select(id => new AzureTenantInfo(id, "Tenant " + id[..8], null, DateTime.UtcNow, DateTime.UtcNow)).ToList());
             Tenants.Setup(t => t.GetAccessTokenAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync("token");
-            Query.Setup(q => q.TestConnectionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync((string id, CancellationToken _) => new AppInsightsConnectionResult { Success = true, ResourceName = "res-" + id });
+            Query.Setup(q => q.TestConnectionAsync(It.IsAny<AzureResourceEntry>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((AzureResourceEntry e, CancellationToken _) => new AppInsightsConnectionResult { Success = true, ResourceName = "res-" + e.Key });
         }
 
         public AppInsightsStatusCommand Command => new(Registry.Object, Tenants.Object, Query.Object, Console);
@@ -87,8 +87,8 @@ public class AppInsightsCommandTests
 
         f.Command.Execute(CreateContext("status"), new AppInsightsStatusCommand.Settings());
 
-        f.Query.Verify(q => q.TestConnectionAsync("app-123", It.IsAny<CancellationToken>()), Times.Once);
-        f.Query.Verify(q => q.TestConnectionAsync("app-456", It.IsAny<CancellationToken>()), Times.Never);
+        f.Query.Verify(q => q.TestConnectionAsync(It.Is<AzureResourceEntry>(e => e.Key == "app-123"), It.IsAny<CancellationToken>()), Times.Once);
+        f.Query.Verify(q => q.TestConnectionAsync(It.Is<AzureResourceEntry>(e => e.Key == "app-456"), It.IsAny<CancellationToken>()), Times.Never);
         f.Console.Output.Should().ContainAny("connected", "Connected");
     }
 
@@ -96,7 +96,7 @@ public class AppInsightsCommandTests
     public void Status_ShowsConnectionFailure()
     {
         var f = new StatusFixture(new[] { Entry("ai-prod", "app-123", enabled: true) }, Tenant1);
-        f.Query.Setup(q => q.TestConnectionAsync("app-123", It.IsAny<CancellationToken>()))
+        f.Query.Setup(q => q.TestConnectionAsync(It.Is<AzureResourceEntry>(e => e.Key == "app-123"), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AppInsightsConnectionResult { Success = false, ErrorMessage = "403 forbidden" });
 
         f.Command.Execute(CreateContext("status"), new AppInsightsStatusCommand.Settings());

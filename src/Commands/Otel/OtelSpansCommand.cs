@@ -1,12 +1,14 @@
 using System.ComponentModel;
 using System.Text.Json;
+using PKS.Commands.Azure;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Azure;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
 namespace PKS.Commands.Otel;
 
-[Description("List spans for a specific trace from Application Insights")]
+[Description("List spans for a specific trace from every enabled Application Insights resource")]
 public class OtelSpansCommand : Command<OtelSpansCommand.Settings>
 {
     public class Settings : OtelSettings
@@ -28,48 +30,52 @@ public class OtelSpansCommand : Command<OtelSpansCommand.Settings>
 
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = false };
 
-    private readonly IAppInsightsConfigService _configService;
+    private readonly IAzureResourceRegistry _registry;
     private readonly IAppInsightsQueryService _queryService;
     private readonly IAnsiConsole _console;
 
     public OtelSpansCommand(
-        IAppInsightsConfigService configService,
+        IAzureResourceRegistry registry,
         IAppInsightsQueryService queryService,
         IAnsiConsole console)
     {
-        _configService = configService;
+        _registry = registry;
         _queryService = queryService;
         _console = console;
     }
+
+    /// <summary>Where per-resource failures go: stderr, so Json on stdout stays parseable. Tests inject a capture.</summary>
+    internal IAnsiConsole? ErrorConsole { get; init; }
 
     public override int Execute(CommandContext context, Settings settings)
         => ExecuteAsync(settings).GetAwaiter().GetResult();
 
     private async Task<int> ExecuteAsync(Settings settings)
     {
-        if (!await _configService.IsConfiguredAsync())
-        {
-            _console.MarkupLine("[yellow]Application Insights is not configured.[/]");
-            _console.MarkupLine("[dim]Run [cyan]pks appinsights init[/] to configure.[/]");
+        var targets = await OtelFanOut.ResolveAsync(_registry, settings, _console);
+        if (targets is null)
             return 1;
-        }
 
-        var spans = await _queryService.QuerySpansAsync(settings.OperationId!);
+        var result = await _queryService.QuerySpansManyAsync(targets, settings.OperationId!);
+        var exit = OtelFanOut.ReportFailures(result, ErrorConsole ?? AzureQueryTargets.StderrConsole());
+        var spans = result.Items;
 
         if (settings.Format.Equals("Json", StringComparison.OrdinalIgnoreCase))
         {
             Console.WriteLine(JsonSerializer.Serialize(spans, JsonOpts));
-            return 0;
+            return exit;
         }
 
         if (spans.Count == 0)
         {
-            _console.MarkupLine("[dim]No spans found for the specified operation ID.[/]");
-            return 0;
+            if (exit == 0)
+                _console.MarkupLine("[dim]No spans found for the specified operation ID.[/]");
+            return exit;
         }
 
         var table = new Table()
             .Border(TableBorder.Rounded)
+            .AddColumn("Resource")
             .AddColumn("Timestamp")
             .AddColumn("Span ID")
             .AddColumn("Name")
@@ -82,6 +88,7 @@ public class OtelSpansCommand : Command<OtelSpansCommand.Settings>
         {
             var status = s.Success ? "[green]✓[/]" : "[red]✗[/]";
             table.AddRow(
+                s.Resource.EscapeMarkup(),
                 s.Timestamp.ToString("HH:mm:ss"),
                 s.SpanId.EscapeMarkup(),
                 s.Name.EscapeMarkup(),
@@ -92,6 +99,6 @@ public class OtelSpansCommand : Command<OtelSpansCommand.Settings>
         }
 
         _console.Write(table);
-        return 0;
+        return exit;
     }
 }

@@ -42,7 +42,7 @@ public class LogAnalyticsStatusCommand : Command<LogAnalyticsStatusCommand.Setti
             {
                 var result = await _console.Status().StartAsync(
                     $"Testing {entry.Name.EscapeMarkup()}...",
-                    _ => _queryService.TestConnectionAsync(entry.Key));
+                    _ => _queryService.TestConnectionAsync(entry));
                 if (result.Success)
                     _console.MarkupLine($"[green]Connected[/] - {(result.WorkspaceName ?? entry.Name).EscapeMarkup()}");
                 else
