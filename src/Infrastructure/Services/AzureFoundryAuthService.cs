@@ -1,10 +1,6 @@
-using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using PKS.Infrastructure.Services.Azure;
 using PKS.Infrastructure.Services.Models;
 using PKS.Infrastructure.Services.Security;
 
@@ -44,6 +40,8 @@ public interface IAzureFoundryAuthService
 /// <summary>
 /// Azure AI Foundry OAuth2 authentication using authorization code flow with PKCE.
 /// Uses the Azure CLI well-known public client ID — no app registration needed.
+/// The PKCE / token-endpoint mechanics live in <see cref="AzurePublicClientAuth"/>; this class
+/// owns what is Foundry-specific: the stored credential and the ARM listings.
 /// </summary>
 public class AzureFoundryAuthService : IAzureFoundryAuthService
 {
@@ -54,6 +52,7 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
     private readonly ISecretResolver _secrets;
     private readonly ILogger<AzureFoundryAuthService> _logger;
     private readonly AzureFoundryAuthConfig _config;
+    private readonly AzurePublicClientAuth _auth;
 
     public AzureFoundryAuthService(
         HttpClient httpClient,
@@ -67,111 +66,23 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
         _logger = logger;
         _config = config ?? new AzureFoundryAuthConfig();
         _secrets = secrets;
+        _auth = new AzurePublicClientAuth(
+            httpClient, _config.ClientId, _config.AuthorizeUrl, _config.TokenUrl, _config.CallbackTimeoutSeconds, logger);
     }
 
-    public async Task<string?> DiscoverTenantAsync(string email, CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            var url = $"https://login.microsoftonline.com/common/userrealm/{Uri.EscapeDataString(email)}?api-version=1.0";
-            var response = await _httpClient.GetAsync(url, cancellationToken);
-            var content = await response.Content.ReadAsStringAsync(cancellationToken);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                _logger.LogWarning("Tenant discovery failed: {StatusCode}", response.StatusCode);
-                return null;
-            }
-
-            using var doc = JsonDocument.Parse(content);
-            var root = doc.RootElement;
-
-            // The userrealm endpoint returns different fields depending on account type:
-            // Managed (cloud): "NameSpaceType": "Managed", with tenant info
-            // Federated: "NameSpaceType": "Federated", with federation metadata
-            // Both return a "DomainName" field we can use to get the tenant
-
-            // Try to extract tenant from the domain via OpenID discovery
-            var domain = root.TryGetProperty("DomainName", out var domainProp) ? domainProp.GetString() : null;
-            if (string.IsNullOrEmpty(domain))
-                return null;
-
-            // Use OpenID configuration to get the tenant ID from the issuer
-            var openIdUrl = $"https://login.microsoftonline.com/{Uri.EscapeDataString(domain)}/.well-known/openid-configuration";
-            var openIdResponse = await _httpClient.GetAsync(openIdUrl, cancellationToken);
-            var openIdContent = await openIdResponse.Content.ReadAsStringAsync(cancellationToken);
-
-            if (!openIdResponse.IsSuccessStatusCode)
-                return domain; // Fall back to using domain as tenant identifier
-
-            using var openIdDoc = JsonDocument.Parse(openIdContent);
-            var issuer = openIdDoc.RootElement.TryGetProperty("issuer", out var issuerProp) ? issuerProp.GetString() : null;
-
-            // Issuer format: https://sts.windows.net/{tenant-id}/ or https://login.microsoftonline.com/{tenant-id}/v2.0
-            if (!string.IsNullOrEmpty(issuer))
-            {
-                var parts = issuer.TrimEnd('/').Split('/');
-                var tenantId = parts[^1];
-                // If it ends with "v2.0", go one more level up
-                if (tenantId == "v2.0" && parts.Length >= 2)
-                    tenantId = parts[^2];
-                if (!string.IsNullOrEmpty(tenantId))
-                    return tenantId;
-            }
-
-            return domain; // Fall back to domain as tenant
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Tenant discovery failed for email: {Email}", email);
-            return null;
-        }
-    }
+    public Task<string?> DiscoverTenantAsync(string email, CancellationToken cancellationToken = default)
+        => _auth.DiscoverTenantAsync(email, cancellationToken);
 
     public async Task<FoundryAuthResult> InitiateLoginAsync(string tenantId, string? loginHint = null, string? scopeOverride = null, CancellationToken cancellationToken = default)
     {
         var scope = string.IsNullOrWhiteSpace(scopeOverride) ? _config.InitialScope : scopeOverride;
-        var pkce = GeneratePkce();
-        var state = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-        var port = GetFreePort();
-        var redirectUri = $"http://localhost:{port}";
-
-        var authorizeUrl = $"{_config.GetAuthorizeUrl(tenantId)}" +
-            $"?client_id={Uri.EscapeDataString(_config.ClientId)}" +
-            $"&response_type=code" +
-            $"&redirect_uri={Uri.EscapeDataString(redirectUri)}" +
-            $"&scope={Uri.EscapeDataString(scope)}" +
-            $"&state={Uri.EscapeDataString(state)}" +
-            $"&code_challenge={Uri.EscapeDataString(pkce.CodeChallenge)}" +
-            $"&code_challenge_method=S256" +
-            $"&prompt=select_account";
-
-        // Pre-fill the email in the account picker if provided
-        if (!string.IsNullOrEmpty(loginHint))
-            authorizeUrl += $"&login_hint={Uri.EscapeDataString(loginHint)}";
-
-        // Start listener BEFORE opening browser to avoid race condition
-        using var listener = new HttpListener();
-        listener.Prefixes.Add($"http://localhost:{port}/");
-        listener.Start();
-
-        // Print URL so it's clickable in terminals
-        Console.WriteLine(authorizeUrl);
-
-        // Try to open the browser
-        TryOpenBrowser(authorizeUrl);
-
-        // Wait for the callback
-        var code = await WaitForCallbackAsync(listener, state, cancellationToken);
-
-        // Exchange code for tokens
-        var tokenResponse = await ExchangeCodeForTokensAsync(code, redirectUri, pkce.CodeVerifier, tenantId, scope, cancellationToken);
+        var login = await _auth.LoginInteractiveAsync(tenantId, scope, loginHint, cancellationToken);
 
         return new FoundryAuthResult
         {
-            AccessToken = tokenResponse.AccessToken,
-            RefreshToken = tokenResponse.RefreshToken,
-            ExpiresIn = tokenResponse.ExpiresIn,
+            AccessToken = login.AccessToken,
+            RefreshToken = login.RefreshToken.Reveal(),
+            ExpiresIn = login.ExpiresIn,
             TenantId = tenantId
         };
     }
@@ -187,51 +98,10 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
 
         try
         {
-            var form = new Dictionary<string, string>
-            {
-                ["client_id"] = _config.ClientId,
-                ["grant_type"] = "refresh_token",
-                ["scope"] = scope
-            };
-            SecretSink.SetFormField(form, "refresh_token", credentials.RefreshToken);
-            var requestBody = new FormUrlEncodedContent(form);
-
-            var tokenUrl = _config.GetTokenUrl(credentials.TenantId);
-            var response = await _httpClient.PostAsync(tokenUrl, requestBody, cancellationToken);
-            var content = await response.Content.ReadAsStringAsync(cancellationToken);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                // Differentiate "your refresh token has aged out — re-auth"
-                // from generic transient AAD errors so the user can take the
-                // single right action without digging through raw AAD JSON.
-                // AADSTS50196 ("client request loop") + invalid_grant is what
-                // we see when the refresh token itself has expired.
-                var aadExpired = content.Contains("invalid_grant", StringComparison.OrdinalIgnoreCase)
-                                 || content.Contains("AADSTS50196", StringComparison.Ordinal)
-                                 || content.Contains("AADSTS70008", StringComparison.Ordinal)
-                                 || content.Contains("AADSTS700082", StringComparison.Ordinal);
-                if (aadExpired)
-                {
-                    _logger.LogError("Foundry refresh token has expired or been revoked. Re-auth with: pks foundry login");
-                }
-                else
-                {
-                    _logger.LogError("Foundry token refresh failed: {StatusCode} {Response}", response.StatusCode, content);
-                }
-                return null;
-            }
-
-            var tokenResponse = JsonSerializer.Deserialize<FoundryTokenResponse>(content);
-            if (tokenResponse == null || string.IsNullOrEmpty(tokenResponse.AccessToken))
-            {
-                _logger.LogError("Foundry token refresh returned no access token");
-                return null;
-            }
+            var refreshed = await _auth.RedeemRefreshTokenAsync(credentials.TenantId, credentials.RefreshToken, scope, cancellationToken);
 
             // Update stored refresh token if rotated
-            var rotated = SecretValue.From(tokenResponse.RefreshToken);
-            if (rotated.HasValue && rotated != credentials.RefreshToken)
+            if (refreshed.NewRefreshToken is { HasValue: true } rotated)
             {
                 credentials.RefreshToken = rotated;
             }
@@ -242,7 +112,17 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
             var json = JsonSerializer.Serialize(credentials, SecretJson.Persistence);
             await _configurationService.SetAsync(StorageKey, json, global: true);
 
-            return tokenResponse.AccessToken;
+            return refreshed.AccessToken;
+        }
+        catch (AzureRefreshTokenExpiredException)
+        {
+            _logger.LogError("Foundry refresh token has expired or been revoked. Re-auth with: pks foundry login");
+            return null;
+        }
+        catch (AzureTokenEndpointException ex)
+        {
+            _logger.LogError("Foundry token refresh failed: {StatusCode} {Response}", ex.StatusCode, ex.ResponseBody);
+            return null;
         }
         catch (Exception ex)
         {
@@ -383,141 +263,5 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
     public async Task ClearCredentialsAsync()
     {
         await _configurationService.DeleteAsync(StorageKey);
-    }
-
-    private static PkceChallenge GeneratePkce()
-    {
-        var verifierBytes = RandomNumberGenerator.GetBytes(32);
-        var codeVerifier = Base64UrlEncode(verifierBytes);
-        var challengeBytes = SHA256.HashData(Encoding.ASCII.GetBytes(codeVerifier));
-        var codeChallenge = Base64UrlEncode(challengeBytes);
-
-        return new PkceChallenge
-        {
-            CodeVerifier = codeVerifier,
-            CodeChallenge = codeChallenge
-        };
-    }
-
-    private static string Base64UrlEncode(byte[] bytes)
-    {
-        return Convert.ToBase64String(bytes)
-            .TrimEnd('=')
-            .Replace('+', '-')
-            .Replace('/', '_');
-    }
-
-    private static int GetFreePort()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
-
-    private static void TryOpenBrowser(string url)
-    {
-        // Try $BROWSER first — VS Code devcontainers set this to a helper that opens on the host
-        var browserEnv = Environment.GetEnvironmentVariable("BROWSER");
-        if (!string.IsNullOrEmpty(browserEnv))
-        {
-            try
-            {
-                Process.Start(new ProcessStartInfo(browserEnv, url)
-                {
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                });
-                return;
-            }
-            catch { }
-        }
-
-        try
-        {
-            if (OperatingSystem.IsLinux())
-                Process.Start(new ProcessStartInfo("xdg-open", url)
-                {
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                });
-            else if (OperatingSystem.IsMacOS())
-                Process.Start("open", url);
-            else if (OperatingSystem.IsWindows())
-                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-        }
-        catch { }
-    }
-
-    private async Task<string> WaitForCallbackAsync(HttpListener listener, string expectedState, CancellationToken cancellationToken)
-    {
-        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(_config.CallbackTimeoutSeconds));
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
-
-        try
-        {
-            var contextTask = listener.GetContextAsync();
-            var completedTask = await Task.WhenAny(contextTask, Task.Delay(Timeout.Infinite, linkedCts.Token));
-
-            if (completedTask != contextTask)
-                throw new OperationCanceledException("Authentication callback timed out");
-
-            var context = await contextTask;
-            var query = context.Request.QueryString;
-            var code = query["code"];
-            var returnedState = query["state"];
-            var error = query["error"];
-
-            // Send response to browser
-            var responseHtml = "<html><body><h2>Authentication complete. You can close this tab.</h2></body></html>";
-            var buffer = Encoding.UTF8.GetBytes(responseHtml);
-            context.Response.ContentType = "text/html";
-            context.Response.ContentLength64 = buffer.Length;
-            await context.Response.OutputStream.WriteAsync(buffer, linkedCts.Token);
-            context.Response.Close();
-
-            if (!string.IsNullOrEmpty(error))
-                throw new InvalidOperationException($"Authentication error: {error}");
-
-            if (returnedState != expectedState)
-                throw new InvalidOperationException("State mismatch — possible CSRF attack");
-
-            if (string.IsNullOrEmpty(code))
-                throw new InvalidOperationException("No authorization code received");
-
-            return code;
-        }
-        finally
-        {
-            listener.Stop();
-        }
-    }
-
-    private async Task<FoundryTokenResponse> ExchangeCodeForTokensAsync(
-        string code, string redirectUri, string codeVerifier, string tenantId, string scope, CancellationToken cancellationToken)
-    {
-        var requestBody = new FormUrlEncodedContent(new Dictionary<string, string>
-        {
-            ["client_id"] = _config.ClientId,
-            ["grant_type"] = "authorization_code",
-            ["code"] = code,
-            ["redirect_uri"] = redirectUri,
-            ["code_verifier"] = codeVerifier,
-            ["scope"] = scope
-        });
-
-        var tokenUrl = _config.GetTokenUrl(tenantId);
-        var response = await _httpClient.PostAsync(tokenUrl, requestBody, cancellationToken);
-        var content = await response.Content.ReadAsStringAsync(cancellationToken);
-        response.EnsureSuccessStatusCode();
-
-        var tokenResponse = JsonSerializer.Deserialize<FoundryTokenResponse>(content);
-        if (tokenResponse == null || string.IsNullOrEmpty(tokenResponse.AccessToken))
-            throw new InvalidOperationException("Token exchange returned no access token");
-
-        return tokenResponse;
     }
 }

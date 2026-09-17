@@ -1,13 +1,9 @@
-using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
-using Azure.Core;
-using Azure.Core.Pipeline;
+using global::Azure.Core;
+using global::Azure.Core.Pipeline;
 using Microsoft.Extensions.FileSystemGlobbing;
 using Microsoft.Extensions.Logging;
+using PKS.Infrastructure.Services.Azure;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using PKS.Infrastructure.Services.Security;
@@ -23,6 +19,7 @@ public class AzureFileShareProvider : IFileShareProvider
     private readonly ISecretResolver _secrets;
     private readonly ILogger<AzureFileShareProvider> _logger;
     private readonly AzureFileShareAuthConfig _config;
+    private readonly AzurePublicClientAuth _auth;
 
     public string ProviderName => "Azure File Share";
     public string ProviderKey => "azure-fileshare";
@@ -39,6 +36,8 @@ public class AzureFileShareProvider : IFileShareProvider
         _logger = logger;
         _config = config ?? new AzureFileShareAuthConfig();
         _secrets = secrets;
+        _auth = new AzurePublicClientAuth(
+            httpClient, _config.ClientId, _config.AuthorizeUrl, _config.TokenUrl, _config.CallbackTimeoutSeconds, logger);
     }
 
     public async Task<bool> IsAuthenticatedAsync()
@@ -339,7 +338,7 @@ public class AzureFileShareProvider : IFileShareProvider
                     return found;
                 }
             }
-            catch (Azure.RequestFailedException)
+            catch (global::Azure.RequestFailedException)
             {
                 // Not addressable as a file; fall through and treat it as a directory.
             }
@@ -354,7 +353,7 @@ public class AzureFileShareProvider : IFileShareProvider
     }
 
     private static async Task CollectAsync(
-        Azure.Storage.Files.Shares.ShareDirectoryClient dir,
+        global::Azure.Storage.Files.Shares.ShareDirectoryClient dir,
         string relBase,
         List<StorageFileRef> into,
         bool recursive,
@@ -396,7 +395,7 @@ public class AzureFileShareProvider : IFileShareProvider
                     var props = await fileClient.GetPropertiesAsync(cancellationToken: ct);
                     size = props.Value.ContentLength;
                 }
-                catch (Azure.RequestFailedException) { /* size is best-effort */ }
+                catch (global::Azure.RequestFailedException) { /* size is best-effort */ }
 
                 var deleted = await fileClient.DeleteIfExistsAsync(cancellationToken: ct);
                 if (deleted.Value)
@@ -423,18 +422,18 @@ public class AzureFileShareProvider : IFileShareProvider
     /// Share client carrying a self-renewing OAuth bearer plus the backup request-intent Azure Files
     /// demands. Every share client goes through here so no code path can pin a token again.
     /// </summary>
-    private Azure.Storage.Files.Shares.ShareClient CreateShareClient(string accountName, string resourceName)
+    private global::Azure.Storage.Files.Shares.ShareClient CreateShareClient(string accountName, string resourceName)
     {
-        var options = new Azure.Storage.Files.Shares.ShareClientOptions();
+        var options = new global::Azure.Storage.Files.Shares.ShareClientOptions();
         options.AddPolicy(new FileRequestIntentPolicy(), HttpPipelinePosition.PerCall);
-        return new Azure.Storage.Files.Shares.ShareClient(
+        return new global::Azure.Storage.Files.Shares.ShareClient(
             new Uri($"https://{accountName}.file.core.windows.net/{resourceName}"),
             new RefreshingTokenCredential(token => AcquireTokenAsync(_config.StorageScope, token)),
             options);
     }
 
     private static async Task<int> CountItemsAsync(
-        Azure.Storage.Files.Shares.ShareDirectoryClient dir, CancellationToken ct)
+        global::Azure.Storage.Files.Shares.ShareDirectoryClient dir, CancellationToken ct)
     {
         var count = 0;
         await foreach (var _ in dir.GetFilesAndDirectoriesAsync(cancellationToken: ct))
@@ -462,45 +461,22 @@ public class AzureFileShareProvider : IFileShareProvider
 
         try
         {
-            var requestBody = new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["client_id"] = _config.ClientId,
-                ["grant_type"] = "refresh_token",
-                ["refresh_token"] = credentials.RefreshToken,
-                ["scope"] = scope
-            });
+            var refreshed = await _auth.RedeemRefreshTokenAsync(
+                credentials.TenantId, SecretValue.From(credentials.RefreshToken), scope, ct);
 
-            var tokenUrl = _config.GetTokenUrl(credentials.TenantId);
-            var response = await _httpClient.PostAsync(tokenUrl, requestBody, ct);
-            var content = await response.Content.ReadAsStringAsync(ct);
-
-            if (!response.IsSuccessStatusCode)
+            if (refreshed.NewRefreshToken is { HasValue: true } rotated)
             {
-                _logger.LogError("Token refresh failed: {StatusCode} {Response}", response.StatusCode, content);
-                return null;
-            }
-
-            var tokenResponse = JsonSerializer.Deserialize<FileShareTokenResponse>(content);
-            if (tokenResponse == null || string.IsNullOrEmpty(tokenResponse.AccessToken))
-            {
-                _logger.LogError("Token refresh returned no access token");
-                return null;
-            }
-
-            if (!string.IsNullOrEmpty(tokenResponse.RefreshToken) &&
-                tokenResponse.RefreshToken != credentials.RefreshToken)
-            {
-                credentials.RefreshToken = tokenResponse.RefreshToken;
+                credentials.RefreshToken = rotated.Reveal()!;
             }
             credentials.LastRefreshedAt = DateTime.UtcNow;
             await _configurationService.SetAsync(StorageKey, JsonSerializer.Serialize(credentials), global: true);
 
-            // Trust expires_in when the STS sends it; an hour is AAD's default for this grant.
-            var lifetime = tokenResponse.ExpiresIn > 0
-                ? TimeSpan.FromSeconds(tokenResponse.ExpiresIn)
-                : TimeSpan.FromHours(1);
-
-            return (tokenResponse.AccessToken, DateTimeOffset.UtcNow + lifetime);
+            return (refreshed.AccessToken, refreshed.ExpiresOn);
+        }
+        catch (AzureTokenEndpointException ex)
+        {
+            _logger.LogError("Token refresh failed: {StatusCode} {Response}", ex.StatusCode, ex.ResponseBody);
+            return null;
         }
         catch (Exception ex)
         {
@@ -568,186 +544,22 @@ public class AzureFileShareProvider : IFileShareProvider
         await _configurationService.SetAsync(StorageKey, json, global: true);
     }
 
-    // ── PKCE Auth flow (ported from AzureFoundryAuthService) ───────────────
+    // ── Sign-in (shared mechanics in AzurePublicClientAuth) ──────────────────
 
     private async Task<FileShareTokenResponse> InitiateLoginAsync(string tenantId, string? loginHint, CancellationToken ct)
     {
-        var pkce = GeneratePkce();
-        var state = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-        var port = GetFreePort();
-        var redirectUri = $"http://localhost:{port}";
-
-        var authorizeUrl = $"{_config.GetAuthorizeUrl(tenantId)}" +
-            $"?client_id={Uri.EscapeDataString(_config.ClientId)}" +
-            $"&response_type=code" +
-            $"&redirect_uri={Uri.EscapeDataString(redirectUri)}" +
-            $"&scope={Uri.EscapeDataString(_config.InitialScope)}" +
-            $"&state={Uri.EscapeDataString(state)}" +
-            $"&code_challenge={Uri.EscapeDataString(pkce.CodeChallenge)}" +
-            $"&code_challenge_method=S256" +
-            $"&prompt=select_account";
-
-        if (!string.IsNullOrEmpty(loginHint))
-            authorizeUrl += $"&login_hint={Uri.EscapeDataString(loginHint)}";
-
-        using var listener = new HttpListener();
-        listener.Prefixes.Add($"http://localhost:{port}/");
-        listener.Start();
-
-        Console.WriteLine(authorizeUrl);
-        TryOpenBrowser(authorizeUrl);
-
-        var code = await WaitForCallbackAsync(listener, state, ct);
-        return await ExchangeCodeForTokensAsync(code, redirectUri, pkce.CodeVerifier, tenantId, ct);
+        var login = await _auth.LoginInteractiveAsync(tenantId, _config.InitialScope, loginHint, ct);
+        return new FileShareTokenResponse
+        {
+            AccessToken = login.AccessToken,
+            RefreshToken = login.RefreshToken.Reveal(),
+            ExpiresIn = login.ExpiresIn,
+            TokenType = "Bearer"
+        };
     }
 
-    private async Task<string?> DiscoverTenantAsync(string email, CancellationToken ct)
-    {
-        try
-        {
-            var url = $"https://login.microsoftonline.com/common/userrealm/{Uri.EscapeDataString(email)}?api-version=1.0";
-            var response = await _httpClient.GetAsync(url, ct);
-            var content = await response.Content.ReadAsStringAsync(ct);
-            if (!response.IsSuccessStatusCode) return null;
-
-            using var doc = JsonDocument.Parse(content);
-            var domain = doc.RootElement.TryGetProperty("DomainName", out var d) ? d.GetString() : null;
-            if (string.IsNullOrEmpty(domain)) return null;
-
-            var openIdUrl = $"https://login.microsoftonline.com/{Uri.EscapeDataString(domain)}/.well-known/openid-configuration";
-            var openIdResponse = await _httpClient.GetAsync(openIdUrl, ct);
-            var openIdContent = await openIdResponse.Content.ReadAsStringAsync(ct);
-            if (!openIdResponse.IsSuccessStatusCode) return domain;
-
-            using var openIdDoc = JsonDocument.Parse(openIdContent);
-            var issuer = openIdDoc.RootElement.TryGetProperty("issuer", out var i) ? i.GetString() : null;
-            if (!string.IsNullOrEmpty(issuer))
-            {
-                var parts = issuer.TrimEnd('/').Split('/');
-                var tenantId = parts[^1];
-                if (tenantId == "v2.0" && parts.Length >= 2) tenantId = parts[^2];
-                if (!string.IsNullOrEmpty(tenantId)) return tenantId;
-            }
-
-            return domain;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Tenant discovery failed for {Email}", email);
-            return null;
-        }
-    }
-
-    private async Task<FileShareTokenResponse> ExchangeCodeForTokensAsync(
-        string code, string redirectUri, string codeVerifier, string tenantId, CancellationToken ct)
-    {
-        var requestBody = new FormUrlEncodedContent(new Dictionary<string, string>
-        {
-            ["client_id"] = _config.ClientId,
-            ["grant_type"] = "authorization_code",
-            ["code"] = code,
-            ["redirect_uri"] = redirectUri,
-            ["code_verifier"] = codeVerifier,
-            ["scope"] = _config.InitialScope
-        });
-
-        var tokenUrl = _config.GetTokenUrl(tenantId);
-        var response = await _httpClient.PostAsync(tokenUrl, requestBody, ct);
-        var content = await response.Content.ReadAsStringAsync(ct);
-        response.EnsureSuccessStatusCode();
-
-        var tokenResponse = JsonSerializer.Deserialize<FileShareTokenResponse>(content);
-        if (tokenResponse == null || string.IsNullOrEmpty(tokenResponse.AccessToken))
-            throw new InvalidOperationException("Token exchange returned no access token");
-
-        return tokenResponse;
-    }
-
-    private async Task<string> WaitForCallbackAsync(HttpListener listener, string expectedState, CancellationToken ct)
-    {
-        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(_config.CallbackTimeoutSeconds));
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
-
-        try
-        {
-            var contextTask = listener.GetContextAsync();
-            var completedTask = await Task.WhenAny(contextTask, Task.Delay(Timeout.Infinite, linkedCts.Token));
-
-            if (completedTask != contextTask)
-                throw new OperationCanceledException("Authentication callback timed out");
-
-            var context = await contextTask;
-            var query = context.Request.QueryString;
-            var code = query["code"];
-            var returnedState = query["state"];
-            var error = query["error"];
-
-            var responseHtml = "<html><body><h2>Authentication complete. You can close this tab.</h2></body></html>";
-            var buffer = Encoding.UTF8.GetBytes(responseHtml);
-            context.Response.ContentType = "text/html";
-            context.Response.ContentLength64 = buffer.Length;
-            await context.Response.OutputStream.WriteAsync(buffer, linkedCts.Token);
-            context.Response.Close();
-
-            if (!string.IsNullOrEmpty(error))
-                throw new InvalidOperationException($"Authentication error: {error}");
-            if (returnedState != expectedState)
-                throw new InvalidOperationException("State mismatch — possible CSRF attack");
-            if (string.IsNullOrEmpty(code))
-                throw new InvalidOperationException("No authorization code received");
-
-            return code;
-        }
-        finally
-        {
-            listener.Stop();
-        }
-    }
-
-    private static (string CodeVerifier, string CodeChallenge) GeneratePkce()
-    {
-        var verifierBytes = RandomNumberGenerator.GetBytes(32);
-        var codeVerifier = Base64UrlEncode(verifierBytes);
-        var challengeBytes = SHA256.HashData(Encoding.ASCII.GetBytes(codeVerifier));
-        var codeChallenge = Base64UrlEncode(challengeBytes);
-        return (codeVerifier, codeChallenge);
-    }
-
-    private static string Base64UrlEncode(byte[] bytes) =>
-        Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-
-    private static int GetFreePort()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
-
-    private static void TryOpenBrowser(string url)
-    {
-        var browserEnv = Environment.GetEnvironmentVariable("BROWSER");
-        if (!string.IsNullOrEmpty(browserEnv))
-        {
-            try
-            {
-                Process.Start(new ProcessStartInfo(browserEnv, url) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true });
-                return;
-            }
-            catch { }
-        }
-        try
-        {
-            if (OperatingSystem.IsLinux())
-                Process.Start(new ProcessStartInfo("xdg-open", url) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true });
-            else if (OperatingSystem.IsMacOS())
-                Process.Start("open", url);
-            else if (OperatingSystem.IsWindows())
-                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-        }
-        catch { }
-    }
+    private Task<string?> DiscoverTenantAsync(string email, CancellationToken ct)
+        => _auth.DiscoverTenantAsync(email, ct);
 
     private static string ParseResourceGroup(string resourceId)
     {
@@ -763,7 +575,7 @@ public class AzureFileShareProvider : IFileShareProvider
     // ── File sync helpers ──────────────────────────────────────────────────
 
     private async Task DownloadParallelAsync(
-        Azure.Storage.Files.Shares.ShareDirectoryClient rootDir,
+        global::Azure.Storage.Files.Shares.ShareDirectoryClient rootDir,
         StorageSyncRequest request,
         SyncResult result,
         Action<SyncProgressUpdate> progress,
@@ -772,7 +584,7 @@ public class AzureFileShareProvider : IFileShareProvider
         // Producer-consumer: enumeration writes to channel as files are discovered;
         // N consumer tasks start downloading immediately without waiting for enumeration to finish.
         var channel = System.Threading.Channels.Channel.CreateUnbounded<(
-            Azure.Storage.Files.Shares.ShareFileClient Client,
+            global::Azure.Storage.Files.Shares.ShareFileClient Client,
             string LocalPath,
             string RelPath)>(new System.Threading.Channels.UnboundedChannelOptions
             {
@@ -795,13 +607,13 @@ public class AzureFileShareProvider : IFileShareProvider
 
         // Ask for timestamps in the listing so up-to-date files can be recognised without a
         // per-file GetProperties round-trip.
-        var listOptions = new Azure.Storage.Files.Shares.Models.ShareDirectoryGetFilesAndDirectoriesOptions
+        var listOptions = new global::Azure.Storage.Files.Shares.Models.ShareDirectoryGetFilesAndDirectoriesOptions
         {
-            Traits = Azure.Storage.Files.Shares.Models.ShareFileTraits.Timestamps
+            Traits = global::Azure.Storage.Files.Shares.Models.ShareFileTraits.Timestamps
         };
 
         // Producer: enumerate remote files and push to channel (filtered)
-        async Task ProduceAsync(Azure.Storage.Files.Shares.ShareDirectoryClient dir, string localDir, string relBase)
+        async Task ProduceAsync(global::Azure.Storage.Files.Shares.ShareDirectoryClient dir, string localDir, string relBase)
         {
             await foreach (var item in dir.GetFilesAndDirectoriesAsync(listOptions, ct))
             {
@@ -933,7 +745,7 @@ public class AzureFileShareProvider : IFileShareProvider
     }
 
     private async Task UploadDirectoryAsync(
-        Azure.Storage.Files.Shares.ShareDirectoryClient remoteDir,
+        global::Azure.Storage.Files.Shares.ShareDirectoryClient remoteDir,
         string localDir,
         StorageSyncRequest request,
         SyncResult result,
@@ -1000,7 +812,7 @@ public class AzureFileShareProvider : IFileShareProvider
         }
     }
 
-    // ── Token credential wrapper for Azure.Storage.Files.Shares SDK ────────
+    // ── Token credential wrapper for global::Azure.Storage.Files.Shares SDK ────────
 
     /// <summary>
     /// Mints storage tokens on demand from the stored refresh token, reporting the token's REAL
@@ -1013,11 +825,11 @@ public class AzureFileShareProvider : IFileShareProvider
     /// token lapsed (an hour in, mid-way through a large sync) died with 401/403. Reporting the
     /// truth is the whole fix; <c>BearerTokenAuthenticationPolicy</c> does the rest.
     /// </remarks>
-    private sealed class RefreshingTokenCredential : Azure.Core.TokenCredential
+    private sealed class RefreshingTokenCredential : global::Azure.Core.TokenCredential
     {
         private readonly Func<CancellationToken, Task<(string Token, DateTimeOffset ExpiresOn)?>> _acquire;
         private readonly SemaphoreSlim _lock = new(1, 1);
-        private Azure.Core.AccessToken _cached;
+        private global::Azure.Core.AccessToken _cached;
 
         /// <summary>Renew this far ahead of expiry, covering clock skew and an in-flight request.</summary>
         private static readonly TimeSpan RenewBefore = TimeSpan.FromMinutes(5);
@@ -1025,11 +837,11 @@ public class AzureFileShareProvider : IFileShareProvider
         public RefreshingTokenCredential(Func<CancellationToken, Task<(string, DateTimeOffset)?>> acquire)
             => _acquire = acquire;
 
-        public override Azure.Core.AccessToken GetToken(Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
+        public override global::Azure.Core.AccessToken GetToken(global::Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
             => GetTokenAsync(requestContext, cancellationToken).AsTask().GetAwaiter().GetResult();
 
-        public override async ValueTask<Azure.Core.AccessToken> GetTokenAsync(
-            Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
+        public override async ValueTask<global::Azure.Core.AccessToken> GetTokenAsync(
+            global::Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
         {
             if (IsFresh(_cached)) return _cached;
 
@@ -1043,13 +855,13 @@ public class AzureFileShareProvider : IFileShareProvider
                     ?? throw new InvalidOperationException(
                         "Could not refresh the storage access token. Run 'pks fileshare init' to sign in again.");
 
-                _cached = new Azure.Core.AccessToken(acquired.Token, acquired.ExpiresOn);
+                _cached = new global::Azure.Core.AccessToken(acquired.Token, acquired.ExpiresOn);
                 return _cached;
             }
             finally { _lock.Release(); }
         }
 
-        private static bool IsFresh(Azure.Core.AccessToken token)
+        private static bool IsFresh(global::Azure.Core.AccessToken token)
             => !string.IsNullOrEmpty(token.Token) && token.ExpiresOn - RenewBefore > DateTimeOffset.UtcNow;
     }
 }

@@ -148,7 +148,7 @@ public sealed class AgentChatProviderFactory
         {
             return new AzureOpenAIChatProvider(new Uri(entry.Endpoint), new FoundryTokenCredential(_foundryAuth));
         }
-        return new AzureOpenAIChatProvider(new Uri(entry.Endpoint), new Azure.Identity.DefaultAzureCredential());
+        return new AzureOpenAIChatProvider(new Uri(entry.Endpoint), new global::Azure.Identity.DefaultAzureCredential());
     }
 
     private IChatProvider BuildAnthropic(ModelEntry entry)
