@@ -87,6 +87,12 @@ public class StorageLsCommand : Command<StorageLsCommand.Settings>
             shareName = shares.Count == 1 ? shares[0].ResourceName : _console.Prompt(
                 new SelectionPrompt<string>().Title("[cyan]Select share:[/]").AddChoices(shares.Select(r => r.ResourceName)));
         }
+        else if (!string.IsNullOrEmpty(shareName) && string.IsNullOrEmpty(accountName) && resources.Count > 0)
+        {
+            accountName = StorageAccountResolution.AccountForShare(_console, resources, shareName) ?? string.Empty;
+            if (string.IsNullOrEmpty(accountName))
+                return 1;
+        }
 
         var request = new StorageListRequest
         {

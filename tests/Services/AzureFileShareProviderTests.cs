@@ -63,7 +63,8 @@ public class AzureFileShareProviderTests : IDisposable
     private AzureFileShareProvider CreateProvider(
         HttpClient? httpClient = null,
         Mock<IConfigurationService>? configMock = null,
-        AzureFileShareAuthConfig? config = null)
+        AzureFileShareAuthConfig? config = null,
+        IAzureResourceRegistry? registry = null)
     {
         var configuration = configMock ?? CreateConfigServiceMock();
         var http = httpClient ?? new HttpClient();
@@ -78,16 +79,75 @@ public class AzureFileShareProviderTests : IDisposable
             http,
             configuration.Object,
             new Mock<ILogger<AzureFileShareProvider>>().Object,
-            secrets,
             tenants,
+            registry ?? CreateRegistry(configuration),
             config ?? new AzureFileShareAuthConfig());
     }
 
-    private static string TenantStoreJson(string tenantId, string refreshToken) => JsonSerializer.Serialize(
-        new List<AzureTenantCredentials>
+    /// <summary>A real registry over the same config mock, in the per-test directory so its one-shot
+    /// legacy migration never touches the real <c>~/.pks-cli</c>.</summary>
+    private AzureResourceRegistry CreateRegistry(Mock<IConfigurationService> configuration)
+        => new AzureResourceRegistry(
+            configuration.Object,
+            FakeSecretResolver.BackedBy(configuration.Object.GetAsync),
+            Path.Combine(_cacheDir, "azure-resources.json"));
+
+    private static AzureResourceEntry StorageEntry(string account, string tenantId, bool enabled = true, string? subscriptionName = null) => new()
+    {
+        Kind = AzureResourceKind.Storage,
+        Key = account,
+        Name = account,
+        TenantId = tenantId,
+        SubscriptionId = $"sub-{account}",
+        SubscriptionName = subscriptionName,
+        ResourceGroup = $"rg-{account}",
+        Enabled = enabled,
+        DiscoveredAt = DateTime.UtcNow
+    };
+
+    private static string TenantStoreJson(string tenantId, string refreshToken)
+        => TenantStoreJson((tenantId, refreshToken));
+
+    private static string TenantStoreJson(params (string TenantId, string RefreshToken)[] tenants) => JsonSerializer.Serialize(
+        tenants.Select(t => new AzureTenantCredentials
         {
-            new() { TenantId = tenantId, RefreshToken = SecretValue.From(refreshToken), CreatedAt = DateTime.UtcNow, LastRefreshedAt = DateTime.UtcNow }
-        }, SecretJson.Persistence);
+            TenantId = t.TenantId, RefreshToken = SecretValue.From(t.RefreshToken), CreatedAt = DateTime.UtcNow, LastRefreshedAt = DateTime.UtcNow
+        }).ToList(), SecretJson.Persistence);
+
+    private static HttpResponseMessage Json(object body) => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(JsonSerializer.Serialize(body))
+    };
+
+    /// <summary>
+    /// One handler for the two-tenant scenarios: each tenant's token endpoint mints its own access
+    /// token, and each account's ARM share listing must arrive bearing the token of the tenant that
+    /// account was registered in. <paramref name="sharesFor"/> answers the listing per account.
+    /// </summary>
+    private static HttpClient TwoTenantHttp(Func<string, HttpResponseMessage> sharesFor)
+        => CreateMockHttpClient(request =>
+        {
+            var url = request.RequestUri!.ToString();
+            if (url.Contains("/tenant-a/oauth2/v2.0/token"))
+                return Task.FromResult(Json(new FileShareTokenResponse { AccessToken = "token-a", RefreshToken = "rt-a", ExpiresIn = 3600 }));
+            if (url.Contains("/tenant-b/oauth2/v2.0/token"))
+                return Task.FromResult(Json(new FileShareTokenResponse { AccessToken = "token-b", RefreshToken = "rt-b", ExpiresIn = 3600 }));
+
+            var match = System.Text.RegularExpressions.Regex.Match(url, @"storageAccounts/([^/]+)/fileServices/default/shares");
+            if (!match.Success)
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+
+            var account = match.Groups[1].Value;
+            var expectedToken = account == "acct-a" ? "token-a" : "token-b";
+            request.Headers.Authorization!.Parameter.Should().Be(expectedToken,
+                $"the listing for {account} must use the token of its own tenant");
+            return Task.FromResult(sharesFor(account));
+        });
+
+    private static HttpResponseMessage SharesResponse(params string[] names) => Json(new AzureFileShareListResponse
+    {
+        Value = names.Select(n => new AzureFileShareInfo { Name = n, Properties = new AzureFileShareProperties { ShareQuota = 100, EnabledProtocols = "SMB" } }).ToList()
+    });
 
     private static FileShareStoredCredentials CreateValidCredentials() => new()
     {
@@ -236,7 +296,7 @@ public class AzureFileShareProviderTests : IDisposable
     {
         var provider = CreateProvider();
 
-        var result = await provider.GetAccessTokenAsync("https://management.azure.com/.default");
+        var result = await provider.GetAccessTokenAsync("mystorage", "https://management.azure.com/.default");
 
         result.Should().BeNull();
     }
@@ -266,7 +326,7 @@ public class AzureFileShareProviderTests : IDisposable
 
         var provider = CreateProvider(httpClient: httpClient, configMock: configMock);
 
-        var result = await provider.GetAccessTokenAsync("https://management.azure.com/.default");
+        var result = await provider.GetAccessTokenAsync("mystorage", "https://management.azure.com/.default");
 
         result.Should().Be("new-access-token");
     }
@@ -296,7 +356,7 @@ public class AzureFileShareProviderTests : IDisposable
 
         var provider = CreateProvider(httpClient: httpClient, configMock: configMock);
 
-        var result = await provider.GetAccessTokenAsync("https://management.azure.com/.default");
+        var result = await provider.GetAccessTokenAsync("mystorage", "https://management.azure.com/.default");
 
         result.Should().Be("new-access-token");
         configMock.Verify(x => x.SetAsync(
@@ -343,7 +403,7 @@ public class AzureFileShareProviderTests : IDisposable
 
         var provider = CreateProvider(httpClient: httpClient, configMock: configMock);
 
-        var result = await provider.GetAccessTokenAsync("https://storage.azure.com/.default");
+        var result = await provider.GetAccessTokenAsync("mystorage", "https://storage.azure.com/.default");
 
         result.Should().Be("new-access-token");
         sentBody.Should().Contain("refresh_token=fake-tenant-refresh-token");
@@ -366,7 +426,7 @@ public class AzureFileShareProviderTests : IDisposable
 
         var provider = CreateProvider(httpClient: httpClient, configMock: configMock);
 
-        var result = await provider.GetAccessTokenAsync("https://management.azure.com/.default");
+        var result = await provider.GetAccessTokenAsync("mystorage", "https://management.azure.com/.default");
 
         result.Should().BeNull();
     }
@@ -516,5 +576,171 @@ public class AzureFileShareProviderTests : IDisposable
         result[0].ResourceName.Should().Be("data-share");
         result[0].AccountName.Should().Be("mystorage");
         result[0].ProviderKey.Should().Be("azure-fileshare");
+    }
+
+    // ═══════════════════════════════════════
+    //  Multiple enabled storage accounts (registry-driven)
+    // ═══════════════════════════════════════
+
+    [Fact]
+    [Trait("Category", "FileShare")]
+    public async Task IsAuthenticated_ReturnsFalse_WhenNoStorageEntryIsEnabled()
+    {
+        var configMock = CreateConfigServiceMock(new Dictionary<string, string>
+        {
+            [TenantsKey] = TenantStoreJson("tenant-a", "rt-a")
+        });
+        var registry = CreateRegistry(configMock);
+        await registry.UpsertAsync(new[] { StorageEntry("acct-a", "tenant-a", enabled: false) });
+        var provider = CreateProvider(configMock: configMock, registry: registry);
+
+        (await provider.IsAuthenticatedAsync()).Should().BeFalse();
+    }
+
+    [Fact]
+    [Trait("Category", "FileShare")]
+    public async Task IsAuthenticated_ReturnsTrue_FromRegistryAlone_WhenAnEnabledAccountsTenantIsSignedIn()
+    {
+        // No legacy fileshare.azure.credentials at all: the registry entry plus the tenant store is enough.
+        var configMock = CreateConfigServiceMock(new Dictionary<string, string>
+        {
+            [TenantsKey] = TenantStoreJson("tenant-b", "rt-b")
+        });
+        var registry = CreateRegistry(configMock);
+        await registry.UpsertAsync(new[]
+        {
+            StorageEntry("acct-a", "tenant-a"),   // tenant not signed in
+            StorageEntry("acct-b", "tenant-b")
+        });
+        var provider = CreateProvider(configMock: configMock, registry: registry);
+
+        (await provider.IsAuthenticatedAsync()).Should().BeTrue();
+    }
+
+    [Fact]
+    [Trait("Category", "FileShare")]
+    public async Task ListResources_ListsEveryEnabledAccount_UsingEachTenantsOwnToken()
+    {
+        var configMock = CreateConfigServiceMock(new Dictionary<string, string>
+        {
+            [TenantsKey] = TenantStoreJson(("tenant-a", "rt-a"), ("tenant-b", "rt-b"))
+        });
+        var registry = CreateRegistry(configMock);
+        await registry.UpsertAsync(new[]
+        {
+            StorageEntry("acct-a", "tenant-a", subscriptionName: "Sub A"),
+            StorageEntry("acct-b", "tenant-b", subscriptionName: "Sub B")
+        });
+        var http = TwoTenantHttp(account => account == "acct-a"
+            ? SharesResponse("share-a1", "share-a2")
+            : SharesResponse("share-b1"));
+        var provider = CreateProvider(httpClient: http, configMock: configMock, registry: registry);
+
+        var result = (await provider.ListResourcesAsync()).ToList();
+
+        result.Select(r => (r.AccountName, r.ResourceName)).Should().BeEquivalentTo(new[]
+        {
+            ("acct-a", "share-a1"), ("acct-a", "share-a2"), ("acct-b", "share-b1")
+        });
+        result.Should().OnlyContain(r => r.ProviderKey == "azure-fileshare");
+        result.First(r => r.AccountName == "acct-b").Description.Should().Contain("Sub B");
+    }
+
+    [Fact]
+    [Trait("Category", "FileShare")]
+    public async Task ListResources_SkipsAnAccountThatFails_AndStillListsTheOthers()
+    {
+        var configMock = CreateConfigServiceMock(new Dictionary<string, string>
+        {
+            [TenantsKey] = TenantStoreJson(("tenant-a", "rt-a"), ("tenant-b", "rt-b"))
+        });
+        var registry = CreateRegistry(configMock);
+        await registry.UpsertAsync(new[] { StorageEntry("acct-a", "tenant-a"), StorageEntry("acct-b", "tenant-b") });
+        var http = TwoTenantHttp(account => account == "acct-a"
+            ? SharesResponse("share-a1")
+            : new HttpResponseMessage(HttpStatusCode.Forbidden) { Content = new StringContent("{\"error\":\"AuthorizationFailed\"}") });
+        var provider = CreateProvider(httpClient: http, configMock: configMock, registry: registry);
+
+        var result = (await provider.ListResourcesAsync()).ToList();
+
+        result.Should().ContainSingle(r => r.AccountName == "acct-a" && r.ResourceName == "share-a1");
+    }
+
+    [Fact]
+    [Trait("Category", "FileShare")]
+    public async Task ListResources_SkipsAnAccountWhoseTenantIsNotSignedIn()
+    {
+        // Only tenant-a is signed in; acct-b's listing must never even be attempted.
+        var configMock = CreateConfigServiceMock(new Dictionary<string, string>
+        {
+            [TenantsKey] = TenantStoreJson("tenant-a", "rt-a")
+        });
+        var registry = CreateRegistry(configMock);
+        await registry.UpsertAsync(new[] { StorageEntry("acct-a", "tenant-a"), StorageEntry("acct-b", "tenant-b") });
+        var http = TwoTenantHttp(account => account == "acct-a"
+            ? SharesResponse("share-a1")
+            : throw new Xunit.Sdk.XunitException("acct-b must not be listed without a signed-in tenant"));
+        var provider = CreateProvider(httpClient: http, configMock: configMock, registry: registry);
+
+        var result = (await provider.ListResourcesAsync()).ToList();
+
+        result.Select(r => r.AccountName).Should().Equal("acct-a");
+    }
+
+    [Fact]
+    [Trait("Category", "FileShare")]
+    public async Task ListResources_IgnoresDisabledAccounts()
+    {
+        var configMock = CreateConfigServiceMock(new Dictionary<string, string>
+        {
+            [TenantsKey] = TenantStoreJson(("tenant-a", "rt-a"), ("tenant-b", "rt-b"))
+        });
+        var registry = CreateRegistry(configMock);
+        await registry.UpsertAsync(new[] { StorageEntry("acct-a", "tenant-a"), StorageEntry("acct-b", "tenant-b", enabled: false) });
+        var http = TwoTenantHttp(account => account == "acct-a"
+            ? SharesResponse("share-a1")
+            : throw new Xunit.Sdk.XunitException("a disabled account must not be listed"));
+        var provider = CreateProvider(httpClient: http, configMock: configMock, registry: registry);
+
+        var result = (await provider.ListResourcesAsync()).ToList();
+
+        result.Select(r => r.AccountName).Should().Equal("acct-a");
+    }
+
+    [Fact]
+    [Trait("Category", "FileShare")]
+    public async Task ShareOperations_Throw_WhenTheAccountIsNotEnabled()
+    {
+        var configMock = CreateConfigServiceMock(new Dictionary<string, string>
+        {
+            [TenantsKey] = TenantStoreJson("tenant-b", "rt-b")
+        });
+        var registry = CreateRegistry(configMock);
+        await registry.UpsertAsync(new[] { StorageEntry("acct-b", "tenant-b", enabled: false) });
+        var provider = CreateProvider(configMock: configMock, registry: registry);
+
+        var disabled = () => provider.EnumerateFilesAsync("acct-b", "share", "/", recursive: false);
+        await disabled.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Storage account acct-b is not enabled. Run pks fileshare init");
+
+        var unknown = () => provider.DeleteFilesAsync("nosuch", "share", new[] { "x.txt" });
+        await unknown.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Storage account nosuch is not enabled. Run pks fileshare init");
+    }
+
+    [Fact]
+    [Trait("Category", "FileShare")]
+    public async Task GetAccessToken_UsesTheTenantOfTheNamedAccount()
+    {
+        var configMock = CreateConfigServiceMock(new Dictionary<string, string>
+        {
+            [TenantsKey] = TenantStoreJson(("tenant-a", "rt-a"), ("tenant-b", "rt-b"))
+        });
+        var registry = CreateRegistry(configMock);
+        await registry.UpsertAsync(new[] { StorageEntry("acct-a", "tenant-a"), StorageEntry("acct-b", "tenant-b") });
+        var provider = CreateProvider(httpClient: TwoTenantHttp(_ => SharesResponse()), configMock: configMock, registry: registry);
+
+        (await provider.GetAccessTokenAsync("acct-b", "https://storage.azure.com/.default")).Should().Be("token-b");
+        (await provider.GetAccessTokenAsync("acct-a", "https://storage.azure.com/.default")).Should().Be("token-a");
     }
 }

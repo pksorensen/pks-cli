@@ -191,6 +191,13 @@ public class StorageRmCommand : Command<StorageRmCommand.Settings>
         var resources = ((await provider.ListResourcesAsync()) ?? Enumerable.Empty<StorageResource>()).ToList();
         if (resources.Count == 0) return (accountName, shareName);
 
+        if (string.IsNullOrEmpty(accountName) && !string.IsNullOrEmpty(shareName))
+        {
+            // A bare --share is only unambiguous when one account holds it.
+            accountName = StorageAccountResolution.AccountForShare(_console, resources, shareName) ?? string.Empty;
+            return (accountName, shareName);
+        }
+
         if (string.IsNullOrEmpty(accountName))
         {
             var accounts = resources.Select(r => r.AccountName).Distinct().ToList();

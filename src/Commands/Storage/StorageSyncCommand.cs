@@ -151,6 +151,12 @@ public class StorageSyncCommand : Command<StorageSyncCommand.Settings>
                         .AddChoices(sharesForAccount.Select(r => r.ResourceName)));
             }
         }
+        else if (!string.IsNullOrEmpty(shareName) && string.IsNullOrEmpty(accountName) && resources.Count > 0)
+        {
+            accountName = StorageAccountResolution.AccountForShare(_console, resources, shareName);
+            if (string.IsNullOrEmpty(accountName))
+                return 1;
+        }
 
         if (string.IsNullOrEmpty(accountName) || string.IsNullOrEmpty(shareName))
         {

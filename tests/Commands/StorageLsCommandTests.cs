@@ -221,4 +221,86 @@ public class StorageLsCommandTests
             It.IsAny<CancellationToken>()),
             Times.Once);
     }
+
+    // ─────────────────────────────────────────────────────────────
+    //  Several storage accounts behind one provider
+    // ─────────────────────────────────────────────────────────────
+
+    private static StorageResource Resource(string account, string share) => new()
+    {
+        ProviderKey = "azure-fileshare",
+        ProviderName = "Azure File Share",
+        AccountName = account,
+        ResourceName = share
+    };
+
+    private static Mock<IFileShareProvider> CreateTwoAccountProviderMock()
+    {
+        var provider = CreateProviderMock(authenticated: true);
+        provider.Setup(p => p.ListResourcesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<StorageResource> { Resource("beta", "data"), Resource("alpha", "data"), Resource("beta", "logs") });
+        return provider;
+    }
+
+    [Fact]
+    [Trait("Category", "Storage")]
+    public void Ls_UsesAccountFlag_WhenTheSameShareExistsInTwoAccounts()
+    {
+        var provider = CreateTwoAccountProviderMock();
+        var console = new TestConsole();
+        var cmd = new StorageLsCommand(CreateRegistry(provider.Object), console);
+        var ctx = new CommandContext(Mock.Of<IRemainingArguments>(), "ls", null);
+
+        var result = cmd.Execute(ctx, new StorageLsCommand.Settings { AccountName = "alpha", ShareName = "data" });
+
+        result.Should().Be(0);
+        provider.Verify(p => p.ListDirectoryAsync("alpha", "data", It.IsAny<StorageListRequest>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    [Trait("Category", "Storage")]
+    public void Ls_ResolvesTheShareWithinTheGivenAccount_WhenOnlyAccountGiven()
+    {
+        var provider = CreateTwoAccountProviderMock();
+        var console = new TestConsole();
+        var cmd = new StorageLsCommand(CreateRegistry(provider.Object), console);
+        var ctx = new CommandContext(Mock.Of<IRemainingArguments>(), "ls", null);
+
+        var result = cmd.Execute(ctx, new StorageLsCommand.Settings { AccountName = "alpha" });
+
+        result.Should().Be(0);
+        provider.Verify(p => p.ListDirectoryAsync("alpha", "data", It.IsAny<StorageListRequest>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    [Trait("Category", "Storage")]
+    public void Ls_InfersTheAccount_WhenTheShareNameIsUniqueAcrossAccounts()
+    {
+        var provider = CreateTwoAccountProviderMock();
+        var console = new TestConsole();
+        var cmd = new StorageLsCommand(CreateRegistry(provider.Object), console);
+        var ctx = new CommandContext(Mock.Of<IRemainingArguments>(), "ls", null);
+
+        var result = cmd.Execute(ctx, new StorageLsCommand.Settings { ShareName = "logs" });
+
+        result.Should().Be(0);
+        provider.Verify(p => p.ListDirectoryAsync("beta", "logs", It.IsAny<StorageListRequest>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    [Trait("Category", "Storage")]
+    public void Ls_Returns1_AndNamesTheAccounts_WhenShareIsAmbiguous_NonInteractive()
+    {
+        var provider = CreateTwoAccountProviderMock();
+        var console = new TestConsole();
+        var cmd = new StorageLsCommand(CreateRegistry(provider.Object), console);
+        var ctx = new CommandContext(Mock.Of<IRemainingArguments>(), "ls", null);
+
+        var result = cmd.Execute(ctx, new StorageLsCommand.Settings { ShareName = "data" });
+
+        result.Should().Be(1);
+        console.Output.Should().Contain("--account");
+        console.Output.Should().Contain("alpha").And.Contain("beta");
+        provider.Verify(p => p.ListDirectoryAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<StorageListRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
 }

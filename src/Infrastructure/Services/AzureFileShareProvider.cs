@@ -6,20 +6,31 @@ using Microsoft.Extensions.Logging;
 using PKS.Infrastructure.Services.Azure;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
-using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Infrastructure.Services;
 
+/// <summary>
+/// Azure Files over every storage account the <see cref="IAzureResourceRegistry"/> has enabled.
+/// Each account carries the tenant it was discovered in, so two accounts in two tenants get two
+/// different bearer tokens; the legacy single selection in <c>fileshare.azure.credentials</c> is
+/// only written here (by <see cref="AuthenticateAsync"/>) — the registry's one-shot migration
+/// reads it, and everything else in this class reads the registry.
+/// </summary>
 public class AzureFileShareProvider : IFileShareProvider
 {
     private const string StorageKey = "fileshare.azure.credentials";
 
     private readonly HttpClient _httpClient;
     private readonly IConfigurationService _configurationService;
-    private readonly ISecretResolver _secrets;
     private readonly ILogger<AzureFileShareProvider> _logger;
     private readonly AzureFileShareAuthConfig _config;
     private readonly IAzureTenantCredentialStore _tenants;
+    private readonly IAzureResourceRegistry _resources;
+
+    /// <summary>One self-renewing storage credential per tenant: accounts in the same tenant share
+    /// a token, accounts in different tenants never do.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, RefreshingTokenCredential> _storageCredentials =
+        new(StringComparer.OrdinalIgnoreCase);
 
     public string ProviderName => "Azure File Share";
     public string ProviderKey => "azure-fileshare";
@@ -28,32 +39,49 @@ public class AzureFileShareProvider : IFileShareProvider
         HttpClient httpClient,
         IConfigurationService configurationService,
         ILogger<AzureFileShareProvider> logger,
-        ISecretResolver secrets,
         IAzureTenantCredentialStore tenants,
+        IAzureResourceRegistry resources,
         AzureFileShareAuthConfig? config = null)
     {
         _httpClient = httpClient;
         _configurationService = configurationService;
         _logger = logger;
         _config = config ?? new AzureFileShareAuthConfig();
-        _secrets = secrets;
         _tenants = tenants;
+        _resources = resources;
     }
 
     /// <summary>
-    /// Signed in means the tenant store holds the tenant this feature was configured against (any
-    /// tenant, when an old entry never recorded one) and a storage account has been picked. The
-    /// refresh token itself lives in the tenant store; the entry here carries only the selection.
+    /// Signed in means at least one enabled storage account whose tenant the tenant store holds
+    /// (the only signed-in tenant, for an entry lifted from the legacy selection that never recorded
+    /// one). The refresh token itself lives in the tenant store; the registry carries the selection.
     /// </summary>
     public async Task<bool> IsAuthenticatedAsync()
     {
-        var credentials = await GetStoredCredentialsAsync();
-        if (credentials == null || string.IsNullOrEmpty(credentials.SelectedStorageAccountName))
-            return false;
+        foreach (var entry in await _resources.ListEnabledAsync(AzureResourceKind.Storage))
+        {
+            if (await TryResolveTenantAsync(entry) is not null)
+                return true;
+        }
+        return false;
+    }
 
-        return string.IsNullOrEmpty(credentials.TenantId)
-            ? (await _tenants.ListTenantsAsync()).Count > 0
-            : await _tenants.HasTenantAsync(credentials.TenantId);
+    /// <summary>The tenant an entry belongs to, or null when that tenant is not signed in (or the
+    /// entry recorded none and several are) — a per-account condition, never a provider-wide one.</summary>
+    private async Task<string?> TryResolveTenantAsync(AzureResourceEntry entry)
+    {
+        try
+        {
+            return await _tenants.ResolveTenantAsync(entry.TenantId);
+        }
+        catch (AzureAuthExpiredException)
+        {
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     public async Task<bool> AuthenticateAsync(IAnsiConsole console, CancellationToken ct = default)
@@ -148,6 +176,25 @@ public class AzureFileShareProvider : IFileShareProvider
             LastRefreshedAt = DateTime.UtcNow
         });
 
+        // The registry is what list/ls/sync/rm read; this makes the account one of the enabled set.
+        await _resources.UpsertAsync(new[]
+        {
+            new AzureResourceEntry
+            {
+                Kind = AzureResourceKind.Storage,
+                Key = selectedAccount.Name,
+                Name = selectedAccount.Name,
+                ResourceId = selectedAccount.Id,
+                TenantId = tenantId,
+                SubscriptionId = selectedSubscription.SubscriptionId,
+                SubscriptionName = selectedSubscription.DisplayName,
+                ResourceGroup = resourceGroup,
+                Enabled = true,
+                DiscoveredAt = DateTime.UtcNow
+            }
+        });
+        await _resources.SetEnabledAsync(AzureResourceKind.Storage, selectedAccount.Name, true);
+
         console.WriteLine();
         var table = new Table()
             .Border(TableBorder.Rounded)
@@ -165,53 +212,64 @@ public class AzureFileShareProvider : IFileShareProvider
         return true;
     }
 
+    /// <summary>
+    /// The shares of every enabled storage account, listed in parallel. An account that cannot be
+    /// listed — tenant not signed in, token dead, ARM 403, network — is logged and skipped so one
+    /// bad account never hides the others.
+    /// </summary>
     public async Task<IEnumerable<StorageResource>> ListResourcesAsync(CancellationToken ct = default)
     {
-        var credentials = await GetStoredCredentialsAsync();
-        if (credentials == null || string.IsNullOrEmpty(credentials.SelectedStorageAccountName))
-            return Enumerable.Empty<StorageResource>();
+        var entries = await _resources.ListEnabledAsync(AzureResourceKind.Storage);
+        var perAccount = await Task.WhenAll(entries.Select(e => ListAccountSharesAsync(e, ct)));
+        return perAccount.SelectMany(shares => shares).ToList();
+    }
 
-        var token = await GetAccessTokenAsync(_config.ManagementScope, ct);
-        if (string.IsNullOrEmpty(token))
-            return Enumerable.Empty<StorageResource>();
-
+    private async Task<IReadOnlyList<StorageResource>> ListAccountSharesAsync(AzureResourceEntry entry, CancellationToken ct)
+    {
+        var tenantLabel = entry.TenantId ?? "(only signed-in tenant)";
         try
         {
-            var shares = await ListFileSharesAsync(
-                token,
-                credentials.SelectedSubscriptionId,
-                credentials.SelectedStorageAccountResourceGroup,
-                credentials.SelectedStorageAccountName,
-                ct);
+            var tenantId = await _tenants.ResolveTenantAsync(entry.TenantId);
+            tenantLabel = tenantId;
 
+            if (string.IsNullOrWhiteSpace(entry.SubscriptionId) || string.IsNullOrWhiteSpace(entry.ResourceGroup))
+                throw new InvalidOperationException("the registry entry records no subscription or resource group; run 'pks fileshare init' to rediscover it");
+
+            var token = await _tenants.GetAccessTokenAsync(tenantId, _config.ManagementScope, ct);
+            var shares = await ListFileSharesAsync(token, entry.SubscriptionId, entry.ResourceGroup, entry.Key, ct);
+
+            var subscription = string.IsNullOrWhiteSpace(entry.SubscriptionName) ? null : $" · {entry.SubscriptionName}";
             return shares.Select(s => new StorageResource
             {
                 ProviderKey = ProviderKey,
                 ProviderName = ProviderName,
-                AccountName = credentials.SelectedStorageAccountName,
+                AccountName = entry.Key,
                 ResourceName = s.Name,
-                Description = $"{s.Properties.ShareQuota} GiB · {s.Properties.EnabledProtocols}"
-            });
+                Description = $"{s.Properties.ShareQuota} GiB · {s.Properties.EnabledProtocols}{subscription}"
+            }).ToList();
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to list Azure file shares");
-            return Enumerable.Empty<StorageResource>();
+            _logger.LogWarning(ex, "Skipping storage account {Account} in tenant {Tenant}: {Reason}", entry.Key, tenantLabel, ex.Message);
+            return Array.Empty<StorageResource>();
         }
     }
 
     public async Task<SyncResult> SyncAsync(StorageSyncRequest request, Action<SyncProgressUpdate> progress, CancellationToken ct = default)
     {
         var result = new SyncResult();
-        var credentials = await GetStoredCredentialsAsync();
-        if (credentials == null)
+        var entry = await FindEnabledAccountAsync(request.AccountName);
+        if (entry == null)
         {
-            result.Errors.Add("Not authenticated. Run 'pks fileshare init' first.");
+            result.Errors.Add((await _resources.ListEnabledAsync(AzureResourceKind.Storage)).Count == 0
+                ? "Not authenticated. Run 'pks fileshare init' first."
+                : NotEnabledMessage(request.AccountName));
             return result;
         }
 
         // Fail fast on a dead refresh token rather than deep inside the transfer loop.
-        if (string.IsNullOrEmpty(await GetAccessTokenAsync(_config.StorageScope, ct)))
+        var tenantId = await TryResolveTenantAsync(entry);
+        if (tenantId == null || await AcquireTokenAsync(tenantId, _config.StorageScope, ct) == null)
         {
             result.Errors.Add("Failed to obtain storage access token.");
             return result;
@@ -219,7 +277,7 @@ public class AzureFileShareProvider : IFileShareProvider
 
         try
         {
-            var shareClient = CreateShareClient(request.AccountName, request.ResourceName);
+            var shareClient = await CreateShareClientAsync(request.AccountName, request.ResourceName);
 
             if (request.Direction is SyncDirection.Download or SyncDirection.Bidirectional)
                 await DownloadParallelAsync(shareClient.GetRootDirectoryClient(), request, result, progress, ct);
@@ -248,7 +306,7 @@ public class AzureFileShareProvider : IFileShareProvider
 
         try
         {
-            var shareClient = CreateShareClient(accountName, resourceName);
+            var shareClient = await CreateShareClientAsync(accountName, resourceName);
 
             var normalizedPath = request.Path.Trim('/');
             var dirClient = string.IsNullOrEmpty(normalizedPath)
@@ -297,7 +355,7 @@ public class AzureFileShareProvider : IFileShareProvider
     {
         var found = new List<StorageFileRef>();
 
-        var shareClient = CreateShareClient(accountName, resourceName);
+        var shareClient = await CreateShareClientAsync(accountName, resourceName);
         var normalized = path.Trim('/');
 
         // A path that names a single file resolves to exactly that file.
@@ -354,7 +412,7 @@ public class AzureFileShareProvider : IFileShareProvider
     {
         var result = new StorageDeleteResult();
 
-        var shareClient = CreateShareClient(accountName, resourceName);
+        var shareClient = await CreateShareClientAsync(accountName, resourceName);
         var root = shareClient.GetRootDirectoryClient();
 
         foreach (var path in paths)
@@ -394,18 +452,38 @@ public class AzureFileShareProvider : IFileShareProvider
     }
 
     /// <summary>
-    /// Share client carrying a self-renewing OAuth bearer plus the backup request-intent Azure Files
-    /// demands. Every share client goes through here so no code path can pin a token again.
+    /// Share client carrying a self-renewing OAuth bearer for the account's own tenant plus the
+    /// backup request-intent Azure Files demands. Every share client goes through here so no code
+    /// path can pin a token again, and no code path can reach an account the registry has not enabled.
     /// </summary>
-    private global::Azure.Storage.Files.Shares.ShareClient CreateShareClient(string accountName, string resourceName)
+    /// <exception cref="InvalidOperationException">The account is unknown to the registry or disabled.</exception>
+    /// <exception cref="AzureAuthExpiredException">The account's tenant is not signed in.</exception>
+    private async Task<global::Azure.Storage.Files.Shares.ShareClient> CreateShareClientAsync(string accountName, string resourceName)
     {
+        var entry = await FindEnabledAccountAsync(accountName)
+            ?? throw new InvalidOperationException(NotEnabledMessage(accountName));
+        var tenantId = await _tenants.ResolveTenantAsync(entry.TenantId);
+
+        var credential = _storageCredentials.GetOrAdd(tenantId,
+            tenant => new RefreshingTokenCredential(token => AcquireTokenAsync(tenant, _config.StorageScope, token)));
+
         var options = new global::Azure.Storage.Files.Shares.ShareClientOptions();
         options.AddPolicy(new FileRequestIntentPolicy(), HttpPipelinePosition.PerCall);
         return new global::Azure.Storage.Files.Shares.ShareClient(
-            new Uri($"https://{accountName}.file.core.windows.net/{resourceName}"),
-            new RefreshingTokenCredential(token => AcquireTokenAsync(_config.StorageScope, token)),
+            new Uri($"https://{entry.Key}.file.core.windows.net/{resourceName}"),
+            credential,
             options);
     }
+
+    private async Task<AzureResourceEntry?> FindEnabledAccountAsync(string accountName)
+    {
+        if (string.IsNullOrWhiteSpace(accountName)) return null;
+        var entry = await _resources.FindAsync(AzureResourceKind.Storage, accountName);
+        return entry is { Enabled: true } ? entry : null;
+    }
+
+    private static string NotEnabledMessage(string accountName)
+        => $"Storage account {accountName} is not enabled. Run pks fileshare init";
 
     private static async Task<int> CountItemsAsync(
         global::Azure.Storage.Files.Shares.ShareDirectoryClient dir, CancellationToken ct)
@@ -418,28 +496,38 @@ public class AzureFileShareProvider : IFileShareProvider
 
     // ── Internal ARM helpers ────────────────────────────────────────────────
 
-    public async Task<string?> GetAccessTokenAsync(string scope, CancellationToken ct = default)
-        => (await AcquireTokenAsync(scope, ct))?.Token;
-
-    /// <summary>
-    /// An access token for <paramref name="scope"/> from the tenant store (which caches and
-    /// refreshes it), with the expiry the token itself carries so a client held open across a long
-    /// sync renews in time. Null when this feature is not signed in — callers report that and stop.
-    /// </summary>
-    private async Task<(string Token, DateTimeOffset ExpiresOn)?> AcquireTokenAsync(string scope, CancellationToken ct = default)
+    /// <summary>An access token for <paramref name="scope"/> in the tenant of the enabled storage
+    /// account <paramref name="accountName"/>; null when the account is not enabled or its tenant
+    /// is not signed in.</summary>
+    public async Task<string?> GetAccessTokenAsync(string accountName, string scope, CancellationToken ct = default)
     {
-        var credentials = await GetStoredCredentialsAsync();
-        if (credentials == null)
+        var entry = await FindEnabledAccountAsync(accountName);
+        if (entry == null)
         {
-            _logger.LogWarning("Cannot obtain token: no stored file share configuration");
+            _logger.LogWarning("Cannot obtain token: storage account {Account} is not enabled", accountName);
             return null;
         }
 
+        var tenantId = await TryResolveTenantAsync(entry);
+        if (tenantId == null)
+        {
+            _logger.LogError("Azure sign-in for storage account {Account} is missing or expired. Run 'pks fileshare init' to sign in again.", accountName);
+            return null;
+        }
+
+        return (await AcquireTokenAsync(tenantId, scope, ct))?.Token;
+    }
+
+    /// <summary>
+    /// An access token for <paramref name="scope"/> in <paramref name="tenantId"/> from the tenant
+    /// store (which caches and refreshes it), with the expiry the token itself carries so a client
+    /// held open across a long sync renews in time. Null when the tenant is not signed in — callers
+    /// report that and stop.
+    /// </summary>
+    private async Task<(string Token, DateTimeOffset ExpiresOn)?> AcquireTokenAsync(string tenantId, string scope, CancellationToken ct = default)
+    {
         try
         {
-            var tenantId = string.IsNullOrEmpty(credentials.TenantId)
-                ? await _tenants.ResolveTenantAsync(null)
-                : credentials.TenantId;
             var token = await _tenants.GetAccessTokenAsync(tenantId, scope, ct);
 
             // The STS's own expiry when the token is a JWT; otherwise renew well inside the cache's
@@ -467,21 +555,6 @@ public class AzureFileShareProvider : IFileShareProvider
 
     public Task<List<AzureFileShareInfo>> ListFileSharesAsync(string accessToken, string subscriptionId, string resourceGroup, string accountName, CancellationToken ct = default)
         => AzureArmRequests.ListFileSharesAsync(_httpClient, accessToken, subscriptionId, resourceGroup, accountName, ct);
-
-    private async Task<FileShareStoredCredentials?> GetStoredCredentialsAsync()
-    {
-        try
-        {
-            var json = await _secrets.RevealAsync(StorageKey);
-            if (string.IsNullOrEmpty(json))
-                return null;
-            return JsonSerializer.Deserialize<FileShareStoredCredentials>(json);
-        }
-        catch
-        {
-            return null;
-        }
-    }
 
     private async Task StoreCredentialsAsync(FileShareStoredCredentials credentials)
     {

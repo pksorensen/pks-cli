@@ -6,7 +6,7 @@ using Spectre.Console.Cli;
 namespace PKS.Commands.Storage;
 
 [Description("List storage resources across authenticated providers")]
-public class StorageListCommand : Command<StorageSettings>
+public class StorageListCommand : Command<StorageListCommand.Settings>
 {
     private readonly FileShareProviderRegistry _registry;
     private readonly IAnsiConsole _console;
@@ -17,12 +17,19 @@ public class StorageListCommand : Command<StorageSettings>
         _console = console;
     }
 
-    public override int Execute(CommandContext context, StorageSettings settings)
+    public class Settings : StorageSettings
     {
-        return ExecuteAsync().GetAwaiter().GetResult();
+        [CommandOption("--account")]
+        [Description("Only show shares of this storage account")]
+        public string? AccountName { get; set; }
     }
 
-    private async Task<int> ExecuteAsync()
+    public override int Execute(CommandContext context, Settings settings)
+    {
+        return ExecuteAsync(settings).GetAwaiter().GetResult();
+    }
+
+    private async Task<int> ExecuteAsync(Settings settings)
     {
         var authenticated = (await _registry.GetAuthenticatedProvidersAsync()).ToList();
 
@@ -46,13 +53,21 @@ public class StorageListCommand : Command<StorageSettings>
         {
             var resources = (await provider.ListResourcesAsync()).ToList();
 
+            if (!string.IsNullOrWhiteSpace(settings.AccountName))
+                resources = resources
+                    .Where(r => string.Equals(r.AccountName, settings.AccountName, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
             if (resources.Count == 0)
             {
                 table.AddRow(Markup.Escape(provider.ProviderName), "-", "-", "[dim]No resources found[/]");
                 continue;
             }
 
-            foreach (var resource in resources)
+            // Several accounts come back interleaved from a parallel listing; group them.
+            foreach (var resource in resources
+                         .OrderBy(r => r.AccountName, StringComparer.OrdinalIgnoreCase)
+                         .ThenBy(r => r.ResourceName, StringComparer.OrdinalIgnoreCase))
             {
                 table.AddRow(
                     Markup.Escape(resource.ProviderName),
