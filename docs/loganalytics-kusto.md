@@ -14,11 +14,16 @@ tenant says `pks appinsights init --reauth <tenant>`.
 ## Configure once
 
 ```bash
-pks loganalytics init                                   # pick subscription + workspace interactively
-pks loganalytics init --subscription <sub-id> --workspace law-prod   # non-interactive
+pks loganalytics init                                   # checkbox list of workspaces across all signed-in tenants
+pks loganalytics init --enable law-prod --disable law-dev   # non-interactive toggles
+pks loganalytics init --reauth <tenant-id>              # the only way to get a browser for a known tenant
 pks loganalytics init --workspace <workspace-guid>      # already know the GUID: no ARM lookup at all
-pks loganalytics status                                 # config + live connection test
+pks loganalytics init --list                            # what is registered and enabled
+pks loganalytics status                                 # entries + per-workspace connection test + tenant sign-in state
 ```
+
+The shared model (tenant store, registry, `--force` never clearing credentials, migration
+from the single-workspace keys) is in `azure-resources.md`.
 
 `init` can be run more than once: every workspace it registers lands in the Azure
 resource registry (`~/.pks-cli/azure-resources.json`) as an **enabled** entry with the
