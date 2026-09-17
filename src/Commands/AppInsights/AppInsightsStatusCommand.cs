@@ -1,25 +1,30 @@
 using System.ComponentModel;
+using PKS.Commands.Azure;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Azure;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
 namespace PKS.Commands.AppInsights;
 
-[Description("Show Application Insights configuration and connection status")]
+[Description("Show the registered Application Insights resources, test the enabled ones and show tenant sign-in state")]
 public class AppInsightsStatusCommand : Command<AppInsightsStatusCommand.Settings>
 {
     public class Settings : AppInsightsSettings { }
 
-    private readonly IAppInsightsConfigService _configService;
+    private readonly IAzureResourceRegistry _registry;
+    private readonly IAzureTenantCredentialStore _tenants;
     private readonly IAppInsightsQueryService _queryService;
     private readonly IAnsiConsole _console;
 
     public AppInsightsStatusCommand(
-        IAppInsightsConfigService configService,
+        IAzureResourceRegistry registry,
+        IAzureTenantCredentialStore tenants,
         IAppInsightsQueryService queryService,
         IAnsiConsole console)
     {
-        _configService = configService;
+        _registry = registry;
+        _tenants = tenants;
         _queryService = queryService;
         _console = console;
     }
@@ -29,39 +34,23 @@ public class AppInsightsStatusCommand : Command<AppInsightsStatusCommand.Setting
 
     private async Task<int> ExecuteAsync()
     {
-        var isConfigured = await _configService.IsConfiguredAsync();
-
-        if (!isConfigured)
+        var entries = await _registry.ListAsync(AzureResourceKind.AppInsights);
+        if (await AzureResourceStatusRenderer.WriteEntriesAsync(_console, _tenants, AzureResourceKind.AppInsights, entries))
         {
-            _console.MarkupLine("[yellow]Application Insights is not configured.[/]");
-            _console.MarkupLine("[dim]Run [cyan]pks appinsights init[/] to configure.[/]");
-            return 0;
+            _console.WriteLine();
+            foreach (var entry in entries.Where(e => e.Enabled))
+            {
+                var result = await _console.Status().StartAsync(
+                    $"Testing {entry.Name.EscapeMarkup()}...",
+                    _ => _queryService.TestConnectionAsync(entry.Key));
+                if (result.Success)
+                    _console.MarkupLine($"[green]Connected[/] - {(result.ResourceName ?? entry.Name).EscapeMarkup()}");
+                else
+                    _console.MarkupLine($"[red]Connection failed[/] - {entry.Name.EscapeMarkup()}: {(result.ErrorMessage ?? "Unknown error").EscapeMarkup()}");
+            }
         }
 
-        var config = await _configService.GetConfigAsync();
-        if (config is null) return 0;
-
-        var table = new Table().Border(TableBorder.Rounded).AddColumn("Setting").AddColumn("Value");
-        table.AddRow("App ID", config.AppId);
-        table.AddRow("Resource", config.ResourceName ?? "[dim]not set[/]");
-        table.AddRow("Subscription", config.SubscriptionId ?? "[dim]not set[/]");
-        table.AddRow("Auth", "[dim]Azure AD (via pks foundry)[/]");
-        table.AddRow("Configured At", config.RegisteredAt == DateTime.MinValue
-            ? "[dim]unknown[/]"
-            : config.RegisteredAt.ToString("yyyy-MM-dd HH:mm") + " UTC");
-
-        _console.Write(table);
-        _console.WriteLine();
-
-        await _console.Status().StartAsync("Testing connection...", async ctx =>
-        {
-            var result = await _queryService.TestConnectionAsync();
-            if (result.Success)
-                _console.MarkupLine($"[green]Connected[/] - {(result.ResourceName ?? "Application Insights").EscapeMarkup()}");
-            else
-                _console.MarkupLine($"[red]Connection failed:[/] {(result.ErrorMessage ?? "Unknown error").EscapeMarkup()}");
-        });
-
+        await AzureResourceStatusRenderer.WriteTenantsAsync(_console, _tenants, AzureResourceKind.AppInsights);
         return 0;
     }
 }

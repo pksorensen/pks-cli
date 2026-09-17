@@ -76,6 +76,10 @@ internal class DefaultAppInsightsHttpAdapter : IAppInsightsHttpAdapter
 public interface IAppInsightsQueryService
 {
     Task<AppInsightsConnectionResult> TestConnectionAsync(CancellationToken ct = default);
+
+    /// <summary>Tests one resource by app id instead of the configured one — the status command runs
+    /// this for every enabled entry.</summary>
+    Task<AppInsightsConnectionResult> TestConnectionAsync(string appIdOverride, CancellationToken ct = default);
     Task<List<OtelError>> QueryErrorsAsync(TimeSpan since, int limit, string? appName = null, string? operationId = null, CancellationToken ct = default);
     Task<List<OtelTrace>> QueryTracesAsync(TimeSpan since, int limit, bool? hasError = null, string? appName = null, CancellationToken ct = default);
     Task<List<OtelLog>> QueryLogsAsync(TimeSpan since, string? severity = null, string? traceId = null, string? appName = null, CancellationToken ct = default);
@@ -118,18 +122,32 @@ public class AppInsightsQueryService : IAppInsightsQueryService
             var config = await _configService.GetConfigAsync();
             if (config is null)
                 return new AppInsightsConnectionResult { Success = false, ErrorMessage = "Not configured" };
+            return await TestResourceAsync(config.AppId, config.ResourceName, ct);
+        }
+        catch (Exception ex)
+        {
+            return new AppInsightsConnectionResult { Success = false, ErrorMessage = ex.Message };
+        }
+    }
 
+    public Task<AppInsightsConnectionResult> TestConnectionAsync(string appIdOverride, CancellationToken ct = default)
+        => TestResourceAsync(appIdOverride, null, ct);
+
+    private async Task<AppInsightsConnectionResult> TestResourceAsync(string appId, string? resourceName, CancellationToken ct)
+    {
+        try
+        {
             var token = await _authService.GetAccessTokenAsync(QueryScope, ct);
             if (string.IsNullOrEmpty(token))
                 return new AppInsightsConnectionResult { Success = false, ErrorMessage = "Not authenticated. Run 'pks foundry init' first." };
 
             var kql = "requests | take 1 | project cloud_RoleName";
-            var response = await _httpAdapter.QueryAsync(config.AppId, token, kql, ct);
+            var response = await _httpAdapter.QueryAsync(appId, token, kql, ct);
 
-            var resourceName = response.Tables.FirstOrDefault()?.Rows.FirstOrDefault()
+            var discoveredName = response.Tables.FirstOrDefault()?.Rows.FirstOrDefault()
                 ?.ElementAtOrDefault(0).GetString();
 
-            return new AppInsightsConnectionResult { Success = true, ResourceName = resourceName ?? config.ResourceName };
+            return new AppInsightsConnectionResult { Success = true, ResourceName = discoveredName ?? resourceName };
         }
         catch (Exception ex)
         {

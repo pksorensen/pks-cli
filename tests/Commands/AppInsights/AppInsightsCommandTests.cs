@@ -2,6 +2,7 @@ using FluentAssertions;
 using Moq;
 using PKS.Commands.AppInsights;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Azure;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -13,204 +14,205 @@ namespace PKS.CLI.Tests.Commands.AppInsights;
 [Trait("Category", "AppInsights")]
 public class AppInsightsCommandTests
 {
-    private static (Mock<IAppInsightsConfigService>, Mock<IAppInsightsQueryService>, TestConsole) CreateStatusMocks(
-        bool isConfigured = true,
-        AppInsightsConfig? config = null,
-        AppInsightsConnectionResult? connectionResult = null)
-    {
-        var configMock = new Mock<IAppInsightsConfigService>();
-        var queryMock = new Mock<IAppInsightsQueryService>();
-        var console = new TestConsole();
-
-        configMock.Setup(m => m.IsConfiguredAsync()).ReturnsAsync(isConfigured);
-        configMock.Setup(m => m.GetConfigAsync()).ReturnsAsync(config ?? (isConfigured
-            ? new AppInsightsConfig { AppId = "app-123", ResourceName = "My AI Resource", SubscriptionId = "sub-xyz" }
-            : null));
-
-        queryMock.Setup(m => m.TestConnectionAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(connectionResult ?? new AppInsightsConnectionResult { Success = true, ResourceName = "My AI Resource" });
-
-        return (configMock, queryMock, console);
-    }
-
-    private static (Mock<IAppInsightsConfigService>, Mock<IAzureFoundryAuthService>, TestConsole) CreateInitMocks(
-        bool isConfigured = false,
-        bool isAuthenticated = true,
-        string? managementToken = "mgmt-token",
-        List<AzureSubscription>? subscriptions = null,
-        List<AppInsightsComponent>? components = null,
-        FoundryAuthResult? authResult = null,
-        Exception? initLoginException = null)
-    {
-        var configMock = new Mock<IAppInsightsConfigService>();
-        var authMock = new Mock<IAzureFoundryAuthService>();
-        var console = new TestConsole();
-
-        configMock.Setup(m => m.IsConfiguredAsync()).ReturnsAsync(isConfigured);
-        configMock.Setup(m => m.GetConfigAsync()).ReturnsAsync(isConfigured
-            ? new AppInsightsConfig { AppId = "app-123", ResourceName = "My AI Resource" }
-            : null);
-        configMock.Setup(m => m.StoreConfigAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()))
-            .Returns(Task.CompletedTask);
-
-        authMock.Setup(m => m.IsAuthenticatedAsync()).ReturnsAsync(isAuthenticated);
-        authMock.Setup(m => m.GetAccessTokenAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(managementToken);
-        authMock.Setup(m => m.DiscoverTenantAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync("common");
-        authMock.Setup(m => m.StoreCredentialsAsync(It.IsAny<FoundryStoredCredentials>()))
-            .Returns(Task.CompletedTask);
-
-        if (initLoginException is not null)
-            authMock.Setup(m => m.InitiateLoginAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-                .ThrowsAsync(initLoginException);
-        else
-            authMock.Setup(m => m.InitiateLoginAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(authResult ?? new FoundryAuthResult { RefreshToken = "refresh-tok" });
-
-        authMock.Setup(m => m.ListSubscriptionsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(subscriptions ?? [new AzureSubscription { SubscriptionId = "sub-123", DisplayName = "My Sub" }]);
-        authMock.Setup(m => m.ListAppInsightsResourcesAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(components ?? [new AppInsightsComponent { Name = "My AppInsights", Properties = new AppInsightsComponentProperties { AppId = "ai-app-id" } }]);
-
-        return (configMock, authMock, console);
-    }
+    private const string Tenant1 = "11111111-aaaa-aaaa-aaaa-111111111111";
+    private const string Tenant2 = "22222222-bbbb-bbbb-bbbb-222222222222";
 
     private static CommandContext CreateContext(string commandName = "status")
         => new(Mock.Of<IRemainingArguments>(), commandName, null);
 
-    // -- Status command tests --
+    private static AzureResourceEntry Entry(string name, string appId, bool enabled, string tenant = Tenant1) => new()
+    {
+        Kind = AzureResourceKind.AppInsights,
+        Name = name,
+        Key = appId,
+        ResourceId = $"/subscriptions/sub-xyz/resourceGroups/rg/providers/microsoft.insights/components/{name}",
+        TenantId = tenant,
+        SubscriptionId = "sub-xyz",
+        SubscriptionName = "My Sub",
+        Enabled = enabled,
+    };
+
+    // ── status ───────────────────────────────────────────────────────────────────
+
+    private sealed class StatusFixture
+    {
+        public Mock<IAzureResourceRegistry> Registry { get; } = new();
+        public Mock<IAzureTenantCredentialStore> Tenants { get; } = new();
+        public Mock<IAppInsightsQueryService> Query { get; } = new();
+        public TestConsole Console { get; } = new TestConsole().Width(200);
+
+        public StatusFixture(IReadOnlyList<AzureResourceEntry>? entries = null, params string[] tenants)
+        {
+            entries ??= new List<AzureResourceEntry>();
+            Registry.Setup(r => r.ListAsync(AzureResourceKind.AppInsights)).ReturnsAsync(entries.ToList());
+            Registry.Setup(r => r.ListEnabledAsync(AzureResourceKind.AppInsights)).ReturnsAsync(entries.Where(e => e.Enabled).ToList());
+            Tenants.Setup(t => t.ListTenantsAsync()).ReturnsAsync(tenants
+                .Select(id => new AzureTenantInfo(id, "Tenant " + id[..8], null, DateTime.UtcNow, DateTime.UtcNow)).ToList());
+            Tenants.Setup(t => t.GetAccessTokenAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync("token");
+            Query.Setup(q => q.TestConnectionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((string id, CancellationToken _) => new AppInsightsConnectionResult { Success = true, ResourceName = "res-" + id });
+        }
+
+        public AppInsightsStatusCommand Command => new(Registry.Object, Tenants.Object, Query.Object, Console);
+    }
 
     [Fact]
-    public void Status_ShowsNotConfigured_WhenNoConfig()
+    public void Status_ShowsNotConfigured_WhenNoEntries()
     {
-        var (configMock, queryMock, console) = CreateStatusMocks(isConfigured: false);
-        var cmd = new AppInsightsStatusCommand(configMock.Object, queryMock.Object, console);
+        var f = new StatusFixture();
 
-        var result = cmd.Execute(CreateContext("status"), new AppInsightsStatusCommand.Settings());
+        var result = f.Command.Execute(CreateContext("status"), new AppInsightsStatusCommand.Settings());
 
         result.Should().Be(0);
-        console.Output.Should().Contain("not configured");
+        f.Console.Output.Should().Contain("not configured");
     }
 
     [Fact]
-    public void Status_ShowsConfigDetails_WhenConfigured()
+    public void Status_ListsEnabledAndDisabledEntries()
     {
-        var (configMock, queryMock, console) = CreateStatusMocks(isConfigured: true);
-        var cmd = new AppInsightsStatusCommand(configMock.Object, queryMock.Object, console);
+        var f = new StatusFixture(new[] { Entry("ai-prod", "app-123", enabled: true), Entry("ai-dev", "app-456", enabled: false) }, Tenant1);
 
-        var result = cmd.Execute(CreateContext("status"), new AppInsightsStatusCommand.Settings());
+        var result = f.Command.Execute(CreateContext("status"), new AppInsightsStatusCommand.Settings());
 
         result.Should().Be(0);
-        console.Output.Should().Contain("app-123");
+        f.Console.Output.Should().Contain("ai-prod").And.Contain("app-123").And.Contain("ai-dev").And.Contain("app-456");
+        f.Console.Output.Should().Contain("✓").And.Contain("✗");
     }
 
     [Fact]
-    public void Status_ShowsAzureAdAuth_WhenConfigured()
+    public void Status_TestsConnection_ForEachEnabledEntryOnly()
     {
-        var (configMock, queryMock, console) = CreateStatusMocks(isConfigured: true);
-        var cmd = new AppInsightsStatusCommand(configMock.Object, queryMock.Object, console);
+        var f = new StatusFixture(new[] { Entry("ai-prod", "app-123", enabled: true), Entry("ai-dev", "app-456", enabled: false) }, Tenant1);
 
-        cmd.Execute(CreateContext("status"), new AppInsightsStatusCommand.Settings());
+        f.Command.Execute(CreateContext("status"), new AppInsightsStatusCommand.Settings());
 
-        console.Output.Should().ContainAny("Azure AD", "foundry", "pks foundry");
+        f.Query.Verify(q => q.TestConnectionAsync("app-123", It.IsAny<CancellationToken>()), Times.Once);
+        f.Query.Verify(q => q.TestConnectionAsync("app-456", It.IsAny<CancellationToken>()), Times.Never);
+        f.Console.Output.Should().ContainAny("connected", "Connected");
     }
 
     [Fact]
-    public void Status_ShowsConnectionStatus_WhenConfigured()
+    public void Status_ShowsConnectionFailure()
     {
-        var (configMock, queryMock, console) = CreateStatusMocks(
-            isConfigured: true,
-            connectionResult: new AppInsightsConnectionResult { Success = true, ResourceName = "My AI Resource" });
-        var cmd = new AppInsightsStatusCommand(configMock.Object, queryMock.Object, console);
+        var f = new StatusFixture(new[] { Entry("ai-prod", "app-123", enabled: true) }, Tenant1);
+        f.Query.Setup(q => q.TestConnectionAsync("app-123", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AppInsightsConnectionResult { Success = false, ErrorMessage = "403 forbidden" });
 
-        cmd.Execute(CreateContext("status"), new AppInsightsStatusCommand.Settings());
+        f.Command.Execute(CreateContext("status"), new AppInsightsStatusCommand.Settings());
 
-        console.Output.Should().ContainAny("connected", "Connected", "My AI Resource");
+        f.Console.Output.Should().Contain("403 forbidden");
     }
 
-    // -- Init command tests --
-
     [Fact]
-    public void Init_ShowsAlreadyConfigured_WhenConfiguredAndNoForce()
+    public void Status_ShowsSignedInAndSignInNeededTenants()
     {
-        var (configMock, authMock, console) = CreateInitMocks(isConfigured: true);
-        var cmd = new AppInsightsInitCommand(configMock.Object, authMock.Object, console);
-        var settings = new AppInsightsInitCommand.Settings { Force = false };
+        var f = new StatusFixture(new[] { Entry("ai-prod", "app-123", enabled: true) }, Tenant1, Tenant2);
+        f.Tenants.Setup(t => t.GetAccessTokenAsync(Tenant2, It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new AzureAuthExpiredException(Tenant2));
 
-        var result = cmd.Execute(CreateContext("init"), settings);
+        var result = f.Command.Execute(CreateContext("status"), new AppInsightsStatusCommand.Settings());
 
         result.Should().Be(0);
-        console.Output.Should().ContainAny("already configured", "Already configured", "app-123");
-        configMock.Verify(m => m.StoreConfigAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
+        f.Console.Output.Should().Contain("signed in");
+        f.Console.Output.Should().Contain("sign-in needed").And.Contain($"pks appinsights init --reauth {Tenant2}");
+        f.Console.Output.Should().NotContain("token", "the probe result is never printed");
+    }
+
+    // ── init ─────────────────────────────────────────────────────────────────────
+
+    private sealed class InitFixture
+    {
+        public Mock<IAzureResourceInitFlow> Flow { get; } = new();
+        public TestConsole Console { get; } = new TestConsole().Width(200);
+        public AzureResourceKind? Kind { get; private set; }
+        public AzureResourceInitOptions? Options { get; private set; }
+
+        public InitFixture(int returnCode = 0)
+        {
+            Flow.Setup(f => f.RunAsync(It.IsAny<AzureResourceKind>(), It.IsAny<AzureResourceInitOptions>(), It.IsAny<IAnsiConsole>(), It.IsAny<CancellationToken>()))
+                .Callback<AzureResourceKind, AzureResourceInitOptions, IAnsiConsole, CancellationToken>((k, o, _, _) => { Kind = k; Options = o; })
+                .ReturnsAsync(returnCode);
+        }
+
+        public AppInsightsInitCommand Command => new(Flow.Object, Console);
     }
 
     [Fact]
-    public void Init_TriggersAuthFlow_WhenNotAuthenticated()
+    public void Init_RunsTheSharedFlow_ForAppInsights()
     {
-        var (configMock, authMock, console) = CreateInitMocks(
-            isAuthenticated: false,
-            subscriptions: [new AzureSubscription { SubscriptionId = "sub-001", DisplayName = "My Subscription" }],
-            components: [new AppInsightsComponent { Name = "My AppInsights", Properties = new AppInsightsComponentProperties { AppId = "ai-app-id-001" } }]);
-        var cmd = new AppInsightsInitCommand(configMock.Object, authMock.Object, console);
+        var f = new InitFixture();
 
-        var result = cmd.Execute(CreateContext("init"), new AppInsightsInitCommand.Settings { TenantId = "common" });
+        var result = f.Command.Execute(CreateContext("init"), new AppInsightsInitCommand.Settings());
 
         result.Should().Be(0);
-        authMock.Verify(m => m.InitiateLoginAsync("common", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
-        authMock.Verify(m => m.StoreCredentialsAsync(It.IsAny<FoundryStoredCredentials>()), Times.Once);
+        f.Kind.Should().Be(AzureResourceKind.AppInsights);
+        f.Options.Should().NotBeNull();
+        f.Options!.Reauth.Should().BeFalse();
+        f.Options.Tenant.Should().BeNull();
+        f.Options.List.Should().BeFalse();
+        f.Options.Enable.Should().BeEmpty();
+        f.Options.Disable.Should().BeEmpty();
     }
 
     [Fact]
-    public void Init_ReturnsOne_WhenAuthTimesOut()
+    public void Init_MapsSettingsToOptions()
     {
-        var (configMock, authMock, console) = CreateInitMocks(
-            isAuthenticated: false,
-            initLoginException: new OperationCanceledException("timed out"));
-        var cmd = new AppInsightsInitCommand(configMock.Object, authMock.Object, console);
+        var f = new InitFixture();
+        var settings = new AppInsightsInitCommand.Settings
+        {
+            Tenant = Tenant1,
+            Subscription = "sub-001",
+            Enable = new[] { "ai-prod", "ai-dev" },
+            Disable = new[] { "ai-old" },
+            List = true,
+        };
 
-        var result = cmd.Execute(CreateContext("init"), new AppInsightsInitCommand.Settings { TenantId = "common" });
+        f.Command.Execute(CreateContext("init"), settings);
+
+        f.Options!.Tenant.Should().Be(Tenant1);
+        f.Options.Subscription.Should().Be("sub-001");
+        f.Options.Enable.Should().Equal("ai-prod", "ai-dev");
+        f.Options.Disable.Should().Equal("ai-old");
+        f.Options.List.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Init_ReauthFlag_MapsToReauth_AndOptionalTenantValue()
+    {
+        var f = new InitFixture();
+
+        f.Command.Execute(CreateContext("init"), new AppInsightsInitCommand.Settings
+        {
+            Reauth = new FlagValue<string> { IsSet = true, Value = Tenant2 },
+        });
+
+        f.Options!.Reauth.Should().BeTrue();
+        f.Options.Tenant.Should().Be(Tenant2, "`--reauth <tenant>` is the spelling the expired-token message tells users to run");
+    }
+
+    [Fact]
+    public void Init_Force_IsPlainInit_AndNeverClearsCredentials()
+    {
+        var f = new InitFixture();
+
+        f.Command.Execute(CreateContext("init"), new AppInsightsInitCommand.Settings { Force = true });
+
+        f.Options!.Reauth.Should().BeFalse("--force is kept for backward compatibility only");
+        // The command must not even be able to reach the Foundry credential store: the old
+        // implementation's `--force` called IAzureFoundryAuthService.ClearCredentialsAsync().
+        typeof(AppInsightsInitCommand).GetConstructors()
+            .SelectMany(c => c.GetParameters())
+            .Should().NotContain(p => p.ParameterType == typeof(IAzureFoundryAuthService));
+    }
+
+    [Fact]
+    public void Init_ReturnsTheFlowsExitCode()
+    {
+        var f = new InitFixture(returnCode: 1);
+
+        var result = f.Command.Execute(CreateContext("init"), new AppInsightsInitCommand.Settings { Enable = new[] { "nope" } });
 
         result.Should().Be(1);
-        console.Output.Should().ContainAny("timed out", "Authentication timed out");
-    }
-
-    [Fact]
-    public void Init_ReturnsOne_WhenNoSubscriptionsFound()
-    {
-        var (configMock, authMock, console) = CreateInitMocks(subscriptions: []);
-        var cmd = new AppInsightsInitCommand(configMock.Object, authMock.Object, console);
-
-        var result = cmd.Execute(CreateContext("init"), new AppInsightsInitCommand.Settings());
-
-        result.Should().Be(1);
-        console.Output.Should().ContainAny("No Azure subscriptions", "subscriptions");
-    }
-
-    [Fact]
-    public void Init_ReturnsOne_WhenNoResourcesFound()
-    {
-        var (configMock, authMock, console) = CreateInitMocks(components: []);
-        var cmd = new AppInsightsInitCommand(configMock.Object, authMock.Object, console);
-
-        var result = cmd.Execute(CreateContext("init"), new AppInsightsInitCommand.Settings());
-
-        result.Should().Be(1);
-        console.Output.Should().ContainAny("No Application Insights", "not found");
-    }
-
-    [Fact]
-    public void Init_ConfiguresSuccessfully_WhenSingleSubscriptionAndSingleResource()
-    {
-        var (configMock, authMock, console) = CreateInitMocks(
-            subscriptions: [new AzureSubscription { SubscriptionId = "sub-001", DisplayName = "My Subscription" }],
-            components: [new AppInsightsComponent { Name = "My AppInsights", Properties = new AppInsightsComponentProperties { AppId = "ai-app-id-001" } }]);
-        var cmd = new AppInsightsInitCommand(configMock.Object, authMock.Object, console);
-
-        var result = cmd.Execute(CreateContext("init"), new AppInsightsInitCommand.Settings());
-
-        result.Should().Be(0);
-        configMock.Verify(m => m.StoreConfigAsync("ai-app-id-001", "My AppInsights", "sub-001"), Times.Once);
-        console.Output.Should().ContainAny("Configured", "configured", "My AppInsights");
     }
 }

@@ -64,6 +64,10 @@ public interface ILogAnalyticsQueryService
 {
     Task<LogAnalyticsConnectionResult> TestConnectionAsync(CancellationToken ct = default);
 
+    /// <summary>Tests one workspace by id instead of the configured one — the status command runs
+    /// this for every enabled entry.</summary>
+    Task<LogAnalyticsConnectionResult> TestConnectionAsync(string workspaceIdOverride, CancellationToken ct = default);
+
     /// <summary>
     /// Run raw KQL. <paramref name="since"/> maps to the API's <c>timespan</c>
     /// property, so it applies without rewriting the query; pass null to let the
@@ -103,14 +107,28 @@ public class LogAnalyticsQueryService : ILogAnalyticsQueryService
             var config = await _configService.GetConfigAsync();
             if (config is null)
                 return new LogAnalyticsConnectionResult { Success = false, ErrorMessage = "Not configured" };
+            return await TestWorkspaceAsync(config.WorkspaceId, config.WorkspaceName, ct);
+        }
+        catch (Exception ex)
+        {
+            return new LogAnalyticsConnectionResult { Success = false, ErrorMessage = ex.Message };
+        }
+    }
 
+    public Task<LogAnalyticsConnectionResult> TestConnectionAsync(string workspaceIdOverride, CancellationToken ct = default)
+        => TestWorkspaceAsync(workspaceIdOverride, null, ct);
+
+    private async Task<LogAnalyticsConnectionResult> TestWorkspaceAsync(string workspaceId, string? workspaceName, CancellationToken ct)
+    {
+        try
+        {
             var token = await _authService.GetAccessTokenAsync(QueryScope, ct);
             if (string.IsNullOrEmpty(token))
                 return new LogAnalyticsConnectionResult { Success = false, ErrorMessage = "Not authenticated. Run 'pks loganalytics init' first." };
 
-            await _httpAdapter.QueryAsync(config.WorkspaceId, token, "print ok = 1", null, ct);
+            await _httpAdapter.QueryAsync(workspaceId, token, "print ok = 1", null, ct);
 
-            return new LogAnalyticsConnectionResult { Success = true, WorkspaceName = config.WorkspaceName };
+            return new LogAnalyticsConnectionResult { Success = true, WorkspaceName = workspaceName };
         }
         catch (Exception ex)
         {

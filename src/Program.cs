@@ -585,6 +585,7 @@ services.AddSingleton<ITemplatePackagingService, TemplatePackagingService>();
 
 // Register Application Insights services
 services.AddSingleton<PKS.Infrastructure.Services.Azure.IAzureResourceRegistry, PKS.Infrastructure.Services.Azure.AzureResourceRegistry>();
+services.AddSingleton<PKS.Infrastructure.Services.Azure.IAzureResourceInitFlow, PKS.Infrastructure.Services.Azure.AzureResourceInitFlow>();
 services.AddSingleton<IAppInsightsConfigService, AppInsightsConfigService>();
 services.AddHttpClient<IAppInsightsHttpAdapter, DefaultAppInsightsHttpAdapter>();
 services.AddSingleton<IAppInsightsQueryService, AppInsightsQueryService>();
@@ -1470,12 +1471,14 @@ app.Configure(config =>
         fs.SetDescription("Manage file share provider credentials");
 
         fs.AddCommand<FileShareInitCommand>("init")
-            .WithDescription("Authenticate with a file share provider")
+            .WithDescription("Sign in to Azure and choose which storage accounts to enable")
             .WithExample(["fileshare", "init"])
-            .WithExample(["fileshare", "init", "--force"]);
+            .WithExample(["fileshare", "init", "--reauth"])
+            .WithExample(["fileshare", "init", "--enable", "mystorageaccount"])
+            .WithExample(["fileshare", "init", "--list"]);
 
         fs.AddCommand<FileShareStatusCommand>("status")
-            .WithDescription("Show authentication status for all file share providers")
+            .WithDescription("Show provider status, registered storage accounts and tenant sign-in state")
             .WithExample(["fileshare", "status"]);
     });
 
@@ -1540,12 +1543,14 @@ app.Configure(config =>
         ai.SetDescription("Manage Application Insights configuration for telemetry queries");
 
         ai.AddCommand<AppInsightsInitCommand>("init")
-            .WithDescription("Configure Application Insights App ID and API key")
+            .WithDescription("Discover Application Insights resources and choose which ones to enable")
             .WithExample(new[] { "appinsights", "init" })
-            .WithExample(new[] { "appinsights", "init", "--force" });
+            .WithExample(new[] { "appinsights", "init", "--reauth", "<tenant-id>" })
+            .WithExample(new[] { "appinsights", "init", "--enable", "ai-prod", "--disable", "ai-dev" })
+            .WithExample(new[] { "appinsights", "init", "--list" });
 
         ai.AddCommand<AppInsightsStatusCommand>("status")
-            .WithDescription("Show Application Insights configuration and connection status")
+            .WithDescription("Show registered Application Insights resources, connection tests and tenant sign-in state")
             .WithExample(new[] { "appinsights", "status" });
     });
 
@@ -1585,14 +1590,16 @@ app.Configure(config =>
         la.SetDescription("Manage the Log Analytics workspace used for KQL queries");
 
         la.AddCommand<LogAnalyticsInitCommand>("init")
-            .WithDescription("Discover and configure a Log Analytics workspace")
+            .WithDescription("Discover Log Analytics workspaces and choose which ones to enable")
             .WithExample(new[] { "loganalytics", "init" })
             .WithExample(new[] { "loganalytics", "init", "--subscription", "<sub-id>", "--workspace", "law-prod" })
             .WithExample(new[] { "loganalytics", "init", "--workspace", "<workspace-guid>" })
-            .WithExample(new[] { "loganalytics", "init", "--force" });
+            .WithExample(new[] { "loganalytics", "init", "--reauth", "<tenant-id>" })
+            .WithExample(new[] { "loganalytics", "init", "--enable", "law-prod", "--disable", "law-dev" })
+            .WithExample(new[] { "loganalytics", "init", "--list" });
 
         la.AddCommand<LogAnalyticsStatusCommand>("status")
-            .WithDescription("Show Log Analytics configuration and connection status")
+            .WithDescription("Show registered Log Analytics workspaces, connection tests and tenant sign-in state")
             .WithExample(new[] { "loganalytics", "status" });
     });
 

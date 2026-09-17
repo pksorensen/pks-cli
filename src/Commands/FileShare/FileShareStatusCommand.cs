@@ -1,19 +1,29 @@
 using System.ComponentModel;
+using PKS.Commands.Azure;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Azure;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
 namespace PKS.Commands.FileShares;
 
-[Description("Show authentication status for all file share providers")]
+[Description("Show file share provider status, the registered storage accounts and tenant sign-in state")]
 public class FileShareStatusCommand : Command<FileShareSettings>
 {
     private readonly FileShareProviderRegistry _registry;
+    private readonly IAzureResourceRegistry _resources;
+    private readonly IAzureTenantCredentialStore _tenants;
     private readonly IAnsiConsole _console;
 
-    public FileShareStatusCommand(FileShareProviderRegistry registry, IAnsiConsole console)
+    public FileShareStatusCommand(
+        FileShareProviderRegistry registry,
+        IAzureResourceRegistry resources,
+        IAzureTenantCredentialStore tenants,
+        IAnsiConsole console)
     {
         _registry = registry;
+        _resources = resources;
+        _tenants = tenants;
         _console = console;
     }
 
@@ -64,6 +74,11 @@ public class FileShareStatusCommand : Command<FileShareSettings>
         }
 
         _console.Write(table);
+        _console.WriteLine();
+
+        var entries = await _resources.ListAsync(AzureResourceKind.Storage);
+        await AzureResourceStatusRenderer.WriteEntriesAsync(_console, _tenants, AzureResourceKind.Storage, entries);
+        await AzureResourceStatusRenderer.WriteTenantsAsync(_console, _tenants, AzureResourceKind.Storage);
         return 0;
     }
 }

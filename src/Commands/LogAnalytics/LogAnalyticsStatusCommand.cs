@@ -1,25 +1,30 @@
 using System.ComponentModel;
+using PKS.Commands.Azure;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Azure;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
 namespace PKS.Commands.LogAnalytics;
 
-[Description("Show Log Analytics configuration and connection status")]
+[Description("Show the registered Log Analytics workspaces, test the enabled ones and show tenant sign-in state")]
 public class LogAnalyticsStatusCommand : Command<LogAnalyticsStatusCommand.Settings>
 {
     public class Settings : LogAnalyticsSettings { }
 
-    private readonly ILogAnalyticsConfigService _configService;
+    private readonly IAzureResourceRegistry _registry;
+    private readonly IAzureTenantCredentialStore _tenants;
     private readonly ILogAnalyticsQueryService _queryService;
     private readonly IAnsiConsole _console;
 
     public LogAnalyticsStatusCommand(
-        ILogAnalyticsConfigService configService,
+        IAzureResourceRegistry registry,
+        IAzureTenantCredentialStore tenants,
         ILogAnalyticsQueryService queryService,
         IAnsiConsole console)
     {
-        _configService = configService;
+        _registry = registry;
+        _tenants = tenants;
         _queryService = queryService;
         _console = console;
     }
@@ -29,38 +34,23 @@ public class LogAnalyticsStatusCommand : Command<LogAnalyticsStatusCommand.Setti
 
     private async Task<int> ExecuteAsync()
     {
-        if (!await _configService.IsConfiguredAsync())
+        var entries = await _registry.ListAsync(AzureResourceKind.LogAnalytics);
+        if (await AzureResourceStatusRenderer.WriteEntriesAsync(_console, _tenants, AzureResourceKind.LogAnalytics, entries))
         {
-            _console.MarkupLine("[yellow]Log Analytics is not configured.[/]");
-            _console.MarkupLine("[dim]Run [cyan]pks loganalytics init[/] to configure.[/]");
-            return 0;
+            _console.WriteLine();
+            foreach (var entry in entries.Where(e => e.Enabled))
+            {
+                var result = await _console.Status().StartAsync(
+                    $"Testing {entry.Name.EscapeMarkup()}...",
+                    _ => _queryService.TestConnectionAsync(entry.Key));
+                if (result.Success)
+                    _console.MarkupLine($"[green]Connected[/] - {(result.WorkspaceName ?? entry.Name).EscapeMarkup()}");
+                else
+                    _console.MarkupLine($"[red]Connection failed[/] - {entry.Name.EscapeMarkup()}: {(result.ErrorMessage ?? "Unknown error").EscapeMarkup()}");
+            }
         }
 
-        var config = await _configService.GetConfigAsync();
-        if (config is null) return 0;
-
-        var table = new Table().Border(TableBorder.Rounded).AddColumn("Setting").AddColumn("Value");
-        table.AddRow("Workspace ID", config.WorkspaceId);
-        table.AddRow("Workspace", config.WorkspaceName.EscapeMarkupOrDim());
-        table.AddRow("Resource ID", config.ResourceId.EscapeMarkupOrDim());
-        table.AddRow("Subscription", config.SubscriptionId.EscapeMarkupOrDim());
-        table.AddRow("Auth", "[dim]Azure AD (via pks foundry)[/]");
-        table.AddRow("Configured At", config.RegisteredAt == DateTime.MinValue
-            ? "[dim]unknown[/]"
-            : config.RegisteredAt.ToString("yyyy-MM-dd HH:mm") + " UTC");
-
-        _console.Write(table);
-        _console.WriteLine();
-
-        await _console.Status().StartAsync("Testing connection...", async ctx =>
-        {
-            var result = await _queryService.TestConnectionAsync();
-            if (result.Success)
-                _console.MarkupLine($"[green]Connected[/] - {(result.WorkspaceName ?? "Log Analytics workspace").EscapeMarkup()}");
-            else
-                _console.MarkupLine($"[red]Connection failed:[/] {(result.ErrorMessage ?? "Unknown error").EscapeMarkup()}");
-        });
-
+        await AzureResourceStatusRenderer.WriteTenantsAsync(_console, _tenants, AzureResourceKind.LogAnalytics);
         return 0;
     }
 }

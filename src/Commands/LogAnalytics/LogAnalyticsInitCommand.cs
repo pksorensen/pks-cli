@@ -1,45 +1,57 @@
 using System.ComponentModel;
-using PKS.Infrastructure.Services;
-using PKS.Infrastructure.Services.Models;
+using PKS.Commands.Azure;
+using PKS.Infrastructure.Services.Azure;
 using Spectre.Console;
 using Spectre.Console.Cli;
-using PKS.Infrastructure.Services.Security;
 
 namespace PKS.Commands.LogAnalytics;
 
-[Description("Discover and configure a Log Analytics workspace for KQL queries")]
+[Description("Discover Log Analytics workspaces and choose which ones to enable for KQL queries")]
 public class LogAnalyticsInitCommand : Command<LogAnalyticsInitCommand.Settings>
 {
-    public class Settings : LogAnalyticsSettings
+    public class Settings : LogAnalyticsSettings, IAzureResourceInitSettings
     {
         [CommandOption("-f|--force")]
-        [Description("Re-configure even if already configured")]
+        [Description("Kept for backward compatibility; same as a plain init. Never clears credentials.")]
         public bool Force { get; set; }
 
-        [CommandOption("-t|--tenant")]
-        [Description("Azure AD tenant ID (defaults to 'common' or auto-discovered from email)")]
-        public string? TenantId { get; set; }
+        [CommandOption("--reauth [TENANT]")]
+        [Description("Sign in again in the browser, optionally to one tenant id or email. Without a value every known tenant is signed in again.")]
+        public FlagValue<string>? Reauth { get; set; }
+
+        [CommandOption("-t|--tenant <ID_OR_EMAIL>")]
+        [Description("Limit to one tenant (id or email). Signs in only if the tenant is not known yet.")]
+        public string? Tenant { get; set; }
 
         [CommandOption("-s|--subscription <ID>")]
-        [Description("Azure subscription ID to search (skips the subscription prompt)")]
-        public string? SubscriptionId { get; set; }
+        [Description("Limit discovery to one subscription (id or display name)")]
+        public string? Subscription { get; set; }
+
+        [CommandOption("--enable <NAME_OR_KEY>")]
+        [Description("Enable a registered workspace by name or workspace id (repeatable). Skips discovery and the prompt.")]
+        public string[] Enable { get; set; } = Array.Empty<string>();
+
+        [CommandOption("--disable <NAME_OR_KEY>")]
+        [Description("Disable a registered workspace by name or workspace id (repeatable). The entry is kept.")]
+        public string[] Disable { get; set; } = Array.Empty<string>();
+
+        [CommandOption("--list")]
+        [Description("List every registered workspace and whether it is enabled")]
+        public bool List { get; set; }
 
         [CommandOption("-w|--workspace <NAME_OR_GUID>")]
-        [Description("Workspace name or GUID to select (skips the workspace prompt)")]
+        [Description("A workspace GUID is registered and enabled directly; a name is enabled after discovery. Skips the prompt.")]
         public string? Workspace { get; set; }
     }
 
-    private readonly ILogAnalyticsConfigService _configService;
-    private readonly IAzureFoundryAuthService _authService;
+    private readonly IAzureResourceInitFlow _flow;
+    private readonly IAzureResourceRegistry _registry;
     private readonly IAnsiConsole _console;
 
-    public LogAnalyticsInitCommand(
-        ILogAnalyticsConfigService configService,
-        IAzureFoundryAuthService authService,
-        IAnsiConsole console)
+    public LogAnalyticsInitCommand(IAzureResourceInitFlow flow, IAzureResourceRegistry registry, IAnsiConsole console)
     {
-        _configService = configService;
-        _authService = authService;
+        _flow = flow;
+        _registry = registry;
         _console = console;
     }
 
@@ -48,199 +60,34 @@ public class LogAnalyticsInitCommand : Command<LogAnalyticsInitCommand.Settings>
 
     private async Task<int> ExecuteAsync(Settings settings)
     {
-        if (!settings.Force && await _configService.IsConfiguredAsync())
-        {
-            var existing = await _configService.GetConfigAsync();
-            _console.MarkupLine("[green]Log Analytics already configured.[/]");
-            if (existing is not null)
-                _console.MarkupLine($"  Workspace: [cyan]{(existing.WorkspaceName ?? existing.WorkspaceId).EscapeMarkup()}[/]");
-            _console.MarkupLine("[dim]Use [cyan]--force[/] to reconfigure.[/]");
-            return 0;
-        }
+        var options = settings.ToOptions();
+        var workspace = settings.Workspace?.Trim();
 
         // A bare GUID is already everything the query API needs — no ARM walk.
-        if (settings.Workspace is not null && Guid.TryParse(settings.Workspace.Trim(), out var directGuid))
+        if (!string.IsNullOrEmpty(workspace) && Guid.TryParse(workspace, out var directGuid))
         {
-            await _configService.StoreConfigAsync(directGuid.ToString(), null, null, settings.SubscriptionId);
-            _console.MarkupLine($"[green]✓ Configured workspace:[/] [cyan]{directGuid}[/]");
+            var key = directGuid.ToString();
+            await _registry.UpsertAsync(new[]
+            {
+                new AzureResourceEntry
+                {
+                    Kind = AzureResourceKind.LogAnalytics,
+                    Key = key,
+                    Name = key,
+                    TenantId = null,
+                    SubscriptionId = options.Subscription,
+                    Enabled = true,
+                },
+            });
+            await _registry.SetEnabledAsync(AzureResourceKind.LogAnalytics, key, true);
+            _console.MarkupLine($"[green]✓ Enabled workspace:[/] [cyan]{key}[/]");
             _console.MarkupLine("[dim]Run [cyan]pks kusto \"Heartbeat | take 5\"[/] to query it.[/]");
             return 0;
         }
 
-        string? managementToken = null;
-        if (!await _authService.IsAuthenticatedAsync())
-        {
-            var authResult = await AuthenticateAsync(settings.TenantId);
-            if (authResult is null) return 1;
-            managementToken = authResult.AccessToken;
-        }
+        if (!string.IsNullOrEmpty(workspace))
+            options.EnableAfterDiscovery.Add(workspace);
 
-        if (string.IsNullOrEmpty(managementToken))
-            managementToken = await _authService.GetAccessTokenAsync("https://management.azure.com/.default");
-
-        if (string.IsNullOrEmpty(managementToken))
-        {
-            _console.MarkupLine("[red]Failed to obtain Azure management token.[/]");
-            return 1;
-        }
-
-        var subscriptions = await _authService.ListSubscriptionsAsync(managementToken);
-        if (subscriptions.Count == 0)
-        {
-            _console.MarkupLine("[red]No Azure subscriptions found.[/]");
-            return 1;
-        }
-
-        AzureSubscription selectedSub;
-        if (!string.IsNullOrWhiteSpace(settings.SubscriptionId))
-        {
-            var match = subscriptions.FirstOrDefault(s =>
-                s.SubscriptionId.Equals(settings.SubscriptionId.Trim(), StringComparison.OrdinalIgnoreCase) ||
-                s.DisplayName.Equals(settings.SubscriptionId.Trim(), StringComparison.OrdinalIgnoreCase));
-            if (match is null)
-            {
-                _console.MarkupLine($"[red]Subscription not found:[/] {settings.SubscriptionId.EscapeMarkup()}");
-                return 1;
-            }
-            selectedSub = match;
-        }
-        else if (subscriptions.Count == 1)
-        {
-            selectedSub = subscriptions[0];
-        }
-        else
-        {
-            var pick = _console.Prompt(
-                new SelectionPrompt<string>()
-                    .Title("[cyan]Select an Azure subscription:[/]")
-                    .PageSize(15)
-                    .AddChoices(subscriptions.Select(s => s.DisplayName)));
-            selectedSub = subscriptions.First(s => s.DisplayName == pick);
-        }
-
-        _console.MarkupLine($"[dim]Subscription: [bold]{selectedSub.DisplayName.EscapeMarkup()}[/][/]");
-        _console.MarkupLine("[dim]Discovering Log Analytics workspaces...[/]");
-
-        var workspaces = await _authService.ListLogAnalyticsWorkspacesAsync(managementToken, selectedSub.SubscriptionId);
-
-        if (workspaces.Count == 0)
-        {
-            _console.MarkupLine("[red]No Log Analytics workspaces found in this subscription.[/]");
-            return 1;
-        }
-
-        LogAnalyticsWorkspace selected;
-        if (!string.IsNullOrWhiteSpace(settings.Workspace))
-        {
-            var match = workspaces.FirstOrDefault(w =>
-                w.Name.Equals(settings.Workspace.Trim(), StringComparison.OrdinalIgnoreCase));
-            if (match is null)
-            {
-                _console.MarkupLine($"[red]Workspace not found in this subscription:[/] {settings.Workspace.EscapeMarkup()}");
-                _console.MarkupLine($"[dim]Available: {string.Join(", ", workspaces.Select(w => w.Name)).EscapeMarkup()}[/]");
-                return 1;
-            }
-            selected = match;
-        }
-        else if (workspaces.Count == 1)
-        {
-            selected = workspaces[0];
-            _console.MarkupLine($"[dim]Workspace: [bold]{selected.Name.EscapeMarkup()}[/] ({ParseResourceGroup(selected.Id).EscapeMarkup()})[/]");
-        }
-        else
-        {
-            var choices = workspaces.Select(w => $"{w.Name}  ({ParseResourceGroup(w.Id)}, {w.Location})").ToList();
-            var pick = _console.Prompt(
-                new SelectionPrompt<string>()
-                    .Title("[cyan]Select a Log Analytics workspace:[/]")
-                    .PageSize(15)
-                    .AddChoices(choices));
-            selected = workspaces[choices.IndexOf(pick)];
-        }
-
-        await _configService.StoreConfigAsync(
-            selected.Properties.CustomerId, selected.Name, selected.Id, selectedSub.SubscriptionId);
-
-        _console.MarkupLine($"[green]✓ Configured:[/] [cyan]{selected.Name.EscapeMarkup()}[/] [dim]({selected.Properties.CustomerId})[/]");
-        _console.MarkupLine("[dim]Run [cyan]pks kusto \"Heartbeat | take 5\"[/] to query it.[/]");
-
-        return 0;
-    }
-
-    private static string ParseResourceGroup(string resourceId)
-    {
-        var parts = resourceId.Split('/');
-        for (int i = 0; i < parts.Length - 1; i++)
-        {
-            if (parts[i].Equals("resourceGroups", StringComparison.OrdinalIgnoreCase))
-                return parts[i + 1];
-        }
-        return string.Empty;
-    }
-
-    private async Task<FoundryAuthResult?> AuthenticateAsync(string? tenantIdOverride)
-    {
-        string tenantId;
-        string? loginHint = null;
-
-        if (!string.IsNullOrEmpty(tenantIdOverride))
-        {
-            tenantId = tenantIdOverride;
-        }
-        else
-        {
-            var input = _console.Prompt(
-                new TextPrompt<string>("[cyan]Enter your email or tenant ID[/] [dim](or press Enter to sign in with 'common' tenant)[/]:")
-                    .AllowEmpty());
-
-            if (string.IsNullOrWhiteSpace(input))
-            {
-                tenantId = "common";
-            }
-            else if (Guid.TryParse(input.Trim(), out _))
-            {
-                tenantId = input.Trim();
-                _console.MarkupLine($"[dim]Tenant: [bold]{tenantId.EscapeMarkup()}[/][/]");
-            }
-            else
-            {
-                loginHint = input.Trim();
-                _console.MarkupLine("[dim]Discovering tenant...[/]");
-                var discovered = await _authService.DiscoverTenantAsync(loginHint);
-                tenantId = string.IsNullOrEmpty(discovered) ? "common" : discovered;
-                if (!string.IsNullOrEmpty(discovered))
-                    _console.MarkupLine($"[dim]Tenant: [bold]{tenantId.EscapeMarkup()}[/][/]");
-            }
-        }
-
-        _console.MarkupLine("[cyan]Starting Azure authentication...[/]");
-        _console.MarkupLine("[dim]A browser window will open. If it doesn't, use the URL printed below.[/]");
-        _console.WriteLine();
-
-        try
-        {
-            var result = await _authService.InitiateLoginAsync(
-                tenantId,
-                loginHint,
-                scopeOverride: "https://management.azure.com/.default offline_access");
-            await _authService.StoreCredentialsAsync(new FoundryStoredCredentials
-            {
-                TenantId = tenantId,
-                RefreshToken = SecretValue.From(result.RefreshToken),
-                CreatedAt = DateTime.UtcNow,
-                LastRefreshedAt = DateTime.UtcNow,
-            });
-            return result;
-        }
-        catch (OperationCanceledException)
-        {
-            _console.MarkupLine("[red]Authentication timed out.[/]");
-            return null;
-        }
-        catch (Exception ex)
-        {
-            _console.MarkupLine($"[red]Authentication failed: {ex.Message.EscapeMarkup()}[/]");
-            return null;
-        }
+        return await _flow.RunAsync(AzureResourceKind.LogAnalytics, options, _console);
     }
 }
