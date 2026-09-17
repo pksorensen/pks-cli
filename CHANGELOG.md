@@ -49,6 +49,31 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.5.0](https://github.com/pksorensen/pks-cli/compare/v7.4.0...v7.5.0) (2026-09-17)
+
+
+### Features
+
+* **azure:** resource registry with enabled flags + legacy key migration ([20c07e7](https://github.com/pksorensen/pks-cli/commit/20c07e744be2d4fbd3c0bacfcbc6b6a3b6687a44))
+* **azure:** tenant-keyed credential store with fileshare token migration ([b77a39d](https://github.com/pksorensen/pks-cli/commit/b77a39d968f97b749460cee40cad64a67af152a9))
+* **init:** shared multi-select init flow for loganalytics/appinsights/fileshare ([9578375](https://github.com/pksorensen/pks-cli/commit/95783751476d7be067a3c31c0f7fbfa87e43aeef))
+* **kusto,otel:** fan out over enabled resources; additive workspace/resource fields ([48c847e](https://github.com/pksorensen/pks-cli/commit/48c847eda9932f96792bb8c01768b662edaf22bb))
+* **runner:** /git-credential refuses by default, and the two false refusals are closed ([aa87579](https://github.com/pksorensen/pks-cli/commit/aa87579c1b192abeeeb8a96192a183050ef01b06))
+* **runner:** fetch the GitHub App key from the vault, so `runner run` is the whole command ([7b6a8ea](https://github.com/pksorensen/pks-cli/commit/7b6a8ea053c1c690bcb7612646a6b273caffad87))
+* **runner:** give every ALP job its own bearer for the credential socket, and log what it asks for ([d528392](https://github.com/pksorensen/pks-cli/commit/d528392c0669babe67954a6bf382cceee125d98a))
+* **runner:** give gh the App identity so PRs are authored by the bot ([8a566f5](https://github.com/pksorensen/pks-cli/commit/8a566f5c5eef05f30b4ee3188eeb710a361518bd))
+* **runner:** mint short-lived repo-scoped GitHub App tokens ([ec09a39](https://github.com/pksorensen/pks-cli/commit/ec09a39742d364f2daf8bbb96b80b91a6ef86f93))
+* **runner:** serve GitHub App tokens scoped to the repo git asks for ([4fb93cb](https://github.com/pksorensen/pks-cli/commit/4fb93cbe0b02361fd9cb6cc0570e077e0378f6b0))
+* **storage:** list/sync/ls/rm across all enabled storage accounts ([5a48172](https://github.com/pksorensen/pks-cli/commit/5a4817259d71900f889102c13ea064fcf30f4f67))
+
+
+### Bug Fixes
+
+* **agentics:** forward runner default model to chat backends ([8c31d5e](https://github.com/pksorensen/pks-cli/commit/8c31d5e476f429d8c5e27d9aa4361a27e23c1e7c))
+* **runner:** close the three ways App mode degraded to the operator ([dcf5fa1](https://github.com/pksorensen/pks-cli/commit/dcf5fa15ec765c56a8f4ce43079ed99123423f99))
+* **runner:** the guided vault ceremony has to be commands that actually run ([18def25](https://github.com/pksorensen/pks-cli/commit/18def25753c4748ed27ba4df7f2fbefe29ca4371))
+* **runner:** the vault ceremony wrote its script where dind cannot see it ([8a09539](https://github.com/pksorensen/pks-cli/commit/8a095398b9589ea822c58d7e9daa2d3090759455))
+
 ## [7.4.0](https://github.com/pksorensen/pks-cli/compare/v7.3.0...v7.4.0) (2026-09-06)
 
 
