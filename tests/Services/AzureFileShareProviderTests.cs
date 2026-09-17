@@ -5,14 +5,24 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Azure;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 using System.Net;
 using System.Text.Json;
 
 namespace PKS.CLI.Tests.Services;
 
-public class AzureFileShareProviderTests
+public class AzureFileShareProviderTests : IDisposable
 {
+    private const string TenantsKey = "azure.tenants.credentials";
+    private readonly string _cacheDir = Path.Combine(Path.GetTempPath(), "pks-cli-tests", "fileshare", Guid.NewGuid().ToString("N"));
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_cacheDir, recursive: true); } catch { }
+    }
+
     private static Mock<IConfigurationService> CreateConfigServiceMock(Dictionary<string, string>? initialData = null)
     {
         var mock = new Mock<IConfigurationService>();
@@ -48,19 +58,36 @@ public class AzureFileShareProviderTests
             => _handler(request);
     }
 
-    private static AzureFileShareProvider CreateProvider(
+    /// <summary>A real tenant store over the same config mock, so the fileshare-token migration and
+    /// the tenant-keyed refresh run for real; the token cache gets a fresh directory per test.</summary>
+    private AzureFileShareProvider CreateProvider(
         HttpClient? httpClient = null,
         Mock<IConfigurationService>? configMock = null,
         AzureFileShareAuthConfig? config = null)
     {
         var configuration = configMock ?? CreateConfigServiceMock();
+        var http = httpClient ?? new HttpClient();
+        var secrets = FakeSecretResolver.BackedBy(configuration.Object.GetAsync);
+        var tenants = new AzureTenantCredentialStore(
+            http,
+            configuration.Object,
+            secrets,
+            new AzureTokenCache(_cacheDir),
+            new Mock<ILogger<AzureTenantCredentialStore>>().Object);
         return new AzureFileShareProvider(
-            httpClient ?? new HttpClient(),
+            http,
             configuration.Object,
             new Mock<ILogger<AzureFileShareProvider>>().Object,
-            FakeSecretResolver.BackedBy(configuration.Object.GetAsync),
+            secrets,
+            tenants,
             config ?? new AzureFileShareAuthConfig());
     }
+
+    private static string TenantStoreJson(string tenantId, string refreshToken) => JsonSerializer.Serialize(
+        new List<AzureTenantCredentials>
+        {
+            new() { TenantId = tenantId, RefreshToken = SecretValue.From(refreshToken), CreatedAt = DateTime.UtcNow, LastRefreshedAt = DateTime.UtcNow }
+        }, SecretJson.Persistence);
 
     private static FileShareStoredCredentials CreateValidCredentials() => new()
     {
@@ -127,20 +154,76 @@ public class AzureFileShareProviderTests
 
     [Fact]
     [Trait("Category", "FileShare")]
-    public async Task IsAuthenticated_ReturnsFalse_WhenEmptyRefreshToken()
+    public async Task IsAuthenticated_ReturnsFalse_WhenTenantIsNotInTheStore()
     {
+        // An old entry whose token was already moved away (or never existed): nothing to migrate,
+        // and the tenant store knows no such tenant.
         var credentials = CreateValidCredentials();
         credentials.RefreshToken = string.Empty;
-        var json = JsonSerializer.Serialize(credentials);
         var configMock = CreateConfigServiceMock(new Dictionary<string, string>
         {
-            ["fileshare.azure.credentials"] = json
+            ["fileshare.azure.credentials"] = JsonSerializer.Serialize(credentials)
         });
         var provider = CreateProvider(configMock: configMock);
 
         var result = await provider.IsAuthenticatedAsync();
 
         result.Should().BeFalse();
+    }
+
+    [Fact]
+    [Trait("Category", "FileShare")]
+    public async Task IsAuthenticated_ReturnsTrue_WhenTenantIsInTheStore_AndTokenFieldIsBlank()
+    {
+        var credentials = CreateValidCredentials();
+        credentials.RefreshToken = string.Empty;
+        var configMock = CreateConfigServiceMock(new Dictionary<string, string>
+        {
+            ["fileshare.azure.credentials"] = JsonSerializer.Serialize(credentials),
+            [TenantsKey] = TenantStoreJson("test-tenant-id", "fake-tenant-refresh-token")
+        });
+        var provider = CreateProvider(configMock: configMock);
+
+        var result = await provider.IsAuthenticatedAsync();
+
+        result.Should().BeTrue();
+    }
+
+    [Fact]
+    [Trait("Category", "FileShare")]
+    public async Task IsAuthenticated_ReturnsFalse_WhenNoStorageAccountSelected()
+    {
+        var credentials = CreateValidCredentials();
+        credentials.SelectedStorageAccountName = string.Empty;
+        var configMock = CreateConfigServiceMock(new Dictionary<string, string>
+        {
+            ["fileshare.azure.credentials"] = JsonSerializer.Serialize(credentials)
+        });
+        var provider = CreateProvider(configMock: configMock);
+
+        var result = await provider.IsAuthenticatedAsync();
+
+        result.Should().BeFalse();
+    }
+
+    [Fact]
+    [Trait("Category", "FileShare")]
+    public async Task IsAuthenticated_MovesLegacyTokenIntoTheTenantStore()
+    {
+        var store = new Dictionary<string, string>
+        {
+            ["fileshare.azure.credentials"] = JsonSerializer.Serialize(CreateValidCredentials())
+        };
+        var configMock = CreateConfigServiceMock(store);
+        var provider = CreateProvider(configMock: configMock);
+
+        (await provider.IsAuthenticatedAsync()).Should().BeTrue();
+
+        store[TenantsKey].Should().Contain("test-refresh-token");
+        var fileShare = JsonSerializer.Deserialize<FileShareStoredCredentials>(store["fileshare.azure.credentials"])!;
+        fileShare.RefreshToken.Should().BeEmpty();
+        fileShare.SelectedStorageAccountName.Should().Be("mystorage");
+        configMock.Verify(x => x.DeleteAsync(It.IsAny<string>()), Times.Never);
     }
 
     // ═══════════════════════════════════════
@@ -217,11 +300,53 @@ public class AzureFileShareProviderTests
 
         result.Should().Be("new-access-token");
         configMock.Verify(x => x.SetAsync(
-            "fileshare.azure.credentials",
+            TenantsKey,
             It.Is<string>(json => json.Contains("rotated-refresh-token")),
             true,
-            false),
+            true),
             Times.Once);
+        configMock.Verify(x => x.SetAsync(
+            "fileshare.azure.credentials",
+            It.Is<string>(json => json.Contains("rotated-refresh-token") || json.Contains("test-refresh-token")),
+            It.IsAny<bool>(),
+            It.IsAny<bool>()),
+            Times.Never);
+    }
+
+    [Fact]
+    [Trait("Category", "FileShare")]
+    public async Task GetAccessToken_UsesTheTenantStore_WhenFileShareEntryHasNoToken()
+    {
+        var credentials = CreateValidCredentials();
+        credentials.RefreshToken = string.Empty;
+        var configMock = CreateConfigServiceMock(new Dictionary<string, string>
+        {
+            ["fileshare.azure.credentials"] = JsonSerializer.Serialize(credentials),
+            [TenantsKey] = TenantStoreJson("test-tenant-id", "fake-tenant-refresh-token")
+        });
+
+        string? sentBody = null;
+        var httpClient = CreateMockHttpClient(async request =>
+        {
+            request.RequestUri!.ToString().Should().Contain("/test-tenant-id/oauth2/v2.0/token");
+            sentBody = await request.Content!.ReadAsStringAsync();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new FileShareTokenResponse
+                {
+                    AccessToken = "new-access-token",
+                    RefreshToken = "fake-tenant-refresh-token",
+                    ExpiresIn = 3600
+                }))
+            };
+        });
+
+        var provider = CreateProvider(httpClient: httpClient, configMock: configMock);
+
+        var result = await provider.GetAccessTokenAsync("https://storage.azure.com/.default");
+
+        result.Should().Be("new-access-token");
+        sentBody.Should().Contain("refresh_token=fake-tenant-refresh-token");
     }
 
     [Fact]

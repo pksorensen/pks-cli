@@ -131,31 +131,12 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
         }
     }
 
-    public async Task<List<AzureSubscription>> ListSubscriptionsAsync(string accessToken, CancellationToken cancellationToken = default)
-    {
-        var request = new HttpRequestMessage(HttpMethod.Get, "https://management.azure.com/subscriptions?api-version=2022-12-01");
-        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
-
-        var response = await _httpClient.SendAsync(request, cancellationToken);
-        var content = await response.Content.ReadAsStringAsync(cancellationToken);
-        response.EnsureSuccessStatusCode();
-
-        var subscriptionsResponse = JsonSerializer.Deserialize<AzureSubscriptionListResponse>(content);
-        return subscriptionsResponse?.Value ?? new List<AzureSubscription>();
-    }
+    public Task<List<AzureSubscription>> ListSubscriptionsAsync(string accessToken, CancellationToken cancellationToken = default)
+        => AzureArmRequests.ListSubscriptionsAsync(_httpClient, accessToken, cancellationToken);
 
     public async Task<List<CognitiveServicesAccount>> ListFoundryResourcesAsync(string accessToken, string subscriptionId, CancellationToken cancellationToken = default)
     {
-        var url = $"https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.CognitiveServices/accounts?api-version=2023-05-01";
-        var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
-
-        var response = await _httpClient.SendAsync(request, cancellationToken);
-        var content = await response.Content.ReadAsStringAsync(cancellationToken);
-        response.EnsureSuccessStatusCode();
-
-        var accountsResponse = JsonSerializer.Deserialize<CognitiveServicesAccountListResponse>(content);
-        var allAccounts = accountsResponse?.Value ?? new List<CognitiveServicesAccount>();
+        var allAccounts = await AzureArmRequests.ListCognitiveServicesAccountsAsync(_httpClient, accessToken, subscriptionId, cancellationToken);
 
         // Filter to AI Foundry resources: Kind contains "AIServices" or endpoint contains ".services.ai.azure.com"
         return allAccounts.Where(a =>
@@ -164,47 +145,14 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
         ).ToList();
     }
 
-    public async Task<List<AppInsightsComponent>> ListAppInsightsResourcesAsync(string accessToken, string subscriptionId, CancellationToken cancellationToken = default)
-    {
-        var url = $"https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.Insights/components?api-version=2020-02-02";
-        var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+    public Task<List<AppInsightsComponent>> ListAppInsightsResourcesAsync(string accessToken, string subscriptionId, CancellationToken cancellationToken = default)
+        => AzureArmRequests.ListAppInsightsComponentsAsync(_httpClient, accessToken, subscriptionId, cancellationToken);
 
-        var response = await _httpClient.SendAsync(request, cancellationToken);
-        var content = await response.Content.ReadAsStringAsync(cancellationToken);
-        response.EnsureSuccessStatusCode();
+    public Task<List<LogAnalyticsWorkspace>> ListLogAnalyticsWorkspacesAsync(string accessToken, string subscriptionId, CancellationToken cancellationToken = default)
+        => AzureArmRequests.ListLogAnalyticsWorkspacesAsync(_httpClient, accessToken, subscriptionId, cancellationToken);
 
-        var result = JsonSerializer.Deserialize<AppInsightsComponentListResponse>(content);
-        return result?.Value ?? new List<AppInsightsComponent>();
-    }
-
-    public async Task<List<LogAnalyticsWorkspace>> ListLogAnalyticsWorkspacesAsync(string accessToken, string subscriptionId, CancellationToken cancellationToken = default)
-    {
-        var url = $"https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.OperationalInsights/workspaces?api-version=2022-10-01";
-        var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
-
-        var response = await _httpClient.SendAsync(request, cancellationToken);
-        var content = await response.Content.ReadAsStringAsync(cancellationToken);
-        response.EnsureSuccessStatusCode();
-
-        var result = JsonSerializer.Deserialize<LogAnalyticsWorkspaceListResponse>(content);
-        return result?.Value ?? new List<LogAnalyticsWorkspace>();
-    }
-
-    public async Task<List<FoundryDeployment>> ListDeploymentsAsync(string accessToken, string subscriptionId, string resourceGroup, string accountName, CancellationToken cancellationToken = default)
-    {
-        var url = $"https://management.azure.com/subscriptions/{subscriptionId}/resourceGroups/{resourceGroup}/providers/Microsoft.CognitiveServices/accounts/{accountName}/deployments?api-version=2023-05-01";
-        var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
-
-        var response = await _httpClient.SendAsync(request, cancellationToken);
-        var content = await response.Content.ReadAsStringAsync(cancellationToken);
-        response.EnsureSuccessStatusCode();
-
-        var deploymentsResponse = JsonSerializer.Deserialize<FoundryDeploymentListResponse>(content);
-        return deploymentsResponse?.Value ?? new List<FoundryDeployment>();
-    }
+    public Task<List<FoundryDeployment>> ListDeploymentsAsync(string accessToken, string subscriptionId, string resourceGroup, string accountName, CancellationToken cancellationToken = default)
+        => AzureArmRequests.ListDeploymentsAsync(_httpClient, accessToken, subscriptionId, resourceGroup, accountName, cancellationToken);
 
     public async Task<bool> IsAuthenticatedAsync()
     {

@@ -413,6 +413,11 @@ services.AddHttpClient<IAzureDevOpsAuthService, AzureDevOpsAuthService>();
 // Configure Azure AI Foundry authentication
 services.AddSingleton<PKS.Infrastructure.Services.Models.AzureFoundryAuthConfig>();
 services.AddHttpClient<IAzureFoundryAuthService, AzureFoundryAuthService>();
+// Tenant-keyed Azure sign-in shared by Log Analytics, App Insights and file shares. The cache is
+// the process-wide instance FoundryTokenCredential also uses, so there is exactly one L1.
+services.AddSingleton(PKS.Infrastructure.Services.Azure.AzureTokenCache.Default);
+services.AddHttpClient<PKS.Infrastructure.Services.Azure.IAzureTenantCredentialStore, PKS.Infrastructure.Services.Azure.AzureTenantCredentialStore>();
+services.AddHttpClient<PKS.Infrastructure.Services.Azure.IAzureArmDiscovery, PKS.Infrastructure.Services.Azure.AzureArmDiscovery>();
 
 // The discovery protocol's resolver — what `pks exec` and `pks aspire run` share. It reads stored
 // credentials, so it is a service: the command layer receives a ResolvedEnvironment it can hand to a

@@ -29,6 +29,7 @@ public class SecretKeysTests
     [InlineData("openrouter.auth.credentials")]
     [InlineData("nvidia.auth.credentials")]
     [InlineData("fileshare.azure.credentials")]
+    [InlineData("azure.tenants.credentials")]
     [InlineData("google:api_key")]
     [InlineData("jira:api_token")]
     [InlineData("jira:access_token")]
