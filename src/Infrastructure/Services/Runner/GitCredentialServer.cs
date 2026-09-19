@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using PKS.Infrastructure.Services.Expo;
+using PKS.Infrastructure.Services.TypeSafe;
 
 namespace PKS.Infrastructure.Services.Runner;
 
@@ -39,6 +40,7 @@ public class GitCredentialServer : IAsyncDisposable
     private readonly ICertStore? _certStore;
     private readonly IExpoCredentialService? _expoCredentials;
     private readonly IGitHubAppTokenService? _appTokens;
+    private readonly ITypeSafeCredentialService? _typeSafe;
     private WebApplication? _app;
 
     /// <summary>
@@ -61,7 +63,8 @@ public class GitCredentialServer : IAsyncDisposable
         IRegistryConfigurationService? registryConfig = null,
         ICertStore? certStore = null,
         IExpoCredentialService? expoCredentials = null,
-        IGitHubAppTokenService? appTokens = null)
+        IGitHubAppTokenService? appTokens = null,
+        ITypeSafeCredentialService? typeSafe = null)
     {
         // Use a stable directory so we can bind-mount the directory (not the file).
         // Directory mounts survive socket file recreation across runner restarts.
@@ -75,6 +78,7 @@ public class GitCredentialServer : IAsyncDisposable
         _certStore = certStore;
         _expoCredentials = expoCredentials;
         _appTokens = appTokens;
+        _typeSafe = typeSafe;
     }
 
     /// <summary>True when this server issues GitHub App tokens rather than the operator's own.</summary>
@@ -532,6 +536,72 @@ public class GitCredentialServer : IAsyncDisposable
             // credential handoff, and a default-serialized SecretValue would ship "***" and fail
             // later with an error naming the wrong cause.
             return Results.Json(new { token });
+        });
+
+        // TypeSafe (Jev). Two routes, one gate: the job's repository must have been allowed with
+        // `pks typesafe allow owner/repo`. The proxy is the one to use — the request body goes up
+        // with the host's key and the answer comes back, so the key never enters the container.
+        // /typesafe/token hands the raw key to a job that must run an SDK; same trade Expo makes.
+        _app.MapPost("/typesafe/systemone", async (HttpRequest request) =>
+        {
+            var claims = ValidateRequest(request);
+            if (claims == null)
+                return Results.Json(new { error = "unauthorized" }, statusCode: 401);
+
+            if (_typeSafe == null)
+                return Results.Json(new { error = "typesafe service unavailable" }, statusCode: 503);
+
+            if (!await _typeSafe.IsRepoAllowedAsync(claims.Owner, claims.Repo))
+            {
+                _onLog?.Invoke($"TypeSafe call DENIED for {claims.Owner}/{claims.Repo} (not allowed with 'pks typesafe allow')");
+                return Results.Json(
+                    new { error = $"{claims.Owner}/{claims.Repo} is not allowed to use TypeSafe on this runner" },
+                    statusCode: 403);
+            }
+
+            string body;
+            using (var reader = new StreamReader(request.Body))
+                body = await reader.ReadToEndAsync();
+            if (body.Length > 1_000_000)
+                return Results.Json(new { error = "request body over 1 MB" }, statusCode: 413);
+
+            var result = await _typeSafe.EvaluateAsync(body);
+            _onLog?.Invoke($"TypeSafe call for {claims.Owner}/{claims.Repo} (job {claims.JobId}) → HTTP {result.StatusCode}");
+            return Results.Content(result.Body, "application/json", statusCode: result.StatusCode);
+        });
+
+        _app.MapGet("/typesafe/token", async (HttpRequest request) =>
+        {
+            var claims = ValidateRequest(request);
+            if (claims == null)
+                return Results.Json(new { error = "unauthorized" }, statusCode: 401);
+
+            if (_typeSafe == null)
+                return Results.Json(new { error = "typesafe service unavailable" }, statusCode: 503);
+
+            if (!await _typeSafe.IsRepoAllowedAsync(claims.Owner, claims.Repo))
+            {
+                _onLog?.Invoke($"TypeSafe token DENIED for {claims.Owner}/{claims.Repo} (not allowed with 'pks typesafe allow')");
+                return Results.Json(
+                    new { error = $"{claims.Owner}/{claims.Repo} is not allowed to use TypeSafe on this runner" },
+                    statusCode: 403);
+            }
+
+            var apiKey = await _typeSafe.RevealApiKeyAsync();
+            if (string.IsNullOrEmpty(apiKey))
+                return Results.Json(
+                    new { error = "No TypeSafe API key stored — run 'pks typesafe init' on the runner host" },
+                    statusCode: 404);
+
+            _onLog?.Invoke($"TypeSafe key served for {claims.Owner}/{claims.Repo} (job {claims.JobId})");
+            // Revealed explicitly, for the same reason as /expo/token: this response *is* the
+            // credential handoff, and a masked serialization would ship "***".
+            return Results.Json(new
+            {
+                apiKey,
+                model = await _typeSafe.GetDefaultModelAsync(),
+                baseUrl = TypeSafeCredentialService.BaseUrl,
+            });
         });
 
         await _app.StartAsync(ct);

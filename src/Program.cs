@@ -548,6 +548,10 @@ services.AddSingleton<IRegistryConfigurationService, RegistryConfigurationServic
 // dependency, so this cannot silently construct its own store.
 services.AddSingleton<PKS.Infrastructure.Services.Expo.IExpoCredentialService,
     PKS.Infrastructure.Services.Expo.ExpoCredentialService>();
+// The TypeSafe (Jev) API key and the rule for who may spend it: proxied through the credential
+// socket for assembly-line stations and self-hosted CI jobs, never exported into a container.
+services.AddSingleton<PKS.Infrastructure.Services.TypeSafe.ITypeSafeCredentialService,
+    PKS.Infrastructure.Services.TypeSafe.TypeSafeCredentialService>();
 services.AddSingleton<ICoolifyConfigurationService, CoolifyConfigurationService>();
 services.AddSingleton<ICoolifyLookupService, CoolifyLookupService>();
 services.AddSingleton<ICoolifyApiService, CoolifyApiService>();
@@ -1136,6 +1140,35 @@ app.Configure(config =>
 
         registry.AddCommand<RegistryRemoveCommand>("remove")
             .WithDescription("Remove a registered registry");
+    });
+
+    // TypeSafe (Jev) — the System One decision model. `init` stores the key, `allow` says which
+    // repositories' jobs may spend it, `ask` tries a question set from the terminal.
+    config.AddBranch<PKS.Commands.TypeSafe.TypeSafeSettings>("typesafe", typesafe =>
+    {
+        typesafe.SetDescription("Manage the TypeSafe (Jev) API key this runner vends to jobs, and ask it questions");
+
+        typesafe.AddCommand<PKS.Commands.TypeSafe.TypeSafeInitCommand>("init")
+            .WithDescription("Store a TypeSafe API key on this host (prompted, never in argv), validated first")
+            .WithExample(new[] { "typesafe", "init" })
+            .WithExample(new[] { "typesafe", "init", "--force", "--model", "jev-1.13.0" });
+
+        typesafe.AddCommand<PKS.Commands.TypeSafe.TypeSafeStatusCommand>("status")
+            .WithDescription("Show whether a key is stored, the default model and which repositories may use it");
+
+        typesafe.AddCommand<PKS.Commands.TypeSafe.TypeSafeAllowCommand>("allow")
+            .WithDescription("Let a repository's jobs call TypeSafe through the credential socket")
+            .WithExample(new[] { "typesafe", "allow", "pksorensen/commuteconnects" });
+
+        typesafe.AddCommand<PKS.Commands.TypeSafe.TypeSafeRevokeCommand>("revoke")
+            .WithDescription("Stop a repository's jobs from calling TypeSafe");
+
+        typesafe.AddCommand<PKS.Commands.TypeSafe.TypeSafeAskCommand>("ask")
+            .WithDescription("Send one System One request ({ state, questions }) and print the JSON answer")
+            .WithExample(new[] { "typesafe", "ask", "--file", "request.json" });
+
+        typesafe.AddCommand<PKS.Commands.TypeSafe.TypeSafeRemoveCommand>("remove")
+            .WithDescription("Delete the stored TypeSafe key from this host");
     });
 
     // Add expo branch command

@@ -23,6 +23,7 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
     private readonly ICertStore _certStore;
     private readonly PKS.Infrastructure.Services.Runner.IRunnerReaper _reaper;
     private readonly PKS.Infrastructure.Services.Expo.IExpoCredentialService _expoCredentials;
+    private readonly PKS.Infrastructure.Services.TypeSafe.ITypeSafeCredentialService? _typeSafe;
 
     public RunnerStartCommand(
         IRunnerDaemonService daemonService,
@@ -35,7 +36,8 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
         ICertStore certStore,
         PKS.Infrastructure.Services.Runner.IRunnerReaper reaper,
         PKS.Infrastructure.Services.Expo.IExpoCredentialService expoCredentials,
-        IAnsiConsole console)
+        IAnsiConsole console,
+        PKS.Infrastructure.Services.TypeSafe.ITypeSafeCredentialService? typeSafe = null)
         : base(console)
     {
         _daemonService = daemonService ?? throw new ArgumentNullException(nameof(daemonService));
@@ -48,6 +50,7 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
         _certStore = certStore ?? throw new ArgumentNullException(nameof(certStore));
         _reaper = reaper ?? throw new ArgumentNullException(nameof(reaper));
         _expoCredentials = expoCredentials ?? throw new ArgumentNullException(nameof(expoCredentials));
+        _typeSafe = typeSafe;
     }
 
     public class Settings : RunnerSettings
@@ -232,7 +235,8 @@ public class RunnerStartCommand : RunnerCommand<RunnerStartCommand.Settings>
                 _coolifyTokenStore,
                 _registryConfig,
                 _certStore,
-                _expoCredentials);
+                _expoCredentials,
+                typeSafe: _typeSafe);
             await credentialServer.StartAsync();
             DisplaySuccess($"Credential server started: {credentialServer.SocketPath}");
             DisplayInfo($"Detailed logs: {logPath}");

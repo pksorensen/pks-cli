@@ -225,6 +225,8 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
     /// the credential socket instead of the socket trusting whoever can reach it.</summary>
     private readonly PKS.Infrastructure.Services.Runner.IJobTokenService? _jobTokens;
 
+    private readonly PKS.Infrastructure.Services.TypeSafe.ITypeSafeCredentialService? _typeSafe;
+
     public AgenticsRunnerRunCommand(
         IAgenticsRunnerConfigurationService configService,
         IDevcontainerSpawnerService spawnerService,
@@ -242,7 +244,8 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         PKS.Infrastructure.IConfigurationService? configurationService = null,
         PKS.Infrastructure.Services.Runner.IRunnerReaper? reaper = null,
         IVaultCliService? vaultCli = null,
-        PKS.Infrastructure.Services.Runner.IJobTokenService? jobTokens = null)
+        PKS.Infrastructure.Services.Runner.IJobTokenService? jobTokens = null,
+        PKS.Infrastructure.Services.TypeSafe.ITypeSafeCredentialService? typeSafe = null)
     {
         _configService = configService ?? throw new ArgumentNullException(nameof(configService));
         _spawnerService = spawnerService ?? throw new ArgumentNullException(nameof(spawnerService));
@@ -263,6 +266,7 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         // service only shells out to, so there is nothing to register and nothing to configure.
         _vaultCli = vaultCli ?? new VaultCliService();
         _jobTokens = jobTokens;
+        _typeSafe = typeSafe;
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -566,7 +570,10 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
                     registration.Id,
                     onLog: msg => AppendCredentialLog(credentialLogPath, msg),
                     tokenService: _jobTokens,
-                    appTokens: _githubAppTokens);
+                    appTokens: _githubAppTokens,
+                    // Stations reach Jev through POST /typesafe/systemone on the socket; the
+                    // key stays on this host and the allow-list decides which project may spend it.
+                    typeSafe: _typeSafe);
                 await credentialServer.StartAsync();
 
                 if (settings.Verbose)
