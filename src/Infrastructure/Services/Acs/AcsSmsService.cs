@@ -150,7 +150,7 @@ public sealed class AcsSmsService : IAcsSmsService
         var text = message.Trim();
         if (text.Length > MaxMessageLength)
         {
-            text = text[..(MaxMessageLength - 1)] + "…";
+            text = text[..(MaxMessageLength - 3)] + "...";
             truncated = true;
         }
 

@@ -161,7 +161,7 @@ public sealed class AcsSmsServiceTests : IDisposable
         using var body = JsonDocument.Parse(_handler.Bodies[0]);
         var sent = body.RootElement.GetProperty("message").GetString()!;
         sent.Length.Should().Be(AcsSmsService.MaxMessageLength);
-        sent.Should().EndWith("…");
+        sent.Should().EndWith("...", "U+2026 is not GSM-7 and would force UCS-2 encoding — five segments instead of two");
     }
 
     [Fact]

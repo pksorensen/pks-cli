@@ -2,6 +2,7 @@ using System.ComponentModel;
 using PKS.Commands.Azure;
 using PKS.Infrastructure.Services.Acs;
 using PKS.Infrastructure.Services.Azure;
+using PKS.Infrastructure.Services.Runner;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -15,13 +16,20 @@ public class AcsStatusCommand : Command<AcsStatusCommand.Settings>
     private readonly IAzureResourceRegistry _registry;
     private readonly IAzureTenantCredentialStore _tenants;
     private readonly IAcsSmsService _sms;
+    private readonly IAgenticsRunnerConfigurationService _runners;
     private readonly IAnsiConsole _console;
 
-    public AcsStatusCommand(IAzureResourceRegistry registry, IAzureTenantCredentialStore tenants, IAcsSmsService sms, IAnsiConsole console)
+    public AcsStatusCommand(
+        IAzureResourceRegistry registry,
+        IAzureTenantCredentialStore tenants,
+        IAcsSmsService sms,
+        IAgenticsRunnerConfigurationService runners,
+        IAnsiConsole console)
     {
         _registry = registry;
         _tenants = tenants;
         _sms = sms;
+        _runners = runners;
         _console = console;
     }
 
@@ -40,6 +48,24 @@ public class AcsStatusCommand : Command<AcsStatusCommand.Settings>
         _console.MarkupLine(defaults.IsConfigured
             ? "Runner capability [cyan]sms[/]: [green]advertised[/] (restart the runner if it is already running)"
             : "Runner capability [cyan]sms[/]: [yellow]not advertised[/] [dim]— run [cyan]pks acs init[/] to enable a sender and set a recipient[/]");
+
+        // A saved operator profile *narrows* the advertised list: a runner configured before
+        // sms existed carries a capability list without it and would drop it silently on
+        // every poll, however well ACS is set up. Name those runners rather than let the
+        // first live test end in "queued" and no SMS.
+        if (defaults.IsConfigured)
+        {
+            foreach (var registration in await _runners.ListRegistrationsAsync())
+            {
+                var saved = registration.Profile?.Capabilities;
+                if (saved == null || saved.Contains(PKS.Commands.Agentics.Runner.AgenticsRunnerRunCommand.SmsCapability)) continue;
+
+                _console.MarkupLine(
+                    $"  [yellow]![/] runner [cyan]{registration.Name.EscapeMarkup()}[/] ({registration.Owner.EscapeMarkup()}/{registration.Project.EscapeMarkup()}) " +
+                    "has a saved capability list without [cyan]sms[/] — it will not advertise it. " +
+                    "Re-run [cyan]pks agentics runner run --configure[/] and tick sms.");
+            }
+        }
 
         await AzureResourceStatusRenderer.WriteTenantsAsync(_console, _tenants, AzureResourceKind.CommunicationServices);
         return 0;
