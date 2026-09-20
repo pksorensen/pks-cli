@@ -578,7 +578,6 @@ services.AddSingleton<FirecrackerNetworkManager>();
 services.AddSingleton<IGitHubActionsService, GitHubActionsService>();
 services.AddSingleton<IProcessRunner, ProcessRunner>();
 services.AddSingleton<IRunnerReaper, RunnerReaper>();
-services.AddSingleton<IRunnerProcessScanner, RunnerProcessScanner>();
 services.AddSingleton<IInteractiveProcessLauncher, InteractiveProcessLauncher>();
 services.AddSingleton<IRunnerContainerService, RunnerContainerService>();
 services.AddSingleton<INamedContainerPool, NamedContainerPool>();

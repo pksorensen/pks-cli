@@ -225,9 +225,6 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
     /// the credential socket instead of the socket trusting whoever can reach it.</summary>
     private readonly PKS.Infrastructure.Services.Runner.IJobTokenService? _jobTokens;
 
-    /// <summary>Optional for the same reason again. When DI supplies it, startup notices a runner
-    /// that is already polling instead of quietly becoming the second one.</summary>
-    private readonly PKS.Infrastructure.Services.Runner.IRunnerProcessScanner? _processScanner;
     private readonly PKS.Infrastructure.Services.TypeSafe.ITypeSafeCredentialService? _typeSafe;
 
     /// <summary>Optional like the rest of the tail. When present and configured (`pks acs init`),
@@ -256,7 +253,6 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         PKS.Infrastructure.Services.Runner.IRunnerReaper? reaper = null,
         IVaultCliService? vaultCli = null,
         PKS.Infrastructure.Services.Runner.IJobTokenService? jobTokens = null,
-        PKS.Infrastructure.Services.Runner.IRunnerProcessScanner? processScanner = null,
         PKS.Infrastructure.Services.TypeSafe.ITypeSafeCredentialService? typeSafe = null,
         PKS.Infrastructure.Services.Acs.IAcsSmsService? acsSms = null)
     {
@@ -279,7 +275,6 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         // service only shells out to, so there is nothing to register and nothing to configure.
         _vaultCli = vaultCli ?? new VaultCliService();
         _jobTokens = jobTokens;
-        _processScanner = processScanner;
         _typeSafe = typeSafe;
         _acsSms = acsSms;
     }
@@ -295,26 +290,11 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         {
             DisplayBanner();
 
-            // A tmux pane has a real terminal, so --no-prompt is the only thing that distinguishes a
-            // detached runner from an operator sitting in front of one. Without it passed through,
-            // both startup gates would park on a question in a pane nobody is watching — which looks
-            // exactly like a runner that started fine but never claims a job.
-            var startupCanPrompt = settings.NoPrompt ? false : (bool?)null;
-
-            // Is one already running? Before the sweep, because the sweep decides what to reap from
-            // whether a container is idle, and a live runner can start a job in one.
-            if (_processScanner is not null)
-            {
-                await PKS.Commands.Runner.RunnerDuplicateGuard.RunAsync(
-                    _processScanner, _console, "agentics", startupCanPrompt);
-            }
-
             // Reap what the previous runner could not. A runner killed by a reboot never reaches its
             // job-end cleanup, so startup is the only moment its leftovers get collected.
             if (_reaper is not null)
             {
-                await PKS.Commands.Runner.RunnerStartupSweep.RunAsync(
-                    _reaper, _console, "agentics", startupCanPrompt);
+                await PKS.Commands.Runner.RunnerStartupSweep.RunAsync(_reaper, _console);
             }
 
             // ── OTEL startup diagnostics ──────────────────────────────────────────────
