@@ -40,6 +40,10 @@ public class RunnerRegisterCommand : RunnerCommand<RunnerRegisterCommand.Setting
         [CommandOption("--expo")]
         [Description("Allow this repository's jobs to fetch the host's Expo token from the credential broker")]
         public bool Expo { get; set; }
+
+        [CommandOption("--deploy-repo <OWNER/REPO>")]
+        [Description("Also let this repository's jobs deploy the Coolify app built from OWNER/REPO (optionally OWNER/REPO@BRANCH). Repeatable — for coordination repos whose deployable lives in a submodule.")]
+        public string[] DeployRepositories { get; set; } = Array.Empty<string>();
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -305,7 +309,7 @@ public class RunnerRegisterCommand : RunnerCommand<RunnerRegisterCommand.Setting
             // 6. Add registration
             var labels = settings.Labels ?? "devcontainer-runner";
             var registration = await WithSpinnerAsync("Adding registration...", async () =>
-                await _configService.AddRegistrationAsync(owner, repo, labels, settings.Expo));
+                await _configService.AddRegistrationAsync(owner, repo, labels, settings.Expo, settings.DeployRepositories));
 
             Console.WriteLine();
 
@@ -322,6 +326,9 @@ public class RunnerRegisterCommand : RunnerCommand<RunnerRegisterCommand.Setting
             table.AddRow("Registered", registration.RegisteredAt.ToString("yyyy-MM-dd HH:mm:ss UTC"));
             table.AddRow("Enabled", registration.Enabled ? "[green]Yes[/]" : "[red]No[/]");
             table.AddRow("Expo access", registration.ExpoEnabled ? "[green]Yes[/]" : "[dim]No[/]");
+            table.AddRow("Deploy repos", registration.DeployRepositories.Count > 0
+                ? string.Join(", ", registration.DeployRepositories)
+                : "[dim]none[/]");
 
             Console.Write(table);
             Console.WriteLine();

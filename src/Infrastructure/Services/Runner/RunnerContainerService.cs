@@ -239,7 +239,7 @@ public class RunnerContainerService : IRunnerContainerService
             try
             {
                 onProgress?.Invoke($"Coolify lookup: {registration.Owner}/{registration.Repository}@{coolifyBranch} (all environments)");
-                var allApps = await _coolifyLookup.FindAllAppsAsync(registration.Owner, registration.Repository, coolifyBranch);
+                var allApps = await LookupDeployableAppsAsync(registration, coolifyBranch, onProgress);
                 if (allApps.Count > 0)
                 {
                     var defaultApp = allApps.FirstOrDefault(a =>
@@ -496,7 +496,7 @@ public class RunnerContainerService : IRunnerContainerService
             try
             {
                 onProgress?.Invoke($"Coolify lookup: {registration.Owner}/{registration.Repository}@{coolifyBranch} (all environments)");
-                var allApps = await _coolifyLookup.FindAllAppsAsync(registration.Owner, registration.Repository, coolifyBranch);
+                var allApps = await LookupDeployableAppsAsync(registration, coolifyBranch, onProgress);
                 if (allApps.Count > 0)
                 {
                     _coolifyTokenStore.RegisterAll(coolifyJobId, allApps);
@@ -719,6 +719,78 @@ public class RunnerContainerService : IRunnerContainerService
     /// <para>Session transcripts (<c>claude-code-config-*</c>) are deliberately left behind: Brain/ASF
     /// ingests them, and reclaiming their ~1 MB per job is not worth losing a session recording.</para>
     /// </summary>
+    /// <summary>
+    /// Every Coolify application this job is allowed to deploy: the ones built from the registered
+    /// repository itself, plus the ones built from any repository listed in
+    /// <see cref="RunnerRegistration.DeployRepositories"/>.
+    ///
+    /// The second list is what makes a coordination repository deployable. Its release workflow runs
+    /// in a repository that owns no Coolify application — the application is built from the
+    /// submodule's repository — so a lookup limited to the registered repository finds nothing to
+    /// deploy. Entries may pin a branch (<c>owner/repo@branch</c>); without one they follow the
+    /// job's own branch, which is the common case where a release on <c>main</c> deploys the app
+    /// tracking <c>main</c>.
+    ///
+    /// A failed lookup for one extra repository is logged and skipped rather than thrown: it must
+    /// not cost the job the applications that did resolve, nor its registry and git credentials.
+    /// </summary>
+    private async Task<List<CoolifyAppMatch>> LookupDeployableAppsAsync(
+        RunnerRegistration registration,
+        string branch,
+        Action<string>? onProgress)
+    {
+        var apps = await _coolifyLookup.FindAllAppsAsync(registration.Owner, registration.Repository, branch);
+
+        foreach (var entry in registration.DeployRepositories ?? new List<string>())
+        {
+            if (string.IsNullOrWhiteSpace(entry))
+                continue;
+
+            var (slug, pinnedBranch) = ParseDeployRepository(entry);
+            var parts = slug.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length != 2)
+            {
+                _logger.LogWarning("Ignoring deploy repository '{Entry}' on {Owner}/{Repo}: expected owner/repo[@branch]",
+                    entry, registration.Owner, registration.Repository);
+                continue;
+            }
+
+            var extraBranch = pinnedBranch ?? branch;
+            try
+            {
+                onProgress?.Invoke($"Coolify lookup: {slug}@{extraBranch} (deploy repository of {registration.Owner}/{registration.Repository})");
+                var extra = await _coolifyLookup.FindAllAppsAsync(parts[0], parts[1], extraBranch);
+
+                foreach (var app in extra)
+                {
+                    if (apps.Any(a => string.Equals(a.Uuid, app.Uuid, StringComparison.OrdinalIgnoreCase)))
+                        continue;
+                    apps.Add(app);
+                }
+
+                _logger.LogInformation("Deploy repository {Slug}@{Branch} contributed {Count} app(s) to {Owner}/{Repo}",
+                    slug, extraBranch, extra.Count, registration.Owner, registration.Repository);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Coolify lookup failed for deploy repository {Slug}@{Branch}", slug, extraBranch);
+                onProgress?.Invoke($"Warning: Coolify lookup failed for {slug}: {ex.Message}");
+            }
+        }
+
+        return apps;
+    }
+
+    /// <summary>Splits <c>owner/repo@branch</c> into its slug and branch. The <c>@</c> is optional.</summary>
+    internal static (string Slug, string? Branch) ParseDeployRepository(string entry)
+    {
+        var text = entry.Trim();
+        var at = text.LastIndexOf('@');
+        return at > 0
+            ? (text[..at].Trim(), text[(at + 1)..].Trim())
+            : (text, null);
+    }
+
     private async Task<IReadOnlyList<string>> ResolveFeatureVolumesAsync(string? containerId, CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(containerId))

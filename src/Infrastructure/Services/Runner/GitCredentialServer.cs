@@ -278,8 +278,16 @@ public class GitCredentialServer : IAsyncDisposable
         if (!string.IsNullOrEmpty(claims.AppUuid))
             return _tokenStore?.GetByAppUuid(claims.AppUuid);
 
-        // New path: resolve by job + environment query param
         var env = request.Query["environment"].FirstOrDefault();
+
+        // Strongest path: the workflow named the application (`coolify-app:` on the deploy action).
+        // It wins over the environment because it is the more specific statement of intent, and it
+        // does not fall through when it misses — see GetByJobIdAndApp for why silence is the bug.
+        var app = request.Query["app"].FirstOrDefault();
+        if (!string.IsNullOrEmpty(app))
+            return _tokenStore?.GetByJobIdAndApp(claims.JobId, app, env);
+
+        // Usual path: resolve by job + environment query param
         if (!string.IsNullOrEmpty(env))
             return _tokenStore?.GetByJobIdAndEnvironment(claims.JobId, env);
 
@@ -334,16 +342,19 @@ public class GitCredentialServer : IAsyncDisposable
                 return Results.Json(new { error = "unauthorized" }, statusCode: 401);
 
             var requestedEnv = request.Query["environment"].FirstOrDefault() ?? "(none)";
+            var requestedApp = request.Query["app"].FirstOrDefault() ?? "(none)";
 
             // Log all available apps for this job for debugging
             var allApps = _tokenStore?.GetAllByJobId(claims.JobId) ?? new List<CoolifyAppMatch>();
-            _onLog?.Invoke($"Token request: job={claims.JobId}, requested_env={requestedEnv}, available_apps=[{string.Join(", ", allApps.Select(a => $"{a.Name}(uuid={a.Uuid}, env={a.EnvironmentName})"))}]");
+            _onLog?.Invoke($"Token request: job={claims.JobId}, requested_app={requestedApp}, requested_env={requestedEnv}, available_apps=[{string.Join(", ", allApps.Select(a => $"{a.Name}(uuid={a.Uuid}, env={a.EnvironmentName})"))}]");
 
             var app = ResolveApp(claims, request);
             if (app == null)
-                return Results.Json(new { error = "app not found", requested_environment = requestedEnv, available = allApps.Select(a => new { a.Name, a.Uuid, environment = a.EnvironmentName }) }, statusCode: 404);
+                return Results.Json(new { error = "app not found", requested_app = requestedApp, requested_environment = requestedEnv, available = allApps.Select(a => new { a.Name, a.Uuid, environment = a.EnvironmentName }) }, statusCode: 404);
 
-            var resolved = app.EnvironmentName == requestedEnv ? "exact" : "fallback";
+            var resolved = requestedApp != "(none)" ? "app-name"
+                : app.EnvironmentName == requestedEnv ? "exact"
+                : "fallback";
             _onLog?.Invoke($"Resolved: {app.Name} (uuid={app.Uuid}, env={app.EnvironmentName}) [{resolved} match for '{requestedEnv}']");
             return Results.Json(new
             {
@@ -363,7 +374,19 @@ public class GitCredentialServer : IAsyncDisposable
 
             var app = ResolveApp(claims, request);
             if (app == null)
-                return Results.Json(new { error = "app not found" }, statusCode: 404);
+            {
+                // Name the miss. This endpoint used to answer a bare "app not found", which reads as
+                // "this repo has no Coolify app" even when the real cause is a name the job asked for
+                // and cannot have.
+                var candidates = _tokenStore?.GetAllByJobId(claims.JobId) ?? new List<CoolifyAppMatch>();
+                return Results.Json(new
+                {
+                    error = "app not found",
+                    requested_app = request.Query["app"].FirstOrDefault() ?? "(none)",
+                    requested_environment = request.Query["environment"].FirstOrDefault() ?? "(none)",
+                    available = candidates.Select(a => new { a.Name, a.Uuid, environment = a.EnvironmentName })
+                }, statusCode: 404);
+            }
 
             // claims.AppUuid is only set when the job named an app outright; the usual path resolves
             // it from the environment, so log what we are actually deploying, not the empty claim.

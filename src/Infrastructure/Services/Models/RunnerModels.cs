@@ -21,6 +21,23 @@ public class RunnerRegistration
     /// "the box holds an Expo token" and "every repo registered on the box can spend it".
     /// </summary>
     public bool ExpoEnabled { get; set; }
+
+    /// <summary>
+    /// Extra <c>owner/repo</c> slugs whose Coolify applications this repository's jobs may deploy,
+    /// each optionally pinned to a branch as <c>owner/repo@branch</c> (default: the job's branch).
+    ///
+    /// The Coolify lookup finds applications by the git repository they are built from, which is
+    /// the right answer right up until the repository running the release is not the repository
+    /// being deployed. <c>pksorensen/commuteconnects</c> is a coordination repository: the web app
+    /// it ships lives in a submodule, and the Coolify application is built from
+    /// <c>KjeldagerIO/commuteconnects-carshare-www</c>. Nothing about the coordination repository
+    /// points at that application, so its release had no deployable at all — and before repository
+    /// matching was made exact, it silently resolved to a neighbouring repository's app instead.
+    ///
+    /// Opt-in and per registration, like <see cref="ExpoEnabled"/>: this grants a repository's jobs
+    /// deploy rights over another repository's application, so it is a decision, not a default.
+    /// </summary>
+    public List<string> DeployRepositories { get; set; } = new();
 }
 
 /// <summary>

@@ -183,7 +183,7 @@ public class CoolifyLookupService : ICoolifyLookupService
                     var gitBranch = app.GetProperty("git_branch").GetString() ?? "";
                     var uuid = app.GetProperty("uuid").GetString() ?? "";
 
-                    if (gitRepo.Contains(fullRepo, StringComparison.OrdinalIgnoreCase) &&
+                    if (RepoMatches(gitRepo, fullRepo) &&
                         string.Equals(gitBranch, branch, StringComparison.OrdinalIgnoreCase))
                     {
                         matchedApps.Add(BuildAppMatch(app, instance, uuid));
@@ -340,7 +340,7 @@ public class CoolifyLookupService : ICoolifyLookupService
                             var gitRepo = fullApp.GetProperty("git_repository").GetString() ?? "";
                             var gitBranch = fullApp.GetProperty("git_branch").GetString() ?? "";
 
-                            var repoMatch = gitRepo.Contains(fullRepo, StringComparison.OrdinalIgnoreCase);
+                            var repoMatch = RepoMatches(gitRepo, fullRepo);
                             var branchMatch = string.Equals(gitBranch, branch, StringComparison.OrdinalIgnoreCase);
 
                             if (repoMatch && branchMatch)
@@ -380,7 +380,7 @@ public class CoolifyLookupService : ICoolifyLookupService
             var gitBranch = app.GetProperty("git_branch").GetString() ?? "";
             var uuid = app.GetProperty("uuid").GetString() ?? "";
 
-            var repoMatch = gitRepo.Contains(fullRepo, StringComparison.OrdinalIgnoreCase);
+            var repoMatch = RepoMatches(gitRepo, fullRepo);
             var branchMatch = string.Equals(gitBranch, branch, StringComparison.OrdinalIgnoreCase);
 
             if (repoMatch && branchMatch)
@@ -392,6 +392,49 @@ public class CoolifyLookupService : ICoolifyLookupService
                     "Coolify match: {Name} (uuid={Uuid}) on {Instance} fqdn={Fqdn}",
                     match.Name, match.Uuid, instance.Url, match.Fqdn);
             }
+        }
+    }
+
+    /// <summary>
+    /// Does a Coolify application's <c>git_repository</c> denote exactly <paramref name="fullRepo"/>
+    /// (an <c>owner/repo</c> slug)?
+    ///
+    /// This used to be a bare <c>Contains</c>, and that shipped a production deploy to the wrong
+    /// application on 2026-09-20: <c>pksorensen/commuteconnects</c> is a *prefix* of
+    /// <c>pksorensen/commuteconnects-landing</c>, so the release of the car-share platform
+    /// redeployed the marketing site instead, and the smoke test passed because the real app
+    /// happened to be up. Substring matching cannot tell a repository from its longer-named
+    /// neighbour, and the failure is silent by construction.
+    ///
+    /// Coolify stores the field in whichever form the source produced — a short <c>owner/repo</c>
+    /// slug, <c>https://github.com/owner/repo(.git)</c>, or <c>git@github.com:owner/repo.git</c> —
+    /// so the comparison normalises rather than demanding one shape. The suffix arm is anchored on
+    /// <c>/</c>, which is what makes it exact: <c>.../pksorensen/commuteconnects-landing</c> does
+    /// not end with <c>/pksorensen/commuteconnects</c>.
+    /// </summary>
+    internal static bool RepoMatches(string gitRepository, string fullRepo)
+    {
+        if (string.IsNullOrWhiteSpace(gitRepository) || string.IsNullOrWhiteSpace(fullRepo))
+            return false;
+
+        var normalized = Normalize(gitRepository);
+        var target = Normalize(fullRepo);
+
+        return normalized == target || normalized.EndsWith("/" + target, StringComparison.Ordinal);
+
+        static string Normalize(string value)
+        {
+            var text = value.Trim().ToLowerInvariant();
+
+            if (text.EndsWith(".git", StringComparison.Ordinal))
+                text = text[..^4];
+
+            // git@host:owner/repo — the scp-like form has no scheme, so strip the host by hand.
+            var colon = text.IndexOf(':');
+            if (colon >= 0 && !text.Contains("://", StringComparison.Ordinal))
+                text = text[(colon + 1)..];
+
+            return text.Trim('/');
         }
     }
 

@@ -201,6 +201,102 @@ public class CoolifyTokenStoreTests
     }
 
     [Fact]
+    public void GetByJobIdAndApp_SelectsByName()
+    {
+        var sut = new CoolifyTokenStore();
+        sut.RegisterAll("job-1", new[]
+        {
+            CreateAppMatch(uuid: "uuid-landing", name: "commuteconnects-www", environment: "production"),
+            CreateAppMatch(uuid: "uuid-carshare", name: "carshare", environment: "production")
+        });
+
+        var result = sut.GetByJobIdAndApp("job-1", "carshare");
+
+        result.Should().NotBeNull();
+        result!.Uuid.Should().Be("uuid-carshare");
+    }
+
+    [Fact]
+    public void GetByJobIdAndApp_SelectsByUuid()
+    {
+        var sut = new CoolifyTokenStore();
+        sut.RegisterAll("job-1", new[]
+        {
+            CreateAppMatch(uuid: "k84g808ckcg8sw4kgoc4kks0", name: "carshare", environment: "production"),
+            CreateAppMatch(uuid: "b2q298qwcs0os28gmkspa5jo", name: "commuteconnects-www", environment: "production")
+        });
+
+        var result = sut.GetByJobIdAndApp("job-1", "b2q298qwcs0os28gmkspa5jo");
+
+        result.Should().NotBeNull();
+        result!.Name.Should().Be("commuteconnects-www");
+    }
+
+    [Fact]
+    public void GetByJobIdAndApp_CaseInsensitive()
+    {
+        var sut = new CoolifyTokenStore();
+        sut.RegisterAll("job-1", new[] { CreateAppMatch(uuid: "uuid-1", name: "CarShare") });
+
+        sut.GetByJobIdAndApp("job-1", "carshare").Should().NotBeNull();
+    }
+
+    [Fact]
+    public void GetByJobIdAndApp_UnknownApp_ReturnsNull_DoesNotFallBack()
+    {
+        var sut = new CoolifyTokenStore();
+        sut.RegisterAll("job-1", new[]
+        {
+            CreateAppMatch(uuid: "uuid-landing", name: "commuteconnects-www", environment: "production")
+        });
+
+        // The whole point: a workflow naming an app it cannot have must get nothing, not the
+        // neighbour that happens to be registered. Falling back here is the 2026-09-20 outage.
+        sut.GetByJobIdAndApp("job-1", "carshare").Should().BeNull();
+    }
+
+    [Fact]
+    public void GetByJobIdAndApp_NarrowsByEnvironment()
+    {
+        var sut = new CoolifyTokenStore();
+        sut.RegisterAll("job-1", new[]
+        {
+            CreateAppMatch(uuid: "uuid-stg", name: "carshare", environment: "staging"),
+            CreateAppMatch(uuid: "uuid-prod", name: "carshare", environment: "production")
+        });
+
+        sut.GetByJobIdAndApp("job-1", "carshare", "production")!.Uuid.Should().Be("uuid-prod");
+        sut.GetByJobIdAndApp("job-1", "carshare", "staging")!.Uuid.Should().Be("uuid-stg");
+    }
+
+    [Fact]
+    public void GetByJobIdAndApp_EnvironmentNarrowsButNeverSelects()
+    {
+        var sut = new CoolifyTokenStore();
+        sut.RegisterAll("job-1", new[]
+        {
+            CreateAppMatch(uuid: "uuid-landing", name: "commuteconnects-www", environment: "production"),
+            CreateAppMatch(uuid: "uuid-carshare", name: "carshare", environment: "staging")
+        });
+
+        // The named app is in a different environment than the one requested. Answer with the app
+        // that was named — never with a different app that merely sits in the right environment.
+        var result = sut.GetByJobIdAndApp("job-1", "carshare", "production");
+
+        result.Should().NotBeNull();
+        result!.Uuid.Should().Be("uuid-carshare");
+    }
+
+    [Fact]
+    public void GetByJobIdAndApp_EmptyApp_ReturnsNull()
+    {
+        var sut = new CoolifyTokenStore();
+        sut.RegisterAll("job-1", new[] { CreateAppMatch() });
+
+        sut.GetByJobIdAndApp("job-1", "").Should().BeNull();
+    }
+
+    [Fact]
     public void GetAllByJobId_ReturnsAllApps()
     {
         // Arrange

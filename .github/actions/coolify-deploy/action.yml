@@ -23,9 +23,25 @@ inputs:
     required: false
     default: ''
   app-name:
-    description: 'Application name for display in logs and release comments'
+    description: 'Application name for display in logs and release comments. NOT a selector — see coolify-app.'
     required: false
     default: 'app'
+  coolify-app:
+    description: |
+      The Coolify application to deploy: its name, or its uuid. This is the selector; `app-name` is
+      only a label for the logs and has never chosen anything.
+
+      Leave it empty and the application is resolved from the repository the workflow runs in, which
+      is right whenever that repository owns exactly one application per environment. Set it when it
+      does not: several applications built from one repository, or a coordination repository whose
+      deployable is built from a submodule's repository (that one also needs the repository listed
+      with `pks github runner deploy-repo` on the runner host).
+
+      A name that does not resolve fails the job with the list of applications it could have named.
+      It never falls back to a different application — that fallback deployed a marketing site over
+      a production release on 2026-09-20.
+    required: false
+    default: ''
   production-url:
     description: 'Production URL. Falls back to COOLIFY_APP_FQDN env var (auto-injected by pks runner).'
     required: false
@@ -85,15 +101,25 @@ runs:
           [ -z "$ENV" ] && ENV="production"
           echo "environment=$ENV" >> "$GITHUB_OUTPUT"
 
+          # The app selector, url-encoded, carried on every proxy call below. Empty when the
+          # workflow did not name one, in which case the broker resolves by environment as before.
+          APP_SELECTOR="${{ inputs.coolify-app }}"
+          APP_QUERY=""
+          if [ -n "$APP_SELECTOR" ]; then
+            APP_QUERY="&app=$(printf '%s' "$APP_SELECTOR" | jq -sRr @uri)"
+            echo "Requesting Coolify app: $APP_SELECTOR"
+          fi
+          echo "app_query=$APP_QUERY" >> "$GITHUB_OUTPUT"
+
           # Fetch app info from proxy
           HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" --unix-socket "$SOCKET" \
             -H "Authorization: Bearer $PKS_TOKEN" \
-            "http://localhost/coolify/token?environment=${ENV}")
+            "http://localhost/coolify/token?environment=${ENV}${APP_QUERY}")
           HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -1)
           APP_INFO=$(echo "$HTTP_RESPONSE" | head -n -1)
 
           if [ "$HTTP_CODE" -ne 200 ]; then
-            echo "::error::Proxy returned HTTP $HTTP_CODE for environment '$ENV'"
+            echo "::error::Proxy returned HTTP $HTTP_CODE for environment '$ENV'${APP_SELECTOR:+, app '$APP_SELECTOR'}"
             echo "Response: $APP_INFO"
             # Show available environments if the proxy returned them
             echo "$APP_INFO" | jq -r '.available[]? | "  Available: \(.name) (env=\(.environment), uuid=\(.uuid))"' 2>/dev/null
@@ -120,6 +146,8 @@ runs:
           echo "Proxy mode: webhook=$WEBHOOK, fqdn=$FQDN, environment=$RESOLVED_ENV (requested=$ENV, match=$RESOLVED_FROM)"
         else
           echo "mode=direct" >> "$GITHUB_OUTPUT"
+
+          APP_SELECTOR="${{ inputs.coolify-app }}"
 
           # Resolve token: input > env var
           TOKEN="${{ inputs.token }}"
@@ -158,10 +186,19 @@ runs:
                 --header "Authorization: Bearer $TOKEN" \
                 "${COOLIFY_BASE}/api/v1/applications" 2>/dev/null || echo "[]")
 
-              APP_UUID=$(echo "$APPS_JSON" | jq -r --arg repo "$REPO_SLUG" --arg env "$ENV" '
+              # Exact repository identity, not a substring. `test($repo;"i")` matched any app whose
+              # repo merely *contained* this one's slug, so a release of owner/foo could resolve to
+              # owner/foo-landing — which is how a marketing site got deployed over a production
+              # release on 2026-09-20. Normalise (lowercase, drop a trailing .git and slash) and
+              # accept either the bare slug or a URL ending in "/owner/repo".
+              APP_UUID=$(echo "$APPS_JSON" | jq -r --arg repo "$REPO_SLUG" --arg env "$ENV" --arg app "$APP_SELECTOR" '
+                def norm: (. // "") | ascii_downcase | sub("\\.git$"; "") | sub("/$"; "");
+                def repomatch($r): (norm) as $g | ($r | ascii_downcase) as $t
+                  | ($g == $t) or ($g | endswith("/" + $t));
                 [ .[] | select(
-                  (.git_repository // "" | test($repo; "i")) and
-                  ((.environment.name // "") == $env)
+                  (.git_repository | repomatch($repo)) and
+                  ((.environment.name // "") == $env) and
+                  ($app == "" or (.name // "") == $app or (.uuid // "") == $app)
                 ) ] | .[0].uuid // empty')
 
               if [ -n "$APP_UUID" ]; then
@@ -171,7 +208,7 @@ runs:
                 echo "Found app ${APP_UUID} in environment '$ENV' (fqdn: ${FQDN})"
                 echo "production_url=$FQDN" >> "$GITHUB_OUTPUT"
               else
-                echo "::warning::Could not find app for ${REPO_SLUG} in environment '$ENV'"
+                echo "::warning::Could not find app for ${REPO_SLUG} in environment '$ENV'${APP_SELECTOR:+ named '$APP_SELECTOR'}"
               fi
             fi
           fi
@@ -205,7 +242,7 @@ runs:
             --unix-socket "$SOCKET" \
             --request POST \
             -H "Authorization: Bearer $PKS_TOKEN" \
-            "http://localhost/coolify/deploy?environment=${{ steps.config.outputs.environment }}")
+            "http://localhost/coolify/deploy?environment=${{ steps.config.outputs.environment }}${{ steps.config.outputs.app_query }}")
         else
           # Direct mode: call Coolify API directly.
           # POST, not GET: Coolify 4.3.14 moved /api/v1/deploy to POST and answers GET with 405
@@ -248,6 +285,9 @@ runs:
         BUILD_TIMEOUT=${{ inputs.build-timeout }}
         HEALTH_TIMEOUT=${{ inputs.health-timeout }}
         ENVIRONMENT="${{ steps.config.outputs.environment }}"
+        # Empty unless the workflow named an application with `coolify-app:`. Carried on the proxy
+        # polls so status is read from the same app the deploy was sent to.
+        APP_QUERY="${{ steps.config.outputs.app_query }}"
 
         if [ "$MODE" = "proxy" ]; then
           SOCKET="${{ steps.config.outputs.socket }}"
@@ -267,7 +307,7 @@ runs:
             local sep="?"
             [[ "$path" == *"?"* ]] && sep="&"
             response=$(curl -s -w "\n%{http_code}" --unix-socket "$SOCKET" -H "$AUTH_HEADER" \
-              "http://localhost${path}${sep}environment=${ENVIRONMENT}" 2>/dev/null)
+              "http://localhost${path}${sep}environment=${ENVIRONMENT}${APP_QUERY}" 2>/dev/null)
           else
             response=$(curl -s -w "\n%{http_code}" -H "$AUTH_HEADER" "${COOLIFY_BASE}${path}" 2>/dev/null)
           fi

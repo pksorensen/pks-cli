@@ -97,7 +97,7 @@ public class RunnerConfigurationService : IRunnerConfigurationService
         }
     }
 
-    public async Task<RunnerRegistration> AddRegistrationAsync(string owner, string repository, string? labels = null, bool expoEnabled = false)
+    public async Task<RunnerRegistration> AddRegistrationAsync(string owner, string repository, string? labels = null, bool expoEnabled = false, IEnumerable<string>? deployRepositories = null)
     {
         var config = await LoadAsync();
 
@@ -108,7 +108,8 @@ public class RunnerConfigurationService : IRunnerConfigurationService
             Labels = labels ?? "devcontainer-runner",
             RegisteredAt = DateTime.UtcNow,
             Enabled = true,
-            ExpoEnabled = expoEnabled
+            ExpoEnabled = expoEnabled,
+            DeployRepositories = deployRepositories?.ToList() ?? new List<string>()
         };
 
         config.Registrations.Add(registration);

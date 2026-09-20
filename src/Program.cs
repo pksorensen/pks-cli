@@ -914,7 +914,14 @@ app.Configure(config =>
             runner.AddCommand<RunnerRegisterCommand>("register")
                 .WithDescription("Register a repository for devcontainer-based runner")
                 .WithExample(new[] { "github", "runner", "register", "owner/repo" })
-                .WithExample(new[] { "github", "runner", "register", "owner/repo", "--labels", "custom-label" });
+                .WithExample(new[] { "github", "runner", "register", "owner/repo", "--labels", "custom-label" })
+                .WithExample(new[] { "github", "runner", "register", "owner/repo", "--deploy-repo", "other-owner/deployable" });
+
+            runner.AddCommand<RunnerDeployRepoCommand>("deploy-repo")
+                .WithDescription("List, add or remove the extra repositories whose Coolify apps this repo's jobs may deploy")
+                .WithExample(new[] { "github", "runner", "deploy-repo", "owner/repo" })
+                .WithExample(new[] { "github", "runner", "deploy-repo", "owner/repo", "other-owner/deployable" })
+                .WithExample(new[] { "github", "runner", "deploy-repo", "owner/repo", "other-owner/deployable", "--remove" });
 
             runner.AddCommand<RunnerUnregisterCommand>("unregister")
                 .WithDescription("Unregister a repository from the runner")
