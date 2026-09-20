@@ -1,0 +1,168 @@
+name: 'Publish Assembly Line'
+description: >-
+  Publish (or re-publish, versioned) this repository's assembly line to the
+  Agentic Live marketplace via GitHub OIDC trusted publishing — no stored token.
+  The card's name, description and version come from .agentics/assembly-line.json;
+  the station count from .agentics/stations/*/; slug and tags from the manifest's
+  optional "marketplace" block. The server binds the card to the OIDC
+  `repository` claim, so a repo can only ever publish itself, and only repos whose
+  owner is allowlisted on the server (MARKETPLACE_TRUSTED_OWNERS) are accepted.
+
+inputs:
+  manifest:
+    description: 'Path to the assembly-line manifest'
+    required: false
+    default: '.agentics/assembly-line.json'
+  stations-dir:
+    description: 'Directory whose subdirectories are the stations (used for the station count)'
+    required: false
+    default: '.agentics/stations'
+  version:
+    description: 'Version to publish. Defaults to the manifest "version", then the pushed tag name (without a leading v).'
+    required: false
+    default: ''
+  slug:
+    description: 'Marketplace slug. Defaults to manifest marketplace.slug, then the repository name without an "alp-" prefix.'
+    required: false
+    default: ''
+  tags:
+    description: 'Comma-separated tags. Defaults to manifest marketplace.tags.'
+    required: false
+    default: ''
+  branch:
+    description: 'Branch the card imports from. Only used for tag builds; branch builds always publish their own branch.'
+    required: false
+    default: 'main'
+  server:
+    description: 'Agentic Live server URL'
+    required: false
+    default: 'https://agentics.dk'
+  audience:
+    description: 'OIDC audience for trusted publishing (must match the server)'
+    required: false
+    default: 'https://agentics.dk/marketplace'
+
+outputs:
+  version:
+    description: 'Version that was published'
+    value: ${{ steps.publish.outputs.version }}
+  import-url:
+    description: 'Import URL of the published card'
+    value: ${{ steps.publish.outputs.import_url }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Publish assembly line
+      id: publish
+      shell: bash
+      env:
+        IN_MANIFEST: ${{ inputs.manifest }}
+        IN_STATIONS_DIR: ${{ inputs.stations-dir }}
+        IN_VERSION: ${{ inputs.version }}
+        IN_SLUG: ${{ inputs.slug }}
+        IN_TAGS: ${{ inputs.tags }}
+        IN_BRANCH: ${{ inputs.branch }}
+        IN_SERVER: ${{ inputs.server }}
+        IN_AUDIENCE: ${{ inputs.audience }}
+      run: |
+        set -euo pipefail
+
+        if [ ! -f "$IN_MANIFEST" ]; then
+          echo "::error::Manifest '$IN_MANIFEST' not found — is this an assembly-line repo?"
+          exit 1
+        fi
+        if ! jq -e . "$IN_MANIFEST" >/dev/null 2>&1; then
+          echo "::error::Manifest '$IN_MANIFEST' is not valid JSON"
+          exit 1
+        fi
+
+        NAME=$(jq -r '.name // empty' "$IN_MANIFEST")
+        DESCRIPTION=$(jq -r '.description // empty' "$IN_MANIFEST")
+        if [ -z "$NAME" ] || [ -z "$DESCRIPTION" ]; then
+          echo "::error::Manifest needs both \"name\" and \"description\""
+          exit 1
+        fi
+
+        VERSION="$IN_VERSION"
+        [ -n "$VERSION" ] || VERSION=$(jq -r '.version // empty' "$IN_MANIFEST")
+        if [ -z "$VERSION" ] && [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+          VERSION="${GITHUB_REF#refs/tags/}"; VERSION="${VERSION#v}"
+        fi
+        if [ -z "$VERSION" ]; then
+          echo "::error::No version: set \"version\" in the manifest, pass the 'version' input, or publish from a tag"
+          exit 1
+        fi
+
+        SLUG="$IN_SLUG"
+        [ -n "$SLUG" ] || SLUG=$(jq -r '.marketplace.slug // empty' "$IN_MANIFEST")
+        if [ -z "$SLUG" ]; then
+          SLUG="${GITHUB_REPOSITORY#*/}"; SLUG="${SLUG#alp-}"
+          SLUG=$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9-]+/-/g; s/^-+|-+$//g')
+        fi
+
+        if [ -n "$IN_TAGS" ]; then
+          TAGS_JSON=$(printf '%s' "$IN_TAGS" | jq -R -c 'split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))')
+        else
+          TAGS_JSON=$(jq -c '.marketplace.tags // [] | map(tostring)' "$IN_MANIFEST")
+        fi
+
+        STATIONS=0
+        if [ -d "$IN_STATIONS_DIR" ]; then
+          STATIONS=$(find "$IN_STATIONS_DIR" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+        fi
+        if [ "$STATIONS" -lt 1 ]; then
+          echo "::error::No stations found under '$IN_STATIONS_DIR'"
+          exit 1
+        fi
+
+        echo "Publishing '$NAME' ($SLUG) v$VERSION with $STATIONS station(s) to $IN_SERVER…"
+
+        # Mint an ephemeral GitHub OIDC token for trusted publishing (no PAT).
+        # Requires the calling job to have `permissions: id-token: write`.
+        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+          echo "::error::OIDC env not present — the job needs 'permissions: id-token: write'"
+          exit 1
+        fi
+        OIDC=$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${IN_AUDIENCE}" | jq -r '.value')
+        if [ -z "$OIDC" ] || [ "$OIDC" = "null" ]; then
+          echo "::error::failed to mint OIDC token"
+          exit 1
+        fi
+
+        PAYLOAD=$(jq -n -c \
+          --arg slug "$SLUG" \
+          --arg name "$NAME" \
+          --arg description "$DESCRIPTION" \
+          --arg version "$VERSION" \
+          --arg branch "$IN_BRANCH" \
+          --argjson stations "$STATIONS" \
+          --argjson tags "$TAGS_JSON" \
+          '{slug: $slug, name: $name, description: $description, version: $version, branch: $branch, stations: $stations, tags: $tags}')
+
+        HTTP_RESPONSE=$(printf '%s' "$PAYLOAD" | curl -s -w "\n%{http_code}" \
+          -X POST \
+          -H "Authorization: Bearer ${OIDC}" \
+          -H "Content-Type: application/json" \
+          --data-binary @- \
+          "${IN_SERVER}/api/marketplace/assembly-lines")
+
+        HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -1)
+        BODY=$(echo "$HTTP_RESPONSE" | head -n -1)
+        echo "Response ($HTTP_CODE): $BODY"
+
+        if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+          echo "::error::Failed to publish assembly line (HTTP $HTTP_CODE): $BODY"
+          exit 1
+        fi
+
+        IMPORT_URL=$(printf '%s' "$BODY" | jq -r '.importUrl // empty')
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        echo "import_url=$IMPORT_URL" >> "$GITHUB_OUTPUT"
+        {
+          echo "### Assembly line published"
+          echo
+          echo "- **$NAME** \`$SLUG\` v$VERSION — $STATIONS station(s)"
+          [ -n "$IMPORT_URL" ] && echo "- Import: $IMPORT_URL"
+        } >> "$GITHUB_STEP_SUMMARY"
