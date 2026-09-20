@@ -3,7 +3,7 @@ description: >-
   Publish (or re-publish, versioned) this repository's assembly line to the
   Agentic Live marketplace via GitHub OIDC trusted publishing — no stored token.
   The card's name, description and version come from .agentics/assembly-line.json;
-  the station count from .agentics/stations/*/; slug and tags from the manifest's
+  the station count from .agentics/stations/*/station.json (trigger ≠ none); slug and tags from the manifest's
   optional "marketplace" block. The server binds the card to the OIDC
   `repository` claim, so a repo can only ever publish itself, and only repos whose
   owner is allowlisted on the server (MARKETPLACE_TRUSTED_OWNERS) are accepted.
@@ -107,9 +107,16 @@ runs:
           TAGS_JSON=$(jq -c '.marketplace.tags // [] | map(tostring)' "$IN_MANIFEST")
         fi
 
+        # Working stations only: a directory with a station.json whose trigger is
+        # not "none" (terminal states like merged/stopped live in the same tree).
         STATIONS=0
         if [ -d "$IN_STATIONS_DIR" ]; then
-          STATIONS=$(find "$IN_STATIONS_DIR" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+          for sj in "$IN_STATIONS_DIR"/*/station.json; do
+            [ -f "$sj" ] || continue
+            if [ "$(jq -r '.trigger.type // "manual"' "$sj" 2>/dev/null)" != "none" ]; then
+              STATIONS=$((STATIONS + 1))
+            fi
+          done
         fi
         if [ "$STATIONS" -lt 1 ]; then
           echo "::error::No stations found under '$IN_STATIONS_DIR'"
@@ -149,7 +156,7 @@ runs:
           "${IN_SERVER}/api/marketplace/assembly-lines")
 
         HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -1)
-        BODY=$(echo "$HTTP_RESPONSE" | head -n -1)
+        BODY=$(echo "$HTTP_RESPONSE" | head -n -1 | head -c 600)
         echo "Response ($HTTP_CODE): $BODY"
 
         if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
