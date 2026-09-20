@@ -207,9 +207,11 @@ runs:
             -H "Authorization: Bearer $PKS_TOKEN" \
             "http://localhost/coolify/deploy?environment=${{ steps.config.outputs.environment }}")
         else
-          # Direct mode: call Coolify API directly
+          # Direct mode: call Coolify API directly.
+          # POST, not GET: Coolify 4.3.14 moved /api/v1/deploy to POST and answers GET with 405
+          # (Allow: POST). The ?uuid= stays in the query string, which deploy() still reads.
           response=$(curl -s -w "\n%{http_code}" \
-            --request GET "${{ steps.config.outputs.webhook }}" \
+            --request POST "${{ steps.config.outputs.webhook }}" \
             --header "Authorization: Bearer ${{ steps.config.outputs.token }}")
         fi
 
