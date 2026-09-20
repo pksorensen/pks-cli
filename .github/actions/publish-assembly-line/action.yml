@@ -6,7 +6,7 @@ description: >-
   the station count from .agentics/stations/*/station.json (trigger ≠ none); slug and tags from the manifest's
   optional "marketplace" block. The server binds the card to the OIDC
   `repository` claim, so a repo can only ever publish itself, and only repos whose
-  owner is allowlisted on the server (MARKETPLACE_TRUSTED_OWNERS) are accepted.
+  owner has applied on agentics.dk (/marketplace/publish) are accepted; cards show once an admin approves the owner.
 
 inputs:
   manifest:
