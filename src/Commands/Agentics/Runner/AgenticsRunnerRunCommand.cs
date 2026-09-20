@@ -225,7 +225,18 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
     /// the credential socket instead of the socket trusting whoever can reach it.</summary>
     private readonly PKS.Infrastructure.Services.Runner.IJobTokenService? _jobTokens;
 
+    /// <summary>Optional for the same reason again. When DI supplies it, startup notices a runner
+    /// that is already polling instead of quietly becoming the second one.</summary>
+    private readonly PKS.Infrastructure.Services.Runner.IRunnerProcessScanner? _processScanner;
     private readonly PKS.Infrastructure.Services.TypeSafe.ITypeSafeCredentialService? _typeSafe;
+
+    /// <summary>Optional like the rest of the tail. When present and configured (`pks acs init`),
+    /// the runner advertises the <c>sms</c> capability and drains the platform's SMS delivery queue
+    /// on its own loop — see <see cref="RunDeliveryLoopAsync"/>.</summary>
+    private readonly PKS.Infrastructure.Services.Acs.IAcsSmsService? _acsSms;
+
+    /// <summary>The capability string the platform routes SMS deliveries on.</summary>
+    internal const string SmsCapability = "sms";
 
     public AgenticsRunnerRunCommand(
         IAgenticsRunnerConfigurationService configService,
@@ -245,7 +256,9 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         PKS.Infrastructure.Services.Runner.IRunnerReaper? reaper = null,
         IVaultCliService? vaultCli = null,
         PKS.Infrastructure.Services.Runner.IJobTokenService? jobTokens = null,
-        PKS.Infrastructure.Services.TypeSafe.ITypeSafeCredentialService? typeSafe = null)
+        PKS.Infrastructure.Services.Runner.IRunnerProcessScanner? processScanner = null,
+        PKS.Infrastructure.Services.TypeSafe.ITypeSafeCredentialService? typeSafe = null,
+        PKS.Infrastructure.Services.Acs.IAcsSmsService? acsSms = null)
     {
         _configService = configService ?? throw new ArgumentNullException(nameof(configService));
         _spawnerService = spawnerService ?? throw new ArgumentNullException(nameof(spawnerService));
@@ -266,7 +279,9 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         // service only shells out to, so there is nothing to register and nothing to configure.
         _vaultCli = vaultCli ?? new VaultCliService();
         _jobTokens = jobTokens;
+        _processScanner = processScanner;
         _typeSafe = typeSafe;
+        _acsSms = acsSms;
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -280,11 +295,26 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         {
             DisplayBanner();
 
+            // A tmux pane has a real terminal, so --no-prompt is the only thing that distinguishes a
+            // detached runner from an operator sitting in front of one. Without it passed through,
+            // both startup gates would park on a question in a pane nobody is watching — which looks
+            // exactly like a runner that started fine but never claims a job.
+            var startupCanPrompt = settings.NoPrompt ? false : (bool?)null;
+
+            // Is one already running? Before the sweep, because the sweep decides what to reap from
+            // whether a container is idle, and a live runner can start a job in one.
+            if (_processScanner is not null)
+            {
+                await PKS.Commands.Runner.RunnerDuplicateGuard.RunAsync(
+                    _processScanner, _console, "agentics", startupCanPrompt);
+            }
+
             // Reap what the previous runner could not. A runner killed by a reboot never reaches its
             // job-end cleanup, so startup is the only moment its leftovers get collected.
             if (_reaper is not null)
             {
-                await PKS.Commands.Runner.RunnerStartupSweep.RunAsync(_reaper, _console);
+                await PKS.Commands.Runner.RunnerStartupSweep.RunAsync(
+                    _reaper, _console, "agentics", startupCanPrompt);
             }
 
             // ── OTEL startup diagnostics ──────────────────────────────────────────────
@@ -646,6 +676,12 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
                 // lifetime and must be restarted. PollAndDispatchOnceAsync enforces that by passing
                 // `spawnEnabled: credentialServer != null` into ComputeCapabilitiesAsync, so we
                 // never advertise a spawn capability we would then decline every job for.
+                // SMS deliveries are drained on their own Task: the main loop awaits
+                // ExecuteSpawnModeAsync for the whole life of a station job, and the one-time code
+                // a station asks us to forward is needed in the middle of exactly that job.
+                if (_acsSms != null)
+                    TrackRunningJob(Task.Run(() => RunDeliveryLoopAsync(registration, cts.Token), cts.Token));
+
                 var jobsProcessed = 0;
                 while (!cts.Token.IsCancellationRequested)
                 {
@@ -1054,6 +1090,10 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         availableCapabilities.Add("chat-llm:v1");
         availableCapabilities.Add("git:push");
         availableCapabilities.Add("git-distribute");
+        // sms is offered whenever the service exists; whether it is actually advertised is decided
+        // live every poll by IsConfiguredAsync (`pks acs init` done + sender enabled + recipient).
+        if (_acsSms != null)
+            availableCapabilities.Add(SmsCapability);
 
         if (!dockerAvailable && !settings.InProcess)
         {
@@ -1306,6 +1346,12 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         // pks-cli handles the target-side credentials internally (e.g. ADO PAT setup).
         if (hasGitCredentials)
             caps.Add("git-distribute");
+
+        // sms: only while `pks acs init` has left an enabled sender and a recipient on this host.
+        // The platform stores whatever the poll body says (updateRunnerLastSeen overwrites
+        // capabilities every poll), so this — not the registration — is the declaration.
+        if (_acsSms != null && await _acsSms.IsConfiguredAsync(ct))
+            caps.Add(SmsCapability);
 
         // Operator override (RunnerProfile.Capabilities, Phase 3): narrow, never widen. Re-applied
         // every poll (not just once at configure time) so a capability the operator opted into stays
@@ -3564,6 +3610,134 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         if (m.Contains("devcontainer up") || m.Contains("running devcontainer")) return "provisioning_devcontainer";
         if (m.Contains("resolving devcontainer template") || m.Contains("applying stage devcontainer") || m.Contains("stage devcontainer files written")) return "provisioning_template";
         return null;
+    }
+
+    /// <summary>
+    /// Drains the platform's SMS delivery queue for this runner: <c>GET …/runners/deliveries</c>,
+    /// send each through <see cref="_acsSms"/>, <c>POST …/runners/deliveries/{id}</c> with the
+    /// outcome. Independent of the job poll so it keeps running while a station job blocks the main
+    /// loop. Sleeps <see cref="DeliveryPollInterval"/> between rounds, backing off to
+    /// <see cref="DeliveryMaxBackoff"/> on errors; an unconfigured service just waits.
+    /// The message text is never logged — it is usually a one-time code.
+    /// </summary>
+    internal async Task RunDeliveryLoopAsync(AgenticsRunnerRegistration registration, CancellationToken ct)
+    {
+        if (_acsSms == null) return;
+        var delay = DeliveryPollInterval;
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                if (await _acsSms.IsConfiguredAsync(ct))
+                {
+                    await DrainDeliveriesOnceAsync(registration, ct);
+                    delay = DeliveryPollInterval;
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _console.MarkupLine($"[yellow]SMS delivery poll error: {ex.Message.EscapeMarkup()}[/]");
+                delay = TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, DeliveryMaxBackoff.Ticks));
+            }
+
+            try
+            {
+                await Task.Delay(delay, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
+    }
+
+    internal static readonly TimeSpan DeliveryPollInterval = TimeSpan.FromSeconds(5);
+    internal static readonly TimeSpan DeliveryMaxBackoff = TimeSpan.FromSeconds(60);
+
+    /// <summary>One round of the delivery loop. <c>internal</c> so a test can drive it without
+    /// the timer. Returns how many deliveries were attempted.</summary>
+    internal async Task<int> DrainDeliveriesOnceAsync(AgenticsRunnerRegistration registration, CancellationToken ct)
+    {
+        if (_acsSms == null) return 0;
+
+        using var client = _httpClientFactory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", registration.Token);
+        var baseUrl = $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}";
+
+        using var response = await client.GetAsync($"{baseUrl}/runners/deliveries", ct);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound || response.StatusCode == System.Net.HttpStatusCode.NoContent)
+            return 0; // platform without the queue yet, or nothing queued
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException($"GET runners/deliveries returned {(int)response.StatusCode}");
+
+        var body = await response.Content.ReadFromJsonAsync<DeliveryListResponse>(JsonOptions, ct);
+        var deliveries = body?.Deliveries ?? new List<RunnerDelivery>();
+        var attempted = 0;
+
+        foreach (var delivery in deliveries)
+        {
+            if (ct.IsCancellationRequested) break;
+            if (string.IsNullOrEmpty(delivery.Id)) continue;
+            attempted++;
+
+            object ack;
+            if (!string.Equals(delivery.Channel, SmsCapability, StringComparison.OrdinalIgnoreCase))
+            {
+                ack = new { status = "failed", error = $"runner cannot deliver channel '{delivery.Channel}'" };
+            }
+            else if (string.IsNullOrWhiteSpace(delivery.Message))
+            {
+                ack = new { status = "failed", error = "empty message" };
+            }
+            else
+            {
+                var result = await _acsSms.SendAsync(delivery.Message, ct: ct);
+                if (result.Ok)
+                {
+                    _console.MarkupLine($"[green]SMS delivery {delivery.Id.EscapeMarkup()} sent[/] [dim]({delivery.Message.Length} chars{(delivery.JobId != null ? $", job {delivery.JobId.EscapeMarkup()}" : "")})[/]");
+                    ack = new { status = "sent", messageId = result.MessageId, truncated = result.Truncated };
+                }
+                else
+                {
+                    _console.MarkupLine($"[yellow]SMS delivery {delivery.Id.EscapeMarkup()} failed:[/] {(result.Error ?? "unknown").EscapeMarkup()}");
+                    ack = new { status = "failed", error = result.Error ?? "unknown error" };
+                }
+            }
+
+            try
+            {
+                using var ackResponse = await client.PostAsJsonAsync($"{baseUrl}/runners/deliveries/{Uri.EscapeDataString(delivery.Id)}", ack, ct);
+                if (!ackResponse.IsSuccessStatusCode)
+                    _console.MarkupLine($"[yellow]SMS delivery {delivery.Id.EscapeMarkup()}: ack returned {(int)ackResponse.StatusCode}[/]");
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _console.MarkupLine($"[yellow]SMS delivery {delivery.Id.EscapeMarkup()}: ack failed: {ex.Message.EscapeMarkup()}[/]");
+            }
+        }
+
+        return attempted;
+    }
+
+    /// <summary>Response wrapper for <c>GET /runners/deliveries</c>.</summary>
+    internal sealed class DeliveryListResponse
+    {
+        public List<RunnerDelivery> Deliveries { get; set; } = new();
+    }
+
+    /// <summary>One queued notification the platform wants this runner to send.</summary>
+    internal sealed class RunnerDelivery
+    {
+        public string Id { get; set; } = "";
+        public string Channel { get; set; } = "";
+        public string Message { get; set; } = "";
+        public string? Tag { get; set; }
+        public string? JobId { get; set; }
     }
 
     private async Task PostJobProgressAsync(

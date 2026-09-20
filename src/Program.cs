@@ -552,6 +552,10 @@ services.AddSingleton<PKS.Infrastructure.Services.Expo.IExpoCredentialService,
 // socket for assembly-line stations and self-hosted CI jobs, never exported into a container.
 services.AddSingleton<PKS.Infrastructure.Services.TypeSafe.ITypeSafeCredentialService,
     PKS.Infrastructure.Services.TypeSafe.TypeSafeCredentialService>();
+// SMS through the user's own Azure Communication Services resource (Entra sign-in from the tenant
+// store, no connection string). The runner advertises `sms` only while IsConfiguredAsync is true.
+services.AddSingleton<PKS.Infrastructure.Services.Acs.IAcsSmsService,
+    PKS.Infrastructure.Services.Acs.AcsSmsService>();
 services.AddSingleton<ICoolifyConfigurationService, CoolifyConfigurationService>();
 services.AddSingleton<ICoolifyLookupService, CoolifyLookupService>();
 services.AddSingleton<ICoolifyApiService, CoolifyApiService>();
@@ -574,6 +578,7 @@ services.AddSingleton<FirecrackerNetworkManager>();
 services.AddSingleton<IGitHubActionsService, GitHubActionsService>();
 services.AddSingleton<IProcessRunner, ProcessRunner>();
 services.AddSingleton<IRunnerReaper, RunnerReaper>();
+services.AddSingleton<IRunnerProcessScanner, RunnerProcessScanner>();
 services.AddSingleton<IInteractiveProcessLauncher, InteractiveProcessLauncher>();
 services.AddSingleton<IRunnerContainerService, RunnerContainerService>();
 services.AddSingleton<INamedContainerPool, NamedContainerPool>();
@@ -1634,6 +1639,33 @@ app.Configure(config =>
         la.AddCommand<LogAnalyticsStatusCommand>("status")
             .WithDescription("Show registered Log Analytics workspaces, connection tests and tenant sign-in state")
             .WithExample(new[] { "loganalytics", "status" });
+    });
+
+    // Azure Communication Services: SMS senders and the runner's `sms` capability
+    config.AddBranch<PKS.Commands.Acs.AcsSettings>("acs", acs =>
+    {
+        acs.SetDescription("Manage the Azure Communication Services SMS senders this host (and its runner) can send from");
+
+        acs.AddCommand<PKS.Commands.Acs.AcsInitCommand>("init")
+            .WithDescription("Sign in, discover SMS-capable phone numbers, add an alphanumeric sender id, pick the default sender and recipient")
+            .WithExample(new[] { "acs", "init" })
+            .WithExample(new[] { "acs", "init", "--subscription", "<sub-id>" })
+            .WithExample(new[] { "acs", "init", "--reauth", "<tenant-id>" })
+            .WithExample(new[] { "acs", "init", "--enable", "+4566339237" })
+            .WithExample(new[] { "acs", "init", "--list" });
+
+        acs.AddCommand<PKS.Commands.Acs.AcsStatusCommand>("status")
+            .WithDescription("Show registered senders, defaults, whether the runner advertises sms, and tenant sign-in state")
+            .WithExample(new[] { "acs", "status" });
+
+        acs.AddBranch<PKS.Commands.Acs.AcsSettings>("sms", sms =>
+        {
+            sms.SetDescription("Send SMS");
+            sms.AddCommand<PKS.Commands.Acs.AcsSmsSendCommand>("send")
+                .WithDescription("Send one SMS through the configured sender (recipient prompted, default from `pks acs init`)")
+                .WithExample(new[] { "acs", "sms", "send", "Hello from pks" })
+                .WithExample(new[] { "acs", "sms", "send" });
+        });
     });
 
     // Raw KQL against the configured Log Analytics workspace

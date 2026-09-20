@@ -20,7 +20,8 @@ public sealed class AzureAuthExpiredException : Exception
 
     public AzureAuthExpiredException(string tenantId, Exception? innerException = null)
         : base($"Azure sign-in for tenant '{tenantId}' is missing, expired or revoked. " +
-               $"Run `pks loganalytics init --reauth {tenantId}` to sign in again.", innerException)
+               $"Run the init command that registered the resource with `--reauth {tenantId}` " +
+               $"(e.g. `pks loganalytics init --reauth {tenantId}` or `pks acs init --reauth {tenantId}`) to sign in again.", innerException)
     {
         TenantId = tenantId;
     }

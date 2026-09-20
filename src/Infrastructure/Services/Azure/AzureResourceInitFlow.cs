@@ -335,6 +335,7 @@ public sealed class AzureResourceInitFlow : IAzureResourceInitFlow
                         .Select(c => Entry(kind, tenantId, subscription, c.Name, c.Properties.AppId, c.Id)),
                     AzureResourceKind.Storage => (await _discovery.ListStorageAccountsAsync(tenantId, subscription.SubscriptionId, ct))
                         .Select(a => Entry(kind, tenantId, subscription, a.Name, a.Name, a.Id)),
+                    AzureResourceKind.CommunicationServices => await DiscoverSmsSendersAsync(tenantId, subscription, warnings, ct),
                     _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
                 };
                 result.Entries.AddRange(entries.Where(e => !string.IsNullOrWhiteSpace(e.Key)));
@@ -353,6 +354,84 @@ public sealed class AzureResourceInitFlow : IAzureResourceInitFlow
                 warnings.Add($"Subscription {subscription.DisplayName} ({subscription.SubscriptionId}) failed: {ex.Message}");
             }
         }
+    }
+
+    /// <summary>
+    /// One entry per SMS-capable sender rather than per resource: every phone number whose
+    /// <c>capabilities.sms</c> allows outbound, plus the alphanumeric sender ids the user added by
+    /// hand earlier (<c>pks acs init</c> keeps them on the resource they were attached to, so they
+    /// are re-emitted here and never flagged "not found"). A resource whose data plane refuses us
+    /// (no RBAC role) becomes a warning, not a failed subscription — the other resources still count.
+    /// </summary>
+    private async Task<List<AzureResourceEntry>> DiscoverSmsSendersAsync(string tenantId, AzureSubscription subscription, List<string> warnings, CancellationToken ct)
+    {
+        var entries = new List<AzureResourceEntry>();
+        var resources = await _discovery.ListCommunicationServicesAsync(tenantId, subscription.SubscriptionId, ct);
+        if (resources.Count == 0) return entries;
+
+        var known = await _registry.ListAsync(AzureResourceKind.CommunicationServices);
+        foreach (var resource in resources)
+        {
+            var endpoint = resource.Properties.HostName;
+            if (string.IsNullOrWhiteSpace(endpoint))
+            {
+                warnings.Add($"Communication Services resource {resource.Name} has no hostName; skipped.");
+                continue;
+            }
+
+            List<AcsPhoneNumber> numbers;
+            try
+            {
+                numbers = await _discovery.ListAcsPhoneNumbersAsync(tenantId, endpoint, ct);
+            }
+            catch (AzureAuthExpiredException) { throw; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (HttpRequestException ex) when (ex.StatusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden)
+            {
+                warnings.Add($"{resource.Name}: the data plane refused the signed-in identity ({(int)ex.StatusCode!}). Give it a role on the resource (Contributor is what Microsoft documents) and run init again.");
+                continue;
+            }
+
+            foreach (var number in numbers.Where(n => n.Capabilities.CanSendSms && !string.IsNullOrWhiteSpace(n.PhoneNumber)))
+            {
+                var entry = SmsSenderEntry(tenantId, subscription, resource, number.PhoneNumber,
+                    $"{FormatPhone(number.PhoneNumber)} · {number.PhoneNumberType.ToLowerInvariant()} · {resource.Name}");
+                entries.Add(entry);
+            }
+
+            // Alphanumeric ids never come from discovery; carry the hand-added ones forward.
+            foreach (var alpha in known.Where(k => IsAlphanumericSender(k.Key) && SameAcsResource(k, resource)))
+                entries.Add(SmsSenderEntry(tenantId, subscription, resource, alpha.Key, alpha.Name));
+        }
+        return entries;
+    }
+
+    /// <summary>Builds a sender entry. The synthetic <c>ResourceId</c> keeps two senders on the same
+    /// resource apart in the registry (its identity is Kind + ResourceId) while still parsing to the
+    /// right resource group.</summary>
+    public static AzureResourceEntry SmsSenderEntry(string? tenantId, AzureSubscription? subscription, CommunicationServiceResource resource, string sender, string name)
+    {
+        var entry = Entry(AzureResourceKind.CommunicationServices, tenantId ?? "", subscription ?? new AzureSubscription(), name, sender, $"{resource.Id}/smsSenders/{sender}");
+        entry.TenantId = tenantId;
+        entry.Endpoint = resource.Properties.HostName;
+        if (subscription == null) { entry.SubscriptionId = null; entry.SubscriptionName = null; }
+        return entry;
+    }
+
+    public static bool IsAlphanumericSender(string key) => !string.IsNullOrEmpty(key) && !key.StartsWith('+');
+
+    private static bool SameAcsResource(AzureResourceEntry entry, CommunicationServiceResource resource)
+    {
+        if (!string.IsNullOrEmpty(entry.Endpoint) && entry.Endpoint.Equals(resource.Properties.HostName, StringComparison.OrdinalIgnoreCase)) return true;
+        return !string.IsNullOrEmpty(entry.ResourceId) && entry.ResourceId.StartsWith(resource.Id + "/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>+4566339237 → +45 66 33 92 37 (Danish grouping); other countries keep the raw E.164.</summary>
+    public static string FormatPhone(string e164)
+    {
+        if (e164.StartsWith("+45") && e164.Length == 11)
+            return $"+45 {e164[3..5]} {e164[5..7]} {e164[7..9]} {e164[9..11]}";
+        return e164;
     }
 
     private static AzureResourceEntry Entry(AzureResourceKind kind, string tenantId, AzureSubscription subscription, string name, string key, string resourceId) => new()
@@ -454,6 +533,7 @@ public sealed class AzureResourceInitFlow : IAzureResourceInitFlow
         AzureResourceKind.LogAnalytics => "Log Analytics workspace",
         AzureResourceKind.AppInsights => "Application Insights resource",
         AzureResourceKind.Storage => "storage account",
+        AzureResourceKind.CommunicationServices => "SMS sender",
         _ => kind.ToString(),
     };
 
@@ -462,6 +542,7 @@ public sealed class AzureResourceInitFlow : IAzureResourceInitFlow
         AzureResourceKind.LogAnalytics => "loganalytics",
         AzureResourceKind.AppInsights => "appinsights",
         AzureResourceKind.Storage => "fileshare",
+        AzureResourceKind.CommunicationServices => "acs",
         _ => kind.ToString().ToLowerInvariant(),
     };
 }

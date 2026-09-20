@@ -2,14 +2,18 @@ using System.Text.Json.Serialization;
 
 namespace PKS.Infrastructure.Services.Azure;
 
-/// <summary>The verticals that register Azure resources: <c>pks loganalytics</c>, <c>pks appinsights</c>
-/// and <c>pks fileshare</c>/<c>storage</c>.</summary>
+/// <summary>The verticals that register Azure resources: <c>pks loganalytics</c>, <c>pks appinsights</c>,
+/// <c>pks fileshare</c>/<c>storage</c> and <c>pks acs</c> (Communication Services SMS senders).</summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum AzureResourceKind
 {
     LogAnalytics,
     AppInsights,
-    Storage
+    Storage,
+
+    /// <summary>One entry per SMS <em>sender</em> — a phone number or an alphanumeric sender id —
+    /// on an Azure Communication Services resource, not one per resource.</summary>
+    CommunicationServices
 }
 
 /// <summary>
@@ -40,4 +44,9 @@ public sealed class AzureResourceEntry
     public string? ResourceGroup { get; set; }
     public bool Enabled { get; set; }
     public DateTime DiscoveredAt { get; set; }
+
+    /// <summary>Data-plane host for kinds that have one (<see cref="AzureResourceKind.CommunicationServices"/>:
+    /// the resource's <c>hostName</c>, e.g. <c>my-acs.europe.communication.azure.com</c>). Not a
+    /// secret. <c>null</c> for the other kinds.</summary>
+    public string? Endpoint { get; set; }
 }

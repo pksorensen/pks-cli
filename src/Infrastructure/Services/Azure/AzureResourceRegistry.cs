@@ -123,6 +123,7 @@ public sealed class AzureResourceRegistry : IAzureResourceRegistry
                 existing.SubscriptionId = incoming.SubscriptionId;
                 existing.SubscriptionName = incoming.SubscriptionName;
                 existing.ResourceGroup = incoming.ResourceGroup;
+                if (incoming.Endpoint != null) existing.Endpoint = incoming.Endpoint;
                 if (incoming.TenantId != null) existing.TenantId = incoming.TenantId;
                 if (incoming.DiscoveredAt != default) existing.DiscoveredAt = incoming.DiscoveredAt;
                 // Enabled is the user's decision and survives re-discovery.

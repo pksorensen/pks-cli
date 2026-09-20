@@ -64,6 +64,10 @@ public sealed class AzureResourceInitFlowTests : IDisposable
             .ReturnsAsync(new List<AppInsightsComponent>());
         _discovery.Setup(d => d.ListStorageAccountsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<StorageAccountInfo>());
+        _discovery.Setup(d => d.ListCommunicationServicesAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<CommunicationServiceResource>());
+        _discovery.Setup(d => d.ListAcsPhoneNumbersAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<AcsPhoneNumber>());
     }
 
     public void Dispose()
@@ -622,5 +626,99 @@ public sealed class AzureResourceInitFlowTests : IDisposable
         entry.Key.Should().Be("stprod");
         entry.Name.Should().Be("stprod");
         entry.ResourceGroup.Should().Be("rg-st");
+    }
+
+    // ── Communication Services (SMS senders) ───────────────────────────────────
+
+    private static CommunicationServiceResource AcsResource(string name, string sub = Sub1) => new()
+    {
+        Id = $"/subscriptions/{sub}/resourceGroups/rg-{name}/providers/Microsoft.Communication/communicationServices/{name}",
+        Name = name,
+        Location = "global",
+        Properties = new CommunicationServiceProperties { HostName = $"{name}.europe.communication.azure.com", DataLocation = "Europe" },
+    };
+
+    private static AcsPhoneNumber Number(string e164, string type, string sms) => new()
+    {
+        Id = e164, PhoneNumber = e164, CountryCode = "DK", PhoneNumberType = type,
+        Capabilities = new AcsPhoneNumberCapabilities { Sms = sms, Calling = "none" },
+    };
+
+    [Fact]
+    public async Task CommunicationServices_OneEntryPerSmsCapableNumber_NoneForVoiceOnly()
+    {
+        KnowTenant(Tenant1);
+        Subscriptions(Tenant1, Sub1);
+        var acs = AcsResource("com-prd");
+        _discovery.Setup(d => d.ListCommunicationServicesAsync(Tenant1, Sub1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<CommunicationServiceResource> { acs });
+        _discovery.Setup(d => d.ListAcsPhoneNumbersAsync(Tenant1, acs.Properties.HostName, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<AcsPhoneNumber>
+            {
+                Number("+4566339237", "mobile", "inbound+outbound"),
+                Number("+4570000000", "geographic", "none"),
+                Number("+4580000000", "tollFree", "outbound"),
+            });
+
+        var rc = await CreateFlow().RunAsync(AzureResourceKind.CommunicationServices, new AzureResourceInitOptions(), NonInteractiveConsole());
+
+        rc.Should().Be(0);
+        var all = await _registry.ListAsync(AzureResourceKind.CommunicationServices);
+        all.Select(e => e.Key).Should().BeEquivalentTo(new[] { "+4566339237", "+4580000000" });
+
+        var mobile = await EntryAsync("+4566339237", AzureResourceKind.CommunicationServices);
+        mobile.Name.Should().Be("+45 66 33 92 37 · mobile · com-prd");
+        mobile.Endpoint.Should().Be("com-prd.europe.communication.azure.com");
+        mobile.ResourceGroup.Should().Be("rg-com-prd");
+        mobile.TenantId.Should().Be(Tenant1);
+        mobile.Enabled.Should().BeFalse("nothing is enabled until the user ticks it");
+        mobile.ResourceId.Should().NotBe((await EntryAsync("+4580000000", AzureResourceKind.CommunicationServices)).ResourceId,
+            "two senders on one resource must not collapse into one registry entry");
+    }
+
+    [Fact]
+    public async Task CommunicationServices_AlphanumericSenderAddedByHand_SurvivesRediscovery()
+    {
+        KnowTenant(Tenant1);
+        Subscriptions(Tenant1, Sub1);
+        var acs = AcsResource("com-prd");
+        _discovery.Setup(d => d.ListCommunicationServicesAsync(Tenant1, Sub1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<CommunicationServiceResource> { acs });
+        _discovery.Setup(d => d.ListAcsPhoneNumbersAsync(Tenant1, acs.Properties.HostName, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<AcsPhoneNumber> { Number("+4566339237", "mobile", "inbound+outbound") });
+
+        var alpha = AzureResourceInitFlow.SmsSenderEntry(Tenant1, new AzureSubscription { SubscriptionId = Sub1 }, acs, "Agentics", "Agentics · alphanumeric · com-prd");
+        alpha.Enabled = true;
+        await _registry.UpsertAsync(new[] { alpha });
+
+        var rc = await CreateFlow().RunAsync(AzureResourceKind.CommunicationServices, new AzureResourceInitOptions(), NonInteractiveConsole());
+
+        rc.Should().Be(0);
+        var kept = await EntryAsync("Agentics", AzureResourceKind.CommunicationServices);
+        kept.Enabled.Should().BeTrue();
+        kept.Endpoint.Should().Be(acs.Properties.HostName);
+        (await _registry.ListAsync(AzureResourceKind.CommunicationServices)).Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task CommunicationServices_DataPlaneForbidden_WarnsAndKeepsOtherResources()
+    {
+        KnowTenant(Tenant1);
+        Subscriptions(Tenant1, Sub1);
+        var noRole = AcsResource("com-norole");
+        var ok = AcsResource("com-ok");
+        _discovery.Setup(d => d.ListCommunicationServicesAsync(Tenant1, Sub1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<CommunicationServiceResource> { noRole, ok });
+        _discovery.Setup(d => d.ListAcsPhoneNumbersAsync(Tenant1, noRole.Properties.HostName, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("forbidden", null, System.Net.HttpStatusCode.Forbidden));
+        _discovery.Setup(d => d.ListAcsPhoneNumbersAsync(Tenant1, ok.Properties.HostName, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<AcsPhoneNumber> { Number("+4566339237", "mobile", "outbound") });
+
+        var console = NonInteractiveConsole();
+        var rc = await CreateFlow().RunAsync(AzureResourceKind.CommunicationServices, new AzureResourceInitOptions(), console);
+
+        rc.Should().Be(0);
+        console.Output.Should().Contain("com-norole").And.Contain("403");
+        (await _registry.ListAsync(AzureResourceKind.CommunicationServices)).Should().ContainSingle(e => e.Key == "+4566339237");
     }
 }
