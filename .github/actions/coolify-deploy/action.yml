@@ -193,8 +193,11 @@ runs:
               # accept either the bare slug or a URL ending in "/owner/repo".
               APP_UUID=$(echo "$APPS_JSON" | jq -r --arg repo "$REPO_SLUG" --arg env "$ENV" --arg app "$APP_SELECTOR" '
                 def norm: (. // "") | ascii_downcase | sub("\\.git$"; "") | sub("/$"; "");
+                # Three separators, because Coolify stores whichever form the source produced:
+                # the bare slug, "https://host/owner/repo", and the scp form a deploy-key source
+                # writes, "git@host:owner/repo".
                 def repomatch($r): (norm) as $g | ($r | ascii_downcase) as $t
-                  | ($g == $t) or ($g | endswith("/" + $t));
+                  | ($g == $t) or ($g | endswith("/" + $t)) or ($g | endswith(":" + $t));
                 [ .[] | select(
                   (.git_repository | repomatch($repo)) and
                   ((.environment.name // "") == $env) and
