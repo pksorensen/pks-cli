@@ -404,10 +404,12 @@ runs:
 
           # Fetch deployment logs for debugging
           DEPLOY_DETAIL=$(api_get "/coolify/deployments/${DEPLOY_UUID}")
-          LOGS=$(echo "$DEPLOY_DETAIL" | jq -r '.logs // empty')
-
-          # Pretty-print logs if it's a JSON array, else fall back to raw
-          if echo "$LOGS" | jq -e 'if type == "array" then true else false end' > /dev/null 2>&1; then
+          if ! echo "$DEPLOY_DETAIL" | jq -e . > /dev/null 2>&1; then
+            echo "=== Deployment Logs ==="
+            echo "$DEPLOY_DETAIL"
+            echo "=== End Deployment Logs ==="
+          elif [ "$(echo "$DEPLOY_DETAIL" | jq -r '.logs | type // "null"')" = "array" ]; then
+            LOGS=$(echo "$DEPLOY_DETAIL" | jq -c '.logs')
             VISIBLE_COUNT=$(echo "$LOGS" | jq '[.[] | select(.hidden == false)] | length')
             HIDDEN_COUNT=$(echo "$LOGS" | jq '[.[] | select(.hidden == true)] | length')
             echo ""
