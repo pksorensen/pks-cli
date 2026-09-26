@@ -49,6 +49,28 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.6.0](https://github.com/pksorensen/pks-cli/compare/v7.5.0...v7.6.0) (2026-09-26)
+
+
+### Features
+
+* **acs:** pks acs init/status/sms send and an sms runner capability ([730ab7f](https://github.com/pksorensen/pks-cli/commit/730ab7fbf81b67764e74e96ec8b15e60b3f09761))
+* **actions:** publish-assembly-line composite action (marketplace trusted publishing) ([2f98d4b](https://github.com/pksorensen/pks-cli/commit/2f98d4b4e41c16af421b61cbbb1049f2be8115a6))
+* **runtime:** add extensible capability host ([#139](https://github.com/pksorensen/pks-cli/issues/139)) ([1a20781](https://github.com/pksorensen/pks-cli/commit/1a20781c7d19d7eb4ee298f6dd6a3a94aa6dd95e))
+* **speech:** add provider-neutral realtime transcription runtime ([9e9810a](https://github.com/pksorensen/pks-cli/commit/9e9810a3938fd2d7519cf0273cb8e41ff8a2e53d))
+* **typesafe:** pks typesafe init/allow/ask + Jev proxy on the credential socket ([ed664f8](https://github.com/pksorensen/pks-cli/commit/ed664f8408d240ca86022479011b6b34e852b64b))
+
+
+### Bug Fixes
+
+* **acs:** GSM-7 truncation marker and a status warning for narrowed runner profiles ([3754312](https://github.com/pksorensen/pks-cli/commit/37543123f93d0e347927fdd2d9c690aa24e400bc))
+* **actions:** publish-assembly-line counts working stations only, truncates error bodies ([3136caa](https://github.com/pksorensen/pks-cli/commit/3136caa487cbbd8879c0c8d1f31321aa23648e00))
+* **coolify-deploy:** match the scp form of git_repository in direct mode ([a674309](https://github.com/pksorensen/pks-cli/commit/a6743095c9081d01ad606c2feee9a4a1dd477465))
+* **coolify-deploy:** preserve string build logs ([e678e08](https://github.com/pksorensen/pks-cli/commit/e678e0856ee72b8dff3e4d8430640853e1d27ede))
+* **coolify:** direct mode POSTs to /api/v1/deploy like the proxy already does ([9db04a3](https://github.com/pksorensen/pks-cli/commit/9db04a3e32ff5af2e88559a098c3cdbfd426d36d))
+* **coolify:** resolve the deploy target exactly, and let a repo deploy an app it does not own ([8acb48b](https://github.com/pksorensen/pks-cli/commit/8acb48bfe122599e51a77540c84154b88c35b7ed))
+* **runner:** drop the half-committed process-scanner hunks so main builds again ([dc51eb4](https://github.com/pksorensen/pks-cli/commit/dc51eb400314b69ed55ff89f22387ec7b0b103f7))
+
 ## [7.5.0](https://github.com/pksorensen/pks-cli/compare/v7.4.0...v7.5.0) (2026-09-17)
 
 

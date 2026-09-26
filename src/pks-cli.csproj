@@ -14,7 +14,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>pks</ToolCommandName>
     <PackageId>pks-cli</PackageId>
-    <PackageVersion>7.5.0</PackageVersion>
+    <PackageVersion>7.6.0</PackageVersion>
     <Authors>PKS Team</Authors>
     <Description>The next agentic CLI for .NET developers - Poul's Killer Swarms</Description>
     <PackageTags>cli;dotnet;agentic;developer-tools</PackageTags>
@@ -24,10 +24,10 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="PKS.CLI.Tests"/>
-    <Compile Remove="pks-speech-runtime/**/*.cs" />
-    <None Remove="pks-speech-runtime/**" />
-    <Compile Remove="pks-cli-runtime/**/*.cs" />
-    <None Remove="pks-cli-runtime/**" />
+    <Compile Remove="pks-speech-runtime/**/*.cs"/>
+    <None Remove="pks-speech-runtime/**"/>
+    <Compile Remove="pks-cli-runtime/**/*.cs"/>
+    <None Remove="pks-cli-runtime/**"/>
   </ItemGroup>
 
   <!-- Self-Contained Build Configuration (for npm distribution) -->
