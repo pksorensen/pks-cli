@@ -1,10 +1,10 @@
-name: Release speech runtime
+name: Release pks-cli runtime
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: Immutable speech runtime version
+        description: Immutable pks-cli runtime version
         required: true
         default: 0.1.0
         type: string
@@ -18,7 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      IMAGE: registry.agentics.dk/agentics/pks-cli-speech-runtime
+      IMAGE: registry.agentics.dk/agentics/pks-cli-runtime
+      LEGACY_IMAGE: registry.agentics.dk/agentics/pks-cli-speech-runtime
       VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@v4
@@ -33,7 +34,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile.speech-runtime
+          file: Dockerfile.runtime
           platforms: linux/amd64
           load: true
           tags: ${{ env.IMAGE }}:${{ env.VERSION }}
@@ -49,12 +50,16 @@ jobs:
           printf '%s' "$oidc" | docker login registry.agentics.dk \
             --username oauth2 --password-stdin
 
-      - name: Push image
+      - name: Push canonical and compatibility images
         shell: bash
         run: |
           docker push "$IMAGE:$VERSION"
           docker tag "$IMAGE:$VERSION" "$IMAGE:latest"
           docker push "$IMAGE:latest"
+          docker tag "$IMAGE:$VERSION" "$LEGACY_IMAGE:$VERSION"
+          docker push "$LEGACY_IMAGE:$VERSION"
+          docker tag "$IMAGE:$VERSION" "$LEGACY_IMAGE:latest"
+          docker push "$LEGACY_IMAGE:latest"
 
       - name: Log out
         if: always()

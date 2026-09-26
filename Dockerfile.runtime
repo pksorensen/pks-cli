@@ -1,0 +1,13 @@
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+COPY . .
+RUN dotnet restore src/pks-cli-runtime/pks-cli-runtime.csproj
+RUN dotnet publish src/pks-cli-runtime/pks-cli-runtime.csproj -c Release -o /app --no-restore /p:UseAppHost=false
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
+WORKDIR /app
+COPY --from=build /app/ ./
+ENV ASPNETCORE_URLS=http://+:8080 \
+    PKS_RUNTIME_CAPABILITIES=speech.realtime.transcribe
+EXPOSE 8080
+ENTRYPOINT ["dotnet", "pks-cli-runtime.dll"]
