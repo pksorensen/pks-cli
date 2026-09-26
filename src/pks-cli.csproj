@@ -26,6 +26,8 @@
     <InternalsVisibleTo Include="PKS.CLI.Tests"/>
     <Compile Remove="pks-speech-runtime/**/*.cs" />
     <None Remove="pks-speech-runtime/**" />
+    <Compile Remove="pks-cli-runtime/**/*.cs" />
+    <None Remove="pks-cli-runtime/**" />
   </ItemGroup>
 
   <!-- Self-Contained Build Configuration (for npm distribution) -->
