@@ -40,6 +40,7 @@ using PKS.Commands.Image;
 using PKS.Commands.Promptwall;
 using PKS.Commands.Tts;
 using PKS.Commands.Voice;
+using PKS.Commands.Runtime.Speech;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.Text;
@@ -76,7 +77,11 @@ var isFoundryProxy = commandArgs.Length > 2 &&
 // Skip banner for ado git-proxy (background daemon — clean stdout)
 var isAdoGitProxy = commandArgs.Length > 2 &&
                     commandArgs[1].Equals("ado", StringComparison.OrdinalIgnoreCase) &&
-                    commandArgs[2].Equals("git-proxy", StringComparison.OrdinalIgnoreCase);
+                   commandArgs[2].Equals("git-proxy", StringComparison.OrdinalIgnoreCase);
+
+// Skip banner for long-running provider runtimes.
+var isRuntime = commandArgs.Length > 1 &&
+                commandArgs[1].Equals("runtime", StringComparison.OrdinalIgnoreCase);
 
 // Skip banner for hooks commands with --json flag OR when it's a hook event command
 var hasJsonFlag = commandArgs.Any(a => a.Equals("--json", StringComparison.OrdinalIgnoreCase) ||
@@ -141,7 +146,7 @@ if (commandArgs.Any(a => a.Equals("--debug", StringComparison.OrdinalIgnoreCase)
     Environment.SetEnvironmentVariable("PKS_DEBUG", "1");
 
 // Display welcome banner with fancy ASCII art (unless we should skip it)
-if (!isMcpStdio && !isGitAskPass && !isFoundryProxy && !isAdoGitProxy && !noLogo && !isClaudeLimits && !(isHooksCommand && (hasJsonFlag || isHookEventCommand)))
+if (!isMcpStdio && !isGitAskPass && !isFoundryProxy && !isAdoGitProxy && !isRuntime && !noLogo && !isClaudeLimits && !(isHooksCommand && (hasJsonFlag || isHookEventCommand)))
 {
     DisplayWelcomeBanner();
 
@@ -1302,6 +1307,14 @@ app.Configure(config =>
         foundry.AddCommand<FoundryUsageCommand>("usage")
             .WithDescription("Show cost breakdown for the selected Foundry resource")
             .WithExample(new[] { "foundry", "usage" });
+    });
+
+    config.AddBranch("runtime", runtime =>
+    {
+        runtime.SetDescription("Run long-lived provider adapters used by Agentics gateways");
+        runtime.AddCommand<SpeechRuntimeCommand>("speech")
+            .WithDescription("Expose provider-neutral realtime speech over WebSocket")
+            .WithExample(new[] { "runtime", "speech", "--port", "8080" });
     });
 
     // Add Codex branch command — run the real codex CLI against Foundry (native, no translation).
