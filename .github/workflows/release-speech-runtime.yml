@@ -1,0 +1,61 @@
+name: Release speech runtime
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Immutable speech runtime version
+        required: true
+        default: 0.1.0
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      IMAGE: registry.agentics.dk/agentics/pks-cli-speech-runtime
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Validate version
+        shell: bash
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.speech-runtime
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.IMAGE }}:${{ env.VERSION }}
+
+      - name: Log in to registry.agentics.dk with GitHub OIDC
+        shell: bash
+        run: |
+          oidc=$(curl -fsS \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=registry.agentics.dk" | jq -r .value)
+          test -n "$oidc" && test "$oidc" != null
+          echo "::add-mask::$oidc"
+          printf '%s' "$oidc" | docker login registry.agentics.dk \
+            --username oauth2 --password-stdin
+
+      - name: Push image
+        shell: bash
+        run: |
+          docker push "$IMAGE:$VERSION"
+          docker tag "$IMAGE:$VERSION" "$IMAGE:latest"
+          docker push "$IMAGE:latest"
+
+      - name: Log out
+        if: always()
+        run: docker logout registry.agentics.dk

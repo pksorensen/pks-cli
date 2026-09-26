@@ -20,6 +20,8 @@
 **/*.md
 !README.md
 !CHANGELOG.md
+!src/Infrastructure/Resources/**/*.md
+!src/Infrastructure/Services/Writing/Resources/*.md
 
 # Git and version control
 .git/
