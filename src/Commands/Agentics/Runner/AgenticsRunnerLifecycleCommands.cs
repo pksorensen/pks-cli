@@ -97,6 +97,9 @@ public class AgenticsRunnerStartCommand : AsyncCommand<AgenticsRunnerStartComman
 
     public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
     {
+        if (string.IsNullOrEmpty(settings.Project) && InstallationContext.FromEnvironment() is { } installation)
+            return await InstallationRunnerMode.StartServiceAsync(installation, _console);
+
         AgenticsRunnerRegistration registration;
         try
         {

@@ -297,6 +297,11 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
             DisplayBanner();
 
             // Reap what the previous runner could not. A runner killed by a reboot never reaches its
+        // On a self-hosted box the installer describes the installation in the environment; with
+        // no --project, this process is the host runner for every project there.
+        if (string.IsNullOrEmpty(settings.Project) && InstallationContext.FromEnvironment() is { } installation)
+            return await InstallationRunnerMode.RunAsync(installation, _configService, _console);
+
             // job-end cleanup, so startup is the only moment its leftovers get collected.
             if (_reaper is not null)
             {
@@ -744,7 +749,7 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
                 new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", registration.Token);
             var body = new { jobResult = result, error };
             await httpClient.PatchAsJsonAsync(
-                $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}/runners/{registration.Id}",
+                $"{registration.ApiBase}/api/owners/{registration.Owner}/projects/{registration.Project}/runners/{registration.Id}",
                 body, ct);
         }
         catch
@@ -1367,7 +1372,7 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
             using var client = _httpClientFactory.CreateClient();
             client.DefaultRequestHeaders.Authorization =
                 new AuthenticationHeaderValue("Bearer", registration.Token);
-            var url = $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}/repo-info";
+            var url = $"{registration.ApiBase}/api/owners/{registration.Owner}/projects/{registration.Project}/repo-info";
             using var response = await client.GetAsync(url);
             // Unreachable or unparseable answers assume GitHub is required. That is the safe
             // direction: it costs an unnecessary auth preflight, where the opposite would skip a
@@ -1437,7 +1442,7 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
             new AuthenticationHeaderValue("Bearer", registration.Token);
 
         var response = await client.PostAsJsonAsync(
-            $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}/runners/jobs",
+            $"{registration.ApiBase}/api/owners/{registration.Owner}/projects/{registration.Project}/runners/jobs",
             new { capabilities },
             ct);
 
@@ -1653,7 +1658,7 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
 
         // OtlpProxy: same per-task stable dir pattern. Container-side TCP→Unix bridge (in start.sh)
         // forwards localhost:4318 to /var/run/pks-otlp/otlp.sock.
-        var otlpAnalysisBaseUrl = $"{new Uri(registration.Server).Scheme}://{new Uri(registration.Server).Host}{(new Uri(registration.Server).IsDefaultPort ? "" : $":{new Uri(registration.Server).Port}")}";
+        var otlpAnalysisBaseUrl = $"{new Uri(registration.ApiBase).Scheme}://{new Uri(registration.ApiBase).Host}{(new Uri(registration.ApiBase).IsDefaultPort ? "" : $":{new Uri(registration.ApiBase).Port}")}";
         var otlpSocketDir = taskKeyForSockets != null
             ? Path.Combine(Path.GetTempPath(), $"pks-otlp-{taskKeyForSockets}")
             : null;
@@ -1690,7 +1695,7 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", registration.Token);
 
-        var baseUrl = $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}";
+        var baseUrl = $"{registration.ApiBase}/api/owners/{registration.Owner}/projects/{registration.Project}";
 
         // 1. Claim the job so findQueuedJobs stops returning it
         _console.MarkupLine($"[cyan]Claiming job {job.Id}...[/]");
@@ -3056,7 +3061,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             {
                 try
                 {
-                    var metaUrl = $"{registration.Server.TrimEnd('/')}/api/lives/metadata";
+                    var metaUrl = $"{registration.ApiBase.TrimEnd('/')}/api/lives/metadata";
                     var metaReq = new HttpRequestMessage(HttpMethod.Post, metaUrl);
                     metaReq.Content = JsonContent.Create(new
                     {
@@ -3078,7 +3083,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             // Store task and system prompts on the session so the activity log can display them.
             try
             {
-                var sessionPatchUrl = $"{registration.Server.TrimEnd('/')}/api/lives/sessions/{sessionIdValue}";
+                var sessionPatchUrl = $"{registration.ApiBase.TrimEnd('/')}/api/lives/sessions/{sessionIdValue}";
                 var sessionPatchReq = new HttpRequestMessage(HttpMethod.Patch, sessionPatchUrl);
                 sessionPatchReq.Content = JsonContent.Create(new
                 {
@@ -3159,7 +3164,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             {
                 try
                 {
-                    var actUrl = $"{registration.Server.TrimEnd('/')}/api/lives/activity?sessionId={sessionIdValue}&idleThresholdMs={idleTimeoutMs}";
+                    var actUrl = $"{registration.ApiBase.TrimEnd('/')}/api/lives/activity?sessionId={sessionIdValue}&idleThresholdMs={idleTimeoutMs}";
                     var actResp = await client.GetAsync(actUrl, ct);
                     if (actResp.IsSuccessStatusCode)
                     {
@@ -3660,7 +3665,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
 
         using var client = _httpClientFactory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", registration.Token);
-        var baseUrl = $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}";
+        var baseUrl = $"{registration.ApiBase}/api/owners/{registration.Owner}/projects/{registration.Project}";
 
         using var response = await client.GetAsync($"{baseUrl}/runners/deliveries", ct);
         if (response.StatusCode == System.Net.HttpStatusCode.NotFound || response.StatusCode == System.Net.HttpStatusCode.NoContent)
@@ -3923,7 +3928,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", registration.Token);
 
-        var baseUrl = $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}";
+        var baseUrl = $"{registration.ApiBase}/api/owners/{registration.Owner}/projects/{registration.Project}";
         var payload = job.AgentDef!.GitPushPayload!;
         var verbose = settings.Verbose;
 
@@ -4052,7 +4057,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", registration.Token);
 
-        var baseUrl = $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}";
+        var baseUrl = $"{registration.ApiBase}/api/owners/{registration.Owner}/projects/{registration.Project}";
         var payload = job.AgentDef!.DistributePayload!;
         var verbose = settings.Verbose;
 
@@ -4276,7 +4281,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", registration.Token);
 
-        var baseUrl = $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}";
+        var baseUrl = $"{registration.ApiBase}/api/owners/{registration.Owner}/projects/{registration.Project}";
 
         // 1. Claim the job
         string runId;
@@ -4372,7 +4377,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
     /// </summary>
     private static Uri BuildChatChannelUrl(AgenticsRunnerRegistration registration, string jobId)
     {
-        var serverUri = new Uri(registration.Server);
+        var serverUri = new Uri(registration.ApiBase);
         var scheme = string.Equals(serverUri.Scheme, "https", StringComparison.OrdinalIgnoreCase) ? "wss" : "ws";
         return new Uri($"{scheme}://{serverUri.Authority}/api/lives/chat/channel/ws" +
             $"?jobId={Uri.EscapeDataString(jobId)}&token={Uri.EscapeDataString(registration.Token)}");
@@ -5024,7 +5029,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", registration.Token);
 
-        var baseUrl = $"{registration.Server}/api/owners/{registration.Owner}/projects/{registration.Project}";
+        var baseUrl = $"{registration.ApiBase}/api/owners/{registration.Owner}/projects/{registration.Project}";
 
         // 1. Claim via generate-jitconfig
         string runId;

@@ -8,6 +8,20 @@ public class AgenticsRunnerRegistration
     public string Owner { get; set; } = "";
     public string Project { get; set; } = "";
     public string Server { get; set; } = "";
+
+    /// <summary>
+    /// Where this runner reaches the platform's API from the machine it runs on, when that differs
+    /// from <see cref="Server"/> — on a self-hosted box, the loopback port of the platform next to
+    /// it. The runner's own calls (poll, PATCH, deliveries, Chat Channel, telemetry) go here and
+    /// never out over the internet; everything handed to a job or to vibecast keeps
+    /// <see cref="Server"/>, the address the rest of the world knows the platform by.
+    /// </summary>
+    public string? InternalServer { get; set; }
+
+    /// <summary>The base URL for the runner's own API calls: <see cref="InternalServer"/> when set.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string ApiBase => string.IsNullOrWhiteSpace(InternalServer) ? Server : InternalServer.TrimEnd('/');
+
     public string? GitUrl { get; set; }
     public DateTime RegisteredAt { get; set; }
 
