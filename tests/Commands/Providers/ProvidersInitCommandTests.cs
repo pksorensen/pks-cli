@@ -121,14 +121,19 @@ public class ProvidersInitCommandTests
 
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task Interactive_AsksOnlyAboutUnconfiguredProviders()
+    public async Task Interactive_RunsOnlyTheTickedProviders()
     {
-        var done = new FakeStep("done", configured: true);
-        var open = new FakeStep("open", configured: false);
+        var first = new FakeStep("first", configured: false);
+        var second = new FakeStep("second", configured: true);
+        var third = new FakeStep("third", configured: false);
         var console = new TestConsole().Interactive();
-        // Exactly one answer queued: a question about "done" would consume it (or throw on the next).
-        console.Input.PushTextWithEnter("y");
-        var command = new ProvidersInitCommand(new ProviderStepCatalog(new IProviderStep[] { done, open }), console)
+        // ↓ past "first", tick "second" (a configured one: re-setup), ↓, tick "third", enter.
+        console.Input.PushKey(ConsoleKey.DownArrow);
+        console.Input.PushKey(ConsoleKey.Spacebar);
+        console.Input.PushKey(ConsoleKey.DownArrow);
+        console.Input.PushKey(ConsoleKey.Spacebar);
+        console.Input.PushKey(ConsoleKey.Enter);
+        var command = new ProvidersInitCommand(new ProviderStepCatalog(new IProviderStep[] { first, second, third }), console)
         {
             InputRedirected = () => false,
         };
@@ -136,9 +141,27 @@ public class ProvidersInitCommandTests
         var result = await command.ExecuteAsync(null!, new ProvidersInitCommand.Settings());
 
         result.Should().Be(0);
+        first.InteractiveRuns.Should().Be(0);
+        second.InteractiveRuns.Should().Be(1);
+        third.InteractiveRuns.Should().Be(1);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task Interactive_EnterAlone_ChangesNothing()
+    {
+        var done = new FakeStep("done", configured: true);
+        var open = new FakeStep("open", configured: false);
+        var console = new TestConsole().Interactive();
+        console.Input.PushKey(ConsoleKey.Enter);
+        var command = new ProvidersInitCommand(new ProviderStepCatalog(new IProviderStep[] { done, open }), console)
+        {
+            InputRedirected = () => false,
+        };
+
+        (await command.ExecuteAsync(null!, new ProvidersInitCommand.Settings())).Should().Be(0);
         done.InteractiveRuns.Should().Be(0);
-        open.InteractiveRuns.Should().Be(1);
-        console.Output.Should().NotContain("Initialize done");
+        open.InteractiveRuns.Should().Be(0);
     }
 
     [Fact]

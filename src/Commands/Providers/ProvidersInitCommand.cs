@@ -99,7 +99,7 @@ public sealed class ProvidersInitCommand : AsyncCommand<ProvidersInitCommand.Set
         public string? Only { get; set; }
 
         [CommandOption("-f|--force")]
-        [Description("Set up the selected providers again even when already configured")]
+        [Description("Unattended: store keys from the environment even when a provider is already configured")]
         public bool Force { get; set; }
 
         [CommandOption("--from-env")]
@@ -119,38 +119,50 @@ public sealed class ProvidersInitCommand : AsyncCommand<ProvidersInitCommand.Set
         var unattended = settings.FromEnv || !_console.Profile.Capabilities.Interactive || InputRedirected();
         return unattended
             ? await RunUnattendedAsync(steps, settings.Force)
-            : await RunInteractiveAsync(steps, settings.Force);
+            : await RunInteractiveAsync(steps);
     }
 
-    private async Task<int> RunInteractiveAsync(IReadOnlyList<IProviderStep> steps, bool force)
+    private async Task<int> RunInteractiveAsync(IReadOnlyList<IProviderStep> steps)
     {
-        await ProvidersStatusCommand.WriteStatusAsync(_console, steps);
-        _console.WriteLine();
-
-        var failed = 0;
+        // One checklist, not a question per provider: the status is on each line, so the operator
+        // sees the whole host at once and ticks what to set up. A configured provider is listed too —
+        // ticking it is how you replace its key — but never pre-ticked, so Enter on its own changes
+        // nothing.
+        var labels = new Dictionary<IProviderStep, string>();
         foreach (var step in steps)
         {
             var configured = await step.IsConfiguredAsync();
-            string question;
-            if (configured)
-            {
-                if (!force) continue;
-                question = $"Set up [bold]{Markup.Escape(step.DisplayName)}[/] again?";
-            }
-            else
-            {
-                question = $"Initialize [bold]{Markup.Escape(step.DisplayName)}[/]?";
-            }
-
             var hint = await step.HintAsync();
-            if (hint is not null) _console.MarkupLine($"[dim]{Markup.Escape(step.DisplayName)}: {Markup.Escape(hint)}[/]");
-            if (!_console.Confirm(question, false)) continue;
+            var label = $"{Markup.Escape(step.DisplayName),-22} "
+                + (configured ? "[green]configured[/]" : "[dim]not set[/]   ")
+                + $"  [dim]{Markup.Escape(step.Reach)}[/]";
+            if (hint is not null) label += $" [yellow]· {Markup.Escape(hint)}[/]";
+            labels[step] = label;
+        }
 
+        var selected = _console.Prompt(
+            new MultiSelectionPrompt<IProviderStep>()
+                .Title("[bold]Which model providers should this host set up?[/]")
+                .InstructionsText("[dim](↑/↓ to move, [blue]space[/] to select, [green]enter[/] to continue — configured ones are set up again if selected)[/]")
+                .NotRequired()
+                .PageSize(Math.Max(3, steps.Count))
+                .UseConverter(step => labels[step])
+                .AddChoices(steps));
+
+        if (selected.Count == 0)
+        {
+            _console.MarkupLine("[dim]Nothing selected — no changes.[/]");
+            return 0;
+        }
+
+        var failed = 0;
+        foreach (var step in steps.Where(selected.Contains))
+        {
             _console.Write(new Rule($"[cyan]{Markup.Escape(step.DisplayName)}[/]").LeftJustified());
             bool ok;
             try
             {
-                ok = await step.RunInteractiveAsync(force: configured);
+                ok = await step.RunInteractiveAsync(force: await step.IsConfiguredAsync());
             }
             catch (Exception ex)
             {
