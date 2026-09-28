@@ -120,6 +120,18 @@ public class FoundryStoredCredentials
     public string? VoiceClassifierModel { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime LastRefreshedAt { get; set; }
+
+    /// <summary><c>user</c> (empty, the default: a refresh token from the browser sign-in) or
+    /// <c>managed-identity</c>: tokens come from the machine's Azure identity via IMDS and nothing
+    /// long-lived is stored at all.</summary>
+    public string AuthMode { get; set; } = string.Empty;
+    /// <summary>A user-assigned identity's client id; null means the system-assigned one.</summary>
+    public string? ManagedIdentityClientId { get; set; }
+
+    public const string ManagedIdentityMode = "managed-identity";
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsManagedIdentity => AuthMode == ManagedIdentityMode;
 }
 
 /// <summary>

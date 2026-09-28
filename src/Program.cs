@@ -453,6 +453,10 @@ services.AddHttpClient<PKS.Infrastructure.Services.IScalewayService, PKS.Infrast
 services.AddHttpClient<PKS.Infrastructure.Services.IMoonshotService, PKS.Infrastructure.Services.MoonshotService>();
 services.AddHttpClient<PKS.Infrastructure.Services.IOpenRouterService, PKS.Infrastructure.Services.OpenRouterService>();
 services.AddHttpClient<PKS.Infrastructure.Services.INvidiaService, PKS.Infrastructure.Services.NvidiaService>();
+// `pks providers init`: host-wide model provider setup (Anthropic/OpenAI keys, Foundry via managed identity, …).
+services.AddHttpClient<PKS.Infrastructure.Services.Azure.IManagedIdentityClient, PKS.Infrastructure.Services.Azure.ManagedIdentityClient>();
+services.AddHttpClient<PKS.Infrastructure.Services.Providers.IProviderApiKeyService, PKS.Infrastructure.Services.Providers.ProviderApiKeyService>();
+services.AddTransient<PKS.Commands.Providers.ProviderStepCatalog>();
 
 // Two-factor action guard: gates billable/sensitive ACTIONS behind a TOTP second factor whose
 // seed lives behind the pks user and whose code lives on the human's phone (see Services/Security).
@@ -1415,6 +1419,19 @@ app.Configure(config =>
         moonshot.AddCommand<PKS.Commands.Moonshot.MoonshotInitCommand>("init")
             .WithDescription("Register a Moonshot API key")
             .WithExample(["moonshot", "init"]);
+    });
+
+    config.AddBranch<PKS.Commands.Providers.ProvidersSettings>("providers", providers =>
+    {
+        providers.SetDescription("Set up model providers on this host, for every project it runs");
+        providers.AddCommand<PKS.Commands.Providers.ProvidersInitCommand>("init")
+            .WithDescription("Walk every supported provider and set up the ones you want (idempotent)")
+            .WithExample(["providers", "init"])
+            .WithExample(["providers", "init", "--only", "foundry"])
+            .WithExample(["providers", "init", "--from-env"]);
+        providers.AddCommand<PKS.Commands.Providers.ProvidersStatusCommand>("status")
+            .WithDescription("Show which providers are set up and who can use them")
+            .WithExample(["providers", "status"]);
     });
 
     config.AddBranch<PKS.Commands.OpenRouter.OpenRouterSettings>("openrouter", openrouter =>

@@ -53,6 +53,17 @@ public static class SecretSink
         return true;
     }
 
+    /// <summary>
+    /// Appends an <c>export NAME='value'</c> line to a shell script — the runner's per-job start.sh.
+    /// Single-quoted with internal quotes escaped, for the same reason as the docker fragment above.
+    /// </summary>
+    public static bool AppendShellExport(StringBuilder script, string name, SecretValue secret)
+    {
+        if (!secret.HasValue) return false;
+        script.AppendLine($"export {name}='{secret.Reveal()!.Replace("'", "'\\''")}'");
+        return true;
+    }
+
     /// <summary>Signs one request with a bearer token.</summary>
     public static bool SetBearerToken(HttpRequestMessage request, SecretValue secret, string scheme = "Bearer")
     {

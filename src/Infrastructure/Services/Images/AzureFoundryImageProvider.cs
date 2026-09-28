@@ -35,7 +35,7 @@ public class AzureFoundryImageProvider : IImageProvider
             return false;
 
         // Either an API key OR an OAuth refresh token is enough to authenticate.
-        return creds.ApiKey.HasValue || creds.RefreshToken.HasValue;
+        return creds.ApiKey.HasValue || creds.RefreshToken.HasValue || creds.IsManagedIdentity;
     }
 
     public async Task<bool> CanServeModelAsync(string model)

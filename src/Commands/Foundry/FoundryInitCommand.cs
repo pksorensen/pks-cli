@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Azure;
 using PKS.Infrastructure.Services.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -23,12 +24,18 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
     private readonly IAzureFoundryAuthService _authService;
     private readonly AzureFoundryAuthConfig _config;
     private readonly IAnsiConsole _console;
+    private readonly IManagedIdentityClient? _managedIdentity;
 
-    public FoundryInitCommand(IAzureFoundryAuthService authService, AzureFoundryAuthConfig config, IAnsiConsole console)
+    public FoundryInitCommand(
+        IAzureFoundryAuthService authService,
+        AzureFoundryAuthConfig config,
+        IAnsiConsole console,
+        IManagedIdentityClient? managedIdentity = null)
     {
         _authService = authService;
         _config = config;
         _console = console;
+        _managedIdentity = managedIdentity;
     }
 
     public class Settings : FoundrySettings
@@ -40,14 +47,36 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
         [CommandOption("-t|--tenant")]
         [Description("Azure AD tenant ID (defaults to 'common')")]
         public string? TenantId { get; set; }
+
+        [CommandOption("--managed-identity")]
+        [Description("Use this Azure machine's managed identity instead of signing in (no token is stored)")]
+        public bool ManagedIdentity { get; set; }
+
+        [CommandOption("--client-id <ID>")]
+        [Description("Client id of a user-assigned managed identity (default: the system-assigned one)")]
+        public string? ManagedIdentityClientId { get; set; }
+
+        [CommandOption("--subscription <ID>")]
+        [Description("Subscription id or name to use, instead of choosing from a list")]
+        public string? Subscription { get; set; }
+
+        [CommandOption("--resource <NAME>")]
+        [Description("Foundry resource (account) name to use, instead of choosing from a list")]
+        public string? Resource { get; set; }
+
+        [CommandOption("-y|--yes")]
+        [Description("Never prompt: enable every deployment, default to the first, skip the API key")]
+        public bool Yes { get; set; }
     }
 
     public override int Execute(CommandContext context, Settings settings)
     {
-        return ExecuteAsync(settings).GetAwaiter().GetResult();
+        return RunAsync(settings).GetAwaiter().GetResult();
     }
 
-    private async Task<int> ExecuteAsync(Settings settings)
+    /// <summary>The whole flow, callable without a <see cref="CommandContext"/> — `pks providers
+    /// init` runs it as one of its steps.</summary>
+    public async Task<int> RunAsync(Settings settings)
     {
         using var rootSpan = _activitySource.StartActivity("foundry.init");
         rootSpan?.SetTag("foundry.force", settings.Force);
@@ -62,76 +91,101 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
             return 0;
         }
 
-        string tenantId;
-        string? loginHint = null;
-        if (!string.IsNullOrEmpty(settings.TenantId))
+        var useManagedIdentity = settings.ManagedIdentity;
+        if (!useManagedIdentity && !settings.Yes && string.IsNullOrEmpty(settings.TenantId)
+            && _managedIdentity is not null && await _managedIdentity.IsAvailableAsync())
         {
-            tenantId = settings.TenantId;
+            useManagedIdentity = _console.Confirm(
+                "[cyan]This machine has an Azure managed identity.[/] Use it for Foundry instead of signing in?", true);
+        }
+
+        string tenantId;
+        var refreshToken = SecretValue.None;
+        if (useManagedIdentity)
+        {
+            var mi = await StoreManagedIdentityAsync(settings.ManagedIdentityClientId);
+            if (mi is null) return 1;
+            tenantId = mi;
+        }
+        else if (settings.Yes)
+        {
+            _console.MarkupLine("[red]--yes needs --managed-identity: signing in is interactive.[/]");
+            return 1;
         }
         else
         {
-            var email = _console.Prompt(
-                new TextPrompt<string>("[cyan]Enter your email address[/] [dim](or press Enter to sign in with 'common' tenant)[/]:")
-                    .AllowEmpty());
-
-            if (!string.IsNullOrWhiteSpace(email))
+            string? loginHint = null;
+            if (!string.IsNullOrEmpty(settings.TenantId))
             {
-                loginHint = email.Trim();
-                _console.MarkupLine("[dim]Discovering tenant...[/]");
-                using var discoverSpan = _activitySource.StartActivity("foundry.tenant_discover");
-                var discoveredTenant = await _authService.DiscoverTenantAsync(loginHint);
-                discoverSpan?.SetTag("foundry.tenant_discovered", !string.IsNullOrEmpty(discoveredTenant));
-                if (!string.IsNullOrEmpty(discoveredTenant))
+                tenantId = settings.TenantId;
+            }
+            else
+            {
+                var email = _console.Prompt(
+                    new TextPrompt<string>("[cyan]Enter your email address[/] [dim](or press Enter to sign in with 'common' tenant)[/]:")
+                        .AllowEmpty());
+
+                if (!string.IsNullOrWhiteSpace(email))
                 {
-                    tenantId = discoveredTenant;
-                    _console.MarkupLine($"[green]Found tenant: [bold]{Markup.Escape(tenantId)}[/][/]");
+                    loginHint = email.Trim();
+                    _console.MarkupLine("[dim]Discovering tenant...[/]");
+                    using var discoverSpan = _activitySource.StartActivity("foundry.tenant_discover");
+                    var discoveredTenant = await _authService.DiscoverTenantAsync(loginHint);
+                    discoverSpan?.SetTag("foundry.tenant_discovered", !string.IsNullOrEmpty(discoveredTenant));
+                    if (!string.IsNullOrEmpty(discoveredTenant))
+                    {
+                        tenantId = discoveredTenant;
+                        _console.MarkupLine($"[green]Found tenant: [bold]{Markup.Escape(tenantId)}[/][/]");
+                    }
+                    else
+                    {
+                        tenantId = "common";
+                        _console.MarkupLine("[yellow]Could not discover tenant, using 'common'.[/]");
+                    }
                 }
                 else
                 {
                     tenantId = "common";
-                    _console.MarkupLine("[yellow]Could not discover tenant, using 'common'.[/]");
                 }
             }
-            else
+
+            _console.MarkupLine("[cyan]Starting Azure AI Foundry authentication...[/]");
+            _console.MarkupLine("[dim]A browser window will open. If it doesn't, use the URL printed below.[/]");
+            _console.WriteLine();
+
+            FoundryAuthResult authResult;
             {
-                tenantId = "common";
+                using var loginSpan = _activitySource.StartActivity("foundry.login");
+                loginSpan?.SetTag("foundry.tenant", tenantId);
+                try
+                {
+                    authResult = await _authService.InitiateLoginAsync(tenantId, loginHint);
+                }
+                catch (OperationCanceledException)
+                {
+                    loginSpan?.SetStatus(ActivityStatusCode.Error, "timeout");
+                    _console.MarkupLine("[red]Authentication timed out.[/]");
+                    return 1;
+                }
+                catch (Exception ex)
+                {
+                    loginSpan?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                    _console.MarkupLine($"[red]Authentication failed: {Markup.Escape(ex.Message)}[/]");
+                    return 1;
+                }
             }
+
+            refreshToken = SecretValue.From(authResult.RefreshToken);
+
+            // Store initial credentials (tenantId + refreshToken) so token refresh works
+            await _authService.StoreCredentialsAsync(new FoundryStoredCredentials
+            {
+                TenantId = tenantId,
+                RefreshToken = refreshToken,
+                CreatedAt = DateTime.UtcNow,
+                LastRefreshedAt = DateTime.UtcNow,
+            });
         }
-
-        _console.MarkupLine("[cyan]Starting Azure AI Foundry authentication...[/]");
-        _console.MarkupLine("[dim]A browser window will open. If it doesn't, use the URL printed below.[/]");
-        _console.WriteLine();
-
-        FoundryAuthResult authResult;
-        {
-            using var loginSpan = _activitySource.StartActivity("foundry.login");
-            loginSpan?.SetTag("foundry.tenant", tenantId);
-            try
-            {
-                authResult = await _authService.InitiateLoginAsync(tenantId, loginHint);
-            }
-            catch (OperationCanceledException)
-            {
-                loginSpan?.SetStatus(ActivityStatusCode.Error, "timeout");
-                _console.MarkupLine("[red]Authentication timed out.[/]");
-                return 1;
-            }
-            catch (Exception ex)
-            {
-                loginSpan?.SetStatus(ActivityStatusCode.Error, ex.Message);
-                _console.MarkupLine($"[red]Authentication failed: {Markup.Escape(ex.Message)}[/]");
-                return 1;
-            }
-        }
-
-        // Store initial credentials (tenantId + refreshToken) so token refresh works
-        await _authService.StoreCredentialsAsync(new FoundryStoredCredentials
-        {
-            TenantId = tenantId,
-            RefreshToken = SecretValue.From(authResult.RefreshToken),
-            CreatedAt = DateTime.UtcNow,
-            LastRefreshedAt = DateTime.UtcNow,
-        });
 
         // Get management token to list subscriptions and resources
         string? managementToken;
@@ -142,6 +196,7 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
             _console.MarkupLine("[red]Failed to obtain management access token.[/]");
             return 1;
         }
+        var nonInteractive = settings.Yes;
 
         // List subscriptions
         List<AzureSubscription> subscriptions;
@@ -153,14 +208,33 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
         if (subscriptions.Count == 0)
         {
             _console.MarkupLine("[red]No Azure subscriptions found for this account.[/]");
+            if (useManagedIdentity) WriteManagedIdentityRoleHint();
             return 1;
         }
 
         AzureSubscription selectedSubscription;
-        if (subscriptions.Count == 1)
+        if (!string.IsNullOrWhiteSpace(settings.Subscription))
+        {
+            var wanted = settings.Subscription.Trim();
+            var match = subscriptions.FirstOrDefault(s =>
+                s.SubscriptionId.Equals(wanted, StringComparison.OrdinalIgnoreCase)
+                || s.DisplayName.Equals(wanted, StringComparison.OrdinalIgnoreCase));
+            if (match is null)
+            {
+                _console.MarkupLine($"[red]Subscription '{Markup.Escape(wanted)}' is not visible to this identity.[/]");
+                return 1;
+            }
+            selectedSubscription = match;
+        }
+        else if (subscriptions.Count == 1)
         {
             selectedSubscription = subscriptions[0];
             _console.MarkupLine($"[dim]Using subscription: [bold]{Markup.Escape(selectedSubscription.DisplayName)}[/][/]");
+        }
+        else if (nonInteractive)
+        {
+            _console.MarkupLine("[red]Several subscriptions are visible; pick one with --subscription.[/]");
+            return 1;
         }
         else
         {
@@ -183,14 +257,30 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
         if (resources.Count == 0)
         {
             _console.MarkupLine("[red]No Azure AI Foundry resources found in this subscription.[/]");
+            if (useManagedIdentity) WriteManagedIdentityRoleHint();
             return 1;
         }
 
         CognitiveServicesAccount selectedResource;
-        if (resources.Count == 1)
+        if (!string.IsNullOrWhiteSpace(settings.Resource))
+        {
+            var match = resources.FirstOrDefault(r => r.Name.Equals(settings.Resource.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (match is null)
+            {
+                _console.MarkupLine($"[red]Foundry resource '{Markup.Escape(settings.Resource)}' is not in this subscription, or not visible to this identity.[/]");
+                return 1;
+            }
+            selectedResource = match;
+        }
+        else if (resources.Count == 1)
         {
             selectedResource = resources[0];
             _console.MarkupLine($"[dim]Using resource: [bold]{Markup.Escape(selectedResource.Name)}[/] ({Markup.Escape(selectedResource.Properties.Endpoint)})[/]");
+        }
+        else if (nonInteractive)
+        {
+            _console.MarkupLine("[red]Several Foundry resources are visible; pick one with --resource.[/]");
+            return 1;
         }
         else
         {
@@ -230,10 +320,10 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
         var deploymentPool = deployments;
 
         List<string> selectedDeploymentNames;
-        if (deploymentPool.Count == 1)
+        if (deploymentPool.Count == 1 || nonInteractive)
         {
-            selectedDeploymentNames = new List<string> { deploymentPool[0].Name };
-            _console.MarkupLine($"[dim]Using deployment: [bold]{Markup.Escape(deploymentPool[0].Name)}[/] (model: {Markup.Escape(deploymentPool[0].Properties.Model.Name)})[/]");
+            selectedDeploymentNames = deploymentPool.Select(d => d.Name).ToList();
+            _console.MarkupLine($"[dim]Using deployments: [bold]{Markup.Escape(string.Join(", ", selectedDeploymentNames))}[/][/]");
         }
         else
         {
@@ -251,7 +341,7 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
         }
 
         string defaultDeploymentName;
-        if (selectedDeploymentNames.Count == 1)
+        if (selectedDeploymentNames.Count == 1 || nonInteractive)
         {
             defaultDeploymentName = selectedDeploymentNames[0];
         }
@@ -270,21 +360,28 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
         // but the Anthropic-compatible API lives at services.ai.azure.com.
         var foundryEndpoint = $"https://{selectedResource.Name}.services.ai.azure.com";
 
-        // Optional API key — enables launching claude without az CLI (DefaultAzureCredential fallback)
-        _console.WriteLine();
-        _console.MarkupLine("[dim]An Azure resource API key allows launching claude without 'az login' in the devcontainer.[/]");
-        _console.MarkupLine("[dim]Find it in the Azure AI Foundry portal under your resource → Keys and Endpoint.[/]");
-        var apiKeyInput = _console.Prompt(
-            new TextPrompt<string>("[cyan]Azure resource API key[/] [dim](optional — press Enter to skip):[/]")
-                .AllowEmpty());
-        var apiKey = string.IsNullOrWhiteSpace(apiKeyInput) ? null : apiKeyInput.Trim();
+        // Optional API key — enables launching claude without az CLI (DefaultAzureCredential fallback).
+        // Not asked with a managed identity: the point of one is that no key sits on the box.
+        string? apiKey = null;
+        if (!useManagedIdentity && !nonInteractive)
+        {
+            _console.WriteLine();
+            _console.MarkupLine("[dim]An Azure resource API key allows launching claude without 'az login' in the devcontainer.[/]");
+            _console.MarkupLine("[dim]Find it in the Azure AI Foundry portal under your resource → Keys and Endpoint.[/]");
+            var apiKeyInput = _console.Prompt(
+                new TextPrompt<string>("[cyan]Azure resource API key[/] [dim](optional — press Enter to skip):[/]")
+                    .AllowEmpty());
+            apiKey = string.IsNullOrWhiteSpace(apiKeyInput) ? null : apiKeyInput.Trim();
+        }
 
         // Store complete credentials
         using (_activitySource.StartActivity("foundry.store_credentials"))
             await _authService.StoreCredentialsAsync(new FoundryStoredCredentials
             {
                 TenantId = tenantId,
-                RefreshToken = SecretValue.From(authResult.RefreshToken),
+                RefreshToken = refreshToken,
+                AuthMode = useManagedIdentity ? FoundryStoredCredentials.ManagedIdentityMode : string.Empty,
+                ManagedIdentityClientId = useManagedIdentity ? settings.ManagedIdentityClientId : null,
                 SelectedSubscriptionId = selectedSubscription.SubscriptionId,
                 SelectedSubscriptionName = selectedSubscription.DisplayName,
                 SelectedResourceEndpoint = foundryEndpoint,
@@ -313,16 +410,79 @@ public class FoundryInitCommand : Command<FoundryInitCommand.Settings>
         table.AddRow("Default Model", Markup.Escape(selectedDeployment.Name));
         table.AddRow("Enabled Models", Markup.Escape(string.Join(", ", selectedDeploymentNames)));
         table.AddRow("Resource Group", Markup.Escape(resourceGroup));
+        table.AddRow("Sign-in", useManagedIdentity ? "[green]managed identity[/] [dim](nothing stored)[/]" : "user (refresh token)");
         table.AddRow("API Key", apiKey != null ? "[green]stored[/]" : "[dim]not set — using DefaultAzureCredential[/]");
 
         _console.Write(table);
 
         _console.WriteLine();
         _console.MarkupLine("[dim]Tip: Use [bold]pks foundry token[/] to get an access token for API calls.[/]");
-        if (apiKey == null)
+        if (useManagedIdentity)
+            _console.MarkupLine("[dim]Model calls need a data-plane role for the identity on this resource: 'Azure AI User' (or 'Cognitive Services OpenAI User').[/]");
+        else if (apiKey == null)
             _console.MarkupLine("[dim]Note: Without an API key, claude in the devcontainer needs 'az login' or AZURE_CLIENT_ID/SECRET env vars.[/]");
 
         return 0;
+    }
+
+    /// <summary>
+    /// Probes the managed identity and stores a Foundry session that points at it. Returns the tenant
+    /// id read from the token (for display — IMDS already knows the tenant), or null when the machine
+    /// has no usable identity.
+    /// </summary>
+    private async Task<string?> StoreManagedIdentityAsync(string? clientId)
+    {
+        if (_managedIdentity is null || !await _managedIdentity.IsAvailableAsync())
+        {
+            _console.MarkupLine("[red]No Azure managed identity here: the instance metadata service did not answer.[/]");
+            return null;
+        }
+        var token = await _managedIdentity.GetTokenAsync(_config.ManagementScope, clientId);
+        if (string.IsNullOrEmpty(token))
+        {
+            _console.MarkupLine(string.IsNullOrEmpty(clientId)
+                ? "[red]This VM has no system-assigned identity.[/] Turn it on, or pass [bold]--client-id[/] for a user-assigned one."
+                : $"[red]No managed identity with client id {Markup.Escape(clientId)} on this VM.[/]");
+            return null;
+        }
+
+        var tenantId = TenantFromToken(token) ?? string.Empty;
+        await _authService.StoreCredentialsAsync(new FoundryStoredCredentials
+        {
+            TenantId = tenantId,
+            AuthMode = FoundryStoredCredentials.ManagedIdentityMode,
+            ManagedIdentityClientId = clientId,
+            CreatedAt = DateTime.UtcNow,
+            LastRefreshedAt = DateTime.UtcNow,
+        });
+        _console.MarkupLine("[green]Using the machine's managed identity.[/]");
+        return tenantId;
+    }
+
+    private void WriteManagedIdentityRoleHint()
+    {
+        _console.MarkupLine("[yellow]The managed identity sees nothing yet — it needs roles:[/]");
+        _console.MarkupLine("  [bold]Reader[/] on the subscription or resource group that holds the Foundry resource (to list it),");
+        _console.MarkupLine("  [bold]Azure AI User[/] (or [bold]Cognitive Services OpenAI User[/]) on the Foundry resource (to call models).");
+        _console.MarkupLine("[dim]Role assignments can take a few minutes to apply; run this again afterwards.[/]");
+    }
+
+    /// <summary>The <c>tid</c> claim of an access token. Display only — never validated here.</summary>
+    internal static string? TenantFromToken(string jwt)
+    {
+        var parts = jwt.Split('.');
+        if (parts.Length < 2) return null;
+        try
+        {
+            var payload = parts[1].Replace('-', '+').Replace('_', '/');
+            payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
+            using var doc = System.Text.Json.JsonDocument.Parse(Convert.FromBase64String(payload));
+            return doc.RootElement.TryGetProperty("tid", out var tid) ? tid.GetString() : null;
+        }
+        catch (Exception ex) when (ex is FormatException or System.Text.Json.JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

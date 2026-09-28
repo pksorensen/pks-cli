@@ -53,14 +53,17 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
     private readonly ILogger<AzureFoundryAuthService> _logger;
     private readonly AzureFoundryAuthConfig _config;
     private readonly AzurePublicClientAuth _auth;
+    private readonly IManagedIdentityClient? _managedIdentity;
 
     public AzureFoundryAuthService(
         HttpClient httpClient,
         IConfigurationService configurationService,
         ILogger<AzureFoundryAuthService> logger,
         ISecretResolver secrets,
-        AzureFoundryAuthConfig? config = null)
+        AzureFoundryAuthConfig? config = null,
+        IManagedIdentityClient? managedIdentity = null)
     {
+        _managedIdentity = managedIdentity;
         _httpClient = httpClient;
         _configurationService = configurationService;
         _logger = logger;
@@ -90,6 +93,15 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
     public async Task<string?> GetAccessTokenAsync(string scope, CancellationToken cancellationToken = default)
     {
         var credentials = await GetStoredCredentialsAsync();
+        if (credentials is { IsManagedIdentity: true })
+        {
+            if (_managedIdentity is null)
+            {
+                _logger.LogWarning("Foundry is set up for managed identity, but no IMDS client is available");
+                return null;
+            }
+            return await _managedIdentity.GetTokenAsync(scope, credentials.ManagedIdentityClientId, cancellationToken);
+        }
         if (credentials == null || !credentials.RefreshToken.HasValue)
         {
             _logger.LogWarning("Cannot refresh Foundry token: no stored credentials or refresh token");
@@ -157,7 +169,7 @@ public class AzureFoundryAuthService : IAzureFoundryAuthService
     public async Task<bool> IsAuthenticatedAsync()
     {
         var credentials = await GetStoredCredentialsAsync();
-        return credentials != null && credentials.RefreshToken.HasValue;
+        return credentials != null && (credentials.RefreshToken.HasValue || credentials.IsManagedIdentity);
     }
 
     public async Task<FoundryStoredCredentials?> GetStoredCredentialsAsync()

@@ -232,6 +232,10 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
     /// on its own loop — see <see cref="RunDeliveryLoopAsync"/>.</summary>
     private readonly PKS.Infrastructure.Services.Acs.IAcsSmsService? _acsSms;
 
+    /// <summary>Host-wide keys from `pks providers init`. Optional like the rest of the tail: without
+    /// it a job only gets what the runner's own environment carries.</summary>
+    private readonly PKS.Infrastructure.Services.Providers.IProviderApiKeyService? _providerKeys;
+
     /// <summary>The capability string the platform routes SMS deliveries on.</summary>
     internal const string SmsCapability = "sms";
 
@@ -254,7 +258,8 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         IVaultCliService? vaultCli = null,
         PKS.Infrastructure.Services.Runner.IJobTokenService? jobTokens = null,
         PKS.Infrastructure.Services.TypeSafe.ITypeSafeCredentialService? typeSafe = null,
-        PKS.Infrastructure.Services.Acs.IAcsSmsService? acsSms = null)
+        PKS.Infrastructure.Services.Acs.IAcsSmsService? acsSms = null,
+        PKS.Infrastructure.Services.Providers.IProviderApiKeyService? providerKeys = null)
     {
         _configService = configService ?? throw new ArgumentNullException(nameof(configService));
         _spawnerService = spawnerService ?? throw new ArgumentNullException(nameof(spawnerService));
@@ -277,6 +282,7 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         _jobTokens = jobTokens;
         _typeSafe = typeSafe;
         _acsSms = acsSms;
+        _providerKeys = providerKeys;
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -2305,6 +2311,11 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         var anthropicBaseUrl = Environment.GetEnvironmentVariable("ANTHROPIC_BASE_URL");
         if (!string.IsNullOrEmpty(anthropicKey))
             scriptLines.AppendLine($"export ANTHROPIC_API_KEY='{anthropicKey}'");
+        else if (_providerKeys is not null)
+            // The key `pks providers init` stored for this host — what makes one setup serve every
+            // project the host runs. The environment still wins, so the LLM sim keeps working.
+            SecretSink.AppendShellExport(scriptLines, "ANTHROPIC_API_KEY",
+                await _providerKeys.GetKeyAsync(PKS.Infrastructure.Services.Providers.ApiKeyProvider.Anthropic));
         if (!string.IsNullOrEmpty(anthropicBaseUrl))
         {
             if (Uri.TryCreate(anthropicBaseUrl, UriKind.Absolute, out var anthropicUri)
@@ -2325,6 +2336,9 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         var openaiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
         if (!string.IsNullOrEmpty(openaiKey))
             scriptLines.AppendLine($"export OPENAI_API_KEY='{openaiKey}'");
+        else if (_providerKeys is not null)
+            SecretSink.AppendShellExport(scriptLines, "OPENAI_API_KEY",
+                await _providerKeys.GetKeyAsync(PKS.Infrastructure.Services.Providers.ApiKeyProvider.OpenAI));
         var codexBaseUrl = Environment.GetEnvironmentVariable("VIBECAST_CODEX_BASE_URL");
         if (!string.IsNullOrEmpty(codexBaseUrl))
             scriptLines.AppendLine($"export VIBECAST_CODEX_BASE_URL='{codexBaseUrl}'");

@@ -194,6 +194,15 @@ public sealed class AgentChatProviderFactory
         var deployment = (await _config.GetAsync($"agent.models.{modelId}.deployment")) ?? defaults?.Deployment;
         var apiKey = (await _secrets.RevealAsync($"agent.models.{modelId}.apiKey")) ?? defaults?.ApiKey;
 
+        // Host-wide Anthropic key from `pks providers init`, after the environment: a per-model key
+        // and ANTHROPIC_API_KEY (the LLM sim's route) both stay in charge when set.
+        if (apiKey is null
+            && string.Equals(resolvedProvider, "anthropic", StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY")))
+        {
+            apiKey = await _secrets.RevealAsync(PKS.Infrastructure.Services.Providers.ProviderApiKeyService.AnthropicKey);
+        }
+
         // Foundry fallback: an azure-openai model with no explicitly configured
         // endpoint resolves to the Foundry-selected resource from `pks foundry init`
         // (the same credentials the codex proxy and image generator use). This lets
