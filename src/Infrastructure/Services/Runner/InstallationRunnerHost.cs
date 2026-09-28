@@ -253,7 +253,7 @@ public sealed class ChildProcessProjectRunnerLauncher : IProjectRunnerLauncher
         var workDir = LocalRunnerSupervisor.DefaultWorkDir(registration.Owner, registration.Project);
         Directory.CreateDirectory(workDir);
 
-        var arguments = $"agentics runner run --project {RunnerLauncher.Quote(project)} --no-prompt --work-dir {RunnerLauncher.Quote(workDir)}";
+        var arguments = $"--no-logo agentics runner run --project {RunnerLauncher.Quote(project)} --no-prompt --work-dir {RunnerLauncher.Quote(workDir)}";
         var psi = new ProcessStartInfo("/bin/sh")
         {
             RedirectStandardOutput = true,

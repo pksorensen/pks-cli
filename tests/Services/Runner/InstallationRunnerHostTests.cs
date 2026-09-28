@@ -166,10 +166,21 @@ public class InstallationRunnerHostTests
         var unit = InstallationRunnerMode.BuildUnit(
             new RunnerLauncherCommand(RunnerLauncherKind.Self, "/usr/local/bin/pks"), "root", "/root", withEnvironmentFile: true);
 
-        unit.Should().Contain("ExecStart=/usr/local/bin/pks agentics runner run\n");
+        unit.Should().Contain("ExecStart=/usr/local/bin/pks --no-logo agentics runner run\n");
         unit.Should().Contain("EnvironmentFile=/etc/agentics/runner.env\n");
         unit.Should().Contain("Environment=HOME=/root\n");
         unit.Should().Contain("Restart=always");
+    }
+
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData("ActiveState=active\nNRestarts=0\n", true)]
+    [InlineData("ActiveState=activating\nNRestarts=3\n", false)] // crash-looping on startup
+    [InlineData("ActiveState=active\nNRestarts=1\n", false)]     // up, but only after dying once
+    [InlineData("ActiveState=failed\nNRestarts=0\n", false)]
+    public void ServiceHealth_IsWhatSystemdSaw_NotWhetherRestartReturnedZero(string show, bool healthy)
+    {
+        InstallationRunnerMode.IsHealthy(show).Should().Be(healthy);
     }
 
     [Fact]

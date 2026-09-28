@@ -70,9 +70,31 @@ internal static class InstallationRunnerMode
             }
         }
 
+        // `restart` succeeds as soon as the process is spawned, so a runner that dies on startup
+        // would still be reported as started. Give it a moment and look at what systemd saw.
+        await Task.Delay(TimeSpan.FromSeconds(8));
+        var (_, state) = await SystemctlAsync($"show -p ActiveState -p NRestarts {UnitName}");
+        if (!IsHealthy(state))
+        {
+            console.MarkupLine($"[red]The host runner does not stay up[/] ({state.Replace('\n', ' ').EscapeMarkup()}).");
+            console.MarkupLine($"[dim]See: journalctl -u {UnitName} -n 30[/]");
+            return 1;
+        }
+
         console.MarkupLine($"[green]✓[/] Host runner started for installation [bold]{installation.Id.EscapeMarkup()}[/] — every project on {installation.Server.EscapeMarkup()}.");
         console.MarkupLine($"[dim]Logs: journalctl -u {UnitName} -f · Models: pks providers init[/]");
         return 0;
+    }
+
+    /// <summary>From <c>systemctl show -p ActiveState -p NRestarts</c>: running, and not by way of
+    /// a restart since the one we just asked for.</summary>
+    internal static bool IsHealthy(string show)
+    {
+        var props = show.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(line => line.Split('=', 2))
+            .Where(kv => kv.Length == 2)
+            .ToDictionary(kv => kv[0], kv => kv[1]);
+        return props.GetValueOrDefault("ActiveState") == "active" && props.GetValueOrDefault("NRestarts") is null or "0";
     }
 
     internal static string BuildUnit(RunnerLauncherCommand self, string user, string home, bool withEnvironmentFile) =>
@@ -87,7 +109,7 @@ internal static class InstallationRunnerMode
         User={user}
         Environment=HOME={home}
         {(withEnvironmentFile ? $"EnvironmentFile={EnvironmentFile}" : "# no " + EnvironmentFile + " — the AGENTICS_* variables must come from elsewhere")}
-        ExecStart={self.BuildCommandLine("agentics runner run")}
+        ExecStart={self.BuildCommandLine("--no-logo agentics runner run")}
         Restart=always
         RestartSec=5
         TimeoutStopSec=90
