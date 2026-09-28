@@ -112,6 +112,8 @@ internal static class InstallationRunnerMode
         ExecStart={self.BuildCommandLine("--no-logo agentics runner run")}
         Restart=always
         RestartSec=5
+        # The runners shut down gracefully on Ctrl+C and ignore SIGTERM.
+        KillSignal=SIGINT
         TimeoutStopSec=90
 
         [Install]

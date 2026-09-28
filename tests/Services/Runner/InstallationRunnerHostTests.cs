@@ -170,6 +170,7 @@ public class InstallationRunnerHostTests
         unit.Should().Contain("EnvironmentFile=/etc/agentics/runner.env\n");
         unit.Should().Contain("Environment=HOME=/root\n");
         unit.Should().Contain("Restart=always");
+        unit.Should().Contain("KillSignal=SIGINT\n");
     }
 
     [Theory]

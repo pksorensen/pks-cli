@@ -285,8 +285,9 @@ public sealed class ChildProcessProjectRunnerLauncher : IProjectRunnerLauncher
             if (process.HasExited) return;
             try
             {
-                // SIGTERM first: the runner cleans up its in-flight jobs on it. Process.Kill is SIGKILL.
-                using (var term = Process.Start("kill", ["-TERM", process.Id.ToString()])) term?.WaitForExit();
+                // SIGINT, not SIGTERM: the runner's graceful shutdown hangs off Ctrl+C and it does not
+                // react to SIGTERM at all (measured). Process.Kill is SIGKILL, the last resort.
+                using (var interrupt = Process.Start("kill", ["-INT", process.Id.ToString()])) interrupt?.WaitForExit();
                 using var timeout = new CancellationTokenSource(grace);
                 await process.WaitForExitAsync(timeout.Token);
             }
