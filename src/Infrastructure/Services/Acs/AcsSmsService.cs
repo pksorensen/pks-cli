@@ -79,8 +79,10 @@ public sealed class AcsSmsService : IAcsSmsService
     {
     }
 
-    /// <summary>Test seam: a client with a stubbed handler.</summary>
-    public AcsSmsService(
+    /// <summary>Test seam: a client with a stubbed handler. Internal, because two public
+    /// constructors of equal length are ambiguous to the DI container once an HttpClient is
+    /// resolvable, and then every command that takes an IAcsSmsService fails to construct.</summary>
+    internal AcsSmsService(
         IAzureResourceRegistry registry,
         IAzureTenantCredentialStore tenants,
         IAzureFoundryAuthService foundry,
