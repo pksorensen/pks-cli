@@ -7,6 +7,7 @@ public static class ActionIds
     public const string VmStart = "vm.start";
     public const string VmStop = "vm.stop";
     public const string VmDestroy = "vm.destroy";
+    public const string VmReset = "vm.reset";
     public const string VmAutoshutdownWrite = "vm.autoshutdown.write";
     public const string CloudAuthWrite = "cloud.auth.write";
     public const string DevcontainerSpawnRemote = "devcontainer.spawn.remote";
@@ -54,6 +55,7 @@ public sealed class ActionCatalog : IActionCatalog
         new ActionDefinition(ActionIds.VmStart, "Start VM", "Power on a stopped VM (resumes billing)", true, "Compute"),
         new ActionDefinition(ActionIds.VmStop, "Stop VM", "Deallocate / power off a VM", false, "Compute"),
         new ActionDefinition(ActionIds.VmDestroy, "Destroy VM", "Permanently delete a VM and its resources", true, "Compute"),
+        new ActionDefinition(ActionIds.VmReset, "Reset VM", "Wipe a VM's OS disk back to its baseline snapshot", true, "Compute"),
         new ActionDefinition(ActionIds.VmAutoshutdownWrite, "Change auto-shutdown", "Modify idle/scheduled shutdown policy", false, "Compute"),
         new ActionDefinition(ActionIds.CloudAuthWrite, "Store cloud credentials", "Store or replace Scaleway/Moonshot/Azure/Foundry credentials", true, "Cloud"),
         new ActionDefinition(ActionIds.DevcontainerSpawnRemote, "Spawn remote devcontainer", "Spawn a devcontainer on a remote VM (auto-starts it)", true, "Devcontainer", new[] { ActionIds.VmStart }),

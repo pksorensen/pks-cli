@@ -80,7 +80,24 @@ public class VmInitCommandTests
             azureInitMock.Object,
             scalewayInitMock.Object,
             new Mock<PKS.Infrastructure.Services.Security.IActionGuard>().Object,
+            NoPimHttpClientFactory(),
+            new Mock<IAzureVmDiskService>().Object,
             console);
+    }
+
+    // Every PIM call is refused, so the eligibility check finds nothing and stays silent.
+    private static IHttpClientFactory NoPimHttpClientFactory()
+    {
+        var factory = new Mock<IHttpClientFactory>();
+        factory.Setup(f => f.CreateClient(It.IsAny<string>()))
+            .Returns(() => new HttpClient(new ForbiddenHandler()));
+        return factory.Object;
+    }
+
+    private sealed class ForbiddenHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+            => Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.Forbidden));
     }
 
     // ═════════════════════════════════════════════

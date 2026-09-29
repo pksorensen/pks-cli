@@ -436,6 +436,7 @@ services.AddHttpClient<PKS.Infrastructure.Services.Entra.IEntraApplicationServic
 // Generic Azure authentication
 services.AddSingleton<PKS.Infrastructure.Services.Models.AzureAuthConfig>();
 services.AddHttpClient<PKS.Infrastructure.Services.IAzureAuthService, PKS.Infrastructure.Services.AzureAuthService>();
+services.AddHttpClient<PKS.Infrastructure.Services.IAzureVmDiskService, PKS.Infrastructure.Services.AzureVmDiskService>();
 
 // Azure VM provisioning
 services.AddHttpClient<PKS.Infrastructure.Services.IAzureVmService, PKS.Infrastructure.Services.AzureVmService>();
@@ -1519,6 +1520,13 @@ app.Configure(config =>
         vm.AddCommand<PKS.Commands.Vm.VmDestroyCommand>("destroy")
             .WithDescription("Destroy a VM and all its associated Azure resources")
             .WithExample(new[] { "vm", "destroy" });
+        vm.AddCommand<PKS.Commands.Vm.VmSnapshotCommand>("snapshot")
+            .WithDescription("Save a VM's OS disk as its baseline — the state 'pks vm reset' returns to")
+            .WithExample(new[] { "vm", "snapshot", "my-vm" });
+        vm.AddCommand<PKS.Commands.Vm.VmResetCommand>("reset")
+            .WithDescription("Wipe a VM back to its baseline snapshot, keeping its IP, NIC and SSH key")
+            .WithExample(new[] { "vm", "reset", "my-vm" })
+            .WithExample(new[] { "vm", "reset", "my-vm", "--yes" });
     });
 
     // Two-factor: enroll a TOTP authenticator and toggle which actions it gates.

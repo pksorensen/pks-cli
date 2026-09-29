@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using PKS.Commands.Azure;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Azure;
 using PKS.Infrastructure.Services.Models;
 using PKS.Infrastructure.Services.Security;
 using Spectre.Console;
@@ -25,6 +26,8 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
     private readonly AzureInitCommand _azureInit;
     private readonly PKS.Commands.Scaleway.ScalewayInitCommand _scalewayInit;
     private readonly IActionGuard _guard;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IAzureVmDiskService _disks;
 
     public VmInitCommand(
         IAzureAuthService azureAuth,
@@ -36,6 +39,8 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
         AzureInitCommand azureInit,
         PKS.Commands.Scaleway.ScalewayInitCommand scalewayInit,
         IActionGuard guard,
+        IHttpClientFactory httpClientFactory,
+        IAzureVmDiskService disks,
         IAnsiConsole console)
     {
         _azureAuth = azureAuth;
@@ -47,6 +52,8 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
         _azureInit = azureInit;
         _scalewayInit = scalewayInit;
         _guard = guard;
+        _httpClientFactory = httpClientFactory;
+        _disks = disks;
         _console = console;
     }
 
@@ -119,17 +126,31 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
         if (string.IsNullOrWhiteSpace(vmName))
             vmName = defaultName;
 
-        // 5. List resource groups
-        List<AzureResourceGroup> resourceGroups;
+        // 5. PIM: a role that is only eligible grants nothing, and ARM does not say so — the
+        //    resource-group listing below would just come back empty. Offer activation first.
+        var activated = await AzurePimPrompt.OfferActivationAsync(
+            _console, _httpClientFactory.CreateClient(), token, creds.SubscriptionId, $"pks vm init {vmName}");
+
+        // 5b. List resource groups. A fresh activation takes a little while to reach ARM.
+        List<AzureResourceGroup> resourceGroups = new();
         await _console.Status()
             .SpinnerStyle(Style.Parse("cyan"))
             .Spinner(Spinner.Known.Dots)
-            .StartAsync("Loading resource groups...", async _ =>
+            .StartAsync("Loading resource groups...", async ctx =>
             {
-                resourceGroups = await _vmService.ListResourceGroupsAsync(token, creds.SubscriptionId);
+                var deadline = DateTime.UtcNow.AddSeconds(activated ? 120 : 0);
+                while (true)
+                {
+                    resourceGroups = await _vmService.ListResourceGroupsAsync(token, creds.SubscriptionId);
+                    if (resourceGroups.Count > 0 || DateTime.UtcNow >= deadline) break;
+                    ctx.Status("Waiting for the activated role to take effect...");
+                    await Task.Delay(TimeSpan.FromSeconds(10));
+                }
             });
 
-        resourceGroups = await _vmService.ListResourceGroupsAsync(token, creds.SubscriptionId);
+        if (resourceGroups.Count == 0)
+            _console.MarkupLine($"[yellow]No resource groups visible in subscription {Markup.Escape(creds.SubscriptionId)} — " +
+                "either it has none, or your role there is not active (PIM) yet.[/]");
 
         const string CreateNewOption = "+ Create new resource group";
         var rgChoices = new List<string> { CreateNewOption };
@@ -409,6 +430,7 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
 
         // 10. Wait for SSH
         var sshReady = false;
+        var baselineSaved = false;
         await _console.Status()
             .SpinnerStyle(Style.Parse("cyan"))
             .Spinner(Spinner.Known.Dots)
@@ -465,6 +487,26 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
                         await Task.Delay(TimeSpan.FromSeconds(10));
                     }
                 });
+
+            // 10c. Baseline snapshot of the fresh machine, so 'pks vm reset' can return to it.
+            //      Best effort — the VM is usable without one, and 'pks vm snapshot' makes it later.
+            try
+            {
+                await _console.Status()
+                    .SpinnerStyle(Style.Parse("cyan"))
+                    .Spinner(Spinner.Known.Dots)
+                    .StartAsync("Saving baseline snapshot of the fresh VM...", async ctx =>
+                    {
+                        await VmBaseline.TrySyncAsync(vmInfo.PublicIpAddress, "azureuser", keyPath);
+                        await _disks.CreateBaselineAsync(token, creds.SubscriptionId, selectedRg.Name, vmName,
+                            msg => ctx.Status(Markup.Escape(msg)));
+                    });
+                baselineSaved = true;
+            }
+            catch (Exception ex)
+            {
+                _console.MarkupLine($"[yellow]Could not save a baseline snapshot ({Markup.Escape(ex.Message)}). Run 'pks vm snapshot {Markup.Escape(vmName)}' later to enable 'pks vm reset'.[/]");
+            }
         }
 
         // 11. Register as SSH target
@@ -499,6 +541,7 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
 
             [dim]Connect: ssh -i {Markup.Escape(keyPath)} azureuser@{Markup.Escape(vmInfo.PublicIpAddress)}[/]
             [dim]Spawn devcontainer: pks devcontainer spawn --ssh-target {Markup.Escape(vmName)}[/]
+            [dim]{(baselineSaved ? $"Reset to fresh: pks vm reset {Markup.Escape(vmName)}" : $"Enable reset: pks vm snapshot {Markup.Escape(vmName)}")}[/]
             """)
             .Border(BoxBorder.Rounded)
             .BorderStyle("green")
