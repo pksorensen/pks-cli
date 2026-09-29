@@ -286,9 +286,9 @@ public class RunnerDaemonServiceTests : IDisposable
             .ReturnsAsync(new GitHubJitRunnerConfig { RunnerId = 42, EncodedJitConfig = "jit" })
             .Callback(() => cts.Cancel());
 
-        _mockContainerPool.Setup(p => p.TryGet("my-app-dev")).Returns((NamedContainerEntry?)null);
+        _mockContainerPool.Setup(p => p.TryGet(It.IsAny<string>(), It.IsAny<string>(), "my-app-dev")).Returns((NamedContainerEntry?)null);
         _mockContainerPool
-            .Setup(p => p.AcquireAsync("my-app-dev", It.IsAny<CancellationToken>()))
+            .Setup(p => p.AcquireAsync(It.IsAny<string>(), It.IsAny<string>(), "my-app-dev", It.IsAny<CancellationToken>()))
             .ReturnsAsync(Mock.Of<IDisposable>());
 
         _mockContainerService
@@ -345,9 +345,9 @@ public class RunnerDaemonServiceTests : IDisposable
             Owner = "testowner",
             Repository = "testrepo"
         };
-        _mockContainerPool.Setup(p => p.TryGet("my-app")).Returns(existingEntry);
+        _mockContainerPool.Setup(p => p.TryGet(It.IsAny<string>(), It.IsAny<string>(), "my-app")).Returns(existingEntry);
         _mockContainerPool
-            .Setup(p => p.AcquireAsync("my-app", It.IsAny<CancellationToken>()))
+            .Setup(p => p.AcquireAsync(It.IsAny<string>(), It.IsAny<string>(), "my-app", It.IsAny<CancellationToken>()))
             .ReturnsAsync(Mock.Of<IDisposable>());
 
         // Container is still alive
@@ -1325,6 +1325,273 @@ public class RunnerDaemonServiceTests : IDisposable
                 "testowner", "testrepo", It.IsAny<int>(), It.IsAny<CancellationToken>()),
             Times.Exactly(RunnerDaemonService.MaxDispatchAttempts),
             "and its registration is removed on that path as well");
+    }
+
+    #endregion
+
+    #region Job eligibility
+
+    [Theory]
+    [InlineData("ubuntu-latest")]
+    [InlineData("ubuntu-24.04")]
+    [InlineData("windows-latest")]
+    [InlineData("macos-14")]
+    public void IsServableJob_RejectsGitHubHostedJobs(string label)
+    {
+        var job = new WorkflowJob { Id = 1, Labels = new List<string> { label } };
+
+        RunnerDaemonService.IsServableJob(job).Should().BeFalse(
+            "GitHub runs this on its own fleet, so a runner minted for it can never be claimed " +
+            "and the dispatch would block forever");
+    }
+
+    [Fact]
+    public void IsServableJob_AcceptsSelfHostedJobEvenAlongsideAHostedLabel()
+    {
+        var job = new WorkflowJob
+        {
+            Id = 1,
+            Labels = new List<string> { "self-hosted", "ubuntu-latest" }
+        };
+
+        RunnerDaemonService.IsServableJob(job).Should().BeTrue(
+            "an explicit self-hosted label means the job is waiting for a runner like ours");
+    }
+
+    [Fact]
+    public void IsServableJob_AcceptsCustomLabelWithoutSelfHosted()
+    {
+        var job = new WorkflowJob { Id = 1, Labels = new List<string> { "devcontainer-runner" } };
+
+        RunnerDaemonService.IsServableJob(job).Should().BeTrue(
+            "GitHub matches a job to any runner whose labels are a superset of its own, and our " +
+            "JIT runners carry the job's own labels");
+    }
+
+    #endregion
+
+    #region Stranded dispatch detection
+
+    private static RunnerJobState TrackedDispatch(
+        DateTime startedAt, DateTime? claimWaitStartedAt = null) => new()
+    {
+        RunId = 5,
+        WorkflowJobId = 42,
+        WorkflowJobName = "build",
+        RunnerName = "pks-runner-42-20260829120000",
+        StartedAt = startedAt,
+        ClaimWaitStartedAt = claimWaitStartedAt
+    };
+
+    private static RunnerJobState IdleDispatch(params string[] runnerLabels) => new()
+    {
+        RunId = 5,
+        WorkflowJobId = 42,
+        WorkflowJobName = "fast",
+        RunnerName = "pks-runner-42-20260830080439",
+        StartedAt = DateTime.UtcNow.AddMinutes(-5),
+        RunnerLabels = runnerLabels.Length > 0
+            ? runnerLabels
+            : new[] { "self-hosted", "devcontainer-runner", "agentics-live-www-devcontainer" }
+    };
+
+    [Fact]
+    public void FindRetargetCandidate_WhenOurOtherRunnerTookTheJob_TakesTheStrandedSibling()
+    {
+        // The 2026-08-30 incident: GitHub gave the runner minted for 'fast' the sibling
+        // 'build-remotion-artifacts' instead, and 'fast' was left queued.
+        var state = IdleDispatch();
+        var jobs = new List<WorkflowJob>
+        {
+            new() { Id = 42, Name = "fast", Status = "in_progress", RunnerName = "pks-runner-43-20260830080440",
+                    Labels = new List<string> { "self-hosted", "devcontainer-runner", "agentics-live-www-devcontainer" } },
+            new() { Id = 43, Name = "build-remotion-artifacts", Status = "queued",
+                    Labels = new List<string> { "self-hosted", "devcontainer-runner", "agentics-live-www-devcontainer" } }
+        };
+
+        RunnerDaemonService.FindRetargetCandidate(state, jobs, new HashSet<long>())
+            ?.Id.Should().Be(43,
+                "the dispatch has a working runner and its sibling is still queued — throwing the " +
+                "container away and minting a second one is what cost 'fast' five minutes");
+    }
+
+    [Fact]
+    public void FindRetargetCandidate_WhenTheStrandedJobNeedsALabelWeLack_LeavesItAlone()
+    {
+        var state = IdleDispatch("self-hosted", "devcontainer-runner");
+        var jobs = new List<WorkflowJob>
+        {
+            new() { Id = 42, Name = "fast", Status = "in_progress", RunnerName = "pks-runner-43-20260830080440",
+                    Labels = new List<string> { "self-hosted", "devcontainer-runner" } },
+            new() { Id = 43, Name = "deploy", Status = "queued",
+                    Labels = new List<string> { "self-hosted", "devcontainer-runner", "agentics-live-www-devcontainer" } }
+        };
+
+        RunnerDaemonService.FindRetargetCandidate(state, jobs, new HashSet<long>())
+            .Should().BeNull(
+                "GitHub would never hand this runner that job, so retargeting would only make the " +
+                "starvation quieter");
+    }
+
+    [Fact]
+    public void FindRetargetCandidate_WhenAForeignRunnerTookTheJob_LeavesItToTheStrandingRules()
+    {
+        var state = IdleDispatch();
+        var jobs = new List<WorkflowJob>
+        {
+            new() { Id = 42, Name = "fast", Status = "in_progress", RunnerName = "GitHub Actions 1000005219",
+                    Labels = new List<string> { "self-hosted", "devcontainer-runner", "agentics-live-www-devcontainer" } },
+            new() { Id = 43, Name = "e2e", Status = "queued",
+                    Labels = new List<string> { "self-hosted", "devcontainer-runner", "agentics-live-www-devcontainer" } }
+        };
+
+        RunnerDaemonService.FindRetargetCandidate(state, jobs, new HashSet<long>())
+            .Should().BeNull("only a job lost to one of our own runners frees this dispatch up");
+    }
+
+    [Fact]
+    public void FindRetargetCandidate_WhenAnotherDispatchAlreadyHasTheJob_LeavesItAlone()
+    {
+        var state = IdleDispatch();
+        var jobs = new List<WorkflowJob>
+        {
+            new() { Id = 42, Name = "fast", Status = "in_progress", RunnerName = "pks-runner-43-20260830080440",
+                    Labels = new List<string> { "self-hosted", "devcontainer-runner" } },
+            new() { Id = 43, Name = "e2e", Status = "queued",
+                    Labels = new List<string> { "self-hosted", "devcontainer-runner" } }
+        };
+
+        RunnerDaemonService.FindRetargetCandidate(state, jobs, new HashSet<long> { 43 })
+            .Should().BeNull("two dispatches must not end up waiting for the same job");
+    }
+
+    [Fact]
+    public void FindRetargetCandidate_WhenOurRunnerIsBusy_LeavesItAlone()
+    {
+        var state = IdleDispatch();
+        var jobs = new List<WorkflowJob>
+        {
+            new() { Id = 42, Name = "fast", Status = "in_progress", RunnerName = state.RunnerName,
+                    Labels = new List<string> { "self-hosted", "devcontainer-runner" } },
+            new() { Id = 43, Name = "e2e", Status = "queued",
+                    Labels = new List<string> { "self-hosted", "devcontainer-runner" } }
+        };
+
+        RunnerDaemonService.FindRetargetCandidate(state, jobs, new HashSet<long>())
+            .Should().BeNull("the runner is running a job; retargeting would abandon live work");
+    }
+
+    [Fact]
+    public void ClassifyStrandedDispatch_WhenGitHubAlreadyFinishedTheJob_Strands()
+    {
+        var state = TrackedDispatch(DateTime.UtcNow);
+        var jobs = new List<WorkflowJob>
+        {
+            new() { Id = 42, Status = "completed", Conclusion = "success", RunnerName = "GitHub Actions 1000005219" }
+        };
+
+        RunnerDaemonService.ClassifyStrandedDispatch(
+                state, jobs, DateTime.UtcNow, RunnerDaemonService.ClaimDeadline)
+            .Should().Contain("already finished",
+                "this is the 2026-08-28 leak: the job was done on a hosted runner while our " +
+                "dispatch kept its slot");
+    }
+
+    [Fact]
+    public void ClassifyStrandedDispatch_WhenAnotherRunnerClaimedIt_Strands()
+    {
+        var state = TrackedDispatch(DateTime.UtcNow);
+        var jobs = new List<WorkflowJob>
+        {
+            new() { Id = 42, Status = "in_progress", RunnerName = "some-other-runner" }
+        };
+
+        RunnerDaemonService.ClassifyStrandedDispatch(
+                state, jobs, DateTime.UtcNow, RunnerDaemonService.ClaimDeadline)
+            .Should().Contain("another runner claimed it");
+    }
+
+    [Fact]
+    public void ClassifyStrandedDispatch_WhenOurRunnerIsRunningIt_NeverStrandsHoweverLong()
+    {
+        var state = TrackedDispatch(DateTime.UtcNow.AddHours(-6));
+        var jobs = new List<WorkflowJob>
+        {
+            new() { Id = 42, Status = "in_progress", RunnerName = state.RunnerName }
+        };
+
+        RunnerDaemonService.ClassifyStrandedDispatch(
+                state, jobs, DateTime.UtcNow, RunnerDaemonService.ClaimDeadline)
+            .Should().BeNull("run.sh runs the whole job, so no clock may cap a job we are running");
+    }
+
+    [Fact]
+    public void ClassifyStrandedDispatch_WhenOurRunnerTookASiblingJob_NeverStrands()
+    {
+        var state = TrackedDispatch(DateTime.UtcNow.AddHours(-6));
+        var jobs = new List<WorkflowJob>
+        {
+            new() { Id = 42, Status = "queued" },
+            new() { Id = 43, Status = "in_progress", RunnerName = state.RunnerName }
+        };
+
+        RunnerDaemonService.ClassifyStrandedDispatch(
+                state, jobs, DateTime.UtcNow, RunnerDaemonService.ClaimDeadline)
+            .Should().BeNull(
+                "a JIT runner is not bound to the job it was minted for, and the container is " +
+                "doing real work on the sibling");
+    }
+
+    [Fact]
+    public void ClassifyStrandedDispatch_WhenRunnerCameOnlineWithinTheDeadline_HoldsOn()
+    {
+        var state = TrackedDispatch(
+            DateTime.UtcNow.AddMinutes(-40), claimWaitStartedAt: DateTime.UtcNow.AddMinutes(-3));
+        var jobs = new List<WorkflowJob> { new() { Id = 42, Status = "queued" } };
+
+        RunnerDaemonService.ClassifyStrandedDispatch(
+                state, jobs, DateTime.UtcNow, RunnerDaemonService.ClaimDeadline)
+            .Should().BeNull(
+                "the clock runs from the runner coming online, not from dispatch — the 37 minutes " +
+                "before that were spent building");
+    }
+
+    [Fact]
+    public void ClassifyStrandedDispatch_WhileStillBuilding_NeverStrandsHoweverLong()
+    {
+        // No ClaimWaitStartedAt: still waiting on the container pool, devcontainer up or the
+        // runner install. A cold build reports no progress at all while it runs.
+        var state = TrackedDispatch(DateTime.UtcNow.AddHours(-2));
+        var jobs = new List<WorkflowJob> { new() { Id = 42, Status = "queued" } };
+
+        RunnerDaemonService.ClassifyStrandedDispatch(
+                state, jobs, DateTime.UtcNow, RunnerDaemonService.ClaimDeadline)
+            .Should().BeNull(
+                "nothing can have claimed the job before our runner is even up, so evicting here " +
+                "would burn dispatch attempts on a healthy build and eventually abandon the job");
+    }
+
+    [Fact]
+    public void ClassifyStrandedDispatch_WhenStillQueuedPastTheDeadline_Strands()
+    {
+        var state = TrackedDispatch(
+            DateTime.UtcNow.AddHours(-1), claimWaitStartedAt: DateTime.UtcNow.AddMinutes(-11));
+        var jobs = new List<WorkflowJob> { new() { Id = 42, Status = "queued" } };
+
+        RunnerDaemonService.ClassifyStrandedDispatch(
+                state, jobs, DateTime.UtcNow, RunnerDaemonService.ClaimDeadline)
+            .Should().Contain("no runner claimed it");
+    }
+
+    [Fact]
+    public void ClassifyStrandedDispatch_WhenGitHubDoesNotListTheJob_HoldsOn()
+    {
+        var state = TrackedDispatch(
+            DateTime.UtcNow.AddHours(-6), claimWaitStartedAt: DateTime.UtcNow.AddHours(-6));
+
+        RunnerDaemonService.ClassifyStrandedDispatch(
+                state, new List<WorkflowJob>(), DateTime.UtcNow, RunnerDaemonService.ClaimDeadline)
+            .Should().BeNull("missing data is not evidence that the dispatch is dead");
     }
 
     #endregion
