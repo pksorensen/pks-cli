@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.7.0](https://github.com/pksorensen/pks-cli/compare/v7.6.0...v7.7.0) (2026-09-29)
+
+
+### Features
+
+* **vm:** snapshot a VM's baseline and reset it back to that ([98afa84](https://github.com/pksorensen/pks-cli/commit/98afa844a41f7cfd94c1786fe0d906e0db712ecd))
+
 ## [7.6.0](https://github.com/pksorensen/pks-cli/compare/v7.5.0...v7.6.0) (2026-09-29)
 
 
