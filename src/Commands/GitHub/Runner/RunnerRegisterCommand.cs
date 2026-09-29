@@ -41,7 +41,7 @@ public class RunnerRegisterCommand : RunnerCommand<RunnerRegisterCommand.Setting
         [Description("Allow this repository's jobs to fetch the host's Expo token from the credential broker")]
         public bool Expo { get; set; }
 
-        [CommandOption("--deploy-repo <OWNER/REPO>")]
+        [CommandOption("--deploy-repo <OWNER_REPO>")]
         [Description("Also let this repository's jobs deploy the Coolify app built from OWNER/REPO (optionally OWNER/REPO@BRANCH). Repeatable — for coordination repos whose deployable lives in a submodule.")]
         public string[] DeployRepositories { get; set; } = Array.Empty<string>();
     }
