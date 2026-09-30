@@ -6,6 +6,7 @@ using PKS.Infrastructure.Services;
 using PKS.Infrastructure.Services.Models;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json;
@@ -263,6 +264,56 @@ public class AzureVmServiceTests
         await service.DestroyVmAsync("tok", "sub1", "rg1", "test-vm");
 
         deleteOrder.Should().ContainInOrder("VM", "NIC", "IP", "Disk", "NSG");
+    }
+
+    [Fact]
+    [Trait("Category", "AzureVmService")]
+    public async Task DestroyVmAsync_SecondAttempt_WhenVmIsGone_StillDeletesItsDisksAndBaseline()
+    {
+        // A PIM retry after the VM delete went through but a later delete was refused: the VM
+        // answers 404, so its OS disk can only be found by name among the group's detached disks.
+        var deleted = new List<string>();
+        var service = CreateService(req =>
+        {
+            var url = req.RequestUri!.AbsolutePath;
+            if (req.Method == HttpMethod.Delete)
+            {
+                deleted.Add(url.Split('/').Last());
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NoContent));
+            }
+            if (url.EndsWith("/providers/Microsoft.Compute/disks"))
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""
+                        {"value":[
+                          {"name":"test-vm_OsDisk_1_abc"},
+                          {"name":"test-vm-osdisk-20260930120000"},
+                          {"name":"test-vm-osdisk-20260930130000","managedBy":"/subscriptions/x/vm/other"},
+                          {"name":"other-vm_OsDisk_1_def"}
+                        ]}
+                        """, System.Text.Encoding.UTF8, "application/json")
+                });
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+        }, pollInterval: TimeSpan.Zero);
+
+        await service.DestroyVmAsync("tok", "sub1", "rg1", "test-vm");
+
+        deleted.Should().Contain(new[] { "test-vm_OsDisk_1_abc", "test-vm-osdisk-20260930120000", "test-vm-baseline" });
+        deleted.Should().NotContain(new[] { "test-vm-osdisk-20260930130000", "other-vm_OsDisk_1_def" });
+    }
+
+    [Fact]
+    [Trait("Category", "AzureVmService")]
+    public async Task DeleteVmAsync_403_CarriesTheStatusCode_SoPimRetryCanSeeIt()
+    {
+        var service = CreateService(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden)
+        {
+            Content = new StringContent("""{"error":{"code":"AuthorizationFailed"}}""")
+        }));
+
+        var act = () => service.DeleteVmAsync("tok", "sub1", "rg1", "test-vm");
+
+        (await act.Should().ThrowAsync<HttpRequestException>()).Which.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
 
     [Fact]

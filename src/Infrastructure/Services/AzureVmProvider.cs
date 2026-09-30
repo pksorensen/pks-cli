@@ -1,4 +1,6 @@
+using PKS.Infrastructure.Services.Azure;
 using PKS.Infrastructure.Services.Models;
+using Spectre.Console;
 
 namespace PKS.Infrastructure.Services;
 
@@ -6,6 +8,7 @@ namespace PKS.Infrastructure.Services;
 /// <see cref="IVmProvider"/> backed by the existing Azure ARM stack
 /// (<see cref="IAzureAuthService"/> + <see cref="IAzureVmService"/>). Acquires a
 /// management token on each call so commands no longer thread a token around.
+/// Start, stop and destroy offer PIM activation on a 403 when a console is available.
 /// </summary>
 public class AzureVmProvider : IVmProvider
 {
@@ -13,11 +16,16 @@ public class AzureVmProvider : IVmProvider
 
     private readonly IAzureAuthService _auth;
     private readonly IAzureVmService _vm;
+    private readonly IAnsiConsole? _console;
+    private readonly IHttpClientFactory? _httpClientFactory;
 
-    public AzureVmProvider(IAzureAuthService auth, IAzureVmService vm)
+    public AzureVmProvider(IAzureAuthService auth, IAzureVmService vm,
+        IAnsiConsole? console = null, IHttpClientFactory? httpClientFactory = null)
     {
         _auth = auth;
         _vm = vm;
+        _console = console;
+        _httpClientFactory = httpClientFactory;
     }
 
     public string ProviderKey => "azure";
@@ -48,20 +56,29 @@ public class AzureVmProvider : IVmProvider
     public async Task StartAsync(AzureVmRecord record)
     {
         var token = await RequireTokenAsync();
-        await _vm.StartVmAsync(token, record.SubscriptionId, record.ResourceGroup, record.VmName);
+        await WithPimAsync(token, record, $"start VM {record.VmName}",
+            () => _vm.StartVmAsync(token, record.SubscriptionId, record.ResourceGroup, record.VmName));
     }
 
     public async Task StopAsync(AzureVmRecord record)
     {
         var token = await RequireTokenAsync();
-        await _vm.DeallocateVmAsync(token, record.SubscriptionId, record.ResourceGroup, record.VmName);
+        await WithPimAsync(token, record, $"stop VM {record.VmName}",
+            () => _vm.DeallocateVmAsync(token, record.SubscriptionId, record.ResourceGroup, record.VmName));
     }
 
     public async Task DestroyAsync(AzureVmRecord record, Action<string>? onProgress = null)
     {
         var token = await RequireTokenAsync();
-        await _vm.DestroyVmAsync(token, record.SubscriptionId, record.ResourceGroup, record.VmName, onProgress);
+        // Safe to repeat: deletes treat 404 as done, and leftover OS disks are found by name.
+        await WithPimAsync(token, record, $"destroy VM {record.VmName}",
+            () => _vm.DestroyVmAsync(token, record.SubscriptionId, record.ResourceGroup, record.VmName, onProgress));
     }
+
+    private Task WithPimAsync(string token, AzureVmRecord record, string purpose, Func<Task> operation)
+        => _console == null || _httpClientFactory == null
+            ? operation()
+            : AzurePimRetry.RunAsync(operation, _console, _httpClientFactory.CreateClient(), token, record.SubscriptionId, purpose);
 
     private Task<string?> GetTokenAsync() => _auth.GetAccessTokenAsync(ManagementScope);
 

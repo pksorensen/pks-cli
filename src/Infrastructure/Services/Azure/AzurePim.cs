@@ -240,3 +240,47 @@ public static class AzurePimPrompt
         return anyActivated;
     }
 }
+
+/// <summary>
+/// Runs an ARM operation; on a 403 offers PIM activation (an eligible role grants nothing until
+/// activated, and ARM only says "AuthorizationFailed") and retries while the activation propagates.
+/// The operation must be safe to run again after a partial 403.
+/// </summary>
+public static class AzurePimRetry
+{
+    public static async Task<T> RunAsync<T>(
+        Func<Task<T>> operation, IAnsiConsole console, HttpClient http,
+        string token, string subscriptionId, string purpose, TimeSpan? propagationDelay = null)
+    {
+        try
+        {
+            return await operation();
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        {
+            console.MarkupLine("[yellow]Azure refused this (403). If your role there is a PIM eligibility, it is not active yet.[/]");
+            if (!await AzurePimPrompt.OfferActivationAsync(console, http, token, subscriptionId, purpose))
+                throw;
+        }
+
+        // An activation takes a little while to reach every resource provider (observed: Compute
+        // still refused ~30 s after Network accepted).
+        for (var attempt = 1; ; attempt++)
+        {
+            console.MarkupLine("[dim]Waiting for the activation to take effect...[/]");
+            await Task.Delay(propagationDelay ?? TimeSpan.FromSeconds(30));
+            try
+            {
+                return await operation();
+            }
+            catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Forbidden && attempt < 4)
+            {
+            }
+        }
+    }
+
+    public static Task RunAsync(
+        Func<Task> operation, IAnsiConsole console, HttpClient http,
+        string token, string subscriptionId, string purpose, TimeSpan? propagationDelay = null)
+        => RunAsync(async () => { await operation(); return true; }, console, http, token, subscriptionId, purpose, propagationDelay);
+}

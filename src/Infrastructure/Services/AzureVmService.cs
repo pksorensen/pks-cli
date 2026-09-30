@@ -929,7 +929,7 @@ public class AzureVmService : IAzureVmService
         if (!response.IsSuccessStatusCode && response.StatusCode != System.Net.HttpStatusCode.Accepted)
         {
             var body = await response.Content.ReadAsStringAsync(ct);
-            throw new HttpRequestException($"ARM {(int)response.StatusCode} starting VM: {body}");
+            throw new HttpRequestException($"ARM {(int)response.StatusCode} starting VM: {body}", null, response.StatusCode);
         }
     }
 
@@ -943,7 +943,7 @@ public class AzureVmService : IAzureVmService
         if (!response.IsSuccessStatusCode && response.StatusCode != System.Net.HttpStatusCode.Accepted)
         {
             var body = await response.Content.ReadAsStringAsync(ct);
-            throw new HttpRequestException($"ARM {(int)response.StatusCode} deallocating VM: {body}");
+            throw new HttpRequestException($"ARM {(int)response.StatusCode} deallocating VM: {body}", null, response.StatusCode);
         }
     }
 
@@ -1116,7 +1116,7 @@ public class AzureVmService : IAzureVmService
         if (!resp.IsSuccessStatusCode && resp.StatusCode != System.Net.HttpStatusCode.Accepted)
         {
             var errBody = await resp.Content.ReadAsStringAsync(ct);
-            throw new HttpRequestException($"ARM {(int)resp.StatusCode} deleting {label}: {errBody}");
+            throw new HttpRequestException($"ARM {(int)resp.StatusCode} deleting {label}: {errBody}", null, resp.StatusCode);
         }
 
         var asyncOpUrl = resp.Headers.TryGetValues("Azure-AsyncOperation", out var asyncOp)
@@ -1150,6 +1150,32 @@ public class AzureVmService : IAzureVmService
                 throw new InvalidOperationException($"Delete of {label} failed: {pollBody}");
         }
         throw new TimeoutException($"Timed out waiting for {label} delete to complete.");
+    }
+
+    /// <summary>Unattached disks in the group named the way Azure and 'pks vm reset' name this VM's OS disks.</summary>
+    private async Task<List<string>> ListDetachedOsDisksAsync(string accessToken, string sub, string rg, string vmName, CancellationToken ct)
+    {
+        var url = $"https://management.azure.com/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Compute/disks?api-version={DiskApiVersion}";
+        var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        var resp = await _httpClient.SendAsync(req, ct);
+        if (!resp.IsSuccessStatusCode) return new List<string>();
+
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        var names = new List<string>();
+        if (string.IsNullOrWhiteSpace(body)) return names;
+        using var doc = JsonDocument.Parse(body);
+        if (!doc.RootElement.TryGetProperty("value", out var disks)) return names;
+        foreach (var disk in disks.EnumerateArray())
+        {
+            var name = disk.TryGetProperty("name", out var n) ? n.GetString() : null;
+            var attached = disk.TryGetProperty("managedBy", out var m) && m.ValueKind == JsonValueKind.String;
+            if (name == null || attached) continue;
+            if (name.StartsWith($"{vmName}_OsDisk_", StringComparison.OrdinalIgnoreCase)
+                || name.StartsWith($"{vmName}-osdisk-", StringComparison.OrdinalIgnoreCase))
+                names.Add(name);
+        }
+        return names;
     }
 
     public async Task DestroyVmAsync(string accessToken, string subscriptionId, string resourceGroup, string vmName, Action<string>? onProgress = null, CancellationToken ct = default)
@@ -1191,6 +1217,19 @@ public class AzureVmService : IAzureVmService
             var diskUrl = $"https://management.azure.com/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Compute/disks/{osDiskName}?api-version={DiskApiVersion}";
             await DeleteResourceAsync(accessToken, diskUrl, ct);
         }
+
+        // Disks the VM no longer points at: ones earlier 'pks vm reset' runs left behind, and the OS
+        // disk itself when this is a second attempt (after a PIM activation) and the VM is already gone.
+        foreach (var disk in await ListDetachedOsDisksAsync(accessToken, sub, rg, vmName, ct))
+        {
+            onProgress?.Invoke($"Deleting disk {disk}...");
+            var diskUrl = $"https://management.azure.com/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Compute/disks/{disk}?api-version={DiskApiVersion}";
+            await DeleteResourceAsync(accessToken, diskUrl, ct);
+        }
+
+        onProgress?.Invoke("Deleting baseline snapshot...");
+        var baselineUrl = $"https://management.azure.com/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Compute/snapshots/{AzureVmDiskService.BaselineName(vmName)}?api-version={DiskApiVersion}";
+        await DeleteResourceAsync(accessToken, baselineUrl, ct);
 
         onProgress?.Invoke("Deleting NSG...");
         try

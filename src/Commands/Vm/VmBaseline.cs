@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Net;
 using PKS.Infrastructure.Services.Azure;
 using Spectre.Console;
 
@@ -7,7 +6,7 @@ namespace PKS.Commands.Vm;
 
 /// <summary>
 /// Shared by <c>vm snapshot</c>, <c>vm reset</c> and <c>vm init</c>: flushing the guest before a
-/// snapshot, and retrying an ARM call once a PIM role has been activated.
+/// snapshot, and retrying an ARM call once a PIM role has been activated (<see cref="AzurePimRetry"/>).
 /// </summary>
 public static class VmBaseline
 {
@@ -38,38 +37,9 @@ public static class VmBaseline
         }
     }
 
-    /// <summary>
-    /// Runs an ARM operation; on a 403 offers PIM activation (an eligible role grants nothing until
-    /// activated, and ARM only says "AuthorizationFailed") and retries while the activation propagates.
-    /// </summary>
-    public static async Task<T> WithPimRetryAsync<T>(
+    /// <summary>See <see cref="AzurePimRetry"/>.</summary>
+    public static Task<T> WithPimRetryAsync<T>(
         Func<Task<T>> operation, IAnsiConsole console, IHttpClientFactory httpClientFactory,
         string token, string subscriptionId, string purpose)
-    {
-        try
-        {
-            return await operation();
-        }
-        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Forbidden)
-        {
-            console.MarkupLine("[yellow]Azure refused this (403). If your role there is a PIM eligibility, it is not active yet.[/]");
-            if (!await AzurePimPrompt.OfferActivationAsync(console, httpClientFactory.CreateClient(), token, subscriptionId, purpose))
-                throw;
-        }
-
-        // An activation takes a little while to reach every resource provider (observed: Compute
-        // still refused ~30 s after Network accepted).
-        for (var attempt = 1; ; attempt++)
-        {
-            console.MarkupLine("[dim]Waiting for the activation to take effect...[/]");
-            await Task.Delay(TimeSpan.FromSeconds(30));
-            try
-            {
-                return await operation();
-            }
-            catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.Forbidden && attempt < 4)
-            {
-            }
-        }
-    }
+        => AzurePimRetry.RunAsync(operation, console, httpClientFactory.CreateClient(), token, subscriptionId, purpose);
 }
