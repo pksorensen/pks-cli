@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Azure;
 using PKS.Infrastructure.Services.Security;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -213,15 +214,20 @@ public class SshConnectCommand : Command<SshConnectCommand.Settings>
             return false;
         }
 
+        // The spinner lives inside the operation: on a 403 the PIM prompt runs after it has stopped
+        // (Spectre forbids prompts inside a live display).
         Exception? startError = null;
-        await _console.Status()
-            .SpinnerStyle(Style.Parse("cyan"))
-            .Spinner(Spinner.Known.Dots)
-            .StartAsync("Starting VM...", async _ =>
-            {
-                try { await _vmService.StartVmAsync(token, vmRecord.SubscriptionId, vmRecord.ResourceGroup, vmRecord.VmName); }
-                catch (Exception ex) { startError = ex; }
-            });
+        try
+        {
+            await AzurePimRetry.RunAsync(
+                () => _console.Status()
+                    .SpinnerStyle(Style.Parse("cyan"))
+                    .Spinner(Spinner.Known.Dots)
+                    .StartAsync("Starting VM...", _ =>
+                        _vmService.StartVmAsync(token, vmRecord.SubscriptionId, vmRecord.ResourceGroup, vmRecord.VmName)),
+                _console, token, vmRecord.SubscriptionId, $"start VM {vmRecord.VmName}");
+        }
+        catch (Exception ex) { startError = ex; }
 
         if (startError != null)
         {

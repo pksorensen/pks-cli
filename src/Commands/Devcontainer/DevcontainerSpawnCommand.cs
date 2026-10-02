@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using PKS.Commands.Vm;
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Azure;
 using PKS.Infrastructure.Services.Claude;
 using PKS.Infrastructure.Services.Security;
 using PKS.Infrastructure.Services.Models;
@@ -1166,12 +1167,16 @@ public class DevcontainerSpawnCommand : DevcontainerCommand<DevcontainerSpawnCom
                 $"Start VM '{vmRecord.VmName}' (Azure) to spawn the devcontainer")))
             return false;
 
+        // The spinner lives inside the operation: on a 403 the PIM prompt runs after it has stopped.
         Exception? startError = null;
-        await WithSpinnerAsync("Starting VM...", async () =>
+        try
         {
-            try { await _vmService.StartVmAsync(token, vmRecord.SubscriptionId, vmRecord.ResourceGroup, vmRecord.VmName); }
-            catch (Exception ex) { startError = ex; }
-        });
+            await AzurePimRetry.RunAsync(
+                () => WithSpinnerAsync("Starting VM...", () =>
+                    _vmService.StartVmAsync(token, vmRecord.SubscriptionId, vmRecord.ResourceGroup, vmRecord.VmName)),
+                Console, token, vmRecord.SubscriptionId, $"start VM {vmRecord.VmName}");
+        }
+        catch (Exception ex) { startError = ex; }
 
         if (startError != null)
         {

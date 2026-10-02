@@ -283,4 +283,13 @@ public static class AzurePimRetry
         Func<Task> operation, IAnsiConsole console, HttpClient http,
         string token, string subscriptionId, string purpose, TimeSpan? propagationDelay = null)
         => RunAsync(async () => { await operation(); return true; }, console, http, token, subscriptionId, purpose, propagationDelay);
+
+    /// <summary>For callers without an <see cref="IHttpClientFactory"/> at hand: the client is only
+    /// used on the rare 403 path, to list and activate PIM roles.</summary>
+    public static async Task RunAsync(
+        Func<Task> operation, IAnsiConsole console, string token, string subscriptionId, string purpose)
+    {
+        using var http = new HttpClient();
+        await RunAsync(operation, console, http, token, subscriptionId, purpose);
+    }
 }
