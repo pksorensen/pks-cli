@@ -9,6 +9,7 @@ public static class ActionIds
     public const string VmDestroy = "vm.destroy";
     public const string VmReset = "vm.reset";
     public const string VmAutoshutdownWrite = "vm.autoshutdown.write";
+    public const string VmFirewallWrite = "vm.firewall.write";
     public const string CloudAuthWrite = "cloud.auth.write";
     public const string DevcontainerSpawnRemote = "devcontainer.spawn.remote";
     public const string PksUpdate = "pks.update";
@@ -57,6 +58,7 @@ public sealed class ActionCatalog : IActionCatalog
         new ActionDefinition(ActionIds.VmDestroy, "Destroy VM", "Permanently delete a VM and its resources", true, "Compute"),
         new ActionDefinition(ActionIds.VmReset, "Reset VM", "Wipe a VM's OS disk back to its baseline snapshot", true, "Compute"),
         new ActionDefinition(ActionIds.VmAutoshutdownWrite, "Change auto-shutdown", "Modify idle/scheduled shutdown policy", false, "Compute"),
+        new ActionDefinition(ActionIds.VmFirewallWrite, "Open VM ports", "Allow inbound internet traffic to a VM on more TCP ports", true, "Compute"),
         new ActionDefinition(ActionIds.CloudAuthWrite, "Store cloud credentials", "Store or replace Scaleway/Moonshot/Azure/Foundry credentials", true, "Cloud"),
         new ActionDefinition(ActionIds.DevcontainerSpawnRemote, "Spawn remote devcontainer", "Spawn a devcontainer on a remote VM (auto-starts it)", true, "Devcontainer", new[] { ActionIds.VmStart }),
         new ActionDefinition(ActionIds.PksUpdate, "Update pks", "Replace or self-update the pks binary", true, "Control plane"),

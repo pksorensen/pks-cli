@@ -1511,6 +1511,10 @@ app.Configure(config =>
             .WithExample(new[] { "vm", "autoshutdown", "my-vm", "--idle", "30" })
             .WithExample(new[] { "vm", "autoshutdown", "my-vm", "--scheduled", "22:00" })
             .WithExample(new[] { "vm", "autoshutdown", "my-vm", "--disable" });
+        vm.AddCommand<PKS.Commands.Vm.VmOpenPortCommand>("open-port")
+            .WithDescription("Open inbound TCP ports on a VM's network security group")
+            .WithExample(new[] { "vm", "open-port", "my-vm" })
+            .WithExample(new[] { "vm", "open-port", "my-vm", "80,443" });
         vm.AddCommand<PKS.Commands.Vm.VmListCommand>("list")
             .WithDescription("List VMs provisioned with pks vm init")
             .WithExample(new[] { "vm", "list" });
