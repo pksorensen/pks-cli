@@ -49,6 +49,26 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.8.0](https://github.com/pksorensen/pks-cli/compare/v7.7.0...v7.8.0) (2026-10-08)
+
+
+### Features
+
+* **ssh:** offer PIM activation when starting the VM from ssh connect and devcontainer spawn ([bf9b747](https://github.com/pksorensen/pks-cli/commit/bf9b747dee8951dd1cb8e8694b9a93117aab882f))
+* **storage:** report progress and missing choices when there is no terminal ([fb7079a](https://github.com/pksorensen/pks-cli/commit/fb7079a3561918d6bde2657d7bee31859a6d9310))
+* **vm:** offer PIM activation on 403 in start, stop and destroy ([01097c4](https://github.com/pksorensen/pks-cli/commit/01097c44dc93ca9dc1873b21948ad40d26daf670))
+* **vm:** pks vm open-port opens inbound TCP ports on the VM's NSG ([6a6c21f](https://github.com/pksorensen/pks-cli/commit/6a6c21f3cacc80115d4f42b23f8b4f307146a94d))
+
+
+### Bug Fixes
+
+* **cli:** explain "Invalid long option name" when a flag and its value are one argument ([45d407d](https://github.com/pksorensen/pks-cli/commit/45d407d505ae3960271ef96f7f1a6626877e0283))
+
+
+### Performance Improvements
+
+* **storage:** only walk the directories the sync globs can reach ([0967dcd](https://github.com/pksorensen/pks-cli/commit/0967dcd82eb327c2ed34ec0b3f9c26bb8636825b))
+
 ## [7.7.0](https://github.com/pksorensen/pks-cli/compare/v7.6.0...v7.7.0) (2026-09-29)
 
 
