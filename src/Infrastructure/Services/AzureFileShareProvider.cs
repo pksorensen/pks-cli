@@ -582,27 +582,49 @@ public class AzureFileShareProvider : IFileShareProvider
         Action<SyncProgressUpdate> progress,
         CancellationToken ct)
     {
-        // Producer-consumer: enumeration writes to channel as files are discovered;
-        // N consumer tasks start downloading immediately without waiting for enumeration to finish.
-        var channel = System.Threading.Channels.Channel.CreateUnbounded<(
+        // Two stages joined by a channel, so transfers start while the walk is still finding files:
+        // a pool of walkers lists remote directories (one REST round trip each — the expensive part
+        // of a large share) and N consumers download what the walkers let through.
+        var parallelism = Math.Max(1, request.MaxParallelism);
+        var files = System.Threading.Channels.Channel.CreateUnbounded<(
             global::Azure.Storage.Files.Shares.ShareFileClient Client,
             string LocalPath,
-            string RelPath)>(new System.Threading.Channels.UnboundedChannelOptions
+            string RelPath,
+            long? Size)>(new System.Threading.Channels.UnboundedChannelOptions
             {
-                SingleWriter = true,
+                SingleWriter = false,
                 SingleReader = false,
                 AllowSynchronousContinuations = false
             });
+        var directories = System.Threading.Channels.Channel.CreateUnbounded<(
+            global::Azure.Storage.Files.Shares.ShareDirectoryClient Client,
+            string LocalDir,
+            string RelPath)>();
 
         var discovered = 0;
-        var skipped = 0;
+        var filtered = 0;
         var upToDate = 0;
         var downloaded = 0;
+        var listed = 0;
+        var pruned = 0;
         var bytesTransferred = 0L;
         var errors = new System.Collections.Concurrent.ConcurrentBag<string>();
+        var planned = new System.Collections.Concurrent.ConcurrentBag<PlannedTransfer>();
 
-        // Build glob matcher once (null = match everything)
+        // Build glob matcher once (null = match everything). The pruner keeps the walk out of the
+        // trees the same globs rule out; the matcher still decides file by file.
         var matcher = BuildMatcher(request.Include, request.Exclude);
+        var pruner = new SyncTreePruner(request.Include, request.Exclude);
+
+        void Report(string current) => progress(new SyncProgressUpdate(
+            Volatile.Read(ref downloaded), Volatile.Read(ref discovered), current)
+        {
+            DirectoriesListed = Volatile.Read(ref listed),
+            DirectoriesPruned = Volatile.Read(ref pruned),
+            FilesUpToDate = Volatile.Read(ref upToDate),
+            FilesFiltered = Volatile.Read(ref filtered),
+            BytesTransferred = Interlocked.Read(ref bytesTransferred)
+        });
 
         progress(new SyncProgressUpdate(0, 0, "Discovering..."));
 
@@ -613,63 +635,102 @@ public class AzureFileShareProvider : IFileShareProvider
             Traits = global::Azure.Storage.Files.Shares.Models.ShareFileTraits.Timestamps
         };
 
-        // Producer: enumerate remote files and push to channel (filtered)
-        async Task ProduceAsync(global::Azure.Storage.Files.Shares.ShareDirectoryClient dir, string localDir, string relBase)
+        // Directories queued but not yet fully listed. The walk is over when it drops to zero —
+        // nothing is left to list and nothing being listed can queue more.
+        var pending = 1;
+        directories.Writer.TryWrite((rootDir, request.LocalDirectory, string.Empty));
+
+        async Task ListAsync(global::Azure.Storage.Files.Shares.ShareDirectoryClient dir, string localDir, string relBase)
         {
             await foreach (var item in dir.GetFilesAndDirectoriesAsync(listOptions, ct))
             {
                 var rel = relBase.Length == 0 ? item.Name : $"{relBase}/{item.Name}";
                 if (item.IsDirectory)
                 {
-                    var subLocal = Path.Combine(localDir, item.Name);
-                    Directory.CreateDirectory(subLocal);
-                    await ProduceAsync(dir.GetSubdirectoryClient(item.Name), subLocal, rel);
+                    if (!pruner.ShouldDescend(rel))
+                    {
+                        Interlocked.Increment(ref pruned);
+                        continue;
+                    }
+
+                    Interlocked.Increment(ref pending);
+                    directories.Writer.TryWrite((dir.GetSubdirectoryClient(item.Name), Path.Combine(localDir, item.Name), rel));
+                    continue;
                 }
-                else
+
+                if (matcher != null && !MatcherExtensions.Match(matcher, rel).HasMatches)
                 {
-                    if (matcher != null && !MatcherExtensions.Match(matcher, rel).HasMatches)
-                    {
-                        Interlocked.Increment(ref skipped);
-                        continue;
-                    }
-
-                    var localPath = Path.Combine(localDir, item.Name);
-                    if (!request.Force && IsLocalCopyCurrent(localPath, item.FileSize, item.Properties?.LastModified))
-                    {
-                        Interlocked.Increment(ref upToDate);
-                        continue;
-                    }
-
-                    Interlocked.Increment(ref discovered);
-                    await channel.Writer.WriteAsync((dir.GetFileClient(item.Name), localPath, rel), ct);
+                    Interlocked.Increment(ref filtered);
+                    continue;
                 }
+
+                var localPath = Path.Combine(localDir, item.Name);
+                if (!request.Force && IsLocalCopyCurrent(localPath, item.FileSize, item.Properties?.LastModified))
+                {
+                    Interlocked.Increment(ref upToDate);
+                    continue;
+                }
+
+                Interlocked.Increment(ref discovered);
+                await files.Writer.WriteAsync((dir.GetFileClient(item.Name), localPath, rel, item.FileSize), ct);
             }
         }
 
-        var producer = Task.Run(async () =>
+        var walkers = Enumerable.Range(0, parallelism).Select(_ => Task.Run(async () =>
         {
-            try { await ProduceAsync(rootDir, request.LocalDirectory, string.Empty); }
-            finally { channel.Writer.Complete(); }
+            await foreach (var (dir, localDir, rel) in directories.Reader.ReadAllAsync(ct))
+            {
+                try
+                {
+                    await ListAsync(dir, localDir, rel);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // One unreadable directory must not end the walk of the rest of the share.
+                    _logger.LogError(ex, "Failed to list {Directory}", rel);
+                    errors.Add($"List failed: /{rel} — {ex.Message}");
+                }
+                finally
+                {
+                    Interlocked.Increment(ref listed);
+                    if (Interlocked.Decrement(ref pending) == 0)
+                        directories.Writer.TryComplete();
+                    Report(rel.Length == 0 ? "/" : rel);
+                }
+            }
+        }, ct)).ToArray();
+
+        var walk = Task.Run(async () =>
+        {
+            try { await Task.WhenAll(walkers); }
+            finally
+            {
+                directories.Writer.TryComplete();
+                files.Writer.Complete();
+            }
         }, ct);
 
         // Consumers: MaxParallelism tasks reading from channel
-        var consumers = Enumerable.Range(0, request.MaxParallelism).Select(_ => Task.Run(async () =>
+        var consumers = Enumerable.Range(0, parallelism).Select(_ => Task.Run(async () =>
         {
-            await foreach (var (client, localPath, rel) in channel.Reader.ReadAllAsync(ct))
+            await foreach (var (client, localPath, rel, size) in files.Reader.ReadAllAsync(ct))
             {
-                var disc = Volatile.Read(ref discovered);
                 if (request.DryRun)
                 {
-                    var done = Interlocked.Increment(ref downloaded);
-                    progress(new SyncProgressUpdate(done, disc, rel));
+                    planned.Add(new PlannedTransfer(rel, size));
+                    Interlocked.Increment(ref downloaded);
+                    Report(rel);
                     continue;
                 }
 
                 // Download beside the target and rename into place, so an interrupted run can never
                 // leave a right-sized-but-truncated file that the next run would treat as complete.
+                // The directory is made here, not during the walk, so a tree with nothing to fetch
+                // leaves nothing behind locally.
                 var tempPath = localPath + ".pks-part";
                 try
                 {
+                    Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
                     var dl = await client.DownloadAsync(cancellationToken: ct);
                     await using (var fs = new FileStream(
                         tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
@@ -678,11 +739,11 @@ public class AzureFileShareProvider : IFileShareProvider
                     }
 
                     File.Move(tempPath, localPath, overwrite: true);
-                    var done = Interlocked.Increment(ref downloaded);
+                    Interlocked.Increment(ref downloaded);
                     Interlocked.Add(ref bytesTransferred, dl.Value.ContentLength);
-                    progress(new SyncProgressUpdate(done, Volatile.Read(ref discovered), rel));
+                    Report(rel);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     TryDelete(tempPath);
                     _logger.LogError(ex, "Failed to download {File}", rel);
@@ -691,11 +752,14 @@ public class AzureFileShareProvider : IFileShareProvider
             }
         }, ct));
 
-        await Task.WhenAll(new[] { producer }.Concat(consumers));
-        result.FilesDownloaded = downloaded;
-        result.FilesSkipped += skipped;
+        await Task.WhenAll(new[] { walk }.Concat(consumers));
+        result.FilesDownloaded = request.DryRun ? 0 : downloaded;
+        result.FilesSkipped += filtered;
         result.FilesUpToDate += upToDate;
         result.BytesTransferred += bytesTransferred;
+        result.DirectoriesListed += listed;
+        result.DirectoriesPruned += pruned;
+        result.PlannedTransfers.AddRange(planned.OrderBy(p => p.Path, StringComparer.Ordinal));
         result.Errors.AddRange(errors);
     }
 

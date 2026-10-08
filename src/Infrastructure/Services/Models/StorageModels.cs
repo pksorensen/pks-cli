@@ -44,11 +44,32 @@ public class SyncResult
     public int FilesUpToDate { get; set; }
 
     public long BytesTransferred { get; set; }
+
+    /// <summary>Remote directories listed, and those never listed because the globs ruled them out.</summary>
+    public int DirectoriesListed { get; set; }
+    public int DirectoriesPruned { get; set; }
+
+    /// <summary>Dry run only: what a real run would transfer, share-relative, with sizes.</summary>
+    public List<PlannedTransfer> PlannedTransfers { get; set; } = new();
+
     public List<string> Errors { get; set; } = new();
     public bool Success => Errors.Count == 0;
 }
 
-public record SyncProgressUpdate(int Completed, int Total, string CurrentFile);
+public record PlannedTransfer(string Path, long? SizeBytes);
+
+/// <summary>
+/// A snapshot of a running sync. <see cref="Total"/> grows while the remote walk is still finding
+/// files; the counters let a caller without a live terminal print plain progress lines.
+/// </summary>
+public record SyncProgressUpdate(int Completed, int Total, string CurrentFile)
+{
+    public int DirectoriesListed { get; init; }
+    public int DirectoriesPruned { get; init; }
+    public int FilesUpToDate { get; init; }
+    public int FilesFiltered { get; init; }
+    public long BytesTransferred { get; init; }
+}
 
 public enum StorageItemType { File, Directory }
 
