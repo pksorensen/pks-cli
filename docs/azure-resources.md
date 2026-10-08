@@ -66,7 +66,11 @@ otherwise redeem the same refresh token N times; the first wins and the rest fai
   and stamped with `Resource`; `--resource <name|appid>` (repeatable) narrows.
 - `pks storage list|ls|sync|rm` — every enabled storage account. `--account` disambiguates
   a share name that exists in more than one account; `rm` still binds consent to
-  `azure-fileshare:{account}/{share}`.
+  `azure-fileshare:{account}/{share}`. Without a terminal nothing prompts: a missing
+  `--account`/`--share` fails with the values that exist. `sync` only lists the directories
+  its `--include`/`--exclude` globs can reach (an exclude ending in `/**` stops the walk
+  there), lists them `--parallel` at a time, and without a terminal prints a progress line
+  every five seconds; `--dry-run` ends with the list of files it would fetch.
 
 - `pks acs sms send [MESSAGE]` — one SMS from the default sender to the default recipient
   (message from the argument or stdin; the prompts let you pick another sender/recipient).

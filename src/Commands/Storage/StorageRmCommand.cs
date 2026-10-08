@@ -82,12 +82,11 @@ public class StorageRmCommand : Command<StorageRmCommand.Settings>
             return 1;
         }
 
-        var provider = authenticated.Count == 1
-            ? authenticated[0]
-            : authenticated.First(p => p.ProviderName == _console.Prompt(
-                new SelectionPrompt<string>()
-                    .Title("[cyan]Select a provider:[/]")
-                    .AddChoices(authenticated.Select(p => p.ProviderName))));
+        var providerKey = StorageAccountResolution.Choose(_console, "storage provider",
+            authenticated.Select(p => p.ProviderKey).ToList(), "Run it in a terminal to choose");
+        if (providerKey == null)
+            return 1;
+        var provider = authenticated.First(p => p.ProviderKey == providerKey);
 
         var (accountName, shareName) = await ResolveTargetShareAsync(provider, settings);
         if (string.IsNullOrEmpty(accountName) || string.IsNullOrEmpty(shareName))
@@ -201,16 +200,15 @@ public class StorageRmCommand : Command<StorageRmCommand.Settings>
         if (string.IsNullOrEmpty(accountName))
         {
             var accounts = resources.Select(r => r.AccountName).Distinct().ToList();
-            accountName = accounts.Count == 1 ? accounts[0] : _console.Prompt(
-                new SelectionPrompt<string>().Title("[cyan]Select account:[/]").AddChoices(accounts));
+            accountName = StorageAccountResolution.Choose(_console, "storage account", accounts, "Pass --account <name>") ?? string.Empty;
+            if (string.IsNullOrEmpty(accountName)) return (accountName, shareName);
         }
 
         if (string.IsNullOrEmpty(shareName))
         {
-            var shares = resources.Where(r => r.AccountName == accountName).ToList();
+            var shares = resources.Where(r => r.AccountName == accountName).Select(r => r.ResourceName).ToList();
             if (shares.Count == 0) return (accountName, shareName);
-            shareName = shares.Count == 1 ? shares[0].ResourceName : _console.Prompt(
-                new SelectionPrompt<string>().Title("[cyan]Select share:[/]").AddChoices(shares.Select(r => r.ResourceName)));
+            shareName = StorageAccountResolution.Choose(_console, "file share", shares, "Pass --share <name>") ?? string.Empty;
         }
 
         return (accountName, shareName);

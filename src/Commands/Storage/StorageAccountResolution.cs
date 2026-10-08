@@ -10,6 +10,35 @@ namespace PKS.Commands.Storage;
 /// </summary>
 internal static class StorageAccountResolution
 {
+    /// <summary>
+    /// Picks one of <paramref name="choices"/>: the only one, the user's pick when there is a
+    /// terminal to ask in, or — piped or run by an agent — nothing, after naming what to pass and
+    /// what exists. A selection prompt without a terminal only throws, and says neither.
+    /// </summary>
+    /// <param name="what">What is being chosen, e.g. "storage account".</param>
+    /// <param name="howToChoose">How to choose without a prompt, e.g. "Pass --account &lt;name&gt;".</param>
+    /// <returns>The choice, or <c>null</c> after printing why none was made — the caller returns 1.</returns>
+    public static string? Choose(IAnsiConsole console, string what, IReadOnlyList<string> choices, string howToChoose)
+    {
+        if (choices.Count == 1)
+            return choices[0];
+
+        if (choices.Count == 0)
+        {
+            console.MarkupLine($"[red]No {Markup.Escape(what)} is available.[/]");
+            return null;
+        }
+
+        if (console.Profile.Capabilities.Interactive)
+            return console.Prompt(new SelectionPrompt<string>()
+                .Title($"[cyan]Select a {Markup.Escape(what)}:[/]")
+                .AddChoices(choices));
+
+        console.MarkupLine($"[red]Several {Markup.Escape(what)}s are available and there is no terminal to choose in.[/]");
+        console.MarkupLine($"[dim]{Markup.Escape(howToChoose)} — one of: {Markup.Escape(string.Join(", ", choices))}.[/]");
+        return null;
+    }
+
     /// <returns>The account holding <paramref name="shareName"/>, or <c>null</c> after printing why
     /// none could be chosen — the caller returns exit code 1.</returns>
     public static string? AccountForShare(IAnsiConsole console, IReadOnlyList<StorageResource> resources, string shareName)

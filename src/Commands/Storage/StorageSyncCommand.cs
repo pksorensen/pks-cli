@@ -57,15 +57,15 @@ public class StorageSyncCommand : Command<StorageSyncCommand.Settings>
         public bool Force { get; set; }
 
         [CommandOption("--parallel")]
-        [Description("Maximum parallel file transfers (default: 4)")]
+        [Description("Maximum parallel directory listings and file transfers (default: 4)")]
         public int MaxParallelism { get; set; } = 4;
 
         [CommandOption("--include")]
-        [Description("Glob pattern for files to include, e.g. '*.json' or 'users/**'. Can be repeated.")]
+        [Description("Glob pattern for files to include, e.g. '*.json' or 'users/**'. Can be repeated. Directories no pattern can reach are not listed.")]
         public string[] Include { get; set; } = [];
 
         [CommandOption("--exclude")]
-        [Description("Glob pattern for files to exclude, e.g. '*.tmp'. Can be repeated.")]
+        [Description("Glob pattern for files to exclude, e.g. '*.tmp'. Can be repeated. A pattern ending in '/**' also stops the walk there.")]
         public string[] Exclude { get; set; } = [];
     }
 
@@ -114,11 +114,11 @@ public class StorageSyncCommand : Command<StorageSyncCommand.Settings>
         }
         else
         {
-            var providerName = _console.Prompt(
-                new SelectionPrompt<string>()
-                    .Title("[cyan]Select a provider:[/]")
-                    .AddChoices(authenticated.Select(p => p.ProviderName)));
-            provider = authenticated.First(p => p.ProviderName == providerName);
+            var providerKey = StorageAccountResolution.Choose(_console, "storage provider",
+                authenticated.Select(p => p.ProviderKey).ToList(), "Pass --provider <key>");
+            if (providerKey == null)
+                return 1;
+            provider = authenticated.First(p => p.ProviderKey == providerKey);
         }
 
         // Resolve account and share interactively if not provided
@@ -132,23 +132,22 @@ public class StorageSyncCommand : Command<StorageSyncCommand.Settings>
             var accounts = resources.Select(r => r.AccountName).Distinct().ToList();
             if (string.IsNullOrEmpty(accountName))
             {
-                accountName = accounts.Count == 1
-                    ? accounts[0]
-                    : _console.Prompt(new SelectionPrompt<string>().Title("[cyan]Select storage account:[/]").AddChoices(accounts));
+                accountName = StorageAccountResolution.Choose(_console, "storage account", accounts, "Pass --account <name>");
+                if (accountName == null)
+                    return 1;
             }
 
-            var sharesForAccount = resources.Where(r => r.AccountName == accountName).ToList();
+            var sharesForAccount = resources.Where(r => r.AccountName == accountName).Select(r => r.ResourceName).ToList();
             if (sharesForAccount.Count == 1)
             {
-                shareName = sharesForAccount[0].ResourceName;
+                shareName = sharesForAccount[0];
                 _console.MarkupLine($"[dim]Using share: [bold]{Markup.Escape(shareName)}[/][/]");
             }
             else if (sharesForAccount.Count > 1)
             {
-                shareName = _console.Prompt(
-                    new SelectionPrompt<string>()
-                        .Title("[cyan]Select a file share:[/]")
-                        .AddChoices(sharesForAccount.Select(r => r.ResourceName)));
+                shareName = StorageAccountResolution.Choose(_console, "file share", sharesForAccount, "Pass --share <name>");
+                if (shareName == null)
+                    return 1;
             }
         }
         else if (!string.IsNullOrEmpty(shareName) && string.IsNullOrEmpty(accountName) && resources.Count > 0)
@@ -168,6 +167,13 @@ public class StorageSyncCommand : Command<StorageSyncCommand.Settings>
         var localPath = settings.LocalPath;
         if (string.IsNullOrEmpty(localPath))
         {
+            if (!_console.Profile.Capabilities.Interactive)
+            {
+                _console.MarkupLine("[red]No local directory given and there is no terminal to ask in.[/]");
+                _console.MarkupLine("[dim]Pass it as the first argument: pks storage sync <local-path> …[/]");
+                return 1;
+            }
+
             localPath = _console.Prompt(
                 new TextPrompt<string>("[cyan]Local directory path:[/]")
                     .DefaultValue(Path.Combine(Directory.GetCurrentDirectory(), shareName)));
@@ -225,44 +231,20 @@ public class StorageSyncCommand : Command<StorageSyncCommand.Settings>
         if (settings.Exclude.Length > 0)
             _console.MarkupLine($"[dim]Exclude: {string.Join(", ", settings.Exclude.Select(Markup.Escape))}[/]");
 
-        SyncResult syncResult = default!;
-        await _console.Progress()
-            .AutoClear(false)
-            .HideCompleted(false)
-            .Columns(
-                new TaskDescriptionColumn() { Alignment = Justify.Left },
-                new ProgressBarColumn(),
-                new PercentageColumn(),
-                new RemainingTimeColumn(),
-                new SpinnerColumn())
-            .StartAsync(async ctx =>
-            {
-                ProgressTask? fileTask = null;
+        // A live progress bar draws nothing without a terminal — piped or under an agent the run
+        // looked hung for minutes. There, report in plain lines instead.
+        var syncResult = IsLiveTerminal()
+            ? await SyncWithProgressBarAsync(provider, request)
+            : await SyncWithProgressLinesAsync(provider, request);
 
-                syncResult = await provider.SyncAsync(request, update =>
-                {
-                    // Total grows as the producer discovers files — update MaxValue to track it
-                    if (update.Total == 0)
-                    {
-                        // Still discovering, no files yet
-                        fileTask ??= ctx.AddTask("[dim]Discovering...[/]", maxValue: 1);
-                        fileTask.Description = "[dim]Discovering...[/]";
-                        return;
-                    }
-
-                    if (fileTask == null)
-                        fileTask = ctx.AddTask("[dim]Discovering...[/]", maxValue: update.Total);
-
-                    // Grow MaxValue as more files are discovered
-                    if (update.Total > fileTask.MaxValue)
-                        fileTask.MaxValue = update.Total;
-
-                    fileTask.Description = $"[cyan]{update.Completed}/{update.Total}[/]  [dim]{Markup.Escape(update.CurrentFile)}[/]";
-                    fileTask.Value = update.Completed;
-                });
-
-                fileTask?.StopTask();
-            });
+        if (settings.DryRun && settings.Direction is SyncDirection.Download or SyncDirection.Bidirectional)
+        {
+            _console.WriteLine();
+            var plannedBytes = syncResult.PlannedTransfers.Sum(p => p.SizeBytes ?? 0);
+            _console.MarkupLine($"[bold]Would download {syncResult.PlannedTransfers.Count} file(s), {FormatBytes(plannedBytes)}:[/]");
+            foreach (var planned in syncResult.PlannedTransfers)
+                _console.WriteLine($"  {planned.Path}  {(planned.SizeBytes is { } size ? FormatBytes(size) : "?")}");
+        }
 
         // Summary table
         _console.WriteLine();
@@ -273,7 +255,13 @@ public class StorageSyncCommand : Command<StorageSyncCommand.Settings>
         summary.AddColumn("[bold]Metric[/]");
         summary.AddColumn("[bold]Count[/]");
 
-        if (settings.Direction is SyncDirection.Download or SyncDirection.Bidirectional)
+        if (syncResult.DirectoriesListed > 0)
+            summary.AddRow("Directories listed", syncResult.DirectoriesListed.ToString());
+        if (syncResult.DirectoriesPruned > 0)
+            summary.AddRow("Directories skipped by filters", syncResult.DirectoriesPruned.ToString());
+        if (settings.DryRun && settings.Direction is SyncDirection.Download or SyncDirection.Bidirectional)
+            summary.AddRow("Files to download", syncResult.PlannedTransfers.Count.ToString());
+        else if (settings.Direction is SyncDirection.Download or SyncDirection.Bidirectional)
             summary.AddRow("Files downloaded", syncResult.FilesDownloaded.ToString());
         if (settings.Direction is SyncDirection.Upload or SyncDirection.Bidirectional)
             summary.AddRow("Files uploaded", syncResult.FilesUploaded.ToString());
@@ -298,4 +286,108 @@ public class StorageSyncCommand : Command<StorageSyncCommand.Settings>
 
         return 0;
     }
+
+    private bool IsLiveTerminal() =>
+        _console.Profile.Capabilities.Interactive && _console.Profile.Capabilities.Ansi && !Console.IsOutputRedirected;
+
+    private async Task<SyncResult> SyncWithProgressBarAsync(IFileShareProvider provider, StorageSyncRequest request)
+    {
+        SyncResult syncResult = default!;
+        await _console.Progress()
+            .AutoClear(false)
+            .HideCompleted(false)
+            .Columns(
+                new TaskDescriptionColumn() { Alignment = Justify.Left },
+                new ProgressBarColumn(),
+                new PercentageColumn(),
+                new RemainingTimeColumn(),
+                new SpinnerColumn())
+            .StartAsync(async ctx =>
+            {
+                ProgressTask? fileTask = null;
+
+                syncResult = await provider.SyncAsync(request, update =>
+                {
+                    // Total grows as the walk discovers files — update MaxValue to track it
+                    if (update.Total == 0)
+                    {
+                        // Still discovering, no files yet
+                        fileTask ??= ctx.AddTask("[dim]Discovering...[/]", maxValue: 1);
+                        fileTask.Description = $"[dim]Discovering... {update.DirectoriesListed} dirs listed[/]";
+                        return;
+                    }
+
+                    if (fileTask == null)
+                        fileTask = ctx.AddTask("[dim]Discovering...[/]", maxValue: update.Total);
+
+                    // Grow MaxValue as more files are discovered
+                    if (update.Total > fileTask.MaxValue)
+                        fileTask.MaxValue = update.Total;
+
+                    fileTask.Description = $"[cyan]{update.Completed}/{update.Total}[/]  [dim]{Markup.Escape(update.CurrentFile)}[/]";
+                    fileTask.Value = update.Completed;
+                });
+
+                fileTask?.StopTask();
+            });
+        return syncResult;
+    }
+
+    /// <summary>How often a run without a terminal prints where it has got to.</summary>
+    internal static TimeSpan ProgressLineInterval { get; set; } = TimeSpan.FromSeconds(5);
+
+    private async Task<SyncResult> SyncWithProgressLinesAsync(IFileShareProvider provider, StorageSyncRequest request)
+    {
+        var started = DateTime.UtcNow;
+        SyncProgressUpdate? latest = null;
+        var verb = request.DryRun ? "to transfer" : request.Direction == SyncDirection.Download ? "downloaded" : "transferred";
+
+        void PrintLine(SyncProgressUpdate? u)
+        {
+            if (u == null)
+                return;
+            var elapsed = DateTime.UtcNow - started;
+            var line = $"[{elapsed:hh\\:mm\\:ss}] {u.DirectoriesListed} dirs";
+            if (u.DirectoriesPruned > 0)
+                line += $" ({u.DirectoriesPruned} pruned)";
+            line += $", {u.Total} matched, {(request.DryRun ? u.Total : u.Completed)} {verb}";
+            if (u.FilesUpToDate > 0)
+                line += $", {u.FilesUpToDate} current";
+            if (!request.DryRun)
+                line += $", {FormatBytes(u.BytesTransferred)}";
+            _console.WriteLine(line);
+        }
+
+        _console.WriteLine("Listing remote directories…");
+        using var stop = new CancellationTokenSource();
+        var ticker = Task.Run(async () =>
+        {
+            using var timer = new PeriodicTimer(ProgressLineInterval);
+            try
+            {
+                while (await timer.WaitForNextTickAsync(stop.Token))
+                    PrintLine(Volatile.Read(ref latest));
+            }
+            catch (OperationCanceledException) { }
+        });
+
+        try
+        {
+            return await provider.SyncAsync(request, update => Volatile.Write(ref latest, update));
+        }
+        finally
+        {
+            stop.Cancel();
+            await ticker;
+            PrintLine(Volatile.Read(ref latest));
+        }
+    }
+
+    private static string FormatBytes(long bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024.0:F1} KB",
+        < 1024 * 1024 * 1024 => $"{bytes / (1024.0 * 1024):F1} MB",
+        _ => $"{bytes / (1024.0 * 1024 * 1024):F2} GB"
+    };
 }

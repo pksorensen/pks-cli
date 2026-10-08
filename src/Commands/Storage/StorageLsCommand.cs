@@ -64,12 +64,11 @@ public class StorageLsCommand : Command<StorageLsCommand.Settings>
             return 1;
         }
 
-        var provider = authenticated.Count == 1
-            ? authenticated[0]
-            : authenticated.First(p => p.ProviderName == _console.Prompt(
-                new SelectionPrompt<string>()
-                    .Title("[cyan]Select a provider:[/]")
-                    .AddChoices(authenticated.Select(p => p.ProviderName))));
+        var providerKey = StorageAccountResolution.Choose(_console, "storage provider",
+            authenticated.Select(p => p.ProviderKey).ToList(), "Run it in a terminal to choose");
+        if (providerKey == null)
+            return 1;
+        var provider = authenticated.First(p => p.ProviderKey == providerKey);
 
         // Resolve share
         var resources = ((await provider.ListResourcesAsync()) ?? Enumerable.Empty<StorageResource>()).ToList();
@@ -80,12 +79,14 @@ public class StorageLsCommand : Command<StorageLsCommand.Settings>
         {
             var accounts = resources.Select(r => r.AccountName).Distinct().ToList();
             if (string.IsNullOrEmpty(accountName))
-                accountName = accounts.Count == 1 ? accounts[0] : _console.Prompt(
-                    new SelectionPrompt<string>().Title("[cyan]Select account:[/]").AddChoices(accounts));
+                accountName = StorageAccountResolution.Choose(_console, "storage account", accounts, "Pass --account <name>");
+            if (string.IsNullOrEmpty(accountName))
+                return 1;
 
-            var shares = resources.Where(r => r.AccountName == accountName).ToList();
-            shareName = shares.Count == 1 ? shares[0].ResourceName : _console.Prompt(
-                new SelectionPrompt<string>().Title("[cyan]Select share:[/]").AddChoices(shares.Select(r => r.ResourceName)));
+            var shares = resources.Where(r => r.AccountName == accountName).Select(r => r.ResourceName).ToList();
+            shareName = StorageAccountResolution.Choose(_console, "file share", shares, "Pass --share <name>");
+            if (string.IsNullOrEmpty(shareName))
+                return 1;
         }
         else if (!string.IsNullOrEmpty(shareName) && string.IsNullOrEmpty(accountName) && resources.Count > 0)
         {
