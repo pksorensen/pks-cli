@@ -2371,6 +2371,9 @@ var filteredArgs = args
              && !a.Equals("--debug", StringComparison.OrdinalIgnoreCase))
     .ToArray();
 
+foreach (var hint in PKS.Infrastructure.ArgvHints.Find(filteredArgs))
+    Console.Error.WriteLine($"hint: {hint}");
+
 // `agent` is a Spectre branch (for `agent register`), and Spectre 0.47 can't bind a
 // positional [prompt] on a branch's default command — `pks agent "my prompt"` would be
 // read as an unknown subcommand. Rewrite `agent <anything-but-a-known-subcommand>` →
