@@ -34,12 +34,19 @@ public class GoogleImageProvider : IImageProvider
     }
 
     public Task<byte[]> GenerateAsync(ImageGenerationRequest request)
-        => _google.GenerateImageAsync(
+    {
+        if (request.InputImagePaths.Count > 1)
+            throw new InvalidOperationException("The google provider accepts one --input image. Use --model gpt-image-2 for several.");
+        if (!string.IsNullOrWhiteSpace(request.Size))
+            throw new InvalidOperationException("--size is only supported by the foundry provider. Use --aspect-ratio and --resolution.");
+
+        return _google.GenerateImageAsync(
             request.Prompt,
             request.Model,
             request.AspectRatio,
             request.Resolution,
             request.InputImagePath);
+    }
 
     private static bool LooksLikeGoogleModel(string model)
         => model.StartsWith("gemini", StringComparison.OrdinalIgnoreCase)

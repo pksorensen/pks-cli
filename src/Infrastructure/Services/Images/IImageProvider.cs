@@ -5,8 +5,13 @@ public record ImageGenerationRequest(
     string Model,
     string AspectRatio,
     string? Resolution,
-    string? InputImagePath,
-    string? Quality = null);
+    IReadOnlyList<string> InputImagePaths,
+    string? Quality = null,
+    string? Size = null)
+{
+    /// <summary>The first input image, for providers that accept only one.</summary>
+    public string? InputImagePath => InputImagePaths.Count > 0 ? InputImagePaths[0] : null;
+}
 
 public record ImageModelInfo(string Name, string DisplayName, string Description);
 

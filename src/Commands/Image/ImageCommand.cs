@@ -36,11 +36,11 @@ public class ImageCommand : Command<ImageCommand.Settings>
         public string? Output { get; set; }
 
         [CommandOption("--aspect-ratio")]
-        [Description("Aspect ratio: 1:1, 3:4, 4:3, 9:16, 16:9, auto (default: auto)")]
+        [Description("Aspect ratio: 1:1, 3:4, 4:3, 9:16, 16:9, auto (default: auto). gpt-image accepts any W:H up to 3:1; auto on an edit follows the first --input.")]
         public string AspectRatio { get; set; } = "auto";
 
         [CommandOption("--resolution")]
-        [Description("Output resolution, e.g. 512, 1024, 2048, 4096 (default: model decides)")]
+        [Description("Output resolution, e.g. 512, 1024, 2048, 4096 (default: model decides). For gpt-image this is the long edge (default 1536).")]
         public string? Resolution { get; set; }
 
         [CommandOption("--quality")]
@@ -48,8 +48,12 @@ public class ImageCommand : Command<ImageCommand.Settings>
         public string? Quality { get; set; }
 
         [CommandOption("--input|-i")]
-        [Description("Input image to augment or edit (path to jpg/png). When set, prompt becomes an editing instruction.")]
-        public string? InputImage { get; set; }
+        [Description("Input image to augment or edit (path to jpg/png). When set, prompt becomes an editing instruction. Repeat to pass several references (foundry only), e.g. a scene photo and the artwork to place in it; the prompt can refer to them as image 1, image 2, ...")]
+        public string[]? InputImages { get; set; }
+
+        [CommandOption("--size")]
+        [Description("Exact output size WxH, e.g. 2048x1360 (foundry/gpt-image only; edges multiple of 16, long edge <= 3840, ratio <= 3:1). Overrides --aspect-ratio and --resolution.")]
+        public string? Size { get; set; }
 
         [CommandOption("--list-models|-l")]
         [Description("List available image generation models and exit")]
@@ -96,11 +100,15 @@ public class ImageCommand : Command<ImageCommand.Settings>
             return 1;
         }
 
-        // Validate input image if provided
-        if (!string.IsNullOrEmpty(settings.InputImage) && !File.Exists(settings.InputImage))
+        // Validate input images if provided
+        var inputs = settings.InputImages ?? Array.Empty<string>();
+        foreach (var input in inputs)
         {
-            _console.MarkupLine($"[red]Input image not found:[/] {Markup.Escape(settings.InputImage)}");
-            return 1;
+            if (!File.Exists(input))
+            {
+                _console.MarkupLine($"[red]Input image not found:[/] {Markup.Escape(input)}");
+                return 1;
+            }
         }
 
         var provider = await ResolveProviderAsync(settings);
@@ -122,12 +130,13 @@ public class ImageCommand : Command<ImageCommand.Settings>
             settings.Model,
             settings.AspectRatio,
             settings.Resolution,
-            settings.InputImage,
-            settings.Quality);
+            inputs,
+            settings.Quality,
+            settings.Size);
 
         try
         {
-            var spinnerLabel = settings.InputImage != null
+            var spinnerLabel = inputs.Length > 0
                 ? $"Augmenting image with [bold]{Markup.Escape(settings.Model)}[/] via [bold]{provider.Name}[/]..."
                 : $"Generating image with [bold]{Markup.Escape(settings.Model)}[/] via [bold]{provider.Name}[/]...";
 

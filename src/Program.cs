@@ -621,7 +621,8 @@ services.AddHttpClient<IGoogleAiService, GoogleAiService>();
 // Register image providers (resolved by --model in pks image).
 // Order matters: when multiple providers claim the same model name, the first authenticated one wins.
 services.AddSingleton<PKS.Infrastructure.Services.Images.IImageProvider, PKS.Infrastructure.Services.Images.GoogleImageProvider>();
-services.AddHttpClient<PKS.Infrastructure.Services.Images.AzureFoundryImageProvider>();
+// gpt-image-2 edits at 2K/high routinely take 2-4 minutes, well past the 100 s default.
+services.AddHttpClient<PKS.Infrastructure.Services.Images.AzureFoundryImageProvider>(c => c.Timeout = TimeSpan.FromMinutes(10));
 services.AddSingleton<PKS.Infrastructure.Services.Images.IImageProvider>(sp =>
     sp.GetRequiredService<PKS.Infrastructure.Services.Images.AzureFoundryImageProvider>());
 
