@@ -13,6 +13,14 @@ internal static class SpeechProtocol
 {
     public const string Capability = "speech.realtime.transcribe";
 
+    public static string? NormalizeProviderLanguage(string? language)
+    {
+        if (string.IsNullOrWhiteSpace(language)) return null;
+        var normalized = language.Trim().Replace('_', '-');
+        var separator = normalized.IndexOf('-');
+        return (separator > 0 ? normalized[..separator] : normalized).ToLowerInvariant();
+    }
+
     public static SpeechSessionStart ParseSessionStart(string json)
     {
         using var document = JsonDocument.Parse(json);
