@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.9.0](https://github.com/pksorensen/pks-cli/compare/v7.8.0...v7.9.0) (2026-10-22)
+
+
+### Features
+
+* **exec:** credential proxy placeholders with WebSocket pass-through ([0a1b62b](https://github.com/pksorensen/pks-cli/commit/0a1b62bc7a9a6c2f9b05802d06194ce747ae77b4))
+
 ## [7.8.0](https://github.com/pksorensen/pks-cli/compare/v7.7.0...v7.8.0) (2026-10-08)
 
 
