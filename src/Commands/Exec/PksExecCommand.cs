@@ -21,6 +21,11 @@ namespace PKS.Commands.Exec;
 ///   {apikey}          — registered provider's API key
 ///   {imds:endpoint}   — local managed-identity proxy URL (the resolver starts it)
 ///   {imds:header}     — IMDS X-IDENTITY-HEADER secret
+///   {proxy:endpoint}  — http://127.0.0.1:&lt;port&gt; of a local credential proxy in front of the provider's
+///                       endpoint (foundry: an Entra token per request; openai-compatible: OPENAI_API_KEY).
+///                       Proxies HTTP and WebSocket upgrades; the resolver starts it and Release() stops it
+///   {proxy:token}     — the throwaway bearer token that proxy accepts, per run; the child never sees
+///                       the real credential
 ///   {model:&lt;role&gt;}    — user-selected model id for the named role
 /// </summary>
 [Description("Run a tool that supports the pks-cli discovery contract, with providers/models wired up automatically")]
@@ -67,6 +72,19 @@ public class PksExecCommand : AsyncCommand<PksExecCommand.Settings>
             return 2;
         }
 
+        // Options meant for the tool have to come after `--`: Spectre would otherwise treat an
+        // option it does not know as a remaining parsed option and drop it, and the tool would
+        // silently run with its defaults. Positional ARGS before `--` still pass through.
+        // Spectre also files options after `--` under Parsed, so only refuse when there is no `--`.
+        if (context.Remaining.Parsed.Count > 0 && context.Remaining.Raw.Count == 0)
+        {
+            var unknown = string.Join(" ", context.Remaining.Parsed.Select(g => g.Key));
+            _console.MarkupLine($"[red]unknown option(s) for pks exec: {unknown.EscapeMarkup()}[/]");
+            _console.MarkupLine("[dim]Pass the tool's own options after --, e.g. pks exec heypoul -- meeting --no-me[/]");
+            return 2;
+        }
+        var childArgs = settings.Args.Concat(context.Remaining.Raw).ToArray();
+
         PksManifest manifest;
         try
         {
@@ -95,7 +113,7 @@ public class PksExecCommand : AsyncCommand<PksExecCommand.Settings>
 
         try
         {
-            return await ExecChild(settings, resolved);
+            return await ExecChild(settings, childArgs, resolved);
         }
         finally
         {
@@ -141,12 +159,12 @@ public class PksExecCommand : AsyncCommand<PksExecCommand.Settings>
 
     // ---------- exec ----------
 
-    private async Task<int> ExecChild(Settings settings, ResolvedEnvironment environment)
+    private async Task<int> ExecChild(Settings settings, IReadOnlyList<string> childArgs, ResolvedEnvironment environment)
     {
         if (settings.DryRun)
         {
             _console.MarkupLine("\n[yellow]--dry-run, would exec:[/]");
-            _console.MarkupLine($"  {settings.Executable.EscapeMarkup()} {string.Join(" ", settings.Args).EscapeMarkup()}");
+            _console.MarkupLine($"  {settings.Executable.EscapeMarkup()} {string.Join(" ", childArgs).EscapeMarkup()}");
             _console.MarkupLine("[yellow]with env overlay:[/]");
             foreach (var (name, display) in environment.Describe())
             {
@@ -161,7 +179,7 @@ public class PksExecCommand : AsyncCommand<PksExecCommand.Settings>
             UseShellExecute = false,
             CreateNoWindow = false,
         };
-        foreach (var a in settings.Args)
+        foreach (var a in childArgs)
         {
             psi.ArgumentList.Add(a);
         }

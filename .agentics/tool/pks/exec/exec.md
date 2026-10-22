@@ -40,21 +40,49 @@ Use `pks exec` when launching a companion CLI or agent binary (for example `agen
 1. **Discovery.** `pks exec` shells out to `EXECUTABLE` with `PKS_DISCOVERY=1` and reads its stdout within a 10-second timeout, parsing it as a `v1` manifest. Discovery fails if the exit code is non-zero, stdout is empty, no `{` is found, the JSON does not deserialize, or `manifestVersion` is not `"v1"`.
 2. **Provider selection.** For each capability in the manifest, if the capability is not required you are prompted to opt in. `pks exec` then filters that capability's listed providers down to ones currently available, auto-picks the sole available provider (or an explicit `--provider` match), and otherwise prompts an interactive selection.
 3. **Model selection.** For each model role the chosen provider declares, `pks exec` prompts for a model ID with a role-based suggested default — for example Foundry's stored default model or `claude-opus-4-7`/`claude-sonnet-4-6` by role, Gemini's `gemini-2.5-pro`/`gemini-2.5-flash`, or OpenAI-compatible's `gpt-4o`/`gpt-4o-mini`. There is no validation against what the provider actually serves.
-4. **Env resolution.** The provider's `Env` dictionary templates are expanded, substituting `{endpoint}`, `{apikey}`, `{imds:endpoint}`, `{imds:header}`, and `{model:<role>}` placeholders. The `{imds:*}` placeholders lazily start a loopback managed-identity (IMDS) proxy that forwards Azure token requests through the CLI's own stored Foundry credentials, guarded by a per-run random `X-IDENTITY-HEADER` secret.
-5. **Exec.** Unless `--dry-run` is set, `EXECUTABLE` is launched with `ARGS` and the resolved environment overlay merged in. `Ctrl+C` is forwarded to the child as a tree-kill. When the child exits, the IMDS proxy (if started) is stopped and the child's own exit code is returned — or `127` if the process failed to start, `2` if `EXECUTABLE` was omitted, `1` if discovery failed or if no usable provider was found for a required capability.
+4. **Env resolution.** The provider's `Env` dictionary templates are expanded, substituting `{endpoint}`, `{endpoint:openai}`, `{apikey}`, `{imds:endpoint}`, `{imds:header}`, `{proxy:endpoint}`, `{proxy:token}`, and `{model:<role>}` placeholders. The `{imds:*}` placeholders lazily start a loopback managed-identity (IMDS) proxy that forwards Azure token requests through the CLI's own stored Foundry credentials, guarded by a per-run random `X-IDENTITY-HEADER` secret. The `{proxy:*}` placeholders lazily start a loopback credential proxy instead — see [Credential proxy](#credential-proxy).
+5. **Exec.** Unless `--dry-run` is set, `EXECUTABLE` is launched with `ARGS` and the resolved environment overlay merged in. `Ctrl+C` is forwarded to the child as a tree-kill. When the child exits, the IMDS and credential proxies (if started) are stopped and the child's own exit code is returned — or `127` if the process failed to start, `2` if `EXECUTABLE` was omitted, `1` if discovery failed or if no usable provider was found for a required capability.
+
+## Credential proxy
+
+`{proxy:endpoint}` and `{proxy:token}` give a child access to its provider **without the child ever seeing a credential** — not a key, not an Entra token.
+
+| Placeholder | Resolves to | Shown by `--dry-run` |
+|---|---|---|
+| `{proxy:endpoint}` | `http://127.0.0.1:<port>` — no trailing slash, OS-assigned port, IPv4 loopback so clients that try `::1` for `localhost` first (Go on Windows) still connect | yes |
+| `{proxy:token}` | a random per-run bearer token the proxy accepts | `(set, hidden)` |
+
+The child points its client at `{proxy:endpoint}` exactly as it would at the provider's own endpoint — same paths, same query strings — and sends `Authorization: Bearer {proxy:token}`. The proxy checks the token (anything else is `401`), drops it, signs the request with the real credential and forwards it:
+
+- **`foundry`** — upstream is the selected Foundry resource endpoint; the credential is an Entra access token for `https://cognitiveservices.azure.com/.default`, minted from your `pks foundry init` sign-in and held in memory for at most five minutes. It works for every data-plane route on the resource: `/speechtotext/transcriptions:transcribe`, `/openai/deployments/…`, `/openai/v1/…`, and the realtime routes.
+- **`openai-compatible`** — upstream is `OPENAI_BASE_URL`; the credential is `OPENAI_API_KEY`.
+- **Any other kind** — both placeholders resolve to empty.
+
+**WebSockets are proxied too.** A WebSocket upgrade (`ws://127.0.0.1:<port>/mai/v1/realtime?…`) is checked against the same token, and the proxy opens the upstream socket (`wss://…`) with the real credential *before* accepting the child's, so an upstream refusal reaches the child as `502` on its upgrade request rather than as a socket that opens and dies. Frames then pass through untouched in both directions — text and binary, fragmented messages, and close status and reason — for as long as the session lasts; the token signs only the handshake, so an hour-long session is not cut off when the token that opened it expires. If either side closes, the close is forwarded; if either side fails, the other is closed with `1011`.
+
+Every capability that uses `{proxy:*}` in one run shares one proxy per provider kind and one token. The proxy listens on loopback only and stops when the child exits; the token is the boundary while it runs, so treat it like the credential's stand-in it is, and do not log it.
+
+A manifest binding for a tool that talks to Foundry's speech and realtime APIs looks like:
+
+```json
+{ "kind": "foundry",
+  "env": { "FOUNDRY_ENDPOINT": "{proxy:endpoint}", "FOUNDRY_TOKEN": "{proxy:token}" } }
+```
 
 ## Synopsis
 
 ```text
-pks exec [options] <EXECUTABLE> [ARGS...]
+pks exec [options] <EXECUTABLE> [ARGS...] [-- TOOL-ARGS...]
 ```
 
-`EXECUTABLE` and `ARGS` are positional. `pks exec`'s own options (`--provider`, `--port`, `--dry-run`) are recognized by name wherever they appear on the command line, including after `EXECUTABLE` — Spectre.Console.Cli parses them regardless of position, so `pks exec ./tool.exe --dry-run shoot` behaves the same as `pks exec --dry-run ./tool.exe shoot`. Only tokens that are *not* one of `pks exec`'s own known options are bound to `ARGS` and forwarded to the child.
+`EXECUTABLE` and `ARGS` are positional. `pks exec`'s own options (`--provider`, `--port`, `--dry-run`) are recognized by name wherever they appear on the command line, including after `EXECUTABLE`, so `pks exec ./tool.exe --dry-run shoot` behaves the same as `pks exec --dry-run ./tool.exe shoot`.
+
+**The tool's own options go after `--`.** Everything after `--` is forwarded verbatim, so `pks exec heypoul -- meeting --no-me --language en-US` runs `heypoul meeting --no-me --language en-US`. An option `pks exec` does not know that appears *before* `--` is refused with exit code `2` rather than silently dropped.
 
 ### Arguments
 
 - **`EXECUTABLE`** (required) — path to the tool to run. Must implement the discovery contract.
-- **`ARGS`** (optional, repeatable) — everything after `EXECUTABLE`, forwarded verbatim to the real, non-discovery invocation.
+- **`ARGS`** (optional, repeatable) — positional words after `EXECUTABLE`, forwarded to the real, non-discovery invocation, followed by everything after `--`.
 
 ### Options
 
@@ -62,7 +90,7 @@ pks exec [options] <EXECUTABLE> [ARGS...]
 |---|---|---|
 | `--provider <KIND>` | — | Skip the interactive provider prompt and pick this provider kind directly (for example `foundry`, `gemini`, `openai-compatible`). Fails with an error if the kind is not both offered by the manifest and locally available. |
 | `--port <N>` | random free port | Bind the local managed-identity (IMDS) proxy to this port instead of an OS-assigned one. Only relevant when the manifest's env templates use `{imds:endpoint}`/`{imds:header}`, which today means Foundry-backed capabilities. |
-| `--dry-run` | — | Run discovery and env resolution, then print the resolved command line and the full env overlay instead of exec'ing the child. Keys that look like secrets (containing `token`, `key`, `header`, `password`, or `secret`) print as `(set, hidden)`. The IMDS proxy, if started, is stopped immediately afterward. |
+| `--dry-run` | — | Run discovery and env resolution, then print the resolved command line and the full env overlay instead of exec'ing the child. Values that come from a credential placeholder (`{apikey}`, `{imds:header}`, `{proxy:token}`, `{entra:clientsecret}`) print as `(set, hidden)`, or `(not set)` when nothing filled them. Any proxy that was started is stopped immediately afterward. |
 
 ### Environment variables
 

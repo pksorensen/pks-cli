@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using PKS.Infrastructure.Services.Entra;
@@ -16,6 +17,12 @@ public sealed class ManifestResolver : IManifestResolver
     private readonly IAnsiConsole _console;
 
     private ImdsProxy? _imds;
+
+    /// <summary>Credential proxies started for this run, one per provider kind, and the one throwaway
+    /// token all of them accept. See <see cref="EnsureCredentialProxyAsync"/>.</summary>
+    private readonly Dictionary<string, RunningCredentialProxy> _proxies = new(StringComparer.OrdinalIgnoreCase);
+    private string? _proxyToken;
+    private CachedFoundryToken? _foundryToken;
 
     /// <summary>
     /// App registrations typed in during this run and deliberately not written anywhere. They live for
@@ -82,6 +89,13 @@ public sealed class ManifestResolver : IManifestResolver
     {
         _imds?.Stop();
         _imds = null;
+        foreach (var proxy in _proxies.Values)
+        {
+            proxy.Stop();
+        }
+        _proxies.Clear();
+        _proxyToken = null;
+        _foundryToken = null;
         _entered.Clear();
     }
 
@@ -396,6 +410,10 @@ public sealed class ManifestResolver : IManifestResolver
                 return (EnsureImds(options).Endpoint, false);
             case "imds:header":
                 return (EnsureImds(options).Header, true);
+            case "proxy:endpoint":
+                return ((await EnsureCredentialProxyAsync(providerKind))?.Endpoint ?? "", false);
+            case "proxy:token":
+                return (await EnsureCredentialProxyAsync(providerKind) is null ? "" : _proxyToken!, true);
             case "endpoint":
                 return (await ResolveEndpointAsync(providerKind), false);
             case "endpoint:openai":
@@ -409,6 +427,96 @@ public sealed class ManifestResolver : IManifestResolver
 
     private ImdsProxy EnsureImds(ManifestResolveOptions options)
         => _imds ??= ImdsProxy.Start(_foundryAuth, _foundryConfig, options.ImdsPort);
+
+    /// <summary>
+    /// A loopback proxy in front of the provider's endpoint, started on first use and stopped by
+    /// <see cref="Release"/>. The child gets its URL and a throwaway token; the proxy swaps that token
+    /// for the real credential on every request and WebSocket upgrade, so the credential never enters
+    /// the child's environment. For Foundry that credential is an Entra token for the Cognitive Services
+    /// scope — the same one <see cref="ImdsProxy"/> mints — which works for every data-plane route on
+    /// the resource, REST and realtime alike. Null when the kind has nothing to put behind a proxy.
+    /// </summary>
+    private async Task<RunningCredentialProxy?> EnsureCredentialProxyAsync(string kind)
+    {
+        if (_proxies.TryGetValue(kind, out var running))
+        {
+            return running;
+        }
+
+        string upstream;
+        Func<Task<SecretValue>> credential;
+        string missing;
+        switch (kind.ToLowerInvariant())
+        {
+            case "foundry":
+                upstream = (await _foundryAuth.GetStoredCredentialsAsync())?.SelectedResourceEndpoint ?? "";
+                _foundryToken ??= new CachedFoundryToken(_foundryAuth, _foundryConfig.CognitiveScope);
+                credential = _foundryToken.GetAsync;
+                missing = "No Foundry token available — sign in again with pks foundry init";
+                break;
+            case "openai-compatible":
+                upstream = Environment.GetEnvironmentVariable("OPENAI_BASE_URL") ?? "";
+                credential = () => Task.FromResult(SecretValue.From(Environment.GetEnvironmentVariable("OPENAI_API_KEY")));
+                missing = "OPENAI_API_KEY is not set";
+                break;
+            default:
+                return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(upstream))
+        {
+            return null;
+        }
+
+        _proxyToken ??= Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+        running = await LocalCredentialProxy.StartAsync(_proxyToken, upstream, credential, missing);
+        _proxies[kind] = running;
+        return running;
+    }
+
+    /// <summary>
+    /// Holds a Foundry access token for a few minutes. <see cref="IAzureFoundryAuthService.GetAccessTokenAsync"/>
+    /// redeems the refresh token and rewrites the credential store on every call, which is fine for
+    /// <see cref="ImdsProxy"/> — a client asks it once and keeps the token — but not for a proxy that
+    /// signs every request: a burst of parallel calls would race each other rotating the refresh token.
+    /// Five minutes is far inside any Entra access-token lifetime, and a failed fetch is not cached.
+    /// </summary>
+    private sealed class CachedFoundryToken
+    {
+        private static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(5);
+
+        private readonly IAzureFoundryAuthService _auth;
+        private readonly string _scope;
+        private readonly SemaphoreSlim _lock = new(1, 1);
+        private SecretValue _token;
+        private DateTimeOffset _expires;
+
+        public CachedFoundryToken(IAzureFoundryAuthService auth, string scope)
+        {
+            _auth = auth;
+            _scope = scope;
+        }
+
+        public async Task<SecretValue> GetAsync()
+        {
+            await _lock.WaitAsync();
+            try
+            {
+                if (_token.HasValue && DateTimeOffset.UtcNow < _expires)
+                {
+                    return _token;
+                }
+
+                _token = SecretValue.From(await _auth.GetAccessTokenAsync(_scope));
+                _expires = DateTimeOffset.UtcNow + Lifetime;
+                return _token;
+            }
+            finally
+            {
+                _lock.Release();
+            }
+        }
+    }
 
     private async Task<string> ResolveEndpointAsync(string kind) => kind.ToLowerInvariant() switch
     {

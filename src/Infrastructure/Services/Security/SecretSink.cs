@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net.Http.Headers;
+using System.Net.WebSockets;
 using System.Text;
 
 namespace PKS.Infrastructure.Services.Security;
@@ -77,6 +78,15 @@ public static class SecretSink
     {
         if (!secret.HasValue) return false;
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(scheme, secret.Reveal());
+        return true;
+    }
+
+    /// <summary>Signs a WebSocket upgrade request with a bearer token — the handshake is the only
+    /// request a socket makes, so this is the whole of its authentication.</summary>
+    public static bool SetBearerToken(ClientWebSocketOptions options, SecretValue secret, string scheme = "Bearer")
+    {
+        if (!secret.HasValue) return false;
+        options.SetRequestHeader("Authorization", $"{scheme} {secret.Reveal()}");
         return true;
     }
 
