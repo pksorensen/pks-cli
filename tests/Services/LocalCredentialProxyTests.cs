@@ -52,6 +52,8 @@ public class LocalCredentialProxyTests : IAsyncLifetime
             return Results.Text($"auth={ctx.Request.Headers.Authorization}|path={ctx.Request.Path}{ctx.Request.QueryString}");
         });
 
+        _upstream.MapPost("/http/length", (HttpContext ctx) =>
+            Results.Text($"content-length={ctx.Request.ContentLength?.ToString() ?? "none"}|transfer-encoding={ctx.Request.Headers.TransferEncoding}"));
         _upstream.MapPost("/http/echo", async (HttpContext ctx) =>
         {
             using var reader = new StreamReader(ctx.Request.Body);
@@ -208,6 +210,75 @@ public class LocalCredentialProxyTests : IAsyncLifetime
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         _upstreamAuth.Should().BeEmpty();
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task A_body_with_a_known_length_keeps_its_Content_Length_upstream()
+    {
+        // Foundry's Decision-1 route answers 400 no_content_length_header to a chunked body, so a
+        // child's Content-Length must survive the hop rather than become Transfer-Encoding: chunked.
+        using var client = new HttpClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ProxyToken);
+
+        var response = await client.PostAsync($"{_proxy.Endpoint}/http/length",
+            new StringContent("{\"model\":\"Decision-1\"}", Encoding.UTF8, "application/json"));
+
+        (await response.Content.ReadAsStringAsync()).Should().Be("content-length=22|transfer-encoding=");
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task The_catalog_route_is_served_by_the_proxy_itself_behind_the_same_token()
+    {
+        await using var proxy = await LocalCredentialProxy.StartAsync(
+            ProxyToken, _upstreamBase, () => Task.FromResult(SecretValue.From(UpstreamCredential)), "no credential",
+            catalog: _ => Task.FromResult("{\"object\":\"list\",\"data\":[]}"));
+        using var client = new HttpClient();
+
+        var anonymous = await client.GetAsync($"{proxy.Endpoint}/pks/v1/models");
+        anonymous.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ProxyToken);
+        var response = await client.GetAsync($"{proxy.Endpoint}/pks/v1/models");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("application/json");
+        (await response.Content.ReadAsStringAsync()).Should().Be("{\"object\":\"list\",\"data\":[]}");
+        _upstreamAuth.Should().BeEmpty("the catalog never reaches the upstream");
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task Without_a_catalog_provider_the_catalog_path_is_forwarded_like_any_other()
+    {
+        using var client = new HttpClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ProxyToken);
+
+        var response = await client.GetAsync($"{_proxy.Endpoint}/pks/v1/models");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound, "the test upstream has no such route");
+        _upstreamAuth.Should().BeEmpty();
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task A_catalog_that_cannot_be_read_is_a_502_with_the_reason()
+    {
+        await using var proxy = await LocalCredentialProxy.StartAsync(
+            ProxyToken, _upstreamBase, () => Task.FromResult(SecretValue.From(UpstreamCredential)), "no credential",
+            catalog: _ => throw new HttpRequestException("deployments: HTTP 403"));
+        using var client = new HttpClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ProxyToken);
+
+        var response = await client.GetAsync($"{proxy.Endpoint}/pks/v1/models");
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
+        (await response.Content.ReadAsStringAsync()).Should().Be("catalog unavailable: deployments: HTTP 403");
     }
 
     [Fact]

@@ -60,6 +60,10 @@ The child points its client at `{proxy:endpoint}` exactly as it would at the pro
 
 **WebSockets are proxied too.** A WebSocket upgrade (`ws://127.0.0.1:<port>/mai/v1/realtime?…`) is checked against the same token, and the proxy opens the upstream socket (`wss://…`) with the real credential *before* accepting the child's, so an upstream refusal reaches the child as `502` on its upgrade request rather than as a socket that opens and dies. Frames then pass through untouched in both directions — text and binary, fragmented messages, and close status and reason — for as long as the session lasts; the token signs only the handshake, so an hour-long session is not cut off when the token that opened it expires. If either side closes, the close is forwarded; if either side fails, the other is closed with `1011`.
 
+The proxy forwards a request body with the child's `Content-Length` intact rather than re-chunking it. Foundry's Decision route (`/providers/microsoft/v1/systemone`) refuses chunked bodies with HTTP 400 `no_content_length_header`, and a tool that sends a known length upstream gets the same length forwarded.
+
+**The model catalog is served by the proxy itself.** `GET {proxy:endpoint}/pks/v1/models`, with the same bearer token, returns the deployments on the selected Foundry resource joined with what `pks foundry select` chose (enabled, default, roles), in the OpenAI list shape — see [pks foundry models](/tools/pks/foundry/models). The route never reaches Azure; a `502` carries the reason the deployments list could not be read. The `openai-compatible` kind has no catalog provider, so there the path is forwarded upstream like any other.
+
 Every capability that uses `{proxy:*}` in one run shares one proxy per provider kind and one token. The proxy listens on loopback only and stops when the child exits; the token is the boundary while it runs, so treat it like the credential's stand-in it is, and do not log it.
 
 A manifest binding for a tool that talks to Foundry's speech and realtime APIs looks like:

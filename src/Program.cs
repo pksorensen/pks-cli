@@ -1312,6 +1312,12 @@ app.Configure(config =>
         foundry.AddCommand<FoundryUsageCommand>("usage")
             .WithDescription("Show cost breakdown for the selected Foundry resource")
             .WithExample(new[] { "foundry", "usage" });
+
+        foundry.AddCommand<FoundryModelsCommand>("models")
+            .WithDescription("List the model deployments on the selected resource: the catalog pks exec serves to tools at /pks/v1/models")
+            .WithExample(new[] { "foundry", "models" })
+            .WithExample(new[] { "foundry", "models", "--json" })
+            .WithExample(new[] { "foundry", "models", "--role", "decision" });
     });
 
     config.AddBranch("runtime", runtime =>

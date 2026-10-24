@@ -31,6 +31,8 @@ public sealed class ManifestResolver : IManifestResolver
     /// </summary>
     private readonly Dictionary<string, EntraStoredApp> _entered = new(StringComparer.OrdinalIgnoreCase);
 
+    private static readonly HttpClient _catalogHttp = new() { Timeout = TimeSpan.FromSeconds(30) };
+
     public ManifestResolver(
         IAzureFoundryAuthService foundryAuth,
         AzureFoundryAuthConfig foundryConfig,
@@ -446,6 +448,7 @@ public sealed class ManifestResolver : IManifestResolver
         string upstream;
         Func<Task<SecretValue>> credential;
         string missing;
+        Func<CancellationToken, Task<string>>? catalog = null;
         switch (kind.ToLowerInvariant())
         {
             case "foundry":
@@ -453,6 +456,13 @@ public sealed class ManifestResolver : IManifestResolver
                 _foundryToken ??= new CachedFoundryToken(_foundryAuth, _foundryConfig.CognitiveScope);
                 credential = _foundryToken.GetAsync;
                 missing = "No Foundry token available — sign in again with pks foundry init";
+                var foundryUpstream = upstream;
+                var foundryToken = _foundryToken;
+                // The catalog the child reads at /pks/v1/models: the resource's deployments with
+                // what pks foundry select chose, so a tool needs no model configuration of its own.
+                catalog = async ct => Models.ModelCatalog.ToJson(await Models.ModelCatalog.BuildAsync(
+                    _catalogHttp, foundryUpstream, await foundryToken.GetAsync(),
+                    await _foundryAuth.GetStoredCredentialsAsync(), ct));
                 break;
             case "openai-compatible":
                 upstream = Environment.GetEnvironmentVariable("OPENAI_BASE_URL") ?? "";
@@ -469,7 +479,7 @@ public sealed class ManifestResolver : IManifestResolver
         }
 
         _proxyToken ??= Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
-        running = await LocalCredentialProxy.StartAsync(_proxyToken, upstream, credential, missing);
+        running = await LocalCredentialProxy.StartAsync(_proxyToken, upstream, credential, missing, catalog: catalog);
         _proxies[kind] = running;
         return running;
     }

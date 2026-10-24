@@ -82,15 +82,21 @@ public static class LocalCredentialProxy
     /// bind time, so there is no window for another process to take it, and a client never has to
     /// guess whether <c>localhost</c> means IPv4 or IPv6 (Go on Windows may try <c>::1</c> first).
     /// </summary>
+    /// <param name="catalog">
+    /// Serves <c>GET /pks/v1/models</c> (<see cref="Models.ModelCatalog.Path"/>) to the child: the
+    /// provider's model catalog as pks knows it, behind the same proxy token. Null leaves the path
+    /// to the upstream like any other.
+    /// </param>
     public static async Task<RunningCredentialProxy> StartAsync(
         string proxyToken,
         string upstreamBase,
         Func<Task<SecretValue>> credential,
         string missingCredentialMessage,
         int? port = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<CancellationToken, Task<string>>? catalog = null)
     {
-        var app = Build($"http://127.0.0.1:{port ?? 0}", proxyToken, upstreamBase, credential, missingCredentialMessage);
+        var app = Build($"http://127.0.0.1:{port ?? 0}", proxyToken, upstreamBase, credential, missingCredentialMessage, catalog);
         await app.StartAsync(cancellationToken);
         var bound = new Uri(app.Urls.Single()).Port;
         return new RunningCredentialProxy(app, bound);
@@ -101,7 +107,8 @@ public static class LocalCredentialProxy
         string proxyToken,
         string upstreamBase,
         Func<Task<SecretValue>> credential,
-        string missingCredentialMessage)
+        string missingCredentialMessage,
+        Func<CancellationToken, Task<string>>? catalog = null)
     {
         upstreamBase = upstreamBase.TrimEnd('/');
 
@@ -135,6 +142,31 @@ public static class LocalCredentialProxy
             await ProxyWebSocketAsync(ctx, upstreamBase, credential, missingCredentialMessage);
         });
 
+        if (catalog != null)
+        {
+            app.MapGet(Models.ModelCatalog.Path, async (HttpContext ctx) =>
+            {
+                if (!IsAuthorized(ctx, proxyToken))
+                {
+                    await RejectAsync(ctx);
+                    return;
+                }
+                string json;
+                try
+                {
+                    json = await catalog(ctx.RequestAborted);
+                }
+                catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
+                {
+                    ctx.Response.StatusCode = 502;
+                    await ctx.Response.WriteAsync($"catalog unavailable: {ex.Message}");
+                    return;
+                }
+                ctx.Response.ContentType = "application/json";
+                await ctx.Response.WriteAsync(json, ctx.RequestAborted);
+            });
+        }
+
         app.MapMethods("{**path}", AllHttpMethods, async (HttpContext ctx) =>
         {
             if (!IsAuthorized(ctx, proxyToken))
@@ -153,6 +185,10 @@ public static class LocalCredentialProxy
                 if (ctx.Request.ContentType != null)
                     upstreamRequest.Content.Headers.TryAddWithoutValidation(
                         "Content-Type", ctx.Request.ContentType);
+                // A known length goes upstream as one; StreamContent would otherwise send chunked,
+                // and Foundry's Decision-1 route refuses a body without Content-Length (HTTP 400).
+                if (ctx.Request.ContentLength is { } length)
+                    upstreamRequest.Content.Headers.ContentLength = length;
             }
 
             foreach (var header in ctx.Request.Headers)

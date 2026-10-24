@@ -39,6 +39,8 @@ Zero deployments is tolerated here, unlike in `init`. That is the expected path 
 
 The walk also asks for a voice-classifier model, used to turn spoken phrases into pks subcommands. It is chosen from the deployments you just enabled, and is separate from the default model. Choosing none falls back to simple text matching.
 
+The same choice is published as the `decision` role in the model catalog ([pks foundry models](/tools/pks/foundry/models)), which companion tools read through `pks exec`. heypoul uses it to judge spoken answers to a choice, and that needs a Decision model, so pick `Decision-1` here when the resource has one; a chat model in this slot is ignored by tools that speak the Decision protocol.
+
 ## 5. Store the resource key
 
 pks tries to fetch the resource's Cognitive Services subscription key itself, using the management token against the Azure Resource Manager `listKeys` operation. If that call fails — missing permissions, network trouble — the command falls back to a manual entry prompt rather than failing.
