@@ -12,9 +12,10 @@ namespace PKS.Infrastructure.Services.Models;
 /// default, the roles) under one <c>pks</c> object. There is no standard for model catalogs beyond
 /// that list shape; OpenRouter and models.dev agree on the useful extras, so nothing here is invented.
 ///
-/// pks is the gateway: a tool never lists models at a provider itself. Each exec credential proxy
-/// serves the catalog of the provider behind it at <c>GET /pks/v1/models</c>, and
-/// <c>pks models</c> prints the union across every registered provider.
+/// pks is the gateway: a tool never lists models at a provider itself. Every exec credential proxy
+/// serves the union across every registered provider at <c>GET /pks/v1/models</c> and routes
+/// <c>POST /pks/v1/chat/completions</c> to the provider that owns the requested model (see
+/// <see cref="ChatPath"/>); <c>pks models</c> prints the same union.
 /// (Not to be confused with <see cref="PKS.Infrastructure.Models.ModelCatalog"/>, the on-device
 /// speech models of <c>pks model</c>.)
 /// </summary>
@@ -22,16 +23,48 @@ public static class ProviderCatalog
 {
     public const string Path = "/pks/v1/models";
 
-    /// <summary>Provider kinds, as <c>pks exec</c> manifests name them.</summary>
+    /// <summary>
+    /// The routed chat route: an OpenAI chat-completions request whose <c>model</c> is either a bare
+    /// catalog id (the first provider listing it wins) or <c>provider/id</c>. The proxy forwards it to
+    /// that provider's OpenAI-compatible chat endpoint with that provider's credential.
+    /// </summary>
+    public const string ChatPath = "/pks/v1/chat/completions";
+
+    /// <summary>Provider kinds, as <c>pks exec</c> manifests and <c>pks &lt;provider&gt; init</c> name them.</summary>
     public const string Foundry = "foundry";
     public const string Gemini = "gemini";
+    public const string Anthropic = "anthropic";
+    public const string OpenAi = "openai";
+    public const string Moonshot = "moonshot";
+    public const string TypeSafe = "typesafe";
     public const string OpenAiCompatible = "openai-compatible";
+
+    /// <summary>Every kind the catalog knows, in catalog order — the order a bare model id is resolved in.</summary>
+    public static readonly string[] Kinds = [Foundry, Anthropic, OpenAi, Gemini, Moonshot, TypeSafe, OpenAiCompatible];
 
     /// <summary>Manifest role vocabulary for the deployments <c>pks foundry select</c> chose.</summary>
     public const string TextRole = "text";
     public const string DecisionRole = "decision";
 
     public const string GeminiBaseUrl = "https://generativelanguage.googleapis.com/v1beta";
+    public const string AnthropicBaseUrl = "https://api.anthropic.com";
+    public const string OpenAiBaseUrl = "https://api.openai.com/v1";
+    public const string AnthropicVersion = "2023-06-01";
+
+    /// <summary>
+    /// Where a provider answers an OpenAI chat-completions request. Every provider pks registers has
+    /// such a route — Gemini and Anthropic publish OpenAI-compatible layers — except TypeSafe, whose
+    /// API judges (<c>/v1/systemone</c>) rather than chats, so it returns null.
+    /// </summary>
+    public static string? ChatCompletionsUrl(string kind, string? baseUrl) => kind.ToLowerInvariant() switch
+    {
+        Foundry => string.IsNullOrEmpty(baseUrl) ? null : $"{baseUrl.TrimEnd('/')}/openai/v1/chat/completions",
+        Gemini => $"{(string.IsNullOrEmpty(baseUrl) ? GeminiBaseUrl : baseUrl.TrimEnd('/'))}/openai/chat/completions",
+        Anthropic => $"{(string.IsNullOrEmpty(baseUrl) ? AnthropicBaseUrl : baseUrl.TrimEnd('/'))}/v1/chat/completions",
+        OpenAi => $"{(string.IsNullOrEmpty(baseUrl) ? OpenAiBaseUrl : baseUrl.TrimEnd('/'))}/chat/completions",
+        Moonshot or OpenAiCompatible => string.IsNullOrEmpty(baseUrl) ? null : $"{baseUrl.TrimEnd('/')}/chat/completions",
+        _ => null,
+    };
 
     public static readonly JsonSerializerOptions Json = new()
     {
@@ -69,7 +102,8 @@ public static class ProviderCatalog
 
     public sealed class PksFacts
     {
-        /// <summary>The provider kind: <c>foundry</c>, <c>gemini</c> or <c>openai-compatible</c>.</summary>
+        /// <summary>The provider kind the model is reachable through — one of <see cref="Kinds"/>. Prefix a
+        /// chat request's <c>model</c> with it (<c>provider/id</c>) to pin the provider.</summary>
         [JsonPropertyName("provider")] public string Provider { get; init; } = "";
         /// <summary>Ticked in <c>pks foundry select</c>; every model when the provider has no selection.</summary>
         [JsonPropertyName("enabled")] public bool Enabled { get; init; }
@@ -196,9 +230,10 @@ public static class ProviderCatalog
     /// server answers in the OpenAI list shape. OpenRouter's extras (<c>name</c>,
     /// <c>description</c>, <c>architecture</c>) are kept when present; otherwise the modality is
     /// read from the name. Nothing is enabled or defaulted by pks for this kind, so every model is
-    /// enabled and no roles are assigned.
+    /// enabled and no roles are assigned. The same reader serves OpenAI itself and Moonshot, which
+    /// speak this shape natively; <paramref name="kind"/> is what the entries are tagged with.
     /// </summary>
-    public static async Task<List> BuildOpenAiCompatibleAsync(HttpClient http, string baseUrl, SecretValue apiKey, CancellationToken ct)
+    public static async Task<List> BuildOpenAiCompatibleAsync(HttpClient http, string baseUrl, SecretValue apiKey, CancellationToken ct, string kind = OpenAiCompatible)
     {
         baseUrl = baseUrl.TrimEnd('/');
         var doc = await GetJsonAsync(http, $"{baseUrl}/models", Bearer(apiKey), ct)
@@ -214,17 +249,105 @@ public static class ProviderCatalog
             {
                 Id = id,
                 Created = created,
-                OwnedBy = OpenAiCompatible,
+                OwnedBy = kind,
                 Name = m?["name"]?.GetValue<string>() ?? id,
                 Description = m?["description"]?.GetValue<string>(),
                 Architecture = arch ?? Modality(id, id, null),
                 Pks = new PksFacts
                 {
-                    Provider = OpenAiCompatible,
+                    Provider = kind,
                     Enabled = true,
                     Status = "available",
                     Model = new BaseModel { Name = id },
                     Limit = m?["context_length"] is JsonValue cl && cl.TryGetValue<long>(out var ctx) ? new Limits { Context = ctx } : null,
+                },
+            });
+        }
+        return list;
+    }
+
+    // ---------- anthropic ----------
+
+    /// <summary>
+    /// <c>GET /v1/models</c> at the Claude API, keyed with <c>x-api-key</c> and the required
+    /// <c>anthropic-version</c>, following <c>has_more</c>/<c>last_id</c> pages. Claude models take
+    /// text and images; the listing carries their token limits where it states them.
+    /// </summary>
+    public static async Task<List> BuildAnthropicAsync(HttpClient http, SecretValue apiKey, CancellationToken ct, string baseUrl = AnthropicBaseUrl)
+    {
+        var list = new List();
+        string? after = null;
+        do
+        {
+            var url = $"{baseUrl.TrimEnd('/')}/v1/models?limit=100" + (after is null ? "" : $"&after_id={Uri.EscapeDataString(after)}");
+            var doc = await GetJsonAsync(http, url, r =>
+            {
+                r.Headers.TryAddWithoutValidation("x-api-key", apiKey.Reveal() ?? "");
+                r.Headers.TryAddWithoutValidation("anthropic-version", AnthropicVersion);
+            }, ct) ?? throw new InvalidOperationException("could not list the Claude models");
+            foreach (var m in doc["data"]?.AsArray() ?? [])
+            {
+                var id = m?["id"]?.GetValue<string>();
+                if (string.IsNullOrEmpty(id)) continue;
+                long? created = m?["created_at"]?.GetValue<string>() is { } iso
+                    && DateTimeOffset.TryParse(iso, null, System.Globalization.DateTimeStyles.AssumeUniversal, out var at)
+                    ? at.ToUnixTimeSeconds() : null;
+                long? ctx = m?["max_input_tokens"] is JsonValue mi && mi.TryGetValue<long>(out var mInput) ? mInput : null;
+                long? output = m?["max_tokens"] is JsonValue mo && mo.TryGetValue<long>(out var mOut) ? mOut : null;
+                list.Data.Add(new Entry
+                {
+                    Id = id,
+                    Created = created,
+                    OwnedBy = Anthropic,
+                    Name = m?["display_name"]?.GetValue<string>() ?? id,
+                    Architecture = Build(["text", "image"], ["text"]),
+                    Pks = new PksFacts
+                    {
+                        Provider = Anthropic,
+                        Enabled = true,
+                        Status = "available",
+                        Model = new BaseModel { Name = id },
+                        Limit = ctx is null && output is null ? null : new Limits { Context = ctx, Output = output },
+                    },
+                });
+            }
+            after = doc["has_more"]?.GetValue<bool>() == true ? doc["last_id"]?.GetValue<string>() : null;
+        } while (!string.IsNullOrEmpty(after));
+        return list;
+    }
+
+    // ---------- typesafe ----------
+
+    /// <summary>
+    /// <c>GET /v1/models</c> at TypeSafe (jev). These models judge — <c>/v1/systemone</c> scores a
+    /// request against choices — so they are listed as <c>text->choice</c> and are not routable
+    /// through the chat route; a tool that wants a verdict still posts systemone to its bound provider.
+    /// </summary>
+    public static async Task<List> BuildTypeSafeAsync(HttpClient http, string baseUrl, SecretValue apiKey, CancellationToken ct)
+    {
+        var doc = await GetJsonAsync(http, $"{baseUrl.TrimEnd('/')}/v1/models", Bearer(apiKey), ct)
+            ?? throw new InvalidOperationException("could not list the TypeSafe models");
+        var items = doc is JsonArray arr ? arr : doc["models"]?.AsArray() ?? doc["data"]?.AsArray() ?? [];
+        var list = new List();
+        foreach (var m in items)
+        {
+            string? id = m is JsonValue v && v.TryGetValue<string>(out var s) ? s
+                : m?["name"]?.GetValue<string>() ?? m?["id"]?.GetValue<string>();
+            if (string.IsNullOrEmpty(id)) continue;
+            list.Data.Add(new Entry
+            {
+                Id = id,
+                OwnedBy = TypeSafe,
+                Name = id,
+                Description = m is JsonObject ? m["description"]?.GetValue<string>() : null,
+                Architecture = Build(["text"], ["choice"]),
+                Pks = new PksFacts
+                {
+                    Provider = TypeSafe,
+                    Enabled = true,
+                    Status = "available",
+                    Model = new BaseModel { Name = id, Version = m is JsonObject ? m["release_date"]?.GetValue<string>() : null },
+                    Capabilities = new Dictionary<string, bool> { ["systemone"] = true, ["chat_completion"] = false },
                 },
             });
         }

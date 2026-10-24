@@ -28,6 +28,8 @@ public class ManifestResolverProxyTests : IAsyncLifetime
     private WebApplication _foundry = null!;
     private string _foundryEndpoint = "";
     private bool _upstreamSawCatalogRoute;
+    private bool _upstreamSawChatRoute;
+    private readonly List<(string Path, string Auth, string Model)> _chatCalls = new();
 
     public async Task InitializeAsync()
     {
@@ -42,11 +44,30 @@ public class ManifestResolverProxyTests : IAsyncLifetime
         _foundry.MapGet("/v1/models", (HttpContext ctx) =>
             Results.Text("""{"object":"list","data":[{"id":"upstream-chat","object":"model","owned_by":"upstream"}]}""", "application/json"));
         _foundry.MapGet("/v1/pks/v1/models", () => { _upstreamSawCatalogRoute = true; return Results.NotFound(); });
+        // The Foundry data plane the catalog reads, and the two chat endpoints a routed request may land on.
+        _foundry.MapGet("/openai/deployments", () =>
+            Results.Text("""{"object":"list","data":[{"id":"gpt-test","model":"gpt-test","status":"succeeded"},{"id":"upstream-chat","model":"gpt-4o","status":"succeeded"}]}""", "application/json"));
+        _foundry.MapPost("/openai/v1/chat/completions", RecordChatAsync);
+        _foundry.MapPost("/v1/chat/completions", RecordChatAsync);
+        _foundry.MapPost("/pks/v1/chat/completions", () => { _upstreamSawChatRoute = true; return Results.NotFound(); });
+        _foundry.MapPost("/v1/pks/v1/chat/completions", () => { _upstreamSawChatRoute = true; return Results.NotFound(); });
         await _foundry.StartAsync();
         _foundryEndpoint = _foundry.Urls.Single() + "/";
     }
 
     public async Task DisposeAsync() => await _foundry.DisposeAsync();
+
+    private async Task RecordChatAsync(HttpContext ctx)
+    {
+        var body = await System.Text.Json.Nodes.JsonNode.ParseAsync(ctx.Request.Body);
+        _chatCalls.Add((ctx.Request.Path.ToString(), ctx.Request.Headers.Authorization.ToString(), body?["model"]?.GetValue<string>() ?? ""));
+        ctx.Request.ContentLength.Should().NotBeNull("a routed body goes upstream with a Content-Length");
+        var model = body?["model"]?.GetValue<string>() ?? "";
+        var answer = "{\"id\":\"chatcmpl-1\",\"object\":\"chat.completion\",\"model\":\"" + model
+            + "\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok from " + ctx.Request.Path + "\"}}]}";
+        ctx.Response.ContentType = "application/json";
+        await ctx.Response.WriteAsync(answer);
+    }
 
     private Mock<IAzureFoundryAuthService> FoundrySignedIn()
     {
@@ -253,4 +274,68 @@ public class ManifestResolverProxyTests : IAsyncLifetime
             Environment.SetEnvironmentVariable("OPENAI_API_KEY", previousKey);
         }
     }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task The_chat_route_sends_each_model_to_its_own_provider_with_that_providers_credential()
+    {
+        var previousBase = Environment.GetEnvironmentVariable("OPENAI_BASE_URL");
+        var previousKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        Environment.SetEnvironmentVariable("OPENAI_BASE_URL", _foundryEndpoint + "v1");
+        Environment.SetEnvironmentVariable("OPENAI_API_KEY", "sk-upstream");
+        var resolver = Resolver(FoundrySignedIn(), new TestConsole());
+        try
+        {
+            // The child is bound to Foundry; the openai-compatible endpoint is registered too.
+            var env = ChildEnvironment((await resolver.ResolveAsync(OneCapability("foundry", ProxyEnv), Unattended))!);
+            using var client = new HttpClient();
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", env["FOUNDRY_TOKEN"]);
+            var chat = $"{env["FOUNDRY_ENDPOINT"]}{ProviderCatalog.ChatPath}";
+
+            // The union is served on the Foundry proxy, provider-tagged.
+            var catalog = await (await client.GetAsync($"{env["FOUNDRY_ENDPOINT"]}{ProviderCatalog.Path}")).Content.ReadAsStringAsync();
+            catalog.Should().Contain("\"id\":\"gpt-test\"").And.Contain("\"provider\":\"foundry\"").And.Contain("\"provider\":\"openai-compatible\"");
+
+            // A qualified id pins the provider and the prefix is stripped before it goes upstream.
+            var pinned = await client.PostAsync(chat, Json("""{"model":"openai-compatible/upstream-chat","messages":[{"role":"user","content":"hi"}]}"""));
+            pinned.IsSuccessStatusCode.Should().BeTrue(await pinned.Content.ReadAsStringAsync());
+            _chatCalls.Should().ContainSingle().Which.Should().Be(("/v1/chat/completions", "Bearer sk-upstream", "upstream-chat"));
+
+            // A bare id that both providers list goes to the first in catalog order — Foundry — with its token.
+            _chatCalls.Clear();
+            var bare = await client.PostAsync(chat, Json("""{"model":"upstream-chat","messages":[]}"""));
+            var bareBody = await bare.Content.ReadAsStringAsync();
+            bare.IsSuccessStatusCode.Should().BeTrue(bareBody);
+            _chatCalls.Should().ContainSingle().Which.Should().Be(("/openai/v1/chat/completions", $"Bearer {EntraToken}", "upstream-chat"));
+            bareBody.Should().Contain("ok from /openai/v1/chat/completions", "the provider's answer is relayed");
+
+            // An unknown model is an OpenAI-shaped 404, and nothing is forwarded.
+            _chatCalls.Clear();
+            var unknown = await client.PostAsync(chat, Json("""{"model":"no-such-model","messages":[]}"""));
+            ((int)unknown.StatusCode).Should().Be(404);
+            var error = await unknown.Content.ReadAsStringAsync();
+            error.Should().Contain("\"type\":\"invalid_request_error\"").And.Contain("not in the pks catalog").And.Contain("\"code\":\"model_not_found\"");
+            _chatCalls.Should().BeEmpty();
+
+            // A prefix naming a kind pks knows but has no credential for says so, rather than searching the others.
+            var unregistered = await client.PostAsync(chat, Json("""{"model":"moonshot/kimi-k2","messages":[]}"""));
+            ((int)unregistered.StatusCode).Should().Be(404);
+            (await unregistered.Content.ReadAsStringAsync()).Should().Contain("'moonshot' is not registered");
+
+            // Without a token the route is as closed as every other.
+            using var anonymous = new HttpClient();
+            ((int)(await anonymous.PostAsync(chat, Json("""{"model":"gpt-test"}"""))).StatusCode).Should().Be(401);
+
+            _upstreamSawChatRoute.Should().BeFalse("pks's chat route must never be forwarded to the bound provider");
+        }
+        finally
+        {
+            resolver.Release();
+            Environment.SetEnvironmentVariable("OPENAI_BASE_URL", previousBase);
+            Environment.SetEnvironmentVariable("OPENAI_API_KEY", previousKey);
+        }
+    }
+
+    private static StringContent Json(string body) => new(body, System.Text.Encoding.UTF8, "application/json");
 }

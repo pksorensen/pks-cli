@@ -51,11 +51,33 @@ public class ProviderCatalogTests
         ]}
         """;
 
+    private const string AnthropicPage1 = """
+        {"data":[
+          {"id":"claude-opus-5-5","display_name":"Claude Opus 5.5","created_at":"2026-04-01T00:00:00Z","type":"model","max_input_tokens":1000000,"max_tokens":128000},
+          {"id":"claude-haiku-5-5","display_name":"Claude Haiku 5.5","created_at":"2026-05-01T00:00:00Z","type":"model"}
+        ],"has_more":true,"first_id":"claude-opus-5-5","last_id":"claude-haiku-5-5"}
+        """;
+
+    private const string AnthropicPage2 = """
+        {"data":[
+          {"id":"claude-sonnet-4-6","display_name":"Claude Sonnet 4.6","created_at":"2026-02-01T00:00:00Z","type":"model"}
+        ],"has_more":false,"first_id":"claude-sonnet-4-6","last_id":"claude-sonnet-4-6"}
+        """;
+
+    private const string TypeSafeModels = """
+        {"models":[
+          {"name":"jev-latest","description":"Latest judge","release_date":"2026-09-01"},
+          {"name":"jev-1.13.0","description":"Pinned judge","release_date":"2026-06-01"}
+        ]}
+        """;
+
     private sealed class CannedHandler : HttpMessageHandler
     {
         public readonly List<string> Paths = new();
         public readonly List<string?> Auth = new();
         public readonly List<string?> GoogleKey = new();
+        public readonly List<string?> AnthropicKey = new();
+        public readonly List<string?> AnthropicVersion = new();
         public HttpStatusCode ModelsStatus = HttpStatusCode.OK;
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
@@ -63,13 +85,18 @@ public class ProviderCatalogTests
             Paths.Add(request.RequestUri!.PathAndQuery);
             Auth.Add(request.Headers.Authorization?.ToString());
             GoogleKey.Add(request.Headers.TryGetValues("x-goog-api-key", out var keys) ? string.Join(",", keys) : null);
+            AnthropicKey.Add(request.Headers.TryGetValues("x-api-key", out var akeys) ? string.Join(",", akeys) : null);
+            AnthropicVersion.Add(request.Headers.TryGetValues("anthropic-version", out var avs) ? string.Join(",", avs) : null);
             var path = request.RequestUri.AbsolutePath;
+            var query = request.RequestUri.Query;
             var (status, body) = path switch
             {
                 "/openai/deployments" => (HttpStatusCode.OK, Deployments),
                 "/openai/models" => (ModelsStatus, Models),
                 "/api/v1/models" => (HttpStatusCode.OK, OpenRouterModels),
                 "/v1beta/models" => (HttpStatusCode.OK, GeminiModels),
+                "/anthropic/v1/models" => (HttpStatusCode.OK, query.Contains("after_id=") ? AnthropicPage2 : AnthropicPage1),
+                "/typesafe/v1/models" => (HttpStatusCode.OK, TypeSafeModels),
                 _ => (HttpStatusCode.NotFound, "{}"),
             };
             return Task.FromResult(new HttpResponseMessage(status)
@@ -249,5 +276,66 @@ public class ProviderCatalogTests
         merged.Data.Should().HaveCount(foundry.Data.Count + gemini.Data.Count);
         merged.Data.Take(foundry.Data.Count).Should().OnlyContain(d => d.Pks.Provider == "foundry");
         merged.Data.Skip(foundry.Data.Count).Should().OnlyContain(d => d.Pks.Provider == "gemini");
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task Claude_models_are_listed_across_pages_with_the_key_and_version_headers()
+    {
+        var handler = new CannedHandler();
+        using var http = new HttpClient(handler);
+
+        var list = await ProviderCatalog.BuildAnthropicAsync(http, SecretValue.From("sk-ant-test"), CancellationToken.None, "https://fake.anthropic/anthropic");
+
+        list.Data.Select(e => e.Id).Should().Equal("claude-opus-5-5", "claude-haiku-5-5", "claude-sonnet-4-6");
+        handler.Paths.Should().HaveCount(2, "has_more was true once");
+        handler.Paths[1].Should().Contain("after_id=claude-haiku-5-5");
+        handler.AnthropicKey.Should().AllBe("sk-ant-test");
+        handler.AnthropicVersion.Should().AllBe(ProviderCatalog.AnthropicVersion);
+        handler.Auth.Should().AllBeEquivalentTo((string?)null, "Anthropic takes x-api-key, not a bearer");
+
+        var opus = list.Data[0];
+        opus.OwnedBy.Should().Be("anthropic");
+        opus.Pks.Provider.Should().Be("anthropic");
+        opus.Name.Should().Be("Claude Opus 5.5");
+        opus.Architecture.Modality.Should().Be("text+image->text");
+        opus.Pks.Limit!.Context.Should().Be(1000000);
+        opus.Pks.Limit.Output.Should().Be(128000);
+        opus.Created.Should().Be(DateTimeOffset.Parse("2026-04-01T00:00:00Z").ToUnixTimeSeconds());
+        list.Data[1].Pks.Limit.Should().BeNull();
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task TypeSafe_judges_are_listed_as_choice_models_that_cannot_chat()
+    {
+        var handler = new CannedHandler();
+        using var http = new HttpClient(handler);
+
+        var list = await ProviderCatalog.BuildTypeSafeAsync(http, "https://fake.typesafe/typesafe", SecretValue.From("ts-key"), CancellationToken.None);
+
+        list.Data.Select(e => e.Id).Should().Equal("jev-latest", "jev-1.13.0");
+        handler.Auth.Should().AllBe("Bearer ts-key");
+        list.Data[0].Pks.Provider.Should().Be("typesafe");
+        list.Data[0].Architecture.Modality.Should().Be("text->choice");
+        list.Data[0].Pks.Capabilities.Should().Contain("systemone", true).And.Contain("chat_completion", false);
+        list.Data[0].Pks.Model.Version.Should().Be("2026-09-01");
+        ProviderCatalog.ChatCompletionsUrl("typesafe", null).Should().BeNull("a judge has no chat route");
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public void Each_provider_has_the_chat_route_of_its_OpenAI_compatible_layer()
+    {
+        ProviderCatalog.ChatCompletionsUrl("foundry", "https://r.services.ai.azure.com/").Should().Be("https://r.services.ai.azure.com/openai/v1/chat/completions");
+        ProviderCatalog.ChatCompletionsUrl("gemini", null).Should().Be("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions");
+        ProviderCatalog.ChatCompletionsUrl("anthropic", null).Should().Be("https://api.anthropic.com/v1/chat/completions");
+        ProviderCatalog.ChatCompletionsUrl("openai", null).Should().Be("https://api.openai.com/v1/chat/completions");
+        ProviderCatalog.ChatCompletionsUrl("moonshot", "https://api.moonshot.ai/v1").Should().Be("https://api.moonshot.ai/v1/chat/completions");
+        ProviderCatalog.ChatCompletionsUrl("openai-compatible", "https://openrouter.ai/api/v1/").Should().Be("https://openrouter.ai/api/v1/chat/completions");
+        ProviderCatalog.ChatCompletionsUrl("foundry", null).Should().BeNull("no resource selected");
     }
 }

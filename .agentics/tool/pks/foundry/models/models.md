@@ -16,7 +16,7 @@ examples:
     description: "Only the deployments that fill the decision role"
 ---
 
-List what the selected Foundry resource can serve, joined with what you chose in `pks foundry select`. This is the Foundry slice of [pks models](/tools/pks/models), which lists every registered provider; the same document is served to a tool started by [pks exec](/tools/pks/exec) with the `foundry` provider at `GET {proxy:endpoint}/pks/v1/models`, behind the per-run proxy token, so a tool can pick its own model without a prompt and without seeing a credential.
+List what the selected Foundry resource can serve, joined with what you chose in `pks foundry select`. This is the Foundry slice of [pks models](/tools/pks/models), which lists every registered provider; a tool started by [pks exec](/tools/pks/exec) reads that whole union at `GET {proxy:endpoint}/pks/v1/models`, behind the per-run proxy token, so it can pick its own model without a prompt and without seeing a credential.
 
 ## 1. Prerequisites
 
@@ -70,7 +70,7 @@ A role names a job in a companion tool's manifest. Two are assigned today, both 
 curl -s -H "Authorization: Bearer $FOUNDRY_TOKEN" "$FOUNDRY_ENDPOINT/pks/v1/models"
 ```
 
-with the `{proxy:endpoint}` and `{proxy:token}` the manifest bound. The route is answered by the proxy itself and never reaches Azure; a `502` with `catalog unavailable: …` means the deployments list could not be read. A tool started with the `openai-compatible` provider reads the same route and gets that endpoint's models instead — the route is pks's on every provider kind, never the upstream's.
+with the `{proxy:endpoint}` and `{proxy:token}` the manifest bound. The route is answered by the proxy itself and never reaches Azure, and it carries every registered provider, not only Foundry: the Foundry entries are the ones with `"provider":"foundry"`. A `502` with `catalog unavailable: …` means no provider at all could be listed. The tool may then post any text model it finds — Foundry's or another provider's — to `{proxy:endpoint}/pks/v1/chat/completions`; see [pks models](/tools/pks/models) for how the routing names a model.
 
 ## 6. Verify
 

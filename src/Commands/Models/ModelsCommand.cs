@@ -33,7 +33,7 @@ public class ModelsCommand : AsyncCommand<ModelsCommand.Settings>
         public string? Role { get; set; }
 
         [CommandOption("--provider <KIND>")]
-        [Description("Only one provider kind: foundry, gemini or openai-compatible")]
+        [Description("Only one provider kind: foundry, anthropic, openai, gemini, moonshot, typesafe or openai-compatible")]
         public string? Provider { get; set; }
     }
 
@@ -69,7 +69,7 @@ public class ModelsCommand : AsyncCommand<ModelsCommand.Settings>
         var registered = await service.RegisteredKindsAsync();
         if (registered.Count == 0)
         {
-            console.MarkupLine("[yellow]No provider is registered.[/] [dim]Sign in with [bold]pks foundry init[/], or set GEMINI_API_KEY or OPENAI_BASE_URL.[/]");
+            console.MarkupLine("[yellow]No provider is registered.[/] [dim]Sign in with [bold]pks foundry init[/], [bold]pks providers init[/] (Anthropic/OpenAI), [bold]pks google init[/], [bold]pks moonshot init[/] or [bold]pks typesafe init[/], or set OPENAI_BASE_URL.[/]");
             return 1;
         }
 
@@ -99,7 +99,7 @@ public class ModelsCommand : AsyncCommand<ModelsCommand.Settings>
         console.Write(table);
         foreach (var (k, error) in result.Failures)
             console.MarkupLine($"[yellow]{Markup.Escape(k)}:[/] [dim]{Markup.Escape(error)}[/]");
-        console.MarkupLine("[dim]★ default · roles come from [bold]pks foundry select[/] · a tool started by pks exec reads its provider's slice at {proxy:endpoint}/pks/v1/models[/]");
+        console.MarkupLine("[dim]★ default · roles come from [bold]pks foundry select[/] · a tool started by pks exec reads this list at {proxy:endpoint}/pks/v1/models and may post any text model to {proxy:endpoint}/pks/v1/chat/completions[/]");
         return result.Failures.Count > 0 && catalog.Data.Count == 0 ? 1 : 0;
     }
 }

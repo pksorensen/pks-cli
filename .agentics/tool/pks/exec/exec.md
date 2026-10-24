@@ -32,8 +32,8 @@ Use `pks exec` when launching a companion CLI or agent binary (for example `agen
 ## Prerequisites
 
 - **A discovery-aware executable.** `EXECUTABLE` must respond to `PKS_DISCOVERY=1` by exiting `0` and printing a `v1` manifest JSON object to stdout within 10 seconds.
-- **At least one available provider.** Azure AI Foundry requires having already run [`pks foundry init`](/tools/pks/foundry) — availability is checked via the CLI's stored Foundry credentials, not just declared in the manifest. Gemini requires `GEMINI_API_KEY` to be exported in the shell `pks` runs in. An OpenAI-compatible endpoint requires `OPENAI_BASE_URL` or `OPENAI_API_KEY` to be exported.
-- **The manifest must offer a provider you have.** `pks exec` does not prompt to set missing credentials — if no provider the manifest lists is available locally, it reports the gap and points at `pks foundry init` / `GEMINI_API_KEY` / `OPENAI_BASE_URL`.
+- **At least one available provider.** Azure AI Foundry requires having already run [`pks foundry init`](/tools/pks/foundry) — availability is checked via the CLI's stored Foundry credentials, not just declared in the manifest. Gemini requires a key from `pks google init` or `GEMINI_API_KEY` exported in the shell `pks` runs in. An OpenAI-compatible endpoint requires `OPENAI_BASE_URL` or `OPENAI_API_KEY` to be exported.
+- **The manifest must offer a provider you have.** `pks exec` does not prompt to set missing credentials — if no provider the manifest lists is available locally, it reports the gap and points at `pks foundry init` / `pks google init` / `OPENAI_BASE_URL`.
 
 ## How it works
 
@@ -62,7 +62,12 @@ The child points its client at `{proxy:endpoint}` exactly as it would at the pro
 
 The proxy forwards a request body with the child's `Content-Length` intact rather than re-chunking it. Foundry's Decision route (`/providers/microsoft/v1/systemone`) refuses chunked bodies with HTTP 400 `no_content_length_header`, and a tool that sends a known length upstream gets the same length forwarded.
 
-**The model catalog is served by the proxy itself, never forwarded.** pks is the gateway: a tool lists models at `GET {proxy:endpoint}/pks/v1/models`, with the same bearer token, and gets the models reachable through the provider behind that proxy — in the OpenAI list shape with a `pks` object per entry (`provider`, `enabled`, `default`, `roles`). For `foundry` that is the deployments on the selected resource joined with what `pks foundry select` chose; for `openai-compatible` it is the endpoint's own `/models` listing. The route exists on every proxy kind and never reaches the upstream; a `502` carries the reason the provider could not be listed. Across all registered providers at once, the same document is [pks models](/tools/pks/models).
+**Two routes are pks's own, served by the proxy and never forwarded.** pks is the gateway, whichever provider the manifest bound:
+
+- `GET {proxy:endpoint}/pks/v1/models`, with the same bearer token, is the catalog across *every* provider registered with pks — Foundry, Anthropic, OpenAI, Gemini, Moonshot, TypeSafe, an OpenAI-compatible endpoint — in the OpenAI list shape with a `pks` object per entry (`provider`, `enabled`, `default`, `roles`). The same document is [pks models](/tools/pks/models).
+- `POST {proxy:endpoint}/pks/v1/chat/completions` takes an OpenAI chat-completions body and routes it by its `model`: pks finds the provider that lists it, rewrites the name to that provider's own, signs the request with *that provider's* credential and relays the answer, streaming included. `provider/id` (`gemini/gemini-2.5-flash`) pins the provider; a bare id goes to the first provider in catalog order that lists it. A model pks cannot route is an OpenAI-shaped `404 model_not_found`, never a forwarded request.
+
+So a tool bound to Foundry for speech can clean a transcript with a Gemini or Claude model through the same endpoint and token, and never holds a second key. A `502` on the catalog route carries the reason when no provider at all could be listed.
 
 Every capability that uses `{proxy:*}` in one run shares one proxy per provider kind and one token. The proxy listens on loopback only and stops when the child exits; the token is the boundary while it runs, so treat it like the credential's stand-in it is, and do not log it.
 
@@ -92,7 +97,7 @@ pks exec [options] <EXECUTABLE> [ARGS...] [-- TOOL-ARGS...]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--provider <KIND>` | — | Skip the interactive provider prompt and pick this provider kind directly (for example `foundry`, `gemini`, `openai-compatible`). Fails with an error if the kind is not both offered by the manifest and locally available. |
+| `--provider <KIND>` | — | Skip the interactive provider prompt and pick this provider kind directly (for example `foundry`, `gemini`, `openai-compatible`). Fails with an error if the kind is not both offered by the manifest and locally available. The bound provider decides where the proxy's plain paths go; the `/pks/v1/*` routes see every registered provider regardless. |
 | `--port <N>` | random free port | Bind the local managed-identity (IMDS) proxy to this port instead of an OS-assigned one. Only relevant when the manifest's env templates use `{imds:endpoint}`/`{imds:header}`, which today means Foundry-backed capabilities. |
 | `--dry-run` | — | Run discovery and env resolution, then print the resolved command line and the full env overlay instead of exec'ing the child. Values that come from a credential placeholder (`{apikey}`, `{imds:header}`, `{proxy:token}`, `{entra:clientsecret}`) print as `(set, hidden)`, or `(not set)` when nothing filled them. Any proxy that was started is stopped immediately afterward. |
 
@@ -101,7 +106,7 @@ pks exec [options] <EXECUTABLE> [ARGS...] [-- TOOL-ARGS...]
 | Variable | Default | Purpose |
 |---|---|---|
 | `PKS_DISCOVERY` | `(unset)` | Set to `1` by `pks exec` itself when invoking the child for the discovery phase. Not something you set — the child must detect it and print its manifest instead of running normally. |
-| `GEMINI_API_KEY` | `(unset)` | Presence makes the `gemini` provider selectable for a capability, and resolves the `{apikey}` placeholder for Gemini. |
+| `GEMINI_API_KEY` | `(unset)` | Presence makes the `gemini` provider selectable for a capability, and resolves the `{apikey}` placeholder for Gemini — unless `pks google init` stored a key, which wins. |
 | `OPENAI_BASE_URL` | `(unset)` | Presence (or `OPENAI_API_KEY`) makes the `openai-compatible` provider selectable, and resolves the `{endpoint}` placeholder. |
 | `OPENAI_API_KEY` | `(unset)` | Presence makes `openai-compatible` selectable, and resolves the `{apikey}` placeholder for it. |
 
@@ -128,7 +133,8 @@ Resolves providers and models as usual, then prints the command line and env ove
 ## Troubleshooting
 
 - **`discovery failed for …`** — `EXECUTABLE` either exited non-zero, printed nothing, printed non-JSON, or printed a manifest whose `manifestVersion` is not `v1`, when run with `PKS_DISCOVERY=1`. An ordinary binary that does not know about `PKS_DISCOVERY` will run normally instead of returning a manifest, which fails discovery outright — or hangs until the 10-second timeout kills the process tree.
-- **"no registered provider matches this capability"** — none of the providers the manifest lists for that capability are available locally. Run `pks foundry init` for Foundry, or export `GEMINI_API_KEY` / `OPENAI_BASE_URL` (and `OPENAI_API_KEY`) for the other two.
+- **"no registered provider matches this capability"** — none of the providers the manifest lists for that capability are available locally. Run `pks foundry init` for Foundry, `pks google init` (or export `GEMINI_API_KEY`) for Gemini, or export `OPENAI_BASE_URL` (and `OPENAI_API_KEY`) for an OpenAI-compatible endpoint.
+- **`404 model_not_found` from `/pks/v1/chat/completions`** — the `model` is not in `pks models`, names a provider pks has no credential for (the message says which `init` to run), or is a TypeSafe judge, which has no chat route.
 - **`--provider` still fails** — `--provider` only chooses among providers the manifest offers **and** that are locally available. Asking for a kind the tool does not declare, or one you have not authenticated or configured, fails fast rather than falling back to a prompt.
 - **Position of `--provider`/`--port`/`--dry-run` doesn't matter.** These are recognized by name no matter where they appear relative to `EXECUTABLE`, so putting them after `EXECUTABLE` still gets them parsed by `pks exec` rather than forwarded in `ARGS`.
 - **A typo'd model ID is not caught.** Model IDs are solicited with a free-text prompt and a suggested default; there is no validation against what the provider actually serves, so a typo is passed straight through as the resolved `{model:<role>}` value.

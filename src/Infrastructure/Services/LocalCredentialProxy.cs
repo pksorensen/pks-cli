@@ -1,6 +1,9 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Net.WebSockets;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -36,6 +39,8 @@ public static class LocalCredentialProxy
         "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
         "TE", "Trailers", "Upgrade",
     };
+
+    private static readonly JsonSerializerOptions ErrorJson = new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     private static readonly string[] AllHttpMethods =
         ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
@@ -84,8 +89,14 @@ public static class LocalCredentialProxy
     /// </summary>
     /// <param name="catalog">
     /// Serves <c>GET /pks/v1/models</c> (<see cref="Models.ProviderCatalog.Path"/>) to the child: the
-    /// provider's model catalog as pks knows it, behind the same proxy token. Null leaves the path
-    /// to the upstream like any other.
+    /// model catalog as pks knows it, behind the same proxy token. Null leaves the path to the
+    /// upstream like any other.
+    /// </param>
+    /// <param name="chat">
+    /// Routes <c>POST /pks/v1/chat/completions</c> (<see cref="Models.ProviderCatalog.ChatPath"/>):
+    /// given the request's <c>model</c>, says which provider endpoint and credential the request goes
+    /// to — so a child bound to one provider can still use a model from another, through pks. Null
+    /// leaves the path to the upstream.
     /// </param>
     public static async Task<RunningCredentialProxy> StartAsync(
         string proxyToken,
@@ -94,9 +105,10 @@ public static class LocalCredentialProxy
         string missingCredentialMessage,
         int? port = null,
         CancellationToken cancellationToken = default,
-        Func<CancellationToken, Task<string>>? catalog = null)
+        Func<CancellationToken, Task<string>>? catalog = null,
+        Func<string, CancellationToken, Task<Models.ChatRouteResult>>? chat = null)
     {
-        var app = Build($"http://127.0.0.1:{port ?? 0}", proxyToken, upstreamBase, credential, missingCredentialMessage, catalog);
+        var app = Build($"http://127.0.0.1:{port ?? 0}", proxyToken, upstreamBase, credential, missingCredentialMessage, catalog, chat);
         await app.StartAsync(cancellationToken);
         var bound = new Uri(app.Urls.Single()).Port;
         return new RunningCredentialProxy(app, bound);
@@ -108,7 +120,8 @@ public static class LocalCredentialProxy
         string upstreamBase,
         Func<Task<SecretValue>> credential,
         string missingCredentialMessage,
-        Func<CancellationToken, Task<string>>? catalog = null)
+        Func<CancellationToken, Task<string>>? catalog = null,
+        Func<string, CancellationToken, Task<Models.ChatRouteResult>>? chat = null)
     {
         upstreamBase = upstreamBase.TrimEnd('/');
 
@@ -167,6 +180,53 @@ public static class LocalCredentialProxy
             });
         }
 
+        if (chat != null)
+        {
+            app.MapPost(Models.ProviderCatalog.ChatPath, async (HttpContext ctx) =>
+            {
+                if (!IsAuthorized(ctx, proxyToken))
+                {
+                    await RejectAsync(ctx);
+                    return;
+                }
+
+                JsonObject? body;
+                try
+                {
+                    body = (await JsonNode.ParseAsync(ctx.Request.Body, cancellationToken: ctx.RequestAborted)) as JsonObject;
+                }
+                catch (JsonException)
+                {
+                    body = null;
+                }
+                if (body is null)
+                {
+                    await OpenAiErrorAsync(ctx, 400, "the request body is not a JSON object", "invalid_request_error", null);
+                    return;
+                }
+
+                var model = body["model"]?.GetValue<string>() ?? "";
+                var route = await chat(model, ctx.RequestAborted);
+                if (route.Route is null)
+                {
+                    await OpenAiErrorAsync(ctx, 404, route.Error ?? "no route", "invalid_request_error", "model_not_found");
+                    return;
+                }
+
+                // The provider gets its own name for the model; a `provider/` prefix was pks's.
+                body["model"] = route.Route.Model;
+                var bytes = JsonSerializer.SerializeToUtf8Bytes(body);
+                using var upstreamRequest = new HttpRequestMessage(HttpMethod.Post, route.Route.Url)
+                {
+                    // ByteArrayContent carries a Content-Length, which some providers insist on.
+                    Content = new ByteArrayContent(bytes),
+                };
+                upstreamRequest.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+                await ForwardAsync(ctx, httpClientFactory, upstreamRequest, route.Route.Credential,
+                    $"no credential for provider '{route.Route.Kind}'");
+            });
+        }
+
         app.MapMethods("{**path}", AllHttpMethods, async (HttpContext ctx) =>
         {
             if (!IsAuthorized(ctx, proxyToken))
@@ -191,39 +251,67 @@ public static class LocalCredentialProxy
                     upstreamRequest.Content.Headers.ContentLength = length;
             }
 
-            foreach (var header in ctx.Request.Headers)
-            {
-                if (SkipHeaders.Contains(header.Key)) continue;
-                upstreamRequest.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray());
-            }
-
-            if (!SecretSink.SetBearerToken(upstreamRequest, await credential()))
-            {
-                ctx.Response.StatusCode = 502;
-                await ctx.Response.WriteAsync(missingCredentialMessage);
-                return;
-            }
-
-            var client = httpClientFactory.CreateClient("credential-proxy");
-            using var upstreamResponse = await client.SendAsync(
-                upstreamRequest,
-                HttpCompletionOption.ResponseHeadersRead,
-                ctx.RequestAborted);
-
-            ctx.Response.StatusCode = (int)upstreamResponse.StatusCode;
-            foreach (var header in upstreamResponse.Headers)
-                ctx.Response.Headers.Append(header.Key, header.Value.ToArray());
-            foreach (var header in upstreamResponse.Content.Headers)
-                ctx.Response.Headers.Append(header.Key, header.Value.ToArray());
-
-            // Kestrel owns the framing; forwarding the upstream values breaks SSE pass-through.
-            ctx.Response.Headers.Remove("Transfer-Encoding");
-            ctx.Response.Headers.Remove("Content-Length");
-
-            await upstreamResponse.Content.CopyToAsync(ctx.Response.Body, ctx.RequestAborted);
+            await ForwardAsync(ctx, httpClientFactory, upstreamRequest, await credential(), missingCredentialMessage);
         });
 
         return app;
+    }
+
+    /// <summary>
+    /// Sends a prepared upstream request with the child's remaining headers and the given credential,
+    /// and streams the answer back — status, headers and body, SSE included. Shared by the catch-all
+    /// (same path at the bound provider) and the routed chat route (another provider entirely).
+    /// </summary>
+    private static async Task ForwardAsync(
+        HttpContext ctx,
+        IHttpClientFactory httpClientFactory,
+        HttpRequestMessage upstreamRequest,
+        SecretValue credential,
+        string missingCredentialMessage)
+    {
+        foreach (var header in ctx.Request.Headers)
+        {
+            if (SkipHeaders.Contains(header.Key)) continue;
+            upstreamRequest.Headers.TryAddWithoutValidation(header.Key, header.Value.ToArray());
+        }
+
+        if (!SecretSink.SetBearerToken(upstreamRequest, credential))
+        {
+            ctx.Response.StatusCode = 502;
+            await ctx.Response.WriteAsync(missingCredentialMessage);
+            return;
+        }
+
+        var client = httpClientFactory.CreateClient("credential-proxy");
+        using var upstreamResponse = await client.SendAsync(
+            upstreamRequest,
+            HttpCompletionOption.ResponseHeadersRead,
+            ctx.RequestAborted);
+
+        ctx.Response.StatusCode = (int)upstreamResponse.StatusCode;
+        foreach (var header in upstreamResponse.Headers)
+            ctx.Response.Headers.Append(header.Key, header.Value.ToArray());
+        foreach (var header in upstreamResponse.Content.Headers)
+            ctx.Response.Headers.Append(header.Key, header.Value.ToArray());
+
+        // Kestrel owns the framing; forwarding the upstream values breaks SSE pass-through.
+        ctx.Response.Headers.Remove("Transfer-Encoding");
+        ctx.Response.Headers.Remove("Content-Length");
+
+        await upstreamResponse.Content.CopyToAsync(ctx.Response.Body, ctx.RequestAborted);
+    }
+
+    /// <summary>An error in the shape OpenAI clients already parse, so a tool sees one error format on this route.</summary>
+    private static async Task OpenAiErrorAsync(HttpContext ctx, int status, string message, string type, string? code)
+    {
+        ctx.Response.StatusCode = status;
+        ctx.Response.ContentType = "application/json";
+        var error = new JsonObject
+        {
+            ["error"] = new JsonObject { ["message"] = message, ["type"] = type, ["param"] = "model", ["code"] = code },
+        };
+        // Relaxed escaping keeps quotes in the message readable; the body is JSON a tool prints, not HTML.
+        await ctx.Response.WriteAsync(error.ToJsonString(ErrorJson), ctx.RequestAborted);
     }
 
     private static bool IsAuthorized(HttpContext ctx, string proxyToken)

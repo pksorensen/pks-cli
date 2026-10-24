@@ -15,6 +15,7 @@ public sealed class ManifestResolver : IManifestResolver
     private readonly AzureFoundryAuthConfig _foundryConfig;
     private readonly IEntraApplicationService _entra;
     private readonly IAnsiConsole _console;
+    private readonly IModelCatalogService _catalog;
 
     private ImdsProxy? _imds;
 
@@ -33,16 +34,25 @@ public sealed class ManifestResolver : IManifestResolver
 
     private static readonly HttpClient _catalogHttp = new() { Timeout = TimeSpan.FromSeconds(30) };
 
+    /// <param name="catalog">
+    /// The model catalog and chat routing table every credential proxy serves. Optional so a resolver
+    /// built by hand (tests, scripts) still works: without it the catalog knows the providers that
+    /// need no stored key beyond Foundry's — Foundry, and the environment-configured kinds.
+    /// (<c>pks agent</c> resolves model→provider on its own in <c>AgentChatProviderFactory</c>; the
+    /// two are deliberately separate, this one is the gateway a child process talks to.)
+    /// </param>
     public ManifestResolver(
         IAzureFoundryAuthService foundryAuth,
         AzureFoundryAuthConfig foundryConfig,
         IEntraApplicationService entra,
-        IAnsiConsole console)
+        IAnsiConsole console,
+        IModelCatalogService? catalog = null)
     {
         _foundryAuth = foundryAuth;
         _foundryConfig = foundryConfig;
         _entra = entra;
         _console = console;
+        _catalog = catalog ?? new ModelCatalogService(_catalogHttp, foundryAuth, foundryConfig);
     }
 
     public async Task<ResolvedEnvironment?> ResolveAsync(PksManifest manifest, ManifestResolveOptions options)
@@ -175,7 +185,7 @@ public sealed class ManifestResolver : IManifestResolver
     private async Task<bool> IsAvailableAsync(string kind, string capabilityId) => kind.ToLowerInvariant() switch
     {
         "foundry" => await _foundryAuth.IsAuthenticatedAsync(),
-        "gemini" => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GEMINI_API_KEY")),
+        "gemini" => (await _catalog.CredentialAsync(ProviderCatalog.Gemini)).HasValue,
         "openai-compatible" => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("OPENAI_BASE_URL"))
                              || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("OPENAI_API_KEY")),
         // An app registration pks provisioned, under the alias this capability is called. Available
@@ -189,7 +199,7 @@ public sealed class ManifestResolver : IManifestResolver
     private static string HintFor(string kind, string capabilityId) => kind.ToLowerInvariant() switch
     {
         "foundry" => "sign in with [bold]pks foundry init[/]",
-        "gemini" => "set GEMINI_API_KEY",
+        "gemini" => "run [bold]pks google init[/] or set GEMINI_API_KEY",
         "openai-compatible" => "set OPENAI_BASE_URL (and OPENAI_API_KEY where the endpoint wants one)",
         "entra" => $"provision one with [bold]pks entra app init \"{capabilityId.EscapeMarkup()}\" --alias {capabilityId.EscapeMarkup()}[/], "
                  + "or add [bold]--manual[/] to store one that already exists",
@@ -448,7 +458,6 @@ public sealed class ManifestResolver : IManifestResolver
         string upstream;
         Func<Task<SecretValue>> credential;
         string missing;
-        Func<CancellationToken, Task<string>>? catalog = null;
         switch (kind.ToLowerInvariant())
         {
             case "foundry":
@@ -456,22 +465,11 @@ public sealed class ManifestResolver : IManifestResolver
                 _foundryToken ??= new CachedFoundryToken(_foundryAuth, _foundryConfig.CognitiveScope);
                 credential = _foundryToken.GetAsync;
                 missing = "No Foundry token available — sign in again with pks foundry init";
-                var foundryUpstream = upstream;
-                var foundryToken = _foundryToken;
-                // The catalog the child reads at /pks/v1/models: the resource's deployments with
-                // what pks foundry select chose, so a tool needs no model configuration of its own.
-                catalog = async ct => Models.ProviderCatalog.ToJson(await Models.ProviderCatalog.BuildFoundryAsync(
-                    _catalogHttp, foundryUpstream, await foundryToken.GetAsync(),
-                    await _foundryAuth.GetStoredCredentialsAsync(), ct));
                 break;
             case "openai-compatible":
                 upstream = Environment.GetEnvironmentVariable("OPENAI_BASE_URL") ?? "";
                 credential = () => Task.FromResult(SecretValue.From(Environment.GetEnvironmentVariable("OPENAI_API_KEY")));
                 missing = "OPENAI_API_KEY is not set";
-                var openAiUpstream = upstream;
-                // pks is the gateway: the child lists models here, never at the endpoint itself.
-                catalog = async ct => Models.ProviderCatalog.ToJson(await Models.ProviderCatalog.BuildOpenAiCompatibleAsync(
-                    _catalogHttp, openAiUpstream, SecretValue.From(Environment.GetEnvironmentVariable("OPENAI_API_KEY")), ct));
                 break;
             default:
                 return null;
@@ -483,9 +481,25 @@ public sealed class ManifestResolver : IManifestResolver
         }
 
         _proxyToken ??= Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
-        running = await LocalCredentialProxy.StartAsync(_proxyToken, upstream, credential, missing, catalog: catalog);
+        // pks is the gateway, whichever provider the child is bound to: /pks/v1/models is the union
+        // across every registered provider, and /pks/v1/chat/completions goes wherever the requested
+        // model lives — so a tool needs no model configuration and no second credential of its own.
+        running = await LocalCredentialProxy.StartAsync(_proxyToken, upstream, credential, missing,
+            catalog: UnionCatalogJsonAsync,
+            chat: _catalog.RouteChatAsync);
         _proxies[kind] = running;
         return running;
+    }
+
+    /// <summary>The catalog the proxy serves: every provider's models, or a 502 with every reason when none could be listed.</summary>
+    private async Task<string> UnionCatalogJsonAsync(CancellationToken ct)
+    {
+        var result = await _catalog.BuildAsync(null, ct);
+        if (result.Catalog.Data.Count == 0 && result.Failures.Count > 0)
+        {
+            throw new InvalidOperationException(string.Join("; ", result.Failures.Select(f => $"{f.Kind}: {f.Error}")));
+        }
+        return ProviderCatalog.ToJson(result.Catalog);
     }
 
     /// <summary>
@@ -606,7 +620,8 @@ public sealed class ManifestResolver : IManifestResolver
                 var stored = await _foundryAuth.GetStoredCredentialsAsync();
                 return stored is null ? "" : stored.ApiKey.Reveal() ?? "";
             case "gemini":
-                return Environment.GetEnvironmentVariable("GEMINI_API_KEY") ?? "";
+                // The key pks google init stored, else the environment — the same order the catalog uses.
+                return (await _catalog.CredentialAsync(ProviderCatalog.Gemini)).Reveal() ?? "";
             case "openai-compatible":
                 return Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? "";
             default:
