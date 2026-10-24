@@ -460,7 +460,7 @@ public sealed class ManifestResolver : IManifestResolver
                 var foundryToken = _foundryToken;
                 // The catalog the child reads at /pks/v1/models: the resource's deployments with
                 // what pks foundry select chose, so a tool needs no model configuration of its own.
-                catalog = async ct => Models.ModelCatalog.ToJson(await Models.ModelCatalog.BuildAsync(
+                catalog = async ct => Models.ProviderCatalog.ToJson(await Models.ProviderCatalog.BuildFoundryAsync(
                     _catalogHttp, foundryUpstream, await foundryToken.GetAsync(),
                     await _foundryAuth.GetStoredCredentialsAsync(), ct));
                 break;
@@ -468,6 +468,10 @@ public sealed class ManifestResolver : IManifestResolver
                 upstream = Environment.GetEnvironmentVariable("OPENAI_BASE_URL") ?? "";
                 credential = () => Task.FromResult(SecretValue.From(Environment.GetEnvironmentVariable("OPENAI_API_KEY")));
                 missing = "OPENAI_API_KEY is not set";
+                var openAiUpstream = upstream;
+                // pks is the gateway: the child lists models here, never at the endpoint itself.
+                catalog = async ct => Models.ProviderCatalog.ToJson(await Models.ProviderCatalog.BuildOpenAiCompatibleAsync(
+                    _catalogHttp, openAiUpstream, SecretValue.From(Environment.GetEnvironmentVariable("OPENAI_API_KEY")), ct));
                 break;
             default:
                 return null;

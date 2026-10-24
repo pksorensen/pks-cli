@@ -141,6 +141,15 @@ var isPipeableSsh = commandArgs.Length >= 3
         || commandArgs[2].Equals("copy", StringComparison.OrdinalIgnoreCase));
 if (isPipeableSsh) noLogo = true;
 
+// `pks models --json` / `pks foundry models --json` print the catalog document a tool would
+// read at /pks/v1/models — stdout must be that JSON and nothing else.
+var isModelsJson = hasJsonFlag && commandArgs.Length >= 2
+    && (commandArgs[1].Equals("models", StringComparison.OrdinalIgnoreCase)
+        || (commandArgs.Length >= 3
+            && commandArgs[1].Equals("foundry", StringComparison.OrdinalIgnoreCase)
+            && commandArgs[2].Equals("models", StringComparison.OrdinalIgnoreCase)));
+if (isModelsJson) noLogo = true;
+
 // Enable debug output when --debug flag is passed
 if (commandArgs.Any(a => a.Equals("--debug", StringComparison.OrdinalIgnoreCase)))
     Environment.SetEnvironmentVariable("PKS_DEBUG", "1");
@@ -418,6 +427,7 @@ services.AddHttpClient<IAzureDevOpsAuthService, AzureDevOpsAuthService>();
 // Configure Azure AI Foundry authentication
 services.AddSingleton<PKS.Infrastructure.Services.Models.AzureFoundryAuthConfig>();
 services.AddHttpClient<IAzureFoundryAuthService, AzureFoundryAuthService>();
+services.AddHttpClient<PKS.Infrastructure.Services.Models.IModelCatalogService, PKS.Infrastructure.Services.Models.ModelCatalogService>();
 // Tenant-keyed Azure sign-in shared by Log Analytics, App Insights and file shares. The cache is
 // the process-wide instance FoundryTokenCredential also uses, so there is exactly one L1.
 services.AddSingleton(PKS.Infrastructure.Services.Azure.AzureTokenCache.Default);
@@ -674,6 +684,13 @@ app.Configure(config =>
 
     config.AddCommand<StatusCommand>("status")
         .WithDescription("View system status with real-time insights");
+
+    config.AddCommand<PKS.Commands.Models.ModelsCommand>("models")
+        .WithDescription("List the models reachable through the registered providers: the catalog pks exec serves to tools at /pks/v1/models")
+        .WithExample(new[] { "models" })
+        .WithExample(new[] { "models", "--json" })
+        .WithExample(new[] { "models", "--provider", "gemini" })
+        .WithExample(new[] { "models", "--role", "decision" });
 
     config.AddCommand<PKS.Commands.Exec.PksExecCommand>("exec")
         .WithDescription("Run a tool that supports the pks-cli discovery contract (PKS_DISCOVERY=1)")
@@ -1314,7 +1331,7 @@ app.Configure(config =>
             .WithExample(new[] { "foundry", "usage" });
 
         foundry.AddCommand<FoundryModelsCommand>("models")
-            .WithDescription("List the model deployments on the selected resource: the catalog pks exec serves to tools at /pks/v1/models")
+            .WithDescription("List the model deployments on the selected resource (the foundry slice of pks models)")
             .WithExample(new[] { "foundry", "models" })
             .WithExample(new[] { "foundry", "models", "--json" })
             .WithExample(new[] { "foundry", "models", "--role", "decision" });

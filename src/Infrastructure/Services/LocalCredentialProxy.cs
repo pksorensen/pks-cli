@@ -83,7 +83,7 @@ public static class LocalCredentialProxy
     /// guess whether <c>localhost</c> means IPv4 or IPv6 (Go on Windows may try <c>::1</c> first).
     /// </summary>
     /// <param name="catalog">
-    /// Serves <c>GET /pks/v1/models</c> (<see cref="Models.ModelCatalog.Path"/>) to the child: the
+    /// Serves <c>GET /pks/v1/models</c> (<see cref="Models.ProviderCatalog.Path"/>) to the child: the
     /// provider's model catalog as pks knows it, behind the same proxy token. Null leaves the path
     /// to the upstream like any other.
     /// </param>
@@ -144,7 +144,7 @@ public static class LocalCredentialProxy
 
         if (catalog != null)
         {
-            app.MapGet(Models.ModelCatalog.Path, async (HttpContext ctx) =>
+            app.MapGet(Models.ProviderCatalog.Path, async (HttpContext ctx) =>
             {
                 if (!IsAuthorized(ctx, proxyToken))
                 {

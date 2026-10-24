@@ -27,6 +27,7 @@ public class ManifestResolverProxyTests : IAsyncLifetime
 
     private WebApplication _foundry = null!;
     private string _foundryEndpoint = "";
+    private bool _upstreamSawCatalogRoute;
 
     public async Task InitializeAsync()
     {
@@ -36,6 +37,11 @@ public class ManifestResolverProxyTests : IAsyncLifetime
         _foundry = builder.Build();
         _foundry.MapGet("/speechtotext/whoami", (HttpContext ctx) =>
             Results.Text(ctx.Request.Headers.Authorization.ToString()));
+        // Doubles as an OpenAI-compatible upstream: its own /models listing, and a record of
+        // whether pks's catalog route ever leaked through to it.
+        _foundry.MapGet("/v1/models", (HttpContext ctx) =>
+            Results.Text("""{"object":"list","data":[{"id":"upstream-chat","object":"model","owned_by":"upstream"}]}""", "application/json"));
+        _foundry.MapGet("/v1/pks/v1/models", () => { _upstreamSawCatalogRoute = true; return Results.NotFound(); });
         await _foundry.StartAsync();
         _foundryEndpoint = _foundry.Urls.Single() + "/";
     }
@@ -213,6 +219,38 @@ public class ManifestResolverProxyTests : IAsyncLifetime
         {
             resolver.Release();
             Environment.SetEnvironmentVariable("GEMINI_API_KEY", previous);
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    [Trait("Speed", "Fast")]
+    public async Task The_openai_compatible_proxy_serves_the_catalog_itself_from_the_endpoints_models_and_never_forwards_the_route()
+    {
+        var previousBase = Environment.GetEnvironmentVariable("OPENAI_BASE_URL");
+        var previousKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        Environment.SetEnvironmentVariable("OPENAI_BASE_URL", _foundryEndpoint + "v1");
+        Environment.SetEnvironmentVariable("OPENAI_API_KEY", "sk-upstream");
+        var resolver = Resolver(FoundrySignedIn(), new TestConsole());
+        try
+        {
+            var env = ChildEnvironment((await resolver.ResolveAsync(OneCapability("openai-compatible", ProxyEnv), Unattended))!);
+            env["FOUNDRY_ENDPOINT"].Should().MatchRegex(@"^http://127\.0\.0\.1:\d+$");
+
+            using var client = new HttpClient();
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", env["FOUNDRY_TOKEN"]);
+            var response = await client.GetAsync($"{env["FOUNDRY_ENDPOINT"]}{ProviderCatalog.Path}");
+
+            response.IsSuccessStatusCode.Should().BeTrue();
+            var body = await response.Content.ReadAsStringAsync();
+            body.Should().Contain("\"id\":\"upstream-chat\"").And.Contain("\"provider\":\"openai-compatible\"");
+            _upstreamSawCatalogRoute.Should().BeFalse("pks's catalog route must never be forwarded to the provider");
+        }
+        finally
+        {
+            resolver.Release();
+            Environment.SetEnvironmentVariable("OPENAI_BASE_URL", previousBase);
+            Environment.SetEnvironmentVariable("OPENAI_API_KEY", previousKey);
         }
     }
 }

@@ -64,5 +64,5 @@ Every subcommand accepts the inherited `-v|--verbose` flag. See the [pks foundry
 - [Inspect stored Foundry credentials](/tools/pks/foundry/status) — read-only view of what the other commands will use
 - [Run the local Foundry proxy](/tools/pks/foundry/proxy) — lend a Foundry endpoint to a process without giving it your credential
 - [Report Foundry resource cost](/tools/pks/foundry/usage) — cost summary, chart, and per-meter breakdown
-- [List the model catalog](/tools/pks/foundry/models) — every deployment with enabled, default and roles, as `pks exec` serves it to tools at `/pks/v1/models`
+- [List the model catalog](/tools/pks/foundry/models) — every deployment with enabled, default and roles: the Foundry slice of [pks models](/tools/pks/models), as `pks exec` serves it to tools at `/pks/v1/models`
 - [pks foundry reference](/tools/pks/foundry/reference) — every command, flag, scope, and stored field in one place

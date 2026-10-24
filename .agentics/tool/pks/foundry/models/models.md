@@ -16,7 +16,7 @@ examples:
     description: "Only the deployments that fill the decision role"
 ---
 
-List what the selected Foundry resource can serve, joined with what you chose in `pks foundry select`. The same document is served to a tool started by [pks exec](/tools/pks/exec) at `GET {proxy:endpoint}/pks/v1/models`, behind the per-run proxy token, so a tool can pick its own model without a prompt and without seeing a credential.
+List what the selected Foundry resource can serve, joined with what you chose in `pks foundry select`. This is the Foundry slice of [pks models](/tools/pks/models), which lists every registered provider; the same document is served to a tool started by [pks exec](/tools/pks/exec) with the `foundry` provider at `GET {proxy:endpoint}/pks/v1/models`, behind the per-run proxy token, so a tool can pick its own model without a prompt and without seeing a credential.
 
 ## 1. Prerequisites
 
@@ -46,9 +46,9 @@ pks foundry models --json | jq '.data[] | select(.pks.enabled) | .id'
 The shape is OpenAI's `GET /v1/models` list (`{object:"list", data:[{id, object:"model", created, owned_by}]}`) with OpenRouter's `name`, `description` and `architecture{modality, input_modalities, output_modalities}` on top, and one `pks` object per entry for what no public catalog knows:
 
 ```json
-{"id":"gpt-5.6-luna","object":"model","owned_by":"azure","name":"gpt-5.6-luna",
+{"id":"gpt-5.6-luna","object":"model","owned_by":"foundry","name":"gpt-5.6-luna",
  "architecture":{"modality":"text->text","input_modalities":["text"],"output_modalities":["text"]},
- "pks":{"enabled":true,"default":true,"roles":["text"],"status":"succeeded",
+ "pks":{"provider":"foundry","enabled":true,"default":true,"roles":["text"],"status":"succeeded",
         "model":{"name":"gpt-5.6-luna","version":"2026-06-01"},
         "capabilities":{"chat_completion":true,"embeddings":false}}}
 ```
@@ -70,7 +70,7 @@ A role names a job in a companion tool's manifest. Two are assigned today, both 
 curl -s -H "Authorization: Bearer $FOUNDRY_TOKEN" "$FOUNDRY_ENDPOINT/pks/v1/models"
 ```
 
-with the `{proxy:endpoint}` and `{proxy:token}` the manifest bound. The route is answered by the proxy itself and never reaches Azure; a `502` with `catalog unavailable: …` means the deployments list could not be read. Under the `openai-compatible` provider there is no catalog provider, and the path is forwarded upstream like any other.
+with the `{proxy:endpoint}` and `{proxy:token}` the manifest bound. The route is answered by the proxy itself and never reaches Azure; a `502` with `catalog unavailable: …` means the deployments list could not be read. A tool started with the `openai-compatible` provider reads the same route and gets that endpoint's models instead — the route is pks's on every provider kind, never the upstream's.
 
 ## 6. Verify
 

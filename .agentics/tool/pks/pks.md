@@ -85,6 +85,7 @@ Scaffolding a project and managing `pks` itself.
 |---|---|
 | [pks init](/tools/pks/init) | Scaffold a new project from a NuGet devcontainer template and optionally spawn it. |
 | [pks exec](/tools/pks/exec) | Launch any tool that speaks the `PKS_DISCOVERY` contract, injecting a chosen LLM provider. |
+| [pks models](/tools/pks/models) | List the models reachable through the registered providers — the catalog `pks exec` serves to tools at `/pks/v1/models`. |
 | [pks update](/tools/pks/update) | Update the CLI on the stable or daily channel, per detected install method. |
 | [pks report](/tools/pks/report) | File a GitHub issue with version, environment, and local usage stats attached. |
 | [pks status](/tools/pks/status) | Render the system-status dashboard. |
