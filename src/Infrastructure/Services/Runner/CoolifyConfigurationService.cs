@@ -8,6 +8,27 @@ public class CoolifyInstance
     public string Url { get; set; } = "";
     public string Token { get; set; } = "";
     public DateTime RegisteredAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// What this instance is for: <c>primary</c> (the default, and what an absent field means) or
+    /// <c>standby</c> — a box that still holds copies of the applications but is not what deploys
+    /// should reach.
+    ///
+    /// It exists because an application that has been migrated lives on two instances for a while,
+    /// under the same name and in the same environment, and the resolver then has two equally good
+    /// answers. Marking the old box <c>standby</c> says which one loses that tie, once, on the host
+    /// that owns <c>coolify.json</c> — rather than pinning a host in every workflow that deploys.
+    ///
+    /// A standby is never excluded, only outranked: an application that exists *only* there still
+    /// resolves, which is what keeps the not-yet-migrated applications deployable.
+    /// </summary>
+    public string Role { get; set; } = CoolifyInstanceRoles.Primary;
+}
+
+public static class CoolifyInstanceRoles
+{
+    public const string Primary = "primary";
+    public const string Standby = "standby";
 }
 
 public class CoolifyConfiguration

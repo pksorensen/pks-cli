@@ -9,16 +9,22 @@ namespace PKS.CLI.Tests.Services.Runner;
 /// </summary>
 public class CoolifyTokenStoreTests
 {
-    private static CoolifyAppMatch CreateAppMatch(string uuid = "uuid-1", string name = "my-app", string environment = "production")
+    private static CoolifyAppMatch CreateAppMatch(
+        string uuid = "uuid-1",
+        string name = "my-app",
+        string environment = "production",
+        string instanceUrl = "https://coolify.example.com",
+        string role = CoolifyInstanceRoles.Primary)
         => new CoolifyAppMatch
         {
             Uuid = uuid,
             Name = name,
             Fqdn = $"https://{name}.example.com",
             EnvironmentName = environment,
-            WebhookUrl = $"https://coolify.example.com/webhooks/{uuid}",
-            InstanceUrl = "https://coolify.example.com",
-            Token = "coolify-token-123"
+            WebhookUrl = $"{instanceUrl}/webhooks/{uuid}",
+            InstanceUrl = instanceUrl,
+            Token = "coolify-token-123",
+            InstanceRole = role
         };
 
     [Fact]
@@ -329,5 +335,191 @@ public class CoolifyTokenStoreTests
         // Assert
         result.Should().NotBeNull();
         result.Should().BeEmpty();
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Ambiguity. An application that has been migrated exists on two instances for a while, under
+    // the same name and in the same environment, and both are then equally good answers. The store
+    // used to hand back whichever one came first, so the deploy went wherever the registration order
+    // pointed — silently, and to a box nobody chose.
+    // ---------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void ResolveByJobIdAndApp_SameAppOnTwoPrimaryInstances_IsAmbiguous()
+    {
+        var sut = new CoolifyTokenStore();
+        sut.RegisterAll("job-1", new[]
+        {
+            CreateAppMatch(uuid: "uuid-a", name: "site", environment: "production", instanceUrl: "https://a.example.com"),
+            CreateAppMatch(uuid: "uuid-b", name: "site", environment: "production", instanceUrl: "https://b.example.com")
+        });
+
+        var result = sut.ResolveByJobIdAndApp("job-1", "site", "production");
+
+        result.IsAmbiguous.Should().BeTrue();
+        result.App.Should().BeNull();
+        result.Candidates.Select(c => c.Uuid).Should().BeEquivalentTo(new[] { "uuid-a", "uuid-b" });
+    }
+
+    [Fact]
+    public void GetByJobIdAndApp_WhenAmbiguous_ReturnsNull_RatherThanGuessing()
+    {
+        var sut = new CoolifyTokenStore();
+        sut.RegisterAll("job-1", new[]
+        {
+            CreateAppMatch(uuid: "uuid-a", name: "site", environment: "production", instanceUrl: "https://a.example.com"),
+            CreateAppMatch(uuid: "uuid-b", name: "site", environment: "production", instanceUrl: "https://b.example.com")
+        });
+
+        sut.GetByJobIdAndApp("job-1", "site", "production").Should().BeNull();
+    }
+
+    [Fact]
+    public void ResolveByJobIdAndApp_StandbyLosesTheTie()
+    {
+        var sut = new CoolifyTokenStore();
+        sut.RegisterAll("job-1", new[]
+        {
+            CreateAppMatch(uuid: "uuid-old", name: "site", environment: "production",
+                instanceUrl: "https://old.example.com", role: CoolifyInstanceRoles.Standby),
+            CreateAppMatch(uuid: "uuid-new", name: "site", environment: "production",
+                instanceUrl: "https://new.example.com")
+        });
+
+        var result = sut.ResolveByJobIdAndApp("job-1", "site", "production");
+
+        result.IsResolved.Should().BeTrue();
+        result.App!.Uuid.Should().Be("uuid-new");
+        // The skip is recorded, because a deploy that went to one of two boxes is exactly the event
+        // that needs a trace afterwards.
+        result.TieBreak.Should().NotBeNullOrEmpty();
+        result.TieBreak.Should().Contain("uuid-old");
+    }
+
+    [Fact]
+    public void ResolveByJobIdAndApp_SoleMatchOnStandby_StillResolves()
+    {
+        // A standby is outranked, never excluded — an application that has not been migrated yet
+        // exists only on the old box, and must stay deployable.
+        var sut = new CoolifyTokenStore();
+        sut.RegisterAll("job-1", new[]
+        {
+            CreateAppMatch(uuid: "uuid-old", name: "keycloak", environment: "production",
+                instanceUrl: "https://old.example.com", role: CoolifyInstanceRoles.Standby)
+        });
+
+        var result = sut.ResolveByJobIdAndApp("job-1", "keycloak", "production");
+
+        result.IsResolved.Should().BeTrue();
+        result.App!.Uuid.Should().Be("uuid-old");
+        result.TieBreak.Should().BeNull();
+    }
+
+    [Fact]
+    public void ResolveByJobIdAndApp_TwoStandbysAndNoPrimary_IsAmbiguous()
+    {
+        var sut = new CoolifyTokenStore();
+        sut.RegisterAll("job-1", new[]
+        {
+            CreateAppMatch(uuid: "uuid-a", name: "site", environment: "production",
+                instanceUrl: "https://a.example.com", role: CoolifyInstanceRoles.Standby),
+            CreateAppMatch(uuid: "uuid-b", name: "site", environment: "production",
+                instanceUrl: "https://b.example.com", role: CoolifyInstanceRoles.Standby)
+        });
+
+        sut.ResolveByJobIdAndApp("job-1", "site", "production").IsAmbiguous.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ResolveByJobIdAndApp_AbsentRoleCountsAsPrimary()
+    {
+        // coolify.json files written before the role existed have no such field, and must keep
+        // resolving the way they did — as primaries, so a standby still loses to them.
+        var sut = new CoolifyTokenStore();
+        sut.RegisterAll("job-1", new[]
+        {
+            new CoolifyAppMatch { Uuid = "uuid-plain", Name = "site", EnvironmentName = "production" },
+            CreateAppMatch(uuid: "uuid-standby", name: "site", environment: "production",
+                instanceUrl: "https://old.example.com", role: CoolifyInstanceRoles.Standby)
+        });
+
+        var result = sut.ResolveByJobIdAndApp("job-1", "site", "production");
+
+        result.IsResolved.Should().BeTrue();
+        result.App!.Uuid.Should().Be("uuid-plain");
+    }
+
+    [Fact]
+    public void ResolveByJobIdAndApp_UnknownApp_IsNotFound_NotAmbiguous()
+    {
+        var sut = new CoolifyTokenStore();
+        sut.RegisterAll("job-1", new[] { CreateAppMatch(name: "site") });
+
+        var result = sut.ResolveByJobIdAndApp("job-1", "something-else");
+
+        result.Outcome.Should().Be(CoolifyResolutionOutcome.NotFound);
+        result.Candidates.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ResolveByJobIdAndEnvironment_SameEnvironmentOnTwoInstances_IsAmbiguous()
+    {
+        // The environment branch carried the same defect one step over: FirstOrDefault across apps
+        // that all sit in the requested environment.
+        var sut = new CoolifyTokenStore();
+        sut.RegisterAll("job-1", new[]
+        {
+            CreateAppMatch(uuid: "uuid-a", name: "site", environment: "production", instanceUrl: "https://a.example.com"),
+            CreateAppMatch(uuid: "uuid-b", name: "site", environment: "production", instanceUrl: "https://b.example.com")
+        });
+
+        var result = sut.ResolveByJobIdAndEnvironment("job-1", "production");
+
+        result.IsAmbiguous.Should().BeTrue();
+        result.Candidates.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public void ResolveByJobIdAndEnvironment_StandbyLosesTheTie()
+    {
+        var sut = new CoolifyTokenStore();
+        sut.RegisterAll("job-1", new[]
+        {
+            CreateAppMatch(uuid: "uuid-old", name: "site", environment: "production",
+                instanceUrl: "https://old.example.com", role: CoolifyInstanceRoles.Standby),
+            CreateAppMatch(uuid: "uuid-new", name: "site", environment: "production",
+                instanceUrl: "https://new.example.com")
+        });
+
+        sut.ResolveByJobIdAndEnvironment("job-1", "production").App!.Uuid.Should().Be("uuid-new");
+    }
+
+    [Fact]
+    public void ResolveByJobId_SeveralApps_IsAmbiguous()
+    {
+        // The bare fallback — neither app nor environment named — used to answer list[0].
+        var sut = new CoolifyTokenStore();
+        sut.RegisterAll("job-1", new[]
+        {
+            CreateAppMatch(uuid: "uuid-a", name: "site"),
+            CreateAppMatch(uuid: "uuid-b", name: "api")
+        });
+
+        sut.ResolveByJobId("job-1").IsAmbiguous.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ResolveByJobId_SingleApp_Resolves()
+    {
+        var sut = new CoolifyTokenStore();
+        sut.Register("job-1", CreateAppMatch(uuid: "uuid-only"));
+
+        sut.ResolveByJobId("job-1").App!.Uuid.Should().Be("uuid-only");
+    }
+
+    [Fact]
+    public void ResolveByJobId_UnknownJob_IsNotFound()
+    {
+        new CoolifyTokenStore().ResolveByJobId("nope").Outcome.Should().Be(CoolifyResolutionOutcome.NotFound);
     }
 }

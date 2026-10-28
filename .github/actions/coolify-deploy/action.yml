@@ -123,6 +123,11 @@ runs:
             echo "Response: $APP_INFO"
             # Show available environments if the proxy returned them
             echo "$APP_INFO" | jq -r '.available[]? | "  Available: \(.name) (env=\(.environment), uuid=\(.uuid))"' 2>/dev/null
+            # A 409 means several applications answered equally well — usually the same app on two
+            # Coolify instances after a migration. Name them, so the fix is readable from the log
+            # rather than requiring someone to go read coolify.json on the runner host.
+            echo "$APP_INFO" | jq -r '.candidates[]? | "  Candidate: \(.name) (env=\(.environment), uuid=\(.uuid), instance=\(.instance), role=\(.role))"' 2>/dev/null
+            echo "$APP_INFO" | jq -r '.hint? // empty | "  " + .' 2>/dev/null
             exit 1
           fi
 

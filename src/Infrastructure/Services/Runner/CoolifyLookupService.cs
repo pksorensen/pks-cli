@@ -13,6 +13,11 @@ public class CoolifyAppMatch
     public string WebhookUrl { get; set; } = "";
     public string InstanceUrl { get; set; } = "";
     public string Token { get; set; } = "";
+
+    /// <summary>The role of the instance this match came from — see <see cref="CoolifyInstance.Role"/>.</summary>
+    public string InstanceRole { get; set; } = CoolifyInstanceRoles.Primary;
+
+    public bool IsStandby => string.Equals(InstanceRole, CoolifyInstanceRoles.Standby, StringComparison.OrdinalIgnoreCase);
 }
 
 public interface ICoolifyLookupService
@@ -455,7 +460,8 @@ public class CoolifyLookupService : ICoolifyLookupService
             Fqdn = fqdn,
             WebhookUrl = $"{instance.Url}/api/v1/deploy?uuid={uuid}",
             InstanceUrl = instance.Url,
-            Token = instance.Token
+            Token = instance.Token,
+            InstanceRole = string.IsNullOrWhiteSpace(instance.Role) ? CoolifyInstanceRoles.Primary : instance.Role
         };
     }
 
