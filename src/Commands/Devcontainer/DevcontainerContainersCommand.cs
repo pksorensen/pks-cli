@@ -1,5 +1,7 @@
 using PKS.Infrastructure.Services;
+using PKS.Infrastructure.Services.Devcontainer;
 using PKS.Infrastructure.Services.Models;
+using PKS.Infrastructure.Services.Security;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using System.ComponentModel;
@@ -10,13 +12,18 @@ namespace PKS.Commands.Devcontainer;
 
 /// <summary>
 /// Command to list all managed devcontainers with their status and details.
-/// Supports both local and remote (SSH) targets.
+/// Supports both local and remote (SSH) targets. <c>--remote &lt;target&gt;</c> picks the host without
+/// prompting, and <c>--format json</c> puts nothing but the document on stdout.
 /// </summary>
 public class DevcontainerContainersCommand : DevcontainerCommand<DevcontainerContainersCommand.Settings>
 {
     private readonly IDevcontainerSpawnerService _spawnerService;
     private readonly ISshTargetConfigurationService? _sshConfigService;
     private readonly ISshCommandRunner? _sshCommandRunner;
+    private readonly ISshKeyStore? _keyStore;
+    private readonly IActionGuard? _guard;
+    private readonly TextWriter _stdout;
+    private readonly TextWriter _stderr;
 
     /// <summary>
     /// Initializes a new instance of the DevcontainerContainersCommand
@@ -25,12 +32,20 @@ public class DevcontainerContainersCommand : DevcontainerCommand<DevcontainerCon
         IDevcontainerSpawnerService spawnerService,
         IAnsiConsole console,
         ISshTargetConfigurationService? sshConfigService = null,
-        ISshCommandRunner? sshCommandRunner = null)
+        ISshCommandRunner? sshCommandRunner = null,
+        ISshKeyStore? keyStore = null,
+        IActionGuard? guard = null,
+        TextWriter? stdout = null,
+        TextWriter? stderr = null)
         : base(console)
     {
         _spawnerService = spawnerService ?? throw new ArgumentNullException(nameof(spawnerService));
         _sshConfigService = sshConfigService;
         _sshCommandRunner = sshCommandRunner;
+        _keyStore = keyStore;
+        _guard = guard;
+        _stdout = stdout ?? System.Console.Out;
+        _stderr = stderr ?? System.Console.Error;
     }
 
     /// <summary>
@@ -52,6 +67,13 @@ public class DevcontainerContainersCommand : DevcontainerCommand<DevcontainerCon
         [Description("Output format: table or json (default: table)")]
         [DefaultValue("table")]
         public string Format { get; set; } = "table";
+
+        /// <summary>
+        /// Registered SSH target to list on, or 'local'. Skips the host prompt.
+        /// </summary>
+        [CommandOption("--remote <TARGET>")]
+        [Description("Registered SSH target (label or host) to list on, or 'local'. Never prompts.")]
+        public string? Remote { get; set; }
     }
 
     /// <inheritdoc/>
@@ -66,60 +88,55 @@ public class DevcontainerContainersCommand : DevcontainerCommand<DevcontainerCon
     /// </summary>
     public async Task<int> ExecuteAsync(CommandContext context, Settings settings)
     {
+        var format = settings.Format.ToLowerInvariant();
+        var json = format == "json";
+        if (!json && format != "table")
+        {
+            DisplayError($"Invalid format '{settings.Format}'. Valid formats are: table, json");
+            return 1;
+        }
+
+        if (!json) DisplayBanner("Containers");
+
+        DevcontainerRemoteHost? host = null;
         try
         {
-            DisplayBanner("Containers");
-
-            // Validate format option
-            var format = settings.Format.ToLowerInvariant();
-            if (format != "table" && format != "json")
+            string? error;
+            (host, error) = await ResolveHostAsync(settings.Remote, json);
+            if (host == null)
             {
-                DisplayError($"Invalid format '{settings.Format}'. Valid formats are: table, json");
+                Fail(json, error ?? "Could not resolve host");
                 return 1;
             }
 
-            // Check for registered SSH targets and prompt
-            SshTarget? selectedSshTarget = null;
-            RemoteHostConfig? remoteHost = null;
-
-            if (_sshConfigService != null)
-            {
-                var sshTargets = await _sshConfigService.ListTargetsAsync();
-                if (sshTargets.Count > 0)
-                {
-                    var choices = new List<string> { "Local (this machine)" };
-                    choices.AddRange(sshTargets.Select(t =>
-                        $"{t.Username}@{t.Host}" + (string.IsNullOrEmpty(t.Label) ? "" : $" ({t.Label})")));
-
-                    var selected = Console.Prompt(
-                        new SelectionPrompt<string>()
-                            .Title("[cyan]Which host?[/]")
-                            .AddChoices(choices));
-
-                    var selectedIndex = choices.IndexOf(selected) - 1;
-                    if (selectedIndex >= 0)
-                    {
-                        selectedSshTarget = sshTargets[selectedIndex];
-                        remoteHost = new RemoteHostConfig
-                        {
-                            Host = selectedSshTarget.Host,
-                            Username = selectedSshTarget.Username,
-                            Port = selectedSshTarget.Port,
-                            KeyPath = selectedSshTarget.KeyPath
-                        };
-                    }
-                }
-            }
-
+            var remoteHost = host.Host;
             List<ContainerDisplayInfo> containers;
 
             if (remoteHost != null)
             {
-                containers = await GetRemoteContainersAsync(remoteHost);
+                if (_sshCommandRunner == null)
+                {
+                    Fail(json, "SSH command runner not available");
+                    return 1;
+                }
+
+                var (remote, remoteError) = await GetRemoteContainersAsync(remoteHost, json);
+                if (remote == null)
+                {
+                    if (json)
+                    {
+                        WriteJson(new ContainersReport { Host = host.Label, Reachable = false, Error = remoteError });
+                        return 0;
+                    }
+                    DisplayError($"Failed to list remote containers: {remoteError}");
+                    return 1;
+                }
+                containers = remote;
+
                 // Fetch volumes for each container
                 if (containers.Count > 0)
                 {
-                    await WithSpinnerAsync("Fetching volume info...", async () =>
+                    await MaybeSpinnerAsync(json ? null : "Fetching volume info...", async () =>
                     {
                         foreach (var container in containers)
                         {
@@ -129,7 +146,7 @@ public class DevcontainerContainersCommand : DevcontainerCommand<DevcontainerCon
                             {
                                 try
                                 {
-                                    var inspectJson = System.Text.Json.JsonDocument.Parse(inspectResult.StdOut.Trim().TrimStart('[').TrimEnd(']'));
+                                    var inspectJson = JsonDocument.Parse(inspectResult.StdOut.Trim().TrimStart('[').TrimEnd(']'));
                                     if (inspectJson.RootElement.TryGetProperty("Mounts", out var mounts))
                                     {
                                         foreach (var mount in mounts.EnumerateArray())
@@ -150,7 +167,7 @@ public class DevcontainerContainersCommand : DevcontainerCommand<DevcontainerCon
             }
             else
             {
-                containers = await GetLocalContainersAsync();
+                containers = await GetLocalContainersAsync(json);
             }
 
             // Filter containers based on --all flag
@@ -159,58 +176,101 @@ public class DevcontainerContainersCommand : DevcontainerCommand<DevcontainerCon
                 : containers.Where(c => c.Status.Contains("Up", StringComparison.OrdinalIgnoreCase)
                     || c.Status.Equals("running", StringComparison.OrdinalIgnoreCase)).ToList();
 
-            // Handle empty results
-            if (!filteredContainers.Any())
+            if (json)
             {
-                if (format == "json")
-                {
-                    System.Console.WriteLine("[]");
-                }
-                else
-                {
-                    Console.WriteLine();
-                    DisplayInfo("No managed devcontainers found");
-                    Console.WriteLine();
-
-                    var helpPanel = new Panel(
-                        settings.ShowAll
-                            ? "[dim]No devcontainers have been spawned yet.[/]\n\nCreate one with: [cyan]pks devcontainer spawn[/]"
-                            : "[dim]No running devcontainers found.[/]\n\nUse [cyan]--all[/] to show stopped containers,\nor spawn a new one with: [cyan]pks devcontainer spawn[/]")
-                        .Border(BoxBorder.Rounded)
-                        .BorderStyle("yellow")
-                        .Header(" [yellow]Tip[/] ");
-
-                    Console.Write(helpPanel);
-                }
+                WriteJson(new ContainersReport { Host = host.Label, Reachable = true, Containers = filteredContainers });
                 return 0;
             }
 
-            // Display results based on format
-            if (format == "json")
+            // Handle empty results
+            if (!filteredContainers.Any())
             {
-                DisplayJsonOutput(filteredContainers);
-            }
-            else
-            {
-                DisplayTableOutput(filteredContainers, settings.ShowAll, remoteHost);
+                Console.WriteLine();
+                DisplayInfo("No managed devcontainers found");
+                Console.WriteLine();
+
+                var helpPanel = new Panel(
+                    settings.ShowAll
+                        ? "[dim]No devcontainers have been spawned yet.[/]\n\nCreate one with: [cyan]pks devcontainer spawn[/]"
+                        : "[dim]No running devcontainers found.[/]\n\nUse [cyan]--all[/] to show stopped containers,\nor spawn a new one with: [cyan]pks devcontainer spawn[/]")
+                    .Border(BoxBorder.Rounded)
+                    .BorderStyle("yellow")
+                    .Header(" [yellow]Tip[/] ");
+
+                Console.Write(helpPanel);
+                return 0;
             }
 
+            DisplayTableOutput(filteredContainers, settings.ShowAll, remoteHost);
             return 0;
         }
         catch (Exception ex)
         {
-            DisplayError("Unexpected error");
-            Console.WriteException(ex);
+            if (json)
+            {
+                _stderr.WriteLine($"Unexpected error: {ex.Message}");
+            }
+            else
+            {
+                DisplayError("Unexpected error");
+                Console.WriteException(ex);
+            }
             return 1;
+        }
+        finally
+        {
+            host?.Dispose();
         }
     }
 
-    private async Task<List<ContainerDisplayInfo>> GetLocalContainersAsync()
+    private async Task<(DevcontainerRemoteHost? Host, string? Error)> ResolveHostAsync(string? remoteSpec, bool json)
+    {
+        if (!string.IsNullOrWhiteSpace(remoteSpec))
+            return await DevcontainerRemoteHost.ResolveAsync(remoteSpec, _sshConfigService, _keyStore, _guard);
+
+        // No --remote: keep the historical behaviour — ask which host when targets are registered.
+        // A json consumer cannot answer a prompt, so it gets the local daemon.
+        if (json || _sshConfigService == null)
+            return (DevcontainerRemoteHost.Local, null);
+
+        var sshTargets = await _sshConfigService.ListTargetsAsync();
+        if (sshTargets.Count == 0)
+            return (DevcontainerRemoteHost.Local, null);
+
+        var choices = new List<string> { "Local (this machine)" };
+        choices.AddRange(sshTargets.Select(t =>
+            $"{t.Username}@{t.Host}" + (string.IsNullOrEmpty(t.Label) ? "" : $" ({t.Label})")));
+
+        var selected = Console.Prompt(
+            new SelectionPrompt<string>()
+                .Title("[cyan]Which host?[/]")
+                .AddChoices(choices));
+
+        var selectedIndex = choices.IndexOf(selected) - 1;
+        if (selectedIndex < 0)
+            return (DevcontainerRemoteHost.Local, null);
+
+        return await DevcontainerRemoteHost.FromTargetAsync(sshTargets[selectedIndex], _keyStore, _guard);
+    }
+
+    private void Fail(bool json, string message)
+    {
+        if (json) _stderr.WriteLine(message);
+        else DisplayError(message);
+    }
+
+    private async Task MaybeSpinnerAsync(string? message, Func<Task> operation)
+    {
+        if (message == null) await operation();
+        else await WithSpinnerAsync(message, operation);
+    }
+
+    private async Task<List<ContainerDisplayInfo>> GetLocalContainersAsync(bool json)
     {
         var containers = new List<ContainerDisplayInfo>();
 
         List<DevcontainerContainerInfo>? managed = null;
-        await WithSpinnerAsync("Retrieving managed containers...", async () =>
+        await MaybeSpinnerAsync(json ? null : "Retrieving managed containers...", async () =>
         {
             managed = await _spawnerService.ListManagedContainersAsync();
         });
@@ -224,46 +284,44 @@ public class DevcontainerContainersCommand : DevcontainerCommand<DevcontainerCon
             {
                 ProjectName = c.ProjectName,
                 ContainerId = c.ContainerId,
+                Name = c.ContainerName,
+                LocalFolder = c.Labels.TryGetValue("devcontainer.local_folder", out var folder) ? folder : "",
                 Status = c.Status,
                 Created = c.CreatedDate.ToString("yyyy-MM-dd HH:mm:ss"),
-                Image = c.Labels.TryGetValue("devcontainer.metadata", out var _) ? "(devcontainer)" : ""
+                Image = c.Labels.ContainsKey("devcontainer.metadata") ? "(devcontainer)" : ""
             });
         }
 
         return containers;
     }
 
-    private async Task<List<ContainerDisplayInfo>> GetRemoteContainersAsync(RemoteHostConfig remoteHost)
+    /// <returns>The containers, or <c>null</c> with an error when the host could not be reached.</returns>
+    private async Task<(List<ContainerDisplayInfo>? Containers, string? Error)> GetRemoteContainersAsync(RemoteHostConfig remoteHost, bool json)
     {
-        var containers = new List<ContainerDisplayInfo>();
-
-        if (_sshCommandRunner == null)
-        {
-            DisplayError("SSH command runner not available");
-            return containers;
-        }
-
         SshCommandResult? result = null;
-        await WithSpinnerAsync($"Retrieving containers from {remoteHost.Username}@{remoteHost.Host}...", async () =>
+        await MaybeSpinnerAsync(json ? null : $"Retrieving containers from {remoteHost.Username}@{remoteHost.Host}...", async () =>
         {
             // Use JSON format to avoid shell escaping issues with Go template labels
-            result = await _sshCommandRunner.RunAsync(remoteHost,
-                "docker ps -a --filter label=devcontainer.local_folder --format json");
+            result = await _sshCommandRunner!.RunAsync(remoteHost,
+                "docker ps -a --filter " + DevcontainerLabels.Filter + " --format json");
         });
 
         if (result == null || !result.Success)
         {
-            DisplayError($"Failed to list remote containers: {result?.StdErr ?? "unknown error"}");
-            return containers;
+            var error = string.IsNullOrWhiteSpace(result?.StdErr)
+                ? (result == null ? "unknown error" : $"docker ps exited {result.ExitCode}")
+                : result.StdErr.Trim();
+            return (null, error);
         }
 
+        var containers = new List<ContainerDisplayInfo>();
         var lines = result.StdOut.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries);
         foreach (var line in lines)
         {
             try
             {
-                var json = System.Text.Json.JsonDocument.Parse(line);
-                var root = json.RootElement;
+                var doc = JsonDocument.Parse(line);
+                var root = doc.RootElement;
 
                 var id = root.TryGetProperty("ID", out var idEl) ? idEl.GetString() ?? "" : "";
                 var name = root.TryGetProperty("Names", out var nameEl) ? nameEl.GetString() ?? "" : "";
@@ -271,30 +329,15 @@ public class DevcontainerContainersCommand : DevcontainerCommand<DevcontainerCon
                 var image = root.TryGetProperty("Image", out var imageEl) ? imageEl.GetString() ?? "" : "";
                 var createdAt = root.TryGetProperty("CreatedAt", out var createdEl) ? createdEl.GetString() ?? "" : "";
 
-                // Get labels for project name
                 var labels = root.TryGetProperty("Labels", out var labelsEl) ? labelsEl.GetString() ?? "" : "";
-                var pksProject = "";
-                var localFolder = "";
-                foreach (var label in labels.Split(','))
-                {
-                    var kv = label.Split('=', 2);
-                    if (kv.Length == 2)
-                    {
-                        if (kv[0].Trim() == "pks.project") pksProject = kv[1].Trim();
-                        if (kv[0].Trim() == "devcontainer.local_folder") localFolder = kv[1].Trim();
-                    }
-                }
-
-                var projectName = !string.IsNullOrEmpty(pksProject)
-                    ? pksProject
-                    : !string.IsNullOrEmpty(localFolder)
-                        ? Path.GetFileName(localFolder.TrimEnd('/'))
-                        : name;
+                var (projectName, localFolder) = DevcontainerLabels.Describe(labels, name, image);
 
                 containers.Add(new ContainerDisplayInfo
                 {
                     ProjectName = projectName,
                     ContainerId = id,
+                    Name = name,
+                    LocalFolder = localFolder,
                     Status = status,
                     Created = createdAt,
                     Image = image
@@ -306,7 +349,7 @@ public class DevcontainerContainersCommand : DevcontainerCommand<DevcontainerCon
             }
         }
 
-        return containers;
+        return (containers, null);
     }
 
     private void DisplayTableOutput(List<ContainerDisplayInfo> containers, bool showAll, RemoteHostConfig? remoteHost)
@@ -368,38 +411,75 @@ public class DevcontainerContainersCommand : DevcontainerCommand<DevcontainerCon
         Console.WriteLine();
     }
 
-    private void DisplayJsonOutput(List<ContainerDisplayInfo> containers)
+    private static readonly JsonSerializerOptions JsonOptions = new()
     {
-        var options = new JsonSerializerOptions
-        {
-            WriteIndented = true,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            DefaultIgnoreCondition = JsonIgnoreCondition.Never
-        };
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping, // keep '+' and '/' readable
+    };
 
-        var json = JsonSerializer.Serialize(containers, options);
-        System.Console.WriteLine(json);
+    private void WriteJson(ContainersReport report)
+    {
+        _stdout.WriteLine(JsonSerializer.Serialize(report, JsonOptions));
+        _stdout.Flush();
     }
 
     /// <summary>
-    /// Container information for display purposes
+    /// The JSON document: <c>{host, reachable, error, containers[]}</c>. Before <c>--remote</c> the
+    /// command printed the bare array; the wrapper is what lets an unreachable host be data.
     /// </summary>
-    private class ContainerDisplayInfo
+    public sealed class ContainersReport
     {
+        [JsonPropertyName("host")]
+        public string Host { get; init; } = "local";
+
+        [JsonPropertyName("reachable")]
+        public bool Reachable { get; init; }
+
+        [JsonPropertyName("error")]
+        public string? Error { get; init; }
+
+        [JsonPropertyName("containers")]
+        public List<ContainerDisplayInfo> Containers { get; init; } = new();
+    }
+
+    /// <summary>
+    /// Container information for display purposes. Carries both the contract names
+    /// (<c>id, name, project, localFolder, status, image, createdAt</c>) and the legacy ones
+    /// (<c>projectName, containerId, created, volumes</c>) that earlier consumers of the array read.
+    /// </summary>
+    public sealed class ContainerDisplayInfo
+    {
+        [JsonPropertyName("id")]
+        public string Id => ContainerId;
+
+        [JsonPropertyName("name")]
+        public string Name { get; set; } = string.Empty;
+
+        [JsonPropertyName("project")]
+        public string Project => ProjectName;
+
+        [JsonPropertyName("localFolder")]
+        public string LocalFolder { get; set; } = string.Empty;
+
+        [JsonPropertyName("status")]
+        public string Status { get; set; } = string.Empty;
+
+        [JsonPropertyName("image")]
+        public string Image { get; set; } = string.Empty;
+
+        [JsonPropertyName("createdAt")]
+        public string CreatedAt => DockerTimestamps.ToIso(Created);
+
         [JsonPropertyName("projectName")]
         public string ProjectName { get; set; } = string.Empty;
 
         [JsonPropertyName("containerId")]
         public string ContainerId { get; set; } = string.Empty;
 
-        [JsonPropertyName("status")]
-        public string Status { get; set; } = string.Empty;
-
         [JsonPropertyName("created")]
         public string Created { get; set; } = string.Empty;
-
-        [JsonPropertyName("image")]
-        public string Image { get; set; } = string.Empty;
 
         [JsonPropertyName("volumes")]
         public List<string> Volumes { get; set; } = new();

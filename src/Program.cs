@@ -150,6 +150,19 @@ var isModelsJson = hasJsonFlag && commandArgs.Length >= 2
             && commandArgs[2].Equals("models", StringComparison.OrdinalIgnoreCase)));
 if (isModelsJson) noLogo = true;
 
+// `pks devcontainer list|sessions --format json` are polled by a desktop tool that parses stdout
+// as one JSON document — the banner would be the first thing it chokes on.
+var isDevcontainerJson = commandArgs.Length >= 3
+    && commandArgs[1].Equals("devcontainer", StringComparison.OrdinalIgnoreCase)
+    && (commandArgs[2].Equals("list", StringComparison.OrdinalIgnoreCase)
+        || commandArgs[2].Equals("sessions", StringComparison.OrdinalIgnoreCase))
+    && commandArgs.Select((a, i) => (a, i)).Any(x =>
+        x.a.Equals("--format=json", StringComparison.OrdinalIgnoreCase)
+        || (x.a.Equals("--format", StringComparison.OrdinalIgnoreCase)
+            && x.i + 1 < commandArgs.Length
+            && commandArgs[x.i + 1].Equals("json", StringComparison.OrdinalIgnoreCase)));
+if (isDevcontainerJson) noLogo = true;
+
 // Enable debug output when --debug flag is passed
 if (commandArgs.Any(a => a.Equals("--debug", StringComparison.OrdinalIgnoreCase)))
     Environment.SetEnvironmentVariable("PKS_DEBUG", "1");
@@ -802,7 +815,13 @@ app.Configure(config =>
         devcontainer.AddCommand<PKS.Commands.Devcontainer.DevcontainerContainersCommand>("list")
             .WithDescription("List running devcontainers (local or remote)")
             .WithExample(new[] { "devcontainer", "list" })
-            .WithExample(new[] { "devcontainer", "list", "--all" });
+            .WithExample(new[] { "devcontainer", "list", "--all" })
+            .WithExample(new[] { "devcontainer", "list", "--remote", "hetzner", "--format", "json" });
+
+        devcontainer.AddCommand<PKS.Commands.Devcontainer.DevcontainerSessionsCommand>("sessions")
+            .WithDescription("List the coding sessions (Claude Code, tmux) inside each running devcontainer")
+            .WithExample(new[] { "devcontainer", "sessions" })
+            .WithExample(new[] { "devcontainer", "sessions", "--remote", "hetzner", "--format", "json" });
 
         devcontainer.AddCommand<PKS.Commands.Devcontainer.DevcontainerConnectCommand>("connect")
             .WithDescription("Connect to an existing devcontainer via VS Code")
