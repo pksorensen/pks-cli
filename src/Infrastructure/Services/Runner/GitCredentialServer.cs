@@ -272,11 +272,19 @@ public class GitCredentialServer : IAsyncDisposable
 
     private JobTokenClaims? ValidateRequest(HttpRequest request) => ClassifyRequest(request).Claims;
 
-    private CoolifyAppMatch? ResolveApp(JobTokenClaims claims, HttpRequest request)
+    private CoolifyAppResolution ResolveApp(JobTokenClaims claims, HttpRequest request)
     {
-        // Legacy path: token has a specific app_uuid
+        if (_tokenStore == null)
+            return CoolifyAppResolution.NotFound();
+
+        // Legacy path: token has a specific app_uuid. A uuid names one application outright, so
+        // there is nothing here to be ambiguous about — and it stays the way out of an ambiguity,
+        // since `coolify-app:` accepts a uuid as well as a name.
         if (!string.IsNullOrEmpty(claims.AppUuid))
-            return _tokenStore?.GetByAppUuid(claims.AppUuid);
+        {
+            var byUuid = _tokenStore.GetByAppUuid(claims.AppUuid);
+            return byUuid == null ? CoolifyAppResolution.NotFound() : CoolifyAppResolution.Resolved(byUuid);
+        }
 
         var env = request.Query["environment"].FirstOrDefault();
 
@@ -285,14 +293,49 @@ public class GitCredentialServer : IAsyncDisposable
         // does not fall through when it misses — see GetByJobIdAndApp for why silence is the bug.
         var app = request.Query["app"].FirstOrDefault();
         if (!string.IsNullOrEmpty(app))
-            return _tokenStore?.GetByJobIdAndApp(claims.JobId, app, env);
+            return _tokenStore.ResolveByJobIdAndApp(claims.JobId, app, env);
 
         // Usual path: resolve by job + environment query param
         if (!string.IsNullOrEmpty(env))
-            return _tokenStore?.GetByJobIdAndEnvironment(claims.JobId, env);
+            return _tokenStore.ResolveByJobIdAndEnvironment(claims.JobId, env);
 
-        // Fallback: first registered app for this job
-        return _tokenStore?.GetByJobId(claims.JobId);
+        // Fallback: the job's only registered app — and a refusal if it has several.
+        return _tokenStore.ResolveByJobId(claims.JobId);
+    }
+
+    /// <summary>
+    /// The refusal for an ambiguous resolution: 409, every candidate named, and how to say which
+    /// one was meant. Answering 2xx here is how a deploy reaches a box nobody chose, and the job
+    /// cannot see the candidate list unless this response carries it.
+    /// </summary>
+    private IResult AmbiguousResponse(CoolifyAppResolution resolution, HttpRequest request)
+    {
+        var requestedApp = request.Query["app"].FirstOrDefault() ?? "(none)";
+        var requestedEnv = request.Query["environment"].FirstOrDefault() ?? "(none)";
+
+        _onLog?.Invoke(
+            $"AMBIGUOUS (409): job asked for app={requestedApp}, env={requestedEnv} and " +
+            $"{resolution.Candidates.Count} applications answer equally well: " +
+            string.Join(", ", resolution.Candidates.Select(c => $"{c.Name}(uuid={c.Uuid}, env={c.EnvironmentName}, instance={c.InstanceUrl}, role={c.InstanceRole})")));
+
+        return Results.Json(new
+        {
+            error = "ambiguous app",
+            requested_app = requestedApp,
+            requested_environment = requestedEnv,
+            candidates = resolution.Candidates.Select(c => new
+            {
+                c.Name,
+                c.Uuid,
+                environment = c.EnvironmentName,
+                instance = c.InstanceUrl,
+                role = c.InstanceRole
+            }),
+            hint = "Several Coolify applications match this repository, branch and environment — "
+                 + "usually the same application on two instances after a migration. Pass the uuid as "
+                 + "`coolify-app:` to name one outright, or mark the instance that should lose the tie "
+                 + "with \"role\": \"standby\" in ~/.pks-cli/coolify.json on the runner host."
+        }, statusCode: 409);
     }
 
     public async Task StartAsync(CancellationToken ct = default)
@@ -348,9 +391,16 @@ public class GitCredentialServer : IAsyncDisposable
             var allApps = _tokenStore?.GetAllByJobId(claims.JobId) ?? new List<CoolifyAppMatch>();
             _onLog?.Invoke($"Token request: job={claims.JobId}, requested_app={requestedApp}, requested_env={requestedEnv}, available_apps=[{string.Join(", ", allApps.Select(a => $"{a.Name}(uuid={a.Uuid}, env={a.EnvironmentName})"))}]");
 
-            var app = ResolveApp(claims, request);
+            var resolution = ResolveApp(claims, request);
+            if (resolution.IsAmbiguous)
+                return AmbiguousResponse(resolution, request);
+
+            var app = resolution.App;
             if (app == null)
                 return Results.Json(new { error = "app not found", requested_app = requestedApp, requested_environment = requestedEnv, available = allApps.Select(a => new { a.Name, a.Uuid, environment = a.EnvironmentName }) }, statusCode: 404);
+
+            if (resolution.TieBreak != null)
+                _onLog?.Invoke($"Tie broken by instance role: {resolution.TieBreak}");
 
             var resolved = requestedApp != "(none)" ? "app-name"
                 : app.EnvironmentName == requestedEnv ? "exact"
@@ -372,7 +422,11 @@ public class GitCredentialServer : IAsyncDisposable
             if (claims == null)
                 return Results.Json(new { error = "unauthorized" }, statusCode: 401);
 
-            var app = ResolveApp(claims, request);
+            var resolution = ResolveApp(claims, request);
+            if (resolution.IsAmbiguous)
+                return AmbiguousResponse(resolution, request);
+
+            var app = resolution.App;
             if (app == null)
             {
                 // Name the miss. This endpoint used to answer a bare "app not found", which reads as
@@ -388,9 +442,12 @@ public class GitCredentialServer : IAsyncDisposable
                 }, statusCode: 404);
             }
 
+            if (resolution.TieBreak != null)
+                _onLog?.Invoke($"Tie broken by instance role: {resolution.TieBreak}");
+
             // claims.AppUuid is only set when the job named an app outright; the usual path resolves
             // it from the environment, so log what we are actually deploying, not the empty claim.
-            _onLog?.Invoke($"Proxying deploy for app {app.Name} (uuid={app.Uuid}, job {claims.JobId})");
+            _onLog?.Invoke($"Proxying deploy for app {app.Name} (uuid={app.Uuid}, instance={app.InstanceUrl}, job {claims.JobId})");
 
             try
             {
@@ -422,7 +479,11 @@ public class GitCredentialServer : IAsyncDisposable
             if (claims == null)
                 return Results.Json(new { error = "unauthorized" }, statusCode: 401);
 
-            var app = ResolveApp(claims, request);
+            var resolution = ResolveApp(claims, request);
+            if (resolution.IsAmbiguous)
+                return AmbiguousResponse(resolution, request);
+
+            var app = resolution.App;
             if (app == null)
                 return Results.Json(new { error = "app not found" }, statusCode: 404);
 
@@ -450,7 +511,11 @@ public class GitCredentialServer : IAsyncDisposable
             if (claims == null)
                 return Results.Json(new { error = "unauthorized" }, statusCode: 401);
 
-            var app = ResolveApp(claims, request);
+            var resolution = ResolveApp(claims, request);
+            if (resolution.IsAmbiguous)
+                return AmbiguousResponse(resolution, request);
+
+            var app = resolution.App;
             if (app == null)
                 return Results.Json(new { error = "app not found" }, statusCode: 404);
 
