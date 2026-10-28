@@ -49,6 +49,16 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.10.0](https://github.com/pksorensen/pks-cli/compare/v7.9.0...v7.10.0) (2026-10-28)
+
+
+### Features
+
+* **devcontainer:** list --remote &lt;target&gt; and new `sessions` command for non-interactive polling ([a02bc0e](https://github.com/pksorensen/pks-cli/commit/a02bc0ed9a63f4a991564634860af521f391f1ea))
+* **foundry:** model catalog at /pks/v1/models and `pks foundry models` ([e7837b6](https://github.com/pksorensen/pks-cli/commit/e7837b66d881be9036c3672a946109945f1d5897))
+* **gateway:** route /pks/v1/chat/completions by model across every registered provider; union catalog on every proxy ([10c65fd](https://github.com/pksorensen/pks-cli/commit/10c65fd08555e208335d2ffdabd8cb6ec5ae9788))
+* **models:** catalog across every registered provider, served by every exec proxy ([4d6288e](https://github.com/pksorensen/pks-cli/commit/4d6288ecca6283eba48a8e2e8c600076ec805a2a))
+
 ## [7.9.0](https://github.com/pksorensen/pks-cli/compare/v7.8.0...v7.9.0) (2026-10-22)
 
 
