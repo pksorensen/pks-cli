@@ -51,7 +51,7 @@ public class ModelInitCommand : AsyncCommand<ModelSettings>
         _console.MarkupLine($"[dim]  Capabilities:  {string.Join(", ", entry.Capabilities)}[/]");
         _console.WriteLine();
 
-        if (!_console.Confirm("[yellow]Proceed with download?[/]", defaultValue: true))
+        if (!settings.Yes && !_console.Confirm("[yellow]Proceed with download?[/]", defaultValue: true))
         {
             _console.MarkupLine("[dim]Cancelled.[/]");
             return 0;
@@ -66,7 +66,10 @@ public class ModelInitCommand : AsyncCommand<ModelSettings>
         if (Directory.Exists(stageDir)) Directory.Delete(stageDir, recursive: true);
         Directory.CreateDirectory(stageDir);
 
-        var archivePath = Path.Combine(stageDir, "archive.tar.bz2");
+        var isSingleFile = entry.Kind == CatalogEntryKind.SingleFile;
+        var downloadPath = isSingleFile
+            ? Path.Combine(stageDir, entry.Files.Values.Single())
+            : Path.Combine(stageDir, "archive.tar.bz2");
 
         try
         {
@@ -77,32 +80,53 @@ public class ModelInitCommand : AsyncCommand<ModelSettings>
                 {
                     var dlTask = ctx.AddTask("[cyan]Downloading[/]", maxValue: entry.ExpectedSizeBytes);
                     var dlProgress = new Progress<long>(b => dlTask.Value = b);
-                    await _download.DownloadAsync(entry.DownloadUrl, archivePath, dlProgress);
+                    await _download.DownloadAsync(entry.DownloadUrl, downloadPath, dlProgress);
                     dlTask.Value = dlTask.MaxValue;
 
-                    // Decompressing 640 MiB of bz2 takes ~30–60s on a typical laptop CPU.
-                    // Use the .tar.bz2 file size as the bar's max and report bytes consumed
-                    // from the input file so the bar moves smoothly during extraction.
-                    var archiveSize = new FileInfo(archivePath).Length;
-                    var extractTask = ctx.AddTask("[cyan]Extracting[/]", maxValue: archiveSize);
-                    var extractProgress = new Progress<long>(b => extractTask.Value = b);
-                    await _download.ExtractTarBz2Async(archivePath, stageDir, extractProgress);
-                    extractTask.Value = archiveSize;
+                    // Verify before anything is extracted or moved: a pinned checksum is the only
+                    // thing that makes a GitHub release asset trustworthy.
+                    if (!string.IsNullOrEmpty(entry.Sha256))
+                    {
+                        var verifyTask = ctx.AddTask("[cyan]Verifying checksum[/]", maxValue: 1);
+                        var actual = await _download.ComputeSha256Async(downloadPath);
+                        if (!string.Equals(actual, entry.Sha256, StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidOperationException(
+                                $"checksum mismatch for {Path.GetFileName(downloadPath)}: expected {entry.Sha256}, got {actual}");
+                        verifyTask.Value = 1;
+                    }
+
+                    string extractedRoot;
+                    if (isSingleFile)
+                    {
+                        // The download is the model file itself; nothing to extract.
+                        extractedRoot = stageDir;
+                    }
+                    else
+                    {
+                        // Decompressing 640 MiB of bz2 takes ~30–60s on a typical laptop CPU.
+                        // Use the .tar.bz2 file size as the bar's max and report bytes consumed
+                        // from the input file so the bar moves smoothly during extraction.
+                        var archiveSize = new FileInfo(downloadPath).Length;
+                        var extractTask = ctx.AddTask("[cyan]Extracting[/]", maxValue: archiveSize);
+                        var extractProgress = new Progress<long>(b => extractTask.Value = b);
+                        await _download.ExtractTarBz2Async(downloadPath, stageDir, extractProgress);
+                        extractTask.Value = archiveSize;
+
+                        // Find the extracted top-level dir (e.g. "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8")
+                        var topDirs = Directory.GetDirectories(stageDir);
+                        if (topDirs.Length == 0)
+                            throw new InvalidOperationException("Archive did not contain a top-level directory.");
+                        extractedRoot = topDirs[0];
+                    }
 
                     var regTask = ctx.AddTask("[cyan]Registering[/]", maxValue: 1);
-                    // Find the extracted top-level dir (e.g. "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8")
-                    // and move/rename each of the expected files into installDir/<canonical-name>.
-                    var topDirs = Directory.GetDirectories(stageDir);
-                    if (topDirs.Length == 0)
-                        throw new InvalidOperationException("Archive did not contain a top-level directory.");
-                    var extractedRoot = topDirs[0];
-
+                    // Move/rename each of the expected files into installDir/<canonical-name>.
                     long totalSize = 0;
                     foreach (var (logical, filename) in entry.Files)
                     {
                         var src = Path.Combine(extractedRoot, filename);
                         if (!File.Exists(src))
-                            throw new FileNotFoundException($"Expected file missing in archive: {filename}", src);
+                            throw new FileNotFoundException($"Expected file missing in download: {filename}", src);
                         var dst = Path.Combine(installDir, filename);
                         if (File.Exists(dst)) File.Delete(dst);
                         File.Move(src, dst);

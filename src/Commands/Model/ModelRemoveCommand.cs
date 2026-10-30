@@ -28,7 +28,7 @@ public class ModelRemoveCommand : AsyncCommand<ModelSettings>
         }
 
         _console.MarkupLine($"[yellow]This will delete {Markup.Escape(installed.InstallPath)} ({installed.SizeBytes / (1024.0 * 1024):F0} MiB).[/]");
-        if (!_console.Confirm("Continue?", defaultValue: false))
+        if (!settings.Yes && !_console.Confirm("Continue?", defaultValue: false))
         {
             _console.MarkupLine("[dim]Cancelled.[/]");
             return 0;

@@ -55,7 +55,7 @@ public class ModelUpdateCommand : AsyncCommand<ModelSettings>
         _console.MarkupLine($"[dim]  Download size: ~{Math.Round(entry.ExpectedSizeBytes / (1024.0 * 1024), 0)} MiB[/]");
         _console.WriteLine();
 
-        if (!_console.Confirm("[yellow]Proceed with update?[/]", defaultValue: true))
+        if (!settings.Yes && !_console.Confirm("[yellow]Proceed with update?[/]", defaultValue: true))
         {
             _console.MarkupLine("[dim]Cancelled.[/]");
             return 0;
