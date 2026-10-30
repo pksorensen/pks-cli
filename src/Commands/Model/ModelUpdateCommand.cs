@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using System.Text.Json;
 using PKS.Infrastructure.Models;
 using PKS.Infrastructure.Services;
 using Spectre.Console;
@@ -76,68 +75,9 @@ public class ModelUpdateCommand : AsyncCommand<ModelSettings>
         }
 
         var installDir = _registry.GetInstallDirectory(entry.Name);
-        Directory.CreateDirectory(installDir);
-
-        var stageDir = installDir + ".staging";
-        if (Directory.Exists(stageDir)) Directory.Delete(stageDir, recursive: true);
-        Directory.CreateDirectory(stageDir);
-
-        var archivePath = Path.Combine(stageDir, "archive.tar.bz2");
-
         try
         {
-            await AnsiConsole.Progress()
-                .Columns(new TaskDescriptionColumn(), new ProgressBarColumn(), new PercentageColumn(),
-                         new RemainingTimeColumn(), new SpinnerColumn())
-                .StartAsync(async ctx =>
-                {
-                    var dlTask = ctx.AddTask("[cyan]Downloading[/]", maxValue: entry.ExpectedSizeBytes);
-                    var dlProgress = new Progress<long>(b => dlTask.Value = b);
-                    await _download.DownloadAsync(entry.DownloadUrl, archivePath, dlProgress);
-                    dlTask.Value = dlTask.MaxValue;
-
-                    var extractTask = ctx.AddTask("[cyan]Extracting[/]", maxValue: 1);
-                    await _download.ExtractTarBz2Async(archivePath, stageDir);
-                    extractTask.Value = 1;
-
-                    var regTask = ctx.AddTask("[cyan]Registering[/]", maxValue: 1);
-                    var topDirs = Directory.GetDirectories(stageDir);
-                    if (topDirs.Length == 0)
-                        throw new InvalidOperationException("Archive did not contain a top-level directory.");
-                    var extractedRoot = topDirs[0];
-
-                    long totalSize = 0;
-                    foreach (var (logical, filename) in entry.Files)
-                    {
-                        var src = Path.Combine(extractedRoot, filename);
-                        if (!File.Exists(src))
-                            throw new FileNotFoundException($"Expected file missing in archive: {filename}", src);
-                        var dst = Path.Combine(installDir, filename);
-                        if (File.Exists(dst)) File.Delete(dst);
-                        File.Move(src, dst);
-                        totalSize += new FileInfo(dst).Length;
-                    }
-
-                    var manifest = new InstalledModel
-                    {
-                        Name = entry.Name,
-                        DisplayName = entry.DisplayName,
-                        Version = entry.Version,
-                        Capabilities = entry.Capabilities.ToList(),
-                        Languages = entry.Languages.ToList(),
-                        InstallPath = installDir,
-                        InstalledAt = DateTime.UtcNow,
-                        SizeBytes = totalSize,
-                        SherpaModelType = entry.SherpaModelType,
-                        Files = entry.Files.ToDictionary(kv => kv.Key, kv => kv.Value),
-                        Source = new InstalledModelSource { DownloadUrl = entry.DownloadUrl, Sha256 = entry.Sha256 },
-                    };
-                    var manifestJson = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
-                    await File.WriteAllTextAsync(Path.Combine(installDir, "manifest.json"), manifestJson);
-                    await _registry.RegisterAsync(manifest);
-                    regTask.Value = 1;
-                });
-
+            await ModelInstaller.InstallAsync(entry, installDir, _download, _registry);
             _console.MarkupLine($"[green]✓ Updated {Markup.Escape(entry.Name)} to {Markup.Escape(entry.Version)} at {Markup.Escape(installDir)}[/]");
             return 0;
         }
@@ -145,13 +85,6 @@ public class ModelUpdateCommand : AsyncCommand<ModelSettings>
         {
             _console.MarkupLine($"[red]Update failed: {Markup.Escape(ex.Message)}[/]");
             return 1;
-        }
-        finally
-        {
-            if (Directory.Exists(stageDir))
-            {
-                try { Directory.Delete(stageDir, recursive: true); } catch { /* best-effort cleanup */ }
-            }
         }
     }
 }
