@@ -49,6 +49,18 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.11.0](https://github.com/pksorensen/pks-cli/compare/v7.10.0...v7.11.0) (2026-10-30)
+
+
+### Features
+
+* **models:** speaker-eres2net in the catalog, single-file downloads, checksums and --yes ([a753af2](https://github.com/pksorensen/pks-cli/commit/a753af2de75be583592e07c0a4581a67347e0e49))
+
+
+### Bug Fixes
+
+* **runner:** refuse an ambiguous Coolify deploy instead of picking the first candidate ([b756016](https://github.com/pksorensen/pks-cli/commit/b7560163f4d080b6e8cd8850162c54b43a5735c4))
+
 ## [7.10.0](https://github.com/pksorensen/pks-cli/compare/v7.9.0...v7.10.0) (2026-10-28)
 
 
