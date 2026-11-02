@@ -118,13 +118,22 @@ public class SshCommandRunner : ISshCommandRunner
             StartInfo = new ProcessStartInfo
             {
                 FileName = "ssh",
-                Arguments = string.Join(" ", args.Select(a => a.Contains(' ') ? $"\"{a}\"" : a)),
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             }
         };
+
+        // ArgumentList, not Arguments: the remote command is one argument that contains spaces,
+        // newlines and — in any script worth sending — double quotes of its own. Joining the list
+        // into a string and wrapping the spacey parts in quotes could not escape those inner
+        // quotes, so the outer quote closed on the script's first `"` and the shell on the far end
+        // reparsed the rest as argv. Measured 2026-11-02: a bootstrap script died with
+        // `bash: -c: line 77: syntax error near unexpected token ')'` after its first few
+        // commands had already run, which reads as a bug in the script rather than in its
+        // transport. ArgumentList is passed to execve element by element, so nothing is reparsed.
+        foreach (var a in args) process.StartInfo.ArgumentList.Add(a);
 
         process.Start();
 
@@ -296,13 +305,22 @@ public class SshCommandRunner : ISshCommandRunner
             StartInfo = new ProcessStartInfo
             {
                 FileName = fileName,
-                Arguments = string.Join(" ", args.Select(a => a.Contains(' ') ? $"\"{a}\"" : a)),
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             }
         };
+
+        // ArgumentList, not Arguments: the remote command is one argument that contains spaces,
+        // newlines and — in any script worth sending — double quotes of its own. Joining the list
+        // into a string and wrapping the spacey parts in quotes could not escape those inner
+        // quotes, so the outer quote closed on the script's first `"` and the shell on the far end
+        // reparsed the rest as argv. Measured 2026-11-02: a bootstrap script died with
+        // `bash: -c: line 77: syntax error near unexpected token ')'` after its first few
+        // commands had already run, which reads as a bug in the script rather than in its
+        // transport. ArgumentList is passed to execve element by element, so nothing is reparsed.
+        foreach (var a in args) process.StartInfo.ArgumentList.Add(a);
 
         process.Start();
 
