@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.12.0](https://github.com/pksorensen/pks-cli/compare/v7.11.0...v7.12.0) (2026-11-03)
+
+
+### Features
+
+* **vm:** make a box Codex-ready and write the ssh alias for it ([#148](https://github.com/pksorensen/pks-cli/issues/148)) ([7792e06](https://github.com/pksorensen/pks-cli/commit/7792e06002a64a3756cbb2f47fdda5fc8e6f418d))
+
 ## [7.11.0](https://github.com/pksorensen/pks-cli/compare/v7.10.0...v7.11.0) (2026-10-30)
 
 
