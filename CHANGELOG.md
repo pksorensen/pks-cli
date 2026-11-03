@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.13.0](https://github.com/pksorensen/pks-cli/compare/v7.12.0...v7.13.0) (2026-11-03)
+
+
+### Features
+
+* **proxy:** pks proxy serves local dev servers over HTTPS on real hostnames ([fdb91d8](https://github.com/pksorensen/pks-cli/commit/fdb91d8f7a409955b7de79ac1f2d0753df3372a9))
+
 ## [7.12.0](https://github.com/pksorensen/pks-cli/compare/v7.11.0...v7.12.0) (2026-11-03)
 
 
