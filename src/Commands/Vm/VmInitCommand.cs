@@ -28,6 +28,7 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
     private readonly IActionGuard _guard;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IAzureVmDiskService _disks;
+    private readonly VmCodexCommand _codex;
 
     public VmInitCommand(
         IAzureAuthService azureAuth,
@@ -41,6 +42,7 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
         IActionGuard guard,
         IHttpClientFactory httpClientFactory,
         IAzureVmDiskService disks,
+        VmCodexCommand codex,
         IAnsiConsole console)
     {
         _azureAuth = azureAuth;
@@ -54,6 +56,7 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
         _guard = guard;
         _httpClientFactory = httpClientFactory;
         _disks = disks;
+        _codex = codex;
         _console = console;
     }
 
@@ -62,6 +65,10 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
         [CommandOption("--idle-shutdown <MINUTES>")]
         [Description("Auto-shutdown after N minutes idle (default: 60, 0 = disabled)")]
         public int? IdleShutdown { get; set; }
+
+        [CommandOption("--codex")]
+        [Description("After provisioning, install the Codex CLI and a dedicated 'codex' account (see 'pks vm codex')")]
+        public bool Codex { get; set; }
 
         [CommandOption("--scheduled-shutdown <TIME>")]
         [Description("Daily hard shutdown at this time UTC, format HH:MM (e.g. 22:00)")]
@@ -547,7 +554,7 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
             .BorderStyle("green")
             .Header(" [bold green]Success[/] "));
 
-        return 0;
+        return await MaybeBootstrapCodexAsync(context, settings, vmName, "azureuser", keyPath);
     }
 
     private async Task<int> RunScalewayInitAsync(CommandContext context, Settings settings)
@@ -767,7 +774,7 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
             .Border(BoxBorder.Rounded).BorderStyle("green")
             .Header(" [bold green]Success[/] "));
 
-        return 0;
+        return await MaybeBootstrapCodexAsync(context, settings, vmName, adminUser, keyPath);
     }
 
     // Extract the human-readable message from an ARM error, falling back to the raw exception message
@@ -785,4 +792,31 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
         catch { }
         return raw;
     }
+
+    /// <summary>
+    /// Chains into <c>pks vm codex</c> when <c>--codex</c> was passed, against the target just
+    /// registered. Routed through the same command rather than a second copy of the script, so the
+    /// two entry points cannot drift.
+    ///
+    /// A failure here does not fail the provisioning: the VM exists, is registered and is reachable,
+    /// and reporting non-zero would suggest otherwise. The Codex half is re-runnable on its own.
+    /// </summary>
+    private async Task<int> MaybeBootstrapCodexAsync(
+        CommandContext context, Settings settings, string vmName, string adminUser, string keyPath)
+    {
+        if (!settings.Codex) return 0;
+
+        _console.WriteLine();
+        var rc = await _codex.ExecuteAsync(context, new VmCodexCommand.Settings
+        {
+            Target = vmName,
+            KeyPath = keyPath,
+        });
+
+        if (rc != 0)
+            _console.MarkupLine($"[yellow]The VM is ready but Codex was not installed. Retry with:[/] [bold]pks vm codex {Markup.Escape(vmName)}[/]");
+
+        return 0;
+    }
+
 }

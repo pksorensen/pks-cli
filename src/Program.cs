@@ -1548,6 +1548,11 @@ app.Configure(config =>
         vm.AddCommand<PKS.Commands.Vm.VmTailscaleCommand>("tailscale")
             .WithDescription("Start a VM and connect it to your Tailscale network")
             .WithExample(new[] { "vm", "tailscale" });
+        vm.AddCommand<PKS.Commands.Vm.VmCodexCommand>("codex")
+            .WithDescription("Install the Codex CLI on a box and create a dedicated non-root account for Codex Desktop")
+            .WithExample(new[] { "vm", "codex" })
+            .WithExample(new[] { "vm", "codex", "hetzner" })
+            .WithExample(new[] { "vm", "codex", "--host", "root@example.com", "--docker" });
         vm.AddCommand<PKS.Commands.Vm.VmAutoshutdownCommand>("autoshutdown")
             .WithDescription("Configure auto-shutdown for a VM")
             .WithExample(new[] { "vm", "autoshutdown", "my-vm", "--idle", "30" })

@@ -65,7 +65,13 @@ public class VmInitCommandTests
             .Setup(x => x.Execute(It.IsAny<CommandContext>(), It.IsAny<AzureInitCommand.Settings>()))
             .Returns(azureInitResult);
 
-        var scalewayInitMock = new Mock<ScalewayInitCommand>(scalewayMock.Object, console);
+        // Pre-existing breakage, unrelated to this file's subject: ScalewayInitCommand gained an
+        // IActionGuard parameter and this mock was not updated, so every test in the class threw
+        // from the helper rather than from the code under test.
+        var scalewayInitMock = new Mock<ScalewayInitCommand>(
+            scalewayMock.Object,
+            new Mock<PKS.Infrastructure.Services.Security.IActionGuard>().Object,
+            console);
         scalewayInitMock
             .Setup(x => x.Execute(It.IsAny<CommandContext>(), It.IsAny<ScalewayInitCommand.Settings>()))
             .Returns(0);
@@ -82,6 +88,13 @@ public class VmInitCommandTests
             new Mock<PKS.Infrastructure.Services.Security.IActionGuard>().Object,
             NoPimHttpClientFactory(),
             new Mock<IAzureVmDiskService>().Object,
+            // The Codex bootstrap is only reached when --codex is passed, which these tests do not
+            // do; a real instance is cheaper here than a mock of a sealed command type.
+            new PKS.Commands.Vm.VmCodexCommand(
+                sshServiceMock.Object,
+                new Mock<PKS.Infrastructure.Services.ISshCommandRunner>().Object,
+                new Mock<PKS.Infrastructure.Services.ISshKeyStore>().Object,
+                console),
             console);
     }
 

@@ -52,7 +52,7 @@ Underneath, a provider registry resolves each tracked VM to Azure or Scaleway an
 
 ## Commands
 
-`init` · `list` · `status` · `start` · `stop` · `destroy` · `autoshutdown` · `add-ssh-key` · `export-ssh-key` · `tailscale`
+`init` · `list` · `status` · `start` · `stop` · `destroy` · `autoshutdown` · `add-ssh-key` · `export-ssh-key` · `tailscale` · `codex`
 
 | Command | What it does |
 |---|---|
@@ -66,6 +66,7 @@ Underneath, a provider registry resolves each tracked VM to Azure or Scaleway an
 | `pks vm add-ssh-key` | Registers a private key for a VM pks did not provision. |
 | `pks vm export-ssh-key` | Prints a snippet installing a VM's key on another machine. |
 | [`pks vm tailscale`](/tools/pks/vm/tailscale) | Joins a VM to your Tailscale tailnet over SSH. |
+| [`pks vm codex`](/tools/pks/vm/codex) | Installs the Codex CLI and a dedicated non-root account, so the Codex desktop app can work on the box. |
 
 > **Note.** `pks schedule` is a separate top-level command, not `pks vm schedule`. It is the interactive superset of `pks vm autoshutdown` and adds auto-start scheduling. See [Scheduling VM start and stop](/tools/pks/vm/schedule).
 
@@ -92,3 +93,4 @@ Second-factor requirements are per-user toggleable with `pks actions`. Scaleway 
 - [Scheduling VM start and stop](/tools/pks/vm/schedule) — the top-level `pks schedule` wizard
 - [Manage VM SSH keys](/tools/pks/vm/ssh-keys) — adopt and export private keys
 - [Join a VM to Tailscale](/tools/pks/vm/tailscale) — reach LAN and NAS devices from the cloud
+- [Run Codex on a remote box](/tools/pks/vm/codex) — the Codex desktop app, working on the machine instead of your laptop

@@ -121,7 +121,12 @@ internal class TestableDevcontainerSpawnCommand : PKS.Commands.Devcontainer.Devc
             new Mock<PKS.Infrastructure.Services.IAzureVmMetadataService>().Object,
             new Mock<PKS.Infrastructure.Services.IAzureAuthService>().Object,
             new Mock<PKS.Infrastructure.Services.IAzureVmService>().Object,
-            new Mock<PKS.Commands.Vm.VmInitCommand>().Object,
+            // VmInitCommand is a concrete command with a dozen injected dependencies, so Moq cannot
+            // proxy it (no parameterless constructor) -- Mock.Of<VmInitCommand>() threw here long
+            // before this file's subject existed. These tests never reach the --spawn-vm path that
+            // uses it, so null is both honest and sufficient; a real one would need the whole Azure
+            // and Scaleway graph built just to be ignored.
+            null!,
             configService,
             renderer,
             console)
