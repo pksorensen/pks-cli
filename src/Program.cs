@@ -1081,6 +1081,12 @@ app.Configure(config =>
         });
     });
 
+    config.AddCommand<PKS.Commands.Proxy.ProxyCommand>("proxy")
+        .WithDescription("Serve local dev servers over HTTPS on real-looking hostnames (local CA, trusted once)")
+        .WithExample(new[] { "proxy", "platform.contextand.com", "--to", "http://localhost:5173" })
+        .WithExample(new[] { "proxy", "--route", "app.example.test=http://localhost:3000", "--route", "api.example.test=http://localhost:5000" })
+        .WithExample(new[] { "proxy", "--remove-trust" });
+
     config.AddBranch<PKS.Commands.Cert.CertSettings>("cert", cert =>
     {
         cert.SetDescription("Manage pks-held code-signing certificates (created once, reused across CI runs)");

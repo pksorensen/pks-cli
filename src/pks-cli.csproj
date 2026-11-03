@@ -73,6 +73,8 @@
     <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.0"/>
     <!-- Docker integration -->
     <PackageReference Include="Docker.DotNet" Version="3.125.15"/>
+    <!-- Reverse proxy for pks proxy (websockets, streaming, header transforms) -->
+    <PackageReference Include="Yarp.ReverseProxy" Version="2.3.0"/>
     <!-- OpenTelemetry: ActivitySource + OTLP export to Aspire -->
     <PackageReference Include="OpenTelemetry" Version="1.15.3"/>
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3"/>
