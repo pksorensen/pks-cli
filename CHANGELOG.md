@@ -56,6 +56,11 @@ For template-specific changes, see their respective CHANGELOG files:
 
 * **vm:** make a box Codex-ready and write the ssh alias for it ([#148](https://github.com/pksorensen/pks-cli/issues/148)) ([7792e06](https://github.com/pksorensen/pks-cli/commit/7792e06002a64a3756cbb2f47fdda5fc8e6f418d))
 
+
+### Bug Fixes
+
+* **ssh:** send the remote command as one argv element, not a quoted string ([#148](https://github.com/pksorensen/pks-cli/issues/148)) ([7792e06](https://github.com/pksorensen/pks-cli/commit/7792e06002a64a3756cbb2f47fdda5fc8e6f418d))
+
 ## [7.11.0](https://github.com/pksorensen/pks-cli/compare/v7.10.0...v7.11.0) (2026-10-30)
 
 
