@@ -61,7 +61,7 @@ public sealed class ClaudeBinaryRunner : IClaudeRunner
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();
         proc.OutputDataReceived += (_, e) => { if (e.Data is not null) stdout.AppendLine(e.Data); };
-        proc.ErrorDataReceived  += (_, e) => { if (e.Data is not null) stderr.AppendLine(e.Data); };
+        proc.ErrorDataReceived += (_, e) => { if (e.Data is not null) stderr.AppendLine(e.Data); };
         proc.BeginOutputReadLine();
         proc.BeginErrorReadLine();
 
@@ -131,9 +131,9 @@ public sealed class ClaudeBinaryRunner : IClaudeRunner
         long inTok = 0, outTok = 0, cacheRead = 0, cacheCreate = 0;
         if (root.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
         {
-            inTok      = GetLong(usage, "input_tokens");
-            outTok     = GetLong(usage, "output_tokens");
-            cacheRead  = GetLong(usage, "cache_read_input_tokens");
+            inTok = GetLong(usage, "input_tokens");
+            outTok = GetLong(usage, "output_tokens");
+            cacheRead = GetLong(usage, "cache_read_input_tokens");
             cacheCreate = GetLong(usage, "cache_creation_input_tokens");
         }
 

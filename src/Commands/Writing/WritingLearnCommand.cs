@@ -108,7 +108,7 @@ public class WritingLearnCommand : AsyncCommand<WritingLearnSettings>
             t.AddColumn(""); t.AddColumn(new TableColumn("").RightAligned());
             t.AddRow("Allowlist proposals", $"[green]{p.Actions.Count(a => a.Kind == LearnActionKind.Allowlist)}[/]  ({p.Actions.Count(a => a.Kind == LearnActionKind.Allowlist && a.Accept)} accepted)");
             t.AddRow("Anglicism proposals", $"[green]{p.Actions.Count(a => a.Kind == LearnActionKind.Anglicism)}[/]  ({p.Actions.Count(a => a.Kind == LearnActionKind.Anglicism && a.Accept)} accepted)");
-            t.AddRow("Lesson proposals",    $"[green]{p.Actions.Count(a => a.Kind == LearnActionKind.Lesson)}[/]  ({p.Actions.Count(a => a.Kind == LearnActionKind.Lesson && a.Accept)} accepted)");
+            t.AddRow("Lesson proposals", $"[green]{p.Actions.Count(a => a.Kind == LearnActionKind.Lesson)}[/]  ({p.Actions.Count(a => a.Kind == LearnActionKind.Lesson && a.Accept)} accepted)");
             AnsiConsole.Write(t);
             AnsiConsole.WriteLine();
             AnsiConsole.MarkupLine($"  Review:    [cyan]{lastMdPath}[/]");

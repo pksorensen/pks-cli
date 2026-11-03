@@ -111,7 +111,10 @@ public class AzureFileShareProviderTests : IDisposable
     private static string TenantStoreJson(params (string TenantId, string RefreshToken)[] tenants) => JsonSerializer.Serialize(
         tenants.Select(t => new AzureTenantCredentials
         {
-            TenantId = t.TenantId, RefreshToken = SecretValue.From(t.RefreshToken), CreatedAt = DateTime.UtcNow, LastRefreshedAt = DateTime.UtcNow
+            TenantId = t.TenantId,
+            RefreshToken = SecretValue.From(t.RefreshToken),
+            CreatedAt = DateTime.UtcNow,
+            LastRefreshedAt = DateTime.UtcNow
         }).ToList(), SecretJson.Persistence);
 
     private static HttpResponseMessage Json(object body) => new(HttpStatusCode.OK)

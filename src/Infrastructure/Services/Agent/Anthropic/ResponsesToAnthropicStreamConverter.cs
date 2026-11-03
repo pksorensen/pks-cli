@@ -147,29 +147,29 @@ public sealed class ResponsesToAnthropicStreamConverter
         switch (itemType)
         {
             case "function_call":
-            {
-                var callId = item.TryGetProperty("call_id", out var c) ? c.GetString()
-                    : item.TryGetProperty("id", out var i) ? i.GetString() : null;
-                var name = item.TryGetProperty("name", out var n) ? n.GetString() : null;
-                var block = OpenBlock(oi, "tool_use");
-                block.ToolId = callId ?? "call_" + oi;
-                block.ToolName = name ?? string.Empty;
-                _sawToolCall = true;
-                yield return Frame("content_block_start", new JsonObject
                 {
-                    ["type"] = "content_block_start",
-                    ["index"] = block.Index,
-                    ["content_block"] = new JsonObject
+                    var callId = item.TryGetProperty("call_id", out var c) ? c.GetString()
+                        : item.TryGetProperty("id", out var i) ? i.GetString() : null;
+                    var name = item.TryGetProperty("name", out var n) ? n.GetString() : null;
+                    var block = OpenBlock(oi, "tool_use");
+                    block.ToolId = callId ?? "call_" + oi;
+                    block.ToolName = name ?? string.Empty;
+                    _sawToolCall = true;
+                    yield return Frame("content_block_start", new JsonObject
                     {
-                        ["type"] = "tool_use",
-                        ["id"] = block.ToolId,
-                        ["name"] = block.ToolName,
-                        ["input"] = new JsonObject(),
-                    },
-                });
-                break;
-            }
-            // reasoning / message blocks are opened lazily on their first delta.
+                        ["type"] = "content_block_start",
+                        ["index"] = block.Index,
+                        ["content_block"] = new JsonObject
+                        {
+                            ["type"] = "tool_use",
+                            ["id"] = block.ToolId,
+                            ["name"] = block.ToolName,
+                            ["input"] = new JsonObject(),
+                        },
+                    });
+                    break;
+                }
+                // reasoning / message blocks are opened lazily on their first delta.
         }
     }
 

@@ -6,7 +6,7 @@ namespace PKS.Infrastructure.Services;
 
 public class ModelRegistry
 {
-    [JsonPropertyName("models")]       public List<InstalledModel> Models { get; set; } = new();
+    [JsonPropertyName("models")] public List<InstalledModel> Models { get; set; } = new();
     [JsonPropertyName("lastModified")] public DateTime? LastModified { get; set; }
 }
 

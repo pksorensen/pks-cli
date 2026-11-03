@@ -305,10 +305,10 @@ public class TtsCommand : AsyncCommand<TtsCommand.Settings>
         int r = (int)(Math.Min(w, h) * 0.22);
         string circleGeq =
             $"color=s={size}:c=0x0a0a0a,format=rgba," +
-            $"geq=r='if(lt(hypot(X-{w/2},Y-{h/2}),{r}),255,r(X,Y))':" +
-            $"g='if(lt(hypot(X-{w/2},Y-{h/2}),{r}),255,g(X,Y))':" +
-            $"b='if(lt(hypot(X-{w/2},Y-{h/2}),{r}),255,b(X,Y))':" +
-            $"a='if(lt(hypot(X-{w/2},Y-{h/2}),{r}),255,a(X,Y))'";
+            $"geq=r='if(lt(hypot(X-{w / 2},Y-{h / 2}),{r}),255,r(X,Y))':" +
+            $"g='if(lt(hypot(X-{w / 2},Y-{h / 2}),{r}),255,g(X,Y))':" +
+            $"b='if(lt(hypot(X-{w / 2},Y-{h / 2}),{r}),255,b(X,Y))':" +
+            $"a='if(lt(hypot(X-{w / 2},Y-{h / 2}),{r}),255,a(X,Y))'";
 
         string filter = settings.VideoStyle.ToLowerInvariant() switch
         {
@@ -324,16 +324,16 @@ public class TtsCommand : AsyncCommand<TtsCommand.Settings>
                 // Fake stereo from mono so avectorscope has something to draw.
                 $"color=s={size}:c=0x0a0a0a[bg];" +
                 $"[0:a]aformat=channel_layouts=stereo|mono,pan=stereo|c0=c0|c1=c0," +
-                $"avectorscope=s={Math.Min(w,h)}x{Math.Min(w,h)}:zoom=1.5:draw=line:scale=lin:rc=255:gc=255:bc=255:rf=15:gf=15:bf=15,format=yuva420p[v0];" +
+                $"avectorscope=s={Math.Min(w, h)}x{Math.Min(w, h)}:zoom=1.5:draw=line:scale=lin:rc=255:gc=255:bc=255:rf=15:gf=15:bf=15,format=yuva420p[v0];" +
                 $"[bg][v0]overlay=(W-w)/2:(H-h)/2:shortest=1,format=yuv420p[v]",
             "pulse" =>
                 // Sharper p2p waveform + static centered white disc.
                 $"{circleGeq}[bg];" +
-                $"[0:a]showwaves=s={w}x{Math.Max(300, h/3)}:mode=p2p:colors=0xffffff:rate=30:draw=full,format=yuva420p[v0];" +
+                $"[0:a]showwaves=s={w}x{Math.Max(300, h / 3)}:mode=p2p:colors=0xffffff:rate=30:draw=full,format=yuva420p[v0];" +
                 $"[bg][v0]overlay=0:(H-h)/2:shortest=1,format=yuv420p[v]",
             _ =>  // waves (default) — sharper than the old cline
                 $"color=s={size}:c=0x0a0a0a[bg];" +
-                $"[0:a]showwaves=s={w}x{Math.Max(300, h/3)}:mode=p2p:colors=0xffffff:rate=30:draw=full,format=yuva420p[v0];" +
+                $"[0:a]showwaves=s={w}x{Math.Max(300, h / 3)}:mode=p2p:colors=0xffffff:rate=30:draw=full,format=yuva420p[v0];" +
                 $"[bg][v0]overlay=0:(H-h)/2:shortest=1,format=yuv420p[v]",
         };
 

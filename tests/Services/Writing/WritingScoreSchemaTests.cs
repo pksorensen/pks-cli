@@ -91,7 +91,7 @@ public sealed class WritingScoreSchemaTests
     [Fact]
     public void Validate_returnsNoJson_onEmptyOrJunkInput()
     {
-        WritingScoreSchema.Validate("",       LineCount).Errors.Should().Contain(e => e.Code == "no_json");
+        WritingScoreSchema.Validate("", LineCount).Errors.Should().Contain(e => e.Code == "no_json");
         WritingScoreSchema.Validate("hi mom", LineCount).Errors.Should().Contain(e => e.Code == "no_json");
     }
 

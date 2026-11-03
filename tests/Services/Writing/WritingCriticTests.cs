@@ -48,7 +48,8 @@ public sealed class WritingCriticTests
     {
         var req = new CritiqueRequest
         {
-            SourcePath = "/tmp/x.md", Channel = "blog",
+            SourcePath = "/tmp/x.md",
+            Channel = "blog",
             Content = "first\nsecond\nthird",
         };
         var user = WritingCritic.BuildUserPrompt(req);

@@ -108,8 +108,12 @@ Cap findings at {{maxFindings}}. All five dimension scores are REQUIRED.
         var json = ExtractJson(responseText);
         if (json is null)
         {
-            errors.Add(new() { Field = "$", Code = "no_json",
-                Message = "No JSON object found. Expected raw JSON or ```json fenced block." });
+            errors.Add(new()
+            {
+                Field = "$",
+                Code = "no_json",
+                Message = "No JSON object found. Expected raw JSON or ```json fenced block."
+            });
             return new ValidationResult { Ok = false, Errors = errors };
         }
 
@@ -152,8 +156,12 @@ Cap findings at {{maxFindings}}. All five dimension scores are REQUIRED.
                     }
                     if (iv < 1 || iv > 5)
                     {
-                        errors.Add(new() { Field = $"dimensions.{name}", Code = "out_of_range",
-                            Message = $"got {iv}, expected 1..5" });
+                        errors.Add(new()
+                        {
+                            Field = $"dimensions.{name}",
+                            Code = "out_of_range",
+                            Message = $"got {iv}, expected 1..5"
+                        });
                         continue;
                     }
                     dimensions[name] = iv;
@@ -175,15 +183,23 @@ Cap findings at {{maxFindings}}. All five dimension scores are REQUIRED.
                     var dim = TryStr(f, "dimension");
                     if (dim is null) errors.Add(new() { Field = $"{prefix}.dimension", Code = "missing" });
                     else if (Array.IndexOf(Dimensions, dim) < 0)
-                        errors.Add(new() { Field = $"{prefix}.dimension", Code = "unknown_enum",
-                            Message = $"got '{dim}'" });
+                        errors.Add(new()
+                        {
+                            Field = $"{prefix}.dimension",
+                            Code = "unknown_enum",
+                            Message = $"got '{dim}'"
+                        });
 
                     int line = 0;
                     if (!f.TryGetProperty("line", out var lineEl) || !lineEl.TryGetInt32(out line))
                         errors.Add(new() { Field = $"{prefix}.line", Code = "missing_or_not_integer" });
                     else if (line < 1 || line > sourceLineCount)
-                        errors.Add(new() { Field = $"{prefix}.line", Code = "out_of_range",
-                            Message = $"got {line}, expected 1..{sourceLineCount}" });
+                        errors.Add(new()
+                        {
+                            Field = $"{prefix}.line",
+                            Code = "out_of_range",
+                            Message = $"got {line}, expected 1..{sourceLineCount}"
+                        });
 
                     var match = TryStr(f, "match") ?? "";
                     var message = TryStr(f, "message") ?? "";
@@ -197,7 +213,10 @@ Cap findings at {{maxFindings}}. All five dimension scores are REQUIRED.
                     {
                         RuleId = $"Critic.{dim ?? "Unknown"}",
                         Severity = WritingSeverity.Suggestion,
-                        Line = line, Column = 1, Match = match, Message = message,
+                        Line = line,
+                        Column = 1,
+                        Match = match,
+                        Message = message,
                         Suggestions = suggestions,
                     });
                     i++;

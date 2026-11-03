@@ -89,7 +89,7 @@ public sealed class AnthropicChatProvider : IChatProvider
         string? currentEvent = null;
         var dataBuf = new StringBuilder();
 
-        while (!reader.EndOfStream)
+        while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var line = await reader.ReadLineAsync().ConfigureAwait(false);
@@ -274,57 +274,57 @@ public sealed class AnthropicChatProvider : IChatProvider
         switch (eventName)
         {
             case "content_block_start":
-            {
-                if (!root.TryGetProperty("content_block", out var cb)) return null;
-                var index = root.TryGetProperty("index", out var idxEl) && idxEl.TryGetInt32(out var idx) ? idx : -1;
-                var type = cb.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
-                if (type == "tool_use")
                 {
-                    var id = cb.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? "" : "";
-                    var name = cb.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
-                    if (index >= 0) blockIdByIndex[index] = id;
-                    return new ToolUseStartEvent(id, name);
+                    if (!root.TryGetProperty("content_block", out var cb)) return null;
+                    var index = root.TryGetProperty("index", out var idxEl) && idxEl.TryGetInt32(out var idx) ? idx : -1;
+                    var type = cb.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
+                    if (type == "tool_use")
+                    {
+                        var id = cb.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? "" : "";
+                        var name = cb.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
+                        if (index >= 0) blockIdByIndex[index] = id;
+                        return new ToolUseStartEvent(id, name);
+                    }
+                    return null;
                 }
-                return null;
-            }
 
             case "content_block_delta":
-            {
-                if (!root.TryGetProperty("delta", out var delta)) return null;
-                var deltaType = delta.TryGetProperty("type", out var dtEl) ? dtEl.GetString() : null;
-                switch (deltaType)
                 {
-                    case "text_delta":
-                        return new TextDeltaEvent(delta.TryGetProperty("text", out var txt) ? txt.GetString() ?? "" : "");
-                    case "input_json_delta":
+                    if (!root.TryGetProperty("delta", out var delta)) return null;
+                    var deltaType = delta.TryGetProperty("type", out var dtEl) ? dtEl.GetString() : null;
+                    switch (deltaType)
                     {
-                        var idx = root.TryGetProperty("index", out var idxEl) && idxEl.TryGetInt32(out var i) ? i : -1;
-                        var id = idx >= 0 && blockIdByIndex.TryGetValue(idx, out var resolved) ? resolved : "";
-                        var partial = delta.TryGetProperty("partial_json", out var pj) ? pj.GetString() ?? "" : "";
-                        return new ToolUseDeltaEvent(id, partial);
+                        case "text_delta":
+                            return new TextDeltaEvent(delta.TryGetProperty("text", out var txt) ? txt.GetString() ?? "" : "");
+                        case "input_json_delta":
+                            {
+                                var idx = root.TryGetProperty("index", out var idxEl) && idxEl.TryGetInt32(out var i) ? i : -1;
+                                var id = idx >= 0 && blockIdByIndex.TryGetValue(idx, out var resolved) ? resolved : "";
+                                var partial = delta.TryGetProperty("partial_json", out var pj) ? pj.GetString() ?? "" : "";
+                                return new ToolUseDeltaEvent(id, partial);
+                            }
+                        case "thinking_delta":
+                            return new ThinkingDeltaEvent(delta.TryGetProperty("thinking", out var th) ? th.GetString() ?? "" : "");
                     }
-                    case "thinking_delta":
-                        return new ThinkingDeltaEvent(delta.TryGetProperty("thinking", out var th) ? th.GetString() ?? "" : "");
+                    return null;
                 }
-                return null;
-            }
 
             case "message_delta":
-            {
-                if (root.TryGetProperty("delta", out var delta) &&
-                    delta.TryGetProperty("stop_reason", out var srEl) &&
-                    srEl.ValueKind == JsonValueKind.String)
                 {
-                    stopReason = srEl.GetString();
+                    if (root.TryGetProperty("delta", out var delta) &&
+                        delta.TryGetProperty("stop_reason", out var srEl) &&
+                        srEl.ValueKind == JsonValueKind.String)
+                    {
+                        stopReason = srEl.GetString();
+                    }
+                    if (root.TryGetProperty("usage", out var usageEl))
+                    {
+                        var inTok = usageEl.TryGetProperty("input_tokens", out var itEl) && itEl.TryGetInt32(out var it) ? it : 0;
+                        var outTok = usageEl.TryGetProperty("output_tokens", out var otEl) && otEl.TryGetInt32(out var ot) ? ot : 0;
+                        usage = new ChatUsage(inTok, outTok);
+                    }
+                    return null;
                 }
-                if (root.TryGetProperty("usage", out var usageEl))
-                {
-                    var inTok = usageEl.TryGetProperty("input_tokens", out var itEl) && itEl.TryGetInt32(out var it) ? it : 0;
-                    var outTok = usageEl.TryGetProperty("output_tokens", out var otEl) && otEl.TryGetInt32(out var ot) ? ot : 0;
-                    usage = new ChatUsage(inTok, outTok);
-                }
-                return null;
-            }
 
             case "message_stop":
                 return new MessageStopEvent(MapStopReason(stopReason), usage);

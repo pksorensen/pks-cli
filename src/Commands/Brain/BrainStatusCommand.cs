@@ -36,25 +36,25 @@ public class BrainStatusCommand : AsyncCommand<BrainSettings>
         AnsiConsole.MarkupLine("[bold]Global raw layer[/]");
         var t = new Table().Border(TableBorder.MinimalHeavyHead).HideHeaders();
         t.AddColumn(""); t.AddColumn("");
-        t.AddRow("[grey]Schema version[/]",   index.SchemaVersion.ToString());
-        t.AddRow("[grey]Global root[/]",      $"[cyan]{_paths.GlobalRoot}[/]");
-        t.AddRow("[grey]Created[/]",          index.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm"));
-        t.AddRow("[grey]Updated[/]",          index.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm"));
-        t.AddRow("[grey]Projects[/]",         index.ProjectCount.ToString());
-        t.AddRow("[grey]Sessions[/]",         index.SessionCount.ToString());
-        t.AddRow("[grey]Prompts[/]",          index.PromptCount.ToString("N0"));
-        t.AddRow("[grey]Tool calls[/]",       index.ToolCallCount.ToString("N0"));
-        t.AddRow("[grey]File ops[/]",         index.FileOpCount.ToString("N0"));
-        t.AddRow("[grey]Errors[/]",           index.ErrorCount.ToString("N0"));
+        t.AddRow("[grey]Schema version[/]", index.SchemaVersion.ToString());
+        t.AddRow("[grey]Global root[/]", $"[cyan]{_paths.GlobalRoot}[/]");
+        t.AddRow("[grey]Created[/]", index.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm"));
+        t.AddRow("[grey]Updated[/]", index.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm"));
+        t.AddRow("[grey]Projects[/]", index.ProjectCount.ToString());
+        t.AddRow("[grey]Sessions[/]", index.SessionCount.ToString());
+        t.AddRow("[grey]Prompts[/]", index.PromptCount.ToString("N0"));
+        t.AddRow("[grey]Tool calls[/]", index.ToolCallCount.ToString("N0"));
+        t.AddRow("[grey]File ops[/]", index.FileOpCount.ToString("N0"));
+        t.AddRow("[grey]Errors[/]", index.ErrorCount.ToString("N0"));
         if (index.LastIngestAt.HasValue)
         {
-            t.AddRow("[grey]Last ingest[/]",  index.LastIngestAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm"));
+            t.AddRow("[grey]Last ingest[/]", index.LastIngestAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm"));
             if (index.LastIngestDuration.HasValue)
                 t.AddRow("[grey]Last duration[/]", index.LastIngestDuration.Value.ToString(@"hh\:mm\:ss"));
         }
         else
         {
-            t.AddRow("[grey]Last ingest[/]",  "[yellow](never — run [bold]pks brain ingest[/])[/]");
+            t.AddRow("[grey]Last ingest[/]", "[yellow](never — run [bold]pks brain ingest[/])[/]");
         }
         AnsiConsole.Write(t);
         AnsiConsole.WriteLine();
@@ -75,15 +75,15 @@ public class BrainStatusCommand : AsyncCommand<BrainSettings>
             }
             else
             {
-                et.AddRow("[grey]Extracts[/]",          stats.Count.ToString("N0"));
-                et.AddRow("[grey]Total cost[/]",        $"[green]${stats.TotalCost:0.####}[/]");
-                et.AddRow("[grey]Avg cost / extract[/]",$"${stats.TotalCost / Math.Max(1, stats.Count):0.####}");
-                et.AddRow("[grey]Total input tokens[/]",FormatTokens(stats.TotalInput));
-                et.AddRow("[grey]Total output tokens[/]",FormatTokens(stats.TotalOutput));
+                et.AddRow("[grey]Extracts[/]", stats.Count.ToString("N0"));
+                et.AddRow("[grey]Total cost[/]", $"[green]${stats.TotalCost:0.####}[/]");
+                et.AddRow("[grey]Avg cost / extract[/]", $"${stats.TotalCost / Math.Max(1, stats.Count):0.####}");
+                et.AddRow("[grey]Total input tokens[/]", FormatTokens(stats.TotalInput));
+                et.AddRow("[grey]Total output tokens[/]", FormatTokens(stats.TotalOutput));
                 if (stats.ModelCounts.Count > 0)
-                    et.AddRow("[grey]Models[/]",        string.Join(", ", stats.ModelCounts.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Key} ×{kv.Value}")));
+                    et.AddRow("[grey]Models[/]", string.Join(", ", stats.ModelCounts.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Key} ×{kv.Value}")));
                 if (stats.LatestAt.HasValue)
-                    et.AddRow("[grey]Latest extract[/]",stats.LatestAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm"));
+                    et.AddRow("[grey]Latest extract[/]", stats.LatestAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm"));
                 if (stats.SkillHashes.Count > 1)
                     et.AddRow("[grey]Skill versions[/]", $"[yellow]{stats.SkillHashes.Count} different skill bodies[/] [grey](`pks brain extract --force` to re-extract with current skill)[/]");
             }
@@ -222,7 +222,7 @@ public class BrainStatusCommand : AsyncCommand<BrainSettings>
     }
 
     private static string FormatTokens(long n) =>
-        n < 10_000   ? n.ToString("N0")
+        n < 10_000 ? n.ToString("N0")
         : n < 1_000_000 ? $"{n / 1000.0:0.#}K"
-        :                 $"{n / 1_000_000.0:0.##}M";
+        : $"{n / 1_000_000.0:0.##}M";
 }

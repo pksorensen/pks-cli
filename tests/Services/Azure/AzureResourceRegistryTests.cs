@@ -465,7 +465,9 @@ public sealed class AzureResourceRegistryTests : IDisposable
         });
         var secrets = new FakeSecretResolver((FileShareKey, JsonSerializer.Serialize(new FileShareStoredCredentials
         {
-            TenantId = "t", RefreshToken = "rt", SelectedStorageAccountName = "stacct"
+            TenantId = "t",
+            RefreshToken = "rt",
+            SelectedStorageAccountName = "stacct"
         })));
 
         var all = await CreateRegistry(config, secrets).ListAsync();

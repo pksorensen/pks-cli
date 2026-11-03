@@ -100,9 +100,17 @@ public sealed class PksAgentRunner : IClaudeRunner
         {
             return new ClaudeRunResult
             {
-                Success = false, ResponseText = string.Empty, RawStdout = body, Stderr = "",
-                ExitCode = 0, Duration = sw.Elapsed, Model = deployment,
-                InputTokens = inTok, OutputTokens = outTok, CostUsd = cost, ErrorKind = "budget",
+                Success = false,
+                ResponseText = string.Empty,
+                RawStdout = body,
+                Stderr = "",
+                ExitCode = 0,
+                Duration = sw.Elapsed,
+                Model = deployment,
+                InputTokens = inTok,
+                OutputTokens = outTok,
+                CostUsd = cost,
+                ErrorKind = "budget",
             };
         }
 

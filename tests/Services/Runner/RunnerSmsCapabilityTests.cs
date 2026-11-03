@@ -44,8 +44,13 @@ public class RunnerSmsCapabilityTests
 
     private static AgenticsRunnerRegistration MakeRegistration() => new()
     {
-        Id = "runner-1", Name = "test-runner", Token = "rnt_tok", Owner = "acme", Project = "widgets",
-        Server = "https://agentics.test", RegisteredAt = DateTime.UtcNow,
+        Id = "runner-1",
+        Name = "test-runner",
+        Token = "rnt_tok",
+        Owner = "acme",
+        Project = "widgets",
+        Server = "https://agentics.test",
+        RegisteredAt = DateTime.UtcNow,
     };
 
     private static (AgenticsRunnerRunCommand Command, Spectre.Console.Testing.TestConsole Console) CreateCommand(

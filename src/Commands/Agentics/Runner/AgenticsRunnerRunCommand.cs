@@ -297,10 +297,10 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
             DisplayBanner();
 
             // Reap what the previous runner could not. A runner killed by a reboot never reaches its
-        // On a self-hosted box the installer describes the installation in the environment; with
-        // no --project, this process is the host runner for every project there.
-        if (string.IsNullOrEmpty(settings.Project) && InstallationContext.FromEnvironment() is { } installation)
-            return await InstallationRunnerMode.RunAsync(installation, _configService, _console);
+            // On a self-hosted box the installer describes the installation in the environment; with
+            // no --project, this process is the host runner for every project there.
+            if (string.IsNullOrEmpty(settings.Project) && InstallationContext.FromEnvironment() is { } installation)
+                return await InstallationRunnerMode.RunAsync(installation, _configService, _console);
 
             // job-end cleanup, so startup is the only moment its leftovers get collected.
             if (_reaper is not null)
@@ -4435,70 +4435,70 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                 switch (type)
                 {
                     case "chat.completion.request":
-                    {
-                        var requestId = frame.TryGetProperty("requestId", out var ridProp) ? ridProp.GetString() ?? "" : "";
-                        if (frame.TryGetProperty("body", out var bodyProp))
                         {
-                            var requestedModel = bodyProp.TryGetProperty("model", out var modelProp) ? modelProp.GetString() : null;
-                            // Enforcement gate (Phase 3): the request body's "model" can name
-                            // anything, so it must be checked against the persisted allowlist before
-                            // ever reaching AgentChatProviderFactory.ResolveAsync -- otherwise
-                            // ChatModels is a display preference, not a real allowlist. The decision
-                            // lives in DecideChatCompletionRoute so a test can pin the wiring.
-                            var decision = DecideChatCompletionRoute(
-                                backendUrl, requestedModel, chatLlmModelId, chatModelAllowlist);
-                            switch (decision.Route)
+                            var requestId = frame.TryGetProperty("requestId", out var ridProp) ? ridProp.GetString() ?? "" : "";
+                            if (frame.TryGetProperty("body", out var bodyProp))
                             {
-                                case ChatCompletionRoute.Forward:
-                                    await ForwardChatCompletionRequestAsync(
-                                        ws, backendClient, backendUrl!, backendKey, jobId, requestId,
-                                        bodyProp, decision.ModelId, verbose, ct);
-                                    break;
-                                case ChatCompletionRoute.Rejected:
-                                    await SendChatFrameAsync(ws, new
-                                    {
-                                        type = "chat.completion.error",
-                                        jobId,
-                                        requestId,
-                                        error = $"Model '{decision.ModelId}' is not in this runner's configured chat-model allowlist."
-                                    }, verbose, ct);
-                                    break;
-                                default:
-                                    await ForwardChatCompletionRequestViaProviderAsync(
-                                        ws, decision.ModelId!, jobId, requestId, bodyProp, verbose, ct);
-                                    break;
+                                var requestedModel = bodyProp.TryGetProperty("model", out var modelProp) ? modelProp.GetString() : null;
+                                // Enforcement gate (Phase 3): the request body's "model" can name
+                                // anything, so it must be checked against the persisted allowlist before
+                                // ever reaching AgentChatProviderFactory.ResolveAsync -- otherwise
+                                // ChatModels is a display preference, not a real allowlist. The decision
+                                // lives in DecideChatCompletionRoute so a test can pin the wiring.
+                                var decision = DecideChatCompletionRoute(
+                                    backendUrl, requestedModel, chatLlmModelId, chatModelAllowlist);
+                                switch (decision.Route)
+                                {
+                                    case ChatCompletionRoute.Forward:
+                                        await ForwardChatCompletionRequestAsync(
+                                            ws, backendClient, backendUrl!, backendKey, jobId, requestId,
+                                            bodyProp, decision.ModelId, verbose, ct);
+                                        break;
+                                    case ChatCompletionRoute.Rejected:
+                                        await SendChatFrameAsync(ws, new
+                                        {
+                                            type = "chat.completion.error",
+                                            jobId,
+                                            requestId,
+                                            error = $"Model '{decision.ModelId}' is not in this runner's configured chat-model allowlist."
+                                        }, verbose, ct);
+                                        break;
+                                    default:
+                                        await ForwardChatCompletionRequestViaProviderAsync(
+                                            ws, decision.ModelId!, jobId, requestId, bodyProp, verbose, ct);
+                                        break;
+                                }
                             }
+                            break;
                         }
-                        break;
-                    }
                     case "chat.models.request":
-                    {
-                        var requestId = frame.TryGetProperty("requestId", out var ridProp) ? ridProp.GetString() ?? "" : "";
-                        IReadOnlyList<string> models;
-                        // Literal-forward mode cannot ask the provider factory what the remote backend
-                        // exposes. A persisted runner-profile allowlist is authoritative discovery data,
-                        // though (for example deployments found through Azure ARM by a managed Sandbox),
-                        // so advertise that list directly. Preserve the historical empty response when
-                        // neither the factory nor an explicit profile list can describe the backend.
-                        if (string.IsNullOrEmpty(backendUrl))
                         {
-                            models = Array.Empty<string>();
-                            try { models = await _chatProviderFactory.ListAvailableModelsAsync(ct); }
-                            catch { /* empty list on failure */ }
-                            models = FilterModelsByAllowlist(models, chatModelAllowlist);
+                            var requestId = frame.TryGetProperty("requestId", out var ridProp) ? ridProp.GetString() ?? "" : "";
+                            IReadOnlyList<string> models;
+                            // Literal-forward mode cannot ask the provider factory what the remote backend
+                            // exposes. A persisted runner-profile allowlist is authoritative discovery data,
+                            // though (for example deployments found through Azure ARM by a managed Sandbox),
+                            // so advertise that list directly. Preserve the historical empty response when
+                            // neither the factory nor an explicit profile list can describe the backend.
+                            if (string.IsNullOrEmpty(backendUrl))
+                            {
+                                models = Array.Empty<string>();
+                                try { models = await _chatProviderFactory.ListAvailableModelsAsync(ct); }
+                                catch { /* empty list on failure */ }
+                                models = FilterModelsByAllowlist(models, chatModelAllowlist);
+                            }
+                            else
+                            {
+                                models = ModelsForLiteralBackend(chatModelAllowlist);
+                            }
+                            await SendChatFrameAsync(ws, new { type = "chat.models.response", jobId, requestId, models }, verbose, ct);
+                            break;
                         }
-                        else
-                        {
-                            models = ModelsForLiteralBackend(chatModelAllowlist);
-                        }
-                        await SendChatFrameAsync(ws, new { type = "chat.models.response", jobId, requestId, models }, verbose, ct);
-                        break;
-                    }
                     case "chat.end":
-                    {
-                        var endReason = frame.TryGetProperty("reason", out var reasonProp) ? reasonProp.GetString() : null;
-                        return (true, endReason ?? "chat.end", false);
-                    }
+                        {
+                            var endReason = frame.TryGetProperty("reason", out var reasonProp) ? reasonProp.GetString() : null;
+                            return (true, endReason ?? "chat.end", false);
+                        }
                     default:
                         // Unknown/forward-compatible frame type — ignore rather than fail the session.
                         break;
@@ -4594,7 +4594,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                 if (contentType != null && contentType.Contains("event-stream", StringComparison.OrdinalIgnoreCase))
                 {
                     using var reader = new StreamReader(stream, Encoding.UTF8);
-                    while (!reader.EndOfStream)
+                    while (true)
                     {
                         ct.ThrowIfCancellationRequested();
                         var line = await reader.ReadLineAsync();

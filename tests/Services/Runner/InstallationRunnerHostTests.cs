@@ -141,7 +141,12 @@ public class InstallationRunnerHostTests
         control.Setup(c => c.BootstrapAsync(Box, "acme", "web", It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => new AgenticsRunnerRegistration
             {
-                Id = "r1", Token = $"t{++bootstraps}", Owner = "acme", Project = "web", Server = Box.Server, InternalServer = Box.InternalServer,
+                Id = "r1",
+                Token = $"t{++bootstraps}",
+                Owner = "acme",
+                Project = "web",
+                Server = Box.Server,
+                InternalServer = Box.InternalServer,
             });
         var launcher = new FakeLauncher();
         var host = new InstallationRunnerHost(Box, control.Object, new InMemoryRegistrations(), launcher, _ => { });

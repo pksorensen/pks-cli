@@ -6,7 +6,7 @@ namespace PKS.Infrastructure.Services.Brain;
 public sealed class ExtractReader : IExtractReader
 {
     private static readonly Regex TagPattern = new(@"`([a-z0-9][a-z0-9_-]{1,40})`", RegexOptions.Compiled);
-    private static readonly Regex H1Pattern  = new(@"^#\s+(?:Session\s+\S+\s+—\s+)?(?<title>.+)$", RegexOptions.Compiled);
+    private static readonly Regex H1Pattern = new(@"^#\s+(?:Session\s+\S+\s+—\s+)?(?<title>.+)$", RegexOptions.Compiled);
     private static readonly JsonSerializerOptions SidecarJson = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,

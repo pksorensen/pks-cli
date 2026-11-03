@@ -265,25 +265,25 @@ public sealed class CodexAsfSource : IAgentSessionSource
                 yield break;
 
             case "user_message":
-            {
-                var e = Stamp(builder.Begin(AsfKind.Prompt, ts), state);
-                builder.SetText(e, SourceReadHelpers.Str(payload["message"]) ?? "");
-                var attachments = CountImages(payload);
-                if (attachments.Count > 0) builder.SetAttachments(e, attachments);
+                {
+                    var e = Stamp(builder.Begin(AsfKind.Prompt, ts), state);
+                    builder.SetText(e, SourceReadHelpers.Str(payload["message"]) ?? "");
+                    var attachments = CountImages(payload);
+                    if (attachments.Count > 0) builder.SetAttachments(e, attachments);
 
-                yield return e;
+                    yield return e;
 
-                yield break;
-            }
+                    yield break;
+                }
 
             case "agent_message":
-            {
-                var e = Stamp(builder.Begin(AsfKind.Assistant, ts), state);
+                {
+                    var e = Stamp(builder.Begin(AsfKind.Assistant, ts), state);
 
-                yield return builder.SetText(e, SourceReadHelpers.Str(payload["message"]) ?? "");
+                    yield return builder.SetText(e, SourceReadHelpers.Str(payload["message"]) ?? "");
 
-                yield break;
-            }
+                    yield break;
+                }
 
             case "context_compacted":
                 if (state.CompactionPending)
@@ -298,94 +298,94 @@ public sealed class CodexAsfSource : IAgentSessionSource
                 yield break;
 
             case "token_count":
-            {
-                // Cumulative, emitted on nearly every stream tick — 3100 lines in
-                // one real session. Only the last per turn survives, as a delta.
-                // See docs/specs/asf/01-event-envelope.md §"The token_count rule".
-                var total = payload["info"]?["total_token_usage"] as JsonObject;
-                if (total is not null) state.RecordCumulativeUsage(total);
+                {
+                    // Cumulative, emitted on nearly every stream tick — 3100 lines in
+                    // one real session. Only the last per turn survives, as a delta.
+                    // See docs/specs/asf/01-event-envelope.md §"The token_count rule".
+                    var total = payload["info"]?["total_token_usage"] as JsonObject;
+                    if (total is not null) state.RecordCumulativeUsage(total);
 
-                yield break;
-            }
+                    yield break;
+                }
 
             case "task_complete":
-            {
-                foreach (var usage in state.FlushPendingUsage(builder, ts)) yield return usage;
-
-                var error = SourceReadHelpers.Str(payload["error"]);
-                if (error is not null)
                 {
+                    foreach (var usage in state.FlushPendingUsage(builder, ts)) yield return usage;
+
+                    var error = SourceReadHelpers.Str(payload["error"]);
+                    if (error is not null)
+                    {
+                        var e = Stamp(builder.Begin(AsfKind.Error, ts), state);
+                        e.DurationMs = SourceReadHelpers.Num(payload["duration_ms"]);
+
+                        yield return builder.SetError(e, "task_failed", error);
+                    }
+
+                    yield break;
+                }
+
+            case "turn_aborted":
+                {
+                    foreach (var usage in state.FlushPendingUsage(builder, ts)) yield return usage;
+
                     var e = Stamp(builder.Begin(AsfKind.Error, ts), state);
                     e.DurationMs = SourceReadHelpers.Num(payload["duration_ms"]);
 
-                    yield return builder.SetError(e, "task_failed", error);
+                    yield return builder.SetError(
+                        e, "turn_aborted", SourceReadHelpers.Str(payload["reason"]));
+
+                    yield break;
                 }
 
-                yield break;
-            }
-
-            case "turn_aborted":
-            {
-                foreach (var usage in state.FlushPendingUsage(builder, ts)) yield return usage;
-
-                var e = Stamp(builder.Begin(AsfKind.Error, ts), state);
-                e.DurationMs = SourceReadHelpers.Num(payload["duration_ms"]);
-
-                yield return builder.SetError(
-                    e, "turn_aborted", SourceReadHelpers.Str(payload["reason"]));
-
-                yield break;
-            }
-
             case "patch_apply_end":
-            {
-                var ok = SourceReadHelpers.Bool(payload["success"]) ?? true;
-                foreach (var e in TranslatePatch(builder, payload, ts, state, ok)) yield return e;
+                {
+                    var ok = SourceReadHelpers.Bool(payload["success"]) ?? true;
+                    foreach (var e in TranslatePatch(builder, payload, ts, state, ok)) yield return e;
 
-                yield break;
-            }
+                    yield break;
+                }
 
             case "mcp_tool_call_end":
-            {
-                var invocation = payload["invocation"] as JsonObject;
-                var server = SourceReadHelpers.Str(invocation?["server"]);
-                var tool = SourceReadHelpers.Str(invocation?["tool"]);
+                {
+                    var invocation = payload["invocation"] as JsonObject;
+                    var server = SourceReadHelpers.Str(invocation?["server"]);
+                    var tool = SourceReadHelpers.Str(invocation?["tool"]);
 
-                var call = Stamp(builder.Begin(AsfKind.ToolCall, ts), state);
-                call.CallId = SourceReadHelpers.Str(payload["call_id"]);
-                call.Tool = $"mcp__{server}__{tool}";
-                call.IsMcp = true;
-                builder.SetArgs(call, invocation?["arguments"]);
+                    var call = Stamp(builder.Begin(AsfKind.ToolCall, ts), state);
+                    call.CallId = SourceReadHelpers.Str(payload["call_id"]);
+                    call.Tool = $"mcp__{server}__{tool}";
+                    call.IsMcp = true;
+                    builder.SetArgs(call, invocation?["arguments"]);
 
-                yield return call;
+                    yield return call;
 
-                var result = Stamp(builder.Begin(AsfKind.ToolResult, ts), state);
-                result.CallId = call.CallId;
-                result.Tool = call.Tool;
-                result.IsMcp = true;
-                result.DurationMs = DurationMs(payload["duration"]);
-                var ok = payload["result"]?["Ok"];
-                result.IsError = ok is null ? true : null;
-                builder.SetOutput(result, McpResultText(payload["result"]));
+                    var result = Stamp(builder.Begin(AsfKind.ToolResult, ts), state);
+                    result.CallId = call.CallId;
+                    result.Tool = call.Tool;
+                    result.IsMcp = true;
+                    result.DurationMs = DurationMs(payload["duration"]);
+                    var ok = payload["result"]?["Ok"];
+                    result.IsError = ok is null ? true : null;
+                    builder.SetOutput(result, McpResultText(payload["result"]));
 
-                yield return result;
+                    yield return result;
 
-                yield break;
-            }
+                    yield break;
+                }
 
             case "thread_goal_updated":
-            {
-                var goal = payload["goal"] as JsonObject;
-                var objective = SourceReadHelpers.Str(goal?["objective"]);
-                if (objective is null) yield break;
+                {
+                    var goal = payload["goal"] as JsonObject;
+                    var objective = SourceReadHelpers.Str(goal?["objective"]);
+                    if (objective is null) yield break;
 
-                var e = Stamp(builder.Begin(AsfKind.Plan, ts), state);
-                e.Reason = SourceReadHelpers.Str(goal?["status"]);
+                    var e = Stamp(builder.Begin(AsfKind.Plan, ts), state);
+                    e.Reason = SourceReadHelpers.Str(goal?["status"]);
 
-                yield return builder.SetPlan(e, new[] { objective }, 0);
+                    yield return builder.SetPlan(e, new[] { objective }, 0);
 
-                yield break;
-            }
+                    yield break;
+                }
         }
     }
 
@@ -403,52 +403,52 @@ public sealed class CodexAsfSource : IAgentSessionSource
         switch (kind)
         {
             case "reasoning":
-            {
-                // `encrypted_content` is opaque vendor ciphertext; `summary` is the
-                // only readable part and it is usually empty. Length only.
-                var e = Stamp(builder.Begin(AsfKind.Thinking, ts), state);
+                {
+                    // `encrypted_content` is opaque vendor ciphertext; `summary` is the
+                    // only readable part and it is usually empty. Length only.
+                    var e = Stamp(builder.Begin(AsfKind.Thinking, ts), state);
 
-                yield return builder.SetThinking(e, ReasoningText(payload));
-            }
+                    yield return builder.SetThinking(e, ReasoningText(payload));
+                }
 
                 yield break;
 
             case "custom_tool_call":
             case "function_call":
-            {
-                var callId = SourceReadHelpers.Str(payload["call_id"]) ?? "";
-                var tool = SourceReadHelpers.Str(payload["name"]) ?? "unknown";
-                state.OpenCall(callId, tool, ts);
+                {
+                    var callId = SourceReadHelpers.Str(payload["call_id"]) ?? "";
+                    var tool = SourceReadHelpers.Str(payload["name"]) ?? "unknown";
+                    state.OpenCall(callId, tool, ts);
 
-                var e = Stamp(builder.Begin(AsfKind.ToolCall, ts), state);
-                e.CallId = callId;
-                e.Tool = tool;
+                    var e = Stamp(builder.Begin(AsfKind.ToolCall, ts), state);
+                    e.CallId = callId;
+                    e.Tool = tool;
 
-                // custom_tool_call carries `input` as a raw string (a JS snippet);
-                // function_call carries `arguments` as a JSON *string*. Parsing the
-                // latter means argsHash is stable against key reordering upstream.
-                var input = payload["input"] ?? payload["arguments"];
-                builder.SetArgs(e, NormalizeArgs(input));
+                    // custom_tool_call carries `input` as a raw string (a JS snippet);
+                    // function_call carries `arguments` as a JSON *string*. Parsing the
+                    // latter means argsHash is stable against key reordering upstream.
+                    var input = payload["input"] ?? payload["arguments"];
+                    builder.SetArgs(e, NormalizeArgs(input));
 
-                yield return e;
-            }
+                    yield return e;
+                }
 
                 yield break;
 
             case "custom_tool_call_output":
             case "function_call_output":
-            {
-                var callId = SourceReadHelpers.Str(payload["call_id"]) ?? "";
-                var call = state.CloseCall(callId);
+                {
+                    var callId = SourceReadHelpers.Str(payload["call_id"]) ?? "";
+                    var call = state.CloseCall(callId);
 
-                var e = Stamp(builder.Begin(AsfKind.ToolResult, ts), state);
-                e.CallId = callId;
-                e.Tool = call?.Tool;
-                if (call is not null) e.DurationMs = (long)(ts - call.Value.Ts).TotalMilliseconds;
-                builder.SetOutput(e, OutputText(payload["output"]));
+                    var e = Stamp(builder.Begin(AsfKind.ToolResult, ts), state);
+                    e.CallId = callId;
+                    e.Tool = call?.Tool;
+                    if (call is not null) e.DurationMs = (long)(ts - call.Value.Ts).TotalMilliseconds;
+                    builder.SetOutput(e, OutputText(payload["output"]));
 
-                yield return e;
-            }
+                    yield return e;
+                }
 
                 yield break;
 
@@ -484,14 +484,14 @@ public sealed class CodexAsfSource : IAgentSessionSource
             switch (op)
             {
                 case "update":
-                {
-                    var (added, removed) = SourceReadHelpers.CountDiffLines(
-                        SourceReadHelpers.Str(c["unified_diff"]));
-                    e.LinesAdded = added;
-                    e.LinesRemoved = removed;
+                    {
+                        var (added, removed) = SourceReadHelpers.CountDiffLines(
+                            SourceReadHelpers.Str(c["unified_diff"]));
+                        e.LinesAdded = added;
+                        e.LinesRemoved = removed;
 
-                    break;
-                }
+                        break;
+                    }
 
                 case "add":
                     e.LinesAdded = LineCount(SourceReadHelpers.Str(c["content"]));

@@ -33,11 +33,11 @@ public class ClaudeUsageCommand : AsyncCommand<ClaudeUsageSettings>
     // these Opus rows are intentionally NOT the old $15/$75.
     private static readonly Dictionary<string, ModelPricing> HardcodedPricing = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["haiku-4-5"]  = new(1e-6, 5e-6,   1.25e-6, 1e-7),
+        ["haiku-4-5"] = new(1e-6, 5e-6, 1.25e-6, 1e-7),
         ["sonnet-4-6"] = new(3e-6, 1.5e-5, 3.75e-6, 3e-7),
-        ["opus-4-6"]   = new(5e-6, 2.5e-5, 6.25e-6, 5e-7),
-        ["opus-4-7"]   = new(5e-6, 2.5e-5, 6.25e-6, 5e-7),
-        ["opus-4-8"]   = new(5e-6, 2.5e-5, 6.25e-6, 5e-7),
+        ["opus-4-6"] = new(5e-6, 2.5e-5, 6.25e-6, 5e-7),
+        ["opus-4-7"] = new(5e-6, 2.5e-5, 6.25e-6, 5e-7),
+        ["opus-4-8"] = new(5e-6, 2.5e-5, 6.25e-6, 5e-7),
     };
 
     public override async Task<int> ExecuteAsync(CommandContext context, ClaudeUsageSettings settings)
@@ -307,10 +307,10 @@ public class ClaudeUsageCommand : AsyncCommand<ClaudeUsageSettings>
                     mid = midEl.GetString() ?? "";
                 if (msgEl.TryGetProperty("usage", out var usageEl))
                 {
-                    inp  = GetLong(usageEl, "input_tokens");
+                    inp = GetLong(usageEl, "input_tokens");
                     outp = GetLong(usageEl, "output_tokens");
-                    cc   = GetLong(usageEl, "cache_creation_input_tokens");
-                    cr   = GetLong(usageEl, "cache_read_input_tokens");
+                    cc = GetLong(usageEl, "cache_creation_input_tokens");
+                    cr = GetLong(usageEl, "cache_read_input_tokens");
                 }
             }
 
@@ -351,10 +351,10 @@ public class ClaudeUsageCommand : AsyncCommand<ClaudeUsageSettings>
             {
                 var pricing = GetModelPricing(r.Model, liteLLM, pricingCache);
                 if (pricing != null)
-                    cost = r.Input  * pricing.InputPerToken
+                    cost = r.Input * pricing.InputPerToken
                          + r.Output * pricing.OutputPerToken
                          + r.CacheCreate * pricing.CacheCreatePerToken
-                         + r.CacheRead   * pricing.CacheReadPerToken;
+                         + r.CacheRead * pricing.CacheReadPerToken;
             }
 
             if (cost > 0)
@@ -538,10 +538,10 @@ public class ClaudeUsageCommand : AsyncCommand<ClaudeUsageSettings>
     private static readonly string[] HourlyBlocks = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
     private static readonly string[] Blocks = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
-    private const string R   = "\x1b[0m";
+    private const string R = "\x1b[0m";
     private const string Dim = "\x1b[2m";
-    private const string Cy  = "\x1b[36m";
-    private const string Re  = "\x1b[91m";
+    private const string Cy = "\x1b[36m";
+    private const string Re = "\x1b[91m";
 
     private static void RenderCostChart(List<DailyCost> byDay, DateTime cutoff, int recentDays)
     {
@@ -778,7 +778,7 @@ public class ClaudeUsageCommand : AsyncCommand<ClaudeUsageSettings>
         [property: JsonPropertyName("k")] string DedupKey);
 
     private record CachedFile(
-        [property: JsonPropertyName("s")]  long Size,
+        [property: JsonPropertyName("s")] long Size,
         [property: JsonPropertyName("mt")] long MtimeTicks,
         [property: JsonPropertyName("rows")] List<UsageRow> Rows);
 

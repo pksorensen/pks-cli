@@ -359,8 +359,8 @@ public sealed class WritingProfileStore : IWritingProfileStore
         var sb = new System.Text.StringBuilder();
         sb.Append(existing.Length == 0 || existing.EndsWith('\n') ? string.Empty : "\n");
         sb.AppendLine("# pks writing — local report cache + overrides (see `pks writing init`)");
-        if (!hasEntry)        sb.AppendLine(entry);
-        if (!hasReviewEntry)  sb.AppendLine("**/_review/");
+        if (!hasEntry) sb.AppendLine(entry);
+        if (!hasReviewEntry) sb.AppendLine("**/_review/");
         await File.AppendAllTextAsync(gitignore, sb.ToString(), ct);
     }
 }

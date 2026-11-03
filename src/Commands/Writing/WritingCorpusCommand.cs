@@ -46,7 +46,7 @@ public class WritingCorpusCommand : AsyncCommand<WritingCorpusSettings>
             new WritingCorpusAggregator.Options { MinPosts = settings.MinPosts, Channel = settings.Channel });
 
         var jsonPath = System.IO.Path.Combine(root, "_corpus.LEARN.json");
-        var mdPath   = System.IO.Path.Combine(root, "_corpus.LEARN.md");
+        var mdPath = System.IO.Path.Combine(root, "_corpus.LEARN.md");
         var json = JsonSerializer.Serialize(proposal, WritingProfileStore.JsonOptions);
         await System.IO.File.WriteAllTextAsync(jsonPath, json);
         await System.IO.File.WriteAllTextAsync(mdPath, LearnProposalRenderer.RenderMarkdown(proposal));
@@ -57,7 +57,7 @@ public class WritingCorpusCommand : AsyncCommand<WritingCorpusSettings>
         AnsiConsole.WriteLine();
 
         var allow = proposal.Actions.Count(a => a.Kind == LearnActionKind.Allowlist);
-        var ang   = proposal.Actions.Count(a => a.Kind == LearnActionKind.Anglicism);
+        var ang = proposal.Actions.Count(a => a.Kind == LearnActionKind.Anglicism);
 
         var t = new Table().Border(TableBorder.Minimal).HideHeaders();
         t.AddColumn(""); t.AddColumn(new TableColumn("").RightAligned());

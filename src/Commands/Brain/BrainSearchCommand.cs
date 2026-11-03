@@ -96,10 +96,10 @@ public class BrainSearchCommand : AsyncCommand<BrainSearchSettings>
             if (results.Count >= settings.Limit) break;
             switch (src)
             {
-                case "prompts":  await ScanFirehoseAsync(BrainFirehose.Prompts, settings, match, sinceUtc, results, ct); break;
-                case "tools":    await ScanFirehoseAsync(BrainFirehose.Tools,   settings, match, sinceUtc, results, ct); break;
-                case "files":    await ScanFirehoseAsync(BrainFirehose.Files,   settings, match, sinceUtc, results, ct); break;
-                case "errors":   await ScanFirehoseAsync(BrainFirehose.Errors,  settings, match, sinceUtc, results, ct); break;
+                case "prompts": await ScanFirehoseAsync(BrainFirehose.Prompts, settings, match, sinceUtc, results, ct); break;
+                case "tools": await ScanFirehoseAsync(BrainFirehose.Tools, settings, match, sinceUtc, results, ct); break;
+                case "files": await ScanFirehoseAsync(BrainFirehose.Files, settings, match, sinceUtc, results, ct); break;
+                case "errors": await ScanFirehoseAsync(BrainFirehose.Errors, settings, match, sinceUtc, results, ct); break;
                 case "extracts": await ScanExtractsAsync(settings, match, results, ct); break;
             }
         }

@@ -169,53 +169,53 @@ public static class AnthropicToChatCompletionsTranslator
             switch (type)
             {
                 case "text":
-                {
-                    var text = block.TryGetProperty("text", out var txt) ? txt.GetString() ?? string.Empty : string.Empty;
-                    if (role == "assistant") sbText.Append(text);
-                    else textParts.Add(new JsonObject { ["type"] = "text", ["text"] = text });
-                    break;
-                }
-                case "image":
-                {
-                    var dataUrl = ImageToDataUrl(block);
-                    if (dataUrl is not null && role != "assistant")
                     {
-                        hasImages = true;
-                        textParts.Add(new JsonObject
-                        {
-                            ["type"] = "image_url",
-                            ["image_url"] = new JsonObject { ["url"] = dataUrl },
-                        });
+                        var text = block.TryGetProperty("text", out var txt) ? txt.GetString() ?? string.Empty : string.Empty;
+                        if (role == "assistant") sbText.Append(text);
+                        else textParts.Add(new JsonObject { ["type"] = "text", ["text"] = text });
+                        break;
                     }
-                    break;
-                }
+                case "image":
+                    {
+                        var dataUrl = ImageToDataUrl(block);
+                        if (dataUrl is not null && role != "assistant")
+                        {
+                            hasImages = true;
+                            textParts.Add(new JsonObject
+                            {
+                                ["type"] = "image_url",
+                                ["image_url"] = new JsonObject { ["url"] = dataUrl },
+                            });
+                        }
+                        break;
+                    }
                 case "tool_use":
-                {
-                    var id = block.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? string.Empty : string.Empty;
-                    var name = block.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? string.Empty : string.Empty;
-                    var args = block.TryGetProperty("input", out var inp) ? inp.GetRawText() : "{}";
-                    toolCalls.Add(new JsonObject
                     {
-                        ["id"] = id,
-                        ["type"] = "function",
-                        ["function"] = new JsonObject { ["name"] = name, ["arguments"] = args },
-                    });
-                    break;
-                }
+                        var id = block.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? string.Empty : string.Empty;
+                        var name = block.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? string.Empty : string.Empty;
+                        var args = block.TryGetProperty("input", out var inp) ? inp.GetRawText() : "{}";
+                        toolCalls.Add(new JsonObject
+                        {
+                            ["id"] = id,
+                            ["type"] = "function",
+                            ["function"] = new JsonObject { ["name"] = name, ["arguments"] = args },
+                        });
+                        break;
+                    }
                 case "tool_result":
-                {
-                    // Close the in-progress assistant/user message, then emit the tool message.
-                    FlushUserOrAssistant();
-                    var callId = block.TryGetProperty("tool_use_id", out var tu) ? tu.GetString() ?? string.Empty : string.Empty;
-                    messages.Add(new JsonObject
                     {
-                        ["role"] = "tool",
-                        ["tool_call_id"] = callId,
-                        ["content"] = ToolResultText(block),
-                    });
-                    break;
-                }
-                // thinking / redacted_thinking: not replayed (no upstream equivalent).
+                        // Close the in-progress assistant/user message, then emit the tool message.
+                        FlushUserOrAssistant();
+                        var callId = block.TryGetProperty("tool_use_id", out var tu) ? tu.GetString() ?? string.Empty : string.Empty;
+                        messages.Add(new JsonObject
+                        {
+                            ["role"] = "tool",
+                            ["tool_call_id"] = callId,
+                            ["content"] = ToolResultText(block),
+                        });
+                        break;
+                    }
+                    // thinking / redacted_thinking: not replayed (no upstream equivalent).
             }
         }
 

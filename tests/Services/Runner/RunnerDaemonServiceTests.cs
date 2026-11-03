@@ -1043,7 +1043,10 @@ public class RunnerDaemonServiceTests : IDisposable
 
         var job = new WorkflowJob
         {
-            Id = 99001, RunId = 12345, Name = "build-push", Status = "queued",
+            Id = 99001,
+            RunId = 12345,
+            Name = "build-push",
+            Status = "queued",
             Labels = new List<string> { "devcontainer-runner" }
         };
 
@@ -1092,12 +1095,18 @@ public class RunnerDaemonServiceTests : IDisposable
         // Two parallel jobs with identical labels — GitHub may hand our runner either one.
         var deploy = new WorkflowJob
         {
-            Id = 99001, RunId = 12345, Name = "deploy-production", Status = "queued",
+            Id = 99001,
+            RunId = 12345,
+            Name = "deploy-production",
+            Status = "queued",
             Labels = new List<string> { "devcontainer-runner" }
         };
         var build = new WorkflowJob
         {
-            Id = 99002, RunId = 12345, Name = "build-push", Status = "queued",
+            Id = 99002,
+            RunId = 12345,
+            Name = "build-push",
+            Status = "queued",
             Labels = new List<string> { "devcontainer-runner" }
         };
 
@@ -1374,14 +1383,14 @@ public class RunnerDaemonServiceTests : IDisposable
 
     private static RunnerJobState TrackedDispatch(
         DateTime startedAt, DateTime? claimWaitStartedAt = null) => new()
-    {
-        RunId = 5,
-        WorkflowJobId = 42,
-        WorkflowJobName = "build",
-        RunnerName = "pks-runner-42-20260829120000",
-        StartedAt = startedAt,
-        ClaimWaitStartedAt = claimWaitStartedAt
-    };
+        {
+            RunId = 5,
+            WorkflowJobId = 42,
+            WorkflowJobName = "build",
+            RunnerName = "pks-runner-42-20260829120000",
+            StartedAt = startedAt,
+            ClaimWaitStartedAt = claimWaitStartedAt
+        };
 
     private static RunnerJobState IdleDispatch(params string[] runnerLabels) => new()
     {

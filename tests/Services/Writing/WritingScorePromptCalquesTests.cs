@@ -14,7 +14,9 @@ public sealed class WritingScorePromptCalquesTests
     {
         var sys = WritingScorePrompt.BuildSystem(new WritingScorePrompt.Request
         {
-            SourcePath = "/tmp/x.md", Content = "x", Channel = "blog",
+            SourcePath = "/tmp/x.md",
+            Content = "x",
+            Channel = "blog",
         });
 
         sys.Should().Contain("Calques (loan-translations)",
@@ -28,7 +30,9 @@ public sealed class WritingScorePromptCalquesTests
     {
         var sys = WritingScorePrompt.BuildSystem(new WritingScorePrompt.Request
         {
-            SourcePath = "/tmp/x.md", Content = "x", Channel = "blog",
+            SourcePath = "/tmp/x.md",
+            Content = "x",
+            Channel = "blog",
             Calques = new[]
             {
                 new CalqueEntry { LiteralDanish = "barn",
@@ -48,7 +52,9 @@ public sealed class WritingScorePromptCalquesTests
     {
         var bundle = WritingScorePrompt.Build(new WritingScorePrompt.Request
         {
-            SourcePath = "/tmp/x.md", Content = "x", Channel = "blog",
+            SourcePath = "/tmp/x.md",
+            Content = "x",
+            Channel = "blog",
             Calques = new[] { new CalqueEntry { LiteralDanish = "barn" } },
         });
 

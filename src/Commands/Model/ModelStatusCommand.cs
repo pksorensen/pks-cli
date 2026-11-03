@@ -38,14 +38,14 @@ public class ModelStatusCommand : AsyncCommand<ModelSettings>
         }
 
         var grid = new Grid().AddColumn().AddColumn();
-        grid.AddRow("[bold]Name:[/]",          Markup.Escape(installed.Name));
-        grid.AddRow("[bold]Display:[/]",       Markup.Escape(installed.DisplayName));
-        grid.AddRow("[bold]Version:[/]",       Markup.Escape(installed.Version));
-        grid.AddRow("[bold]Install path:[/]",  Markup.Escape(installed.InstallPath));
-        grid.AddRow("[bold]Installed:[/]",     installed.InstalledAt.ToString("u"));
-        grid.AddRow("[bold]Size:[/]",          $"{installed.SizeBytes / (1024.0 * 1024):F1} MiB");
-        grid.AddRow("[bold]Capabilities:[/]",  string.Join(", ", installed.Capabilities));
-        grid.AddRow("[bold]Languages:[/]",     string.Join(", ", installed.Languages));
+        grid.AddRow("[bold]Name:[/]", Markup.Escape(installed.Name));
+        grid.AddRow("[bold]Display:[/]", Markup.Escape(installed.DisplayName));
+        grid.AddRow("[bold]Version:[/]", Markup.Escape(installed.Version));
+        grid.AddRow("[bold]Install path:[/]", Markup.Escape(installed.InstallPath));
+        grid.AddRow("[bold]Installed:[/]", installed.InstalledAt.ToString("u"));
+        grid.AddRow("[bold]Size:[/]", $"{installed.SizeBytes / (1024.0 * 1024):F1} MiB");
+        grid.AddRow("[bold]Capabilities:[/]", string.Join(", ", installed.Capabilities));
+        grid.AddRow("[bold]Languages:[/]", string.Join(", ", installed.Languages));
 
         if (entry != null && entry.Version != installed.Version)
         {

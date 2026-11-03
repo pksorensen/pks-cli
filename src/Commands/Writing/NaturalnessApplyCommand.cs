@@ -155,9 +155,9 @@ public class NaturalnessApplyCommand : AsyncCommand<NaturalnessApplySettings>
 
         var t = new Table().Border(TableBorder.Minimal).HideHeaders();
         t.AddColumn(""); t.AddColumn(new TableColumn("").RightAligned());
-        t.AddRow("Applied",   $"[green]{result.Applied.Count}[/]");
-        t.AddRow("Skipped",   $"[grey]{result.Skipped.Count}[/]");
-        t.AddRow("Patterns",  $"[green]{result.Applied.Count}[/] upserted");
+        t.AddRow("Applied", $"[green]{result.Applied.Count}[/]");
+        t.AddRow("Skipped", $"[grey]{result.Skipped.Count}[/]");
+        t.AddRow("Patterns", $"[green]{result.Applied.Count}[/] upserted");
         if (result.Warnings.Count > 0)
             t.AddRow("Warnings", $"[yellow]{result.Warnings.Count}[/]");
         AnsiConsole.WriteLine();

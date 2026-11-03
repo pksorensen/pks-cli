@@ -142,14 +142,14 @@ public class BrainWikiCommand : AsyncCommand<BrainWikiSettings>
         AnsiConsole.WriteLine();
         var t = new Table().Border(TableBorder.MinimalHeavyHead).HideHeaders();
         t.AddColumn(""); t.AddColumn("");
-        t.AddRow("[grey]Run id[/]",             run.RunId);
-        t.AddRow("[grey]Duration[/]",           run.Duration.ToString(@"hh\:mm\:ss\.fff"));
-        t.AddRow("[grey]Pages rendered[/]",     run.ClustersRendered.ToString("N0"));
-        t.AddRow("[grey]Failed[/]",             run.Failed.ToString("N0"));
-        t.AddRow("[grey]wiki/index.md[/]",      run.IndexWritten ? "[green]✓ written[/]" : "[grey]skipped[/]");
-        t.AddRow("[grey]Input tokens[/]",       FormatTokens(run.TotalInputTokens + run.TotalCacheReadTokens + run.TotalCacheCreationTokens));
-        t.AddRow("[grey]Output tokens[/]",      FormatTokens(run.TotalOutputTokens));
-        t.AddRow("[grey]Total cost[/]",         $"${run.TotalCostUsd:0.####}");
+        t.AddRow("[grey]Run id[/]", run.RunId);
+        t.AddRow("[grey]Duration[/]", run.Duration.ToString(@"hh\:mm\:ss\.fff"));
+        t.AddRow("[grey]Pages rendered[/]", run.ClustersRendered.ToString("N0"));
+        t.AddRow("[grey]Failed[/]", run.Failed.ToString("N0"));
+        t.AddRow("[grey]wiki/index.md[/]", run.IndexWritten ? "[green]✓ written[/]" : "[grey]skipped[/]");
+        t.AddRow("[grey]Input tokens[/]", FormatTokens(run.TotalInputTokens + run.TotalCacheReadTokens + run.TotalCacheCreationTokens));
+        t.AddRow("[grey]Output tokens[/]", FormatTokens(run.TotalOutputTokens));
+        t.AddRow("[grey]Total cost[/]", $"${run.TotalCostUsd:0.####}");
         AnsiConsole.Write(t);
         AnsiConsole.WriteLine();
         if (run.ClustersRendered > 0)
@@ -159,9 +159,9 @@ public class BrainWikiCommand : AsyncCommand<BrainWikiSettings>
     }
 
     private static string FormatTokens(long n) =>
-        n < 10_000   ? n.ToString("N0")
+        n < 10_000 ? n.ToString("N0")
         : n < 1_000_000 ? $"{n / 1000.0:0.#}K"
-        :                 $"{n / 1_000_000.0:0.##}M";
+        : $"{n / 1_000_000.0:0.##}M";
 
     private sealed class SpectreWikiProgress : IBrainWikiProgress
     {

@@ -174,11 +174,11 @@ public static class OpenAiChatBridge
                     break;
 
                 case ToolUseStartEvent s:
-                {
-                    if (!_roleSent) { delta["role"] = "assistant"; _roleSent = true; }
-                    var idx = _nextToolCallIndex++;
-                    _toolCallIndexById[s.Id] = idx;
-                    delta["tool_calls"] = new JsonArray
+                    {
+                        if (!_roleSent) { delta["role"] = "assistant"; _roleSent = true; }
+                        var idx = _nextToolCallIndex++;
+                        _toolCallIndexById[s.Id] = idx;
+                        delta["tool_calls"] = new JsonArray
                     {
                         new JsonObject
                         {
@@ -188,13 +188,13 @@ public static class OpenAiChatBridge
                             ["function"] = new JsonObject { ["name"] = s.Name, ["arguments"] = "" },
                         },
                     };
-                    break;
-                }
+                        break;
+                    }
 
                 case ToolUseDeltaEvent d:
-                {
-                    if (!_toolCallIndexById.TryGetValue(d.Id, out var idx)) return null;
-                    delta["tool_calls"] = new JsonArray
+                    {
+                        if (!_toolCallIndexById.TryGetValue(d.Id, out var idx)) return null;
+                        delta["tool_calls"] = new JsonArray
                     {
                         new JsonObject
                         {
@@ -202,8 +202,8 @@ public static class OpenAiChatBridge
                             ["function"] = new JsonObject { ["arguments"] = d.ArgumentsJsonDelta },
                         },
                     };
-                    break;
-                }
+                        break;
+                    }
 
                 case ThinkingDeltaEvent:
                     return null;

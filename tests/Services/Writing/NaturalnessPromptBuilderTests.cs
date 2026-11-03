@@ -29,7 +29,8 @@ public sealed class NaturalnessPromptBuilderTests
     {
         var bundle = await _sut.BuildAsync(new NaturalnessPromptRequest
         {
-            SourcePath = "/x/da.md", Content = "x\n",
+            SourcePath = "/x/da.md",
+            Content = "x\n",
         });
         bundle.System.Should().Contain("# Accepted patterns");
         bundle.System.Should().Contain("no accepted patterns yet");
@@ -75,7 +76,8 @@ public sealed class NaturalnessPromptBuilderTests
     {
         var bundle = await _sut.BuildAsync(new NaturalnessPromptRequest
         {
-            SourcePath = "/x/da.md", Content = "x\n",
+            SourcePath = "/x/da.md",
+            Content = "x\n",
         });
         // Crude check via System.Text.Json round-trip
         var json = System.Text.Json.JsonSerializer.Serialize(bundle.Schema);

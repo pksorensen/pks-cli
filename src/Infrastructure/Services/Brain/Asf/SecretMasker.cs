@@ -218,49 +218,49 @@ public sealed class SecretMasker : ISecretMasker
                 return null;
 
             case JsonObject obj:
-            {
-                var result = new JsonObject();
-                foreach (var (key, value) in obj)
                 {
-                    var sensitive = SensitiveKey.IsMatch(key);
-                    result[key] = MaskNode(value?.DeepClone(), sensitive, ref hits);
-                }
-
-                return result;
-            }
-
-            case JsonArray array:
-            {
-                var result = new JsonArray();
-                foreach (var item in array)
-                {
-                    result.Add(MaskNode(item?.DeepClone(), sensitiveParent, ref hits));
-                }
-
-                return result;
-            }
-
-            case JsonValue value:
-            {
-                if (value.TryGetValue<string>(out var s))
-                {
-                    // Wholesale for credential-named members: a short or oddly
-                    // shaped value under `password` is still a password.
-                    if (sensitiveParent && s.Length > 0)
+                    var result = new JsonObject();
+                    foreach (var (key, value) in obj)
                     {
-                        hits++;
-
-                        return JsonValue.Create(Mask4);
+                        var sensitive = SensitiveKey.IsMatch(key);
+                        result[key] = MaskNode(value?.DeepClone(), sensitive, ref hits);
                     }
 
-                    var outcome = MaskWithCount(s);
-                    hits += outcome.Hits;
-
-                    return JsonValue.Create(outcome.Text);
+                    return result;
                 }
 
-                return value.DeepClone();
-            }
+            case JsonArray array:
+                {
+                    var result = new JsonArray();
+                    foreach (var item in array)
+                    {
+                        result.Add(MaskNode(item?.DeepClone(), sensitiveParent, ref hits));
+                    }
+
+                    return result;
+                }
+
+            case JsonValue value:
+                {
+                    if (value.TryGetValue<string>(out var s))
+                    {
+                        // Wholesale for credential-named members: a short or oddly
+                        // shaped value under `password` is still a password.
+                        if (sensitiveParent && s.Length > 0)
+                        {
+                            hits++;
+
+                            return JsonValue.Create(Mask4);
+                        }
+
+                        var outcome = MaskWithCount(s);
+                        hits += outcome.Hits;
+
+                        return JsonValue.Create(outcome.Text);
+                    }
+
+                    return value.DeepClone();
+                }
 
             default:
                 return node.DeepClone();

@@ -531,18 +531,18 @@ public sealed class ClaudeAsfSource : IAgentSessionSource
                 return value.GetValue<string>();
 
             case JsonArray array:
-            {
-                var sb = new StringBuilder();
-                foreach (var block in array.OfType<JsonObject>())
                 {
-                    var text = SourceReadHelpers.Str(block["text"]);
-                    if (text is null) continue;
-                    if (sb.Length > 0) sb.Append('\n');
-                    sb.Append(text);
-                }
+                    var sb = new StringBuilder();
+                    foreach (var block in array.OfType<JsonObject>())
+                    {
+                        var text = SourceReadHelpers.Str(block["text"]);
+                        if (text is null) continue;
+                        if (sb.Length > 0) sb.Append('\n');
+                        sb.Append(text);
+                    }
 
-                return sb.ToString();
-            }
+                    return sb.ToString();
+                }
 
             default:
                 return SourceReadHelpers.Str(content) ?? "";

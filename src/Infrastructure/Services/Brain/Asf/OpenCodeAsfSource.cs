@@ -174,85 +174,85 @@ public sealed class OpenCodeAsfSource : IAgentSessionSource
                     continue;
 
                 case "text":
-                {
-                    var text = SourceReadHelpers.Str(data["text"]);
-                    if (string.IsNullOrWhiteSpace(text)) continue;
+                    {
+                        var text = SourceReadHelpers.Str(data["text"]);
+                        if (string.IsNullOrWhiteSpace(text)) continue;
 
-                    var e = builder.Begin(
-                        part.Role == "user" ? AsfKind.Prompt : AsfKind.Assistant, ts);
-                    e.TurnId = turnId;
-                    e.Model = part.Model;
-                    e.StopReason = part.Role == "user" ? null : part.Finish;
+                        var e = builder.Begin(
+                            part.Role == "user" ? AsfKind.Prompt : AsfKind.Assistant, ts);
+                        e.TurnId = turnId;
+                        e.Model = part.Model;
+                        e.StopReason = part.Role == "user" ? null : part.Finish;
 
-                    yield return builder.Seal(builder.SetText(e, text));
+                        yield return builder.Seal(builder.SetText(e, text));
 
-                    continue;
-                }
+                        continue;
+                    }
 
                 case "reasoning":
-                {
-                    var e = builder.Begin(AsfKind.Thinking, ts);
-                    e.TurnId = turnId;
-                    e.Model = part.Model;
-                    e.DurationMs = TimeSpanMs(data["time"]);
+                    {
+                        var e = builder.Begin(AsfKind.Thinking, ts);
+                        e.TurnId = turnId;
+                        e.Model = part.Model;
+                        e.DurationMs = TimeSpanMs(data["time"]);
 
-                    yield return builder.Seal(
-                        builder.SetThinking(e, SourceReadHelpers.Str(data["text"])));
+                        yield return builder.Seal(
+                            builder.SetThinking(e, SourceReadHelpers.Str(data["text"])));
 
-                    continue;
-                }
+                        continue;
+                    }
 
                 case "tool":
-                {
-                    foreach (var e in TranslateTool(builder, data, ts, turnId, part.Model))
                     {
-                        yield return builder.Seal(e);
-                    }
+                        foreach (var e in TranslateTool(builder, data, ts, turnId, part.Model))
+                        {
+                            yield return builder.Seal(e);
+                        }
 
-                    continue;
-                }
+                        continue;
+                    }
 
                 case "patch":
-                {
-                    if (data["files"] is not JsonArray files) continue;
-                    var hash = SourceReadHelpers.Str(data["hash"]);
-
-                    foreach (var file in files)
                     {
-                        var path = SourceReadHelpers.Str(file);
-                        if (path is null) continue;
+                        if (data["files"] is not JsonArray files) continue;
+                        var hash = SourceReadHelpers.Str(data["hash"]);
 
-                        var e = builder.Begin(AsfKind.FileOp, ts);
-                        e.TurnId = turnId;
-                        e.Op = "edit";
-                        e.Ok = true;
-                        e.Reason = hash;
-                        builder.SetPath(e, path);
+                        foreach (var file in files)
+                        {
+                            var path = SourceReadHelpers.Str(file);
+                            if (path is null) continue;
 
-                        yield return builder.Seal(e);
+                            var e = builder.Begin(AsfKind.FileOp, ts);
+                            e.TurnId = turnId;
+                            e.Op = "edit";
+                            e.Ok = true;
+                            e.Reason = hash;
+                            builder.SetPath(e, path);
+
+                            yield return builder.Seal(e);
+                        }
+
+                        continue;
                     }
 
-                    continue;
-                }
-
                 case "step-finish":
-                {
-                    var tokens = data["tokens"] as JsonObject;
-                    var e = builder.Begin(AsfKind.Usage, ts);
-                    e.TurnId = turnId;
-                    e.Model = part.Model;
-                    e.StopReason = SourceReadHelpers.Str(data["reason"]);
-                    e.InputTokens = SourceReadHelpers.Num(tokens?["input"]);
-                    e.OutputTokens = SourceReadHelpers.Num(tokens?["output"]);
-                    e.ReasoningTokens = SourceReadHelpers.Num(tokens?["reasoning"]);
-                    e.CacheReadTokens = SourceReadHelpers.Num(tokens?["cache"]?["read"]);
-                    e.CacheWriteTokens = SourceReadHelpers.Num(tokens?["cache"]?["write"]);
-                    e.CostUsd = SourceReadHelpers.Dbl(data["cost"]);
+                    {
+                        var tokens = data["tokens"] as JsonObject;
+                        var e = builder.Begin(AsfKind.Usage, ts);
+                        e.TurnId = turnId;
+                        e.Model = part.Model;
+                        e.StopReason = SourceReadHelpers.Str(data["reason"]);
+                        e.InputTokens = SourceReadHelpers.Num(tokens?["input"]);
+                        e.OutputTokens = SourceReadHelpers.Num(tokens?["output"]);
+                        e.ReasoningTokens = SourceReadHelpers.Num(tokens?["reasoning"]);
+                        e.CacheReadTokens = SourceReadHelpers.Num(tokens?["cache"]?["read"]);
+                        e.CacheWriteTokens = SourceReadHelpers.Num(tokens?["cache"]?["write"]);
+                        e.CostUsd = SourceReadHelpers.Dbl(data["cost"]);
 
-                    yield return builder.Seal(e);
+                        yield return builder.Seal(e);
 
-                    continue;
-                }
+                        continue;
+                    }
             }
         }
 

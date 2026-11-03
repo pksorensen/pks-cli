@@ -28,10 +28,10 @@ public sealed class WritingReport
 public static class WritingDimensions
 {
     public const string Naturalness = "Naturalness";   // does it read as native Danish, not translated?
-    public const string Tone        = "Tone";          // matches profile voice?
+    public const string Tone = "Tone";          // matches profile voice?
     public const string Terminology = "Terminology";   // anglicisms, on-brand vocabulary
-    public const string Hook        = "Hook";          // first sentence earns the read
-    public const string Value       = "Value";         // delivers what headline promises
+    public const string Hook = "Hook";          // first sentence earns the read
+    public const string Value = "Value";         // delivers what headline promises
 
     public static readonly IReadOnlyList<string> All = new[]
     {

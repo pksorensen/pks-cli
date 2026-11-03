@@ -140,51 +140,51 @@ public sealed class AzureOpenAIChatProvider : IChatProvider
             switch (msg.Role)
             {
                 case ChatRole.System:
-                {
-                    var text = string.Concat(msg.Content.OfType<TextBlock>().Select(t => t.Text));
-                    result.Add(new SystemChatMessage(text));
-                    break;
-                }
+                    {
+                        var text = string.Concat(msg.Content.OfType<TextBlock>().Select(t => t.Text));
+                        result.Add(new SystemChatMessage(text));
+                        break;
+                    }
                 case ChatRole.User:
-                {
-                    var text = string.Concat(msg.Content.OfType<TextBlock>().Select(t => t.Text));
-                    result.Add(new UserChatMessage(text));
-                    break;
-                }
+                    {
+                        var text = string.Concat(msg.Content.OfType<TextBlock>().Select(t => t.Text));
+                        result.Add(new UserChatMessage(text));
+                        break;
+                    }
                 case ChatRole.Assistant:
-                {
-                    var text = string.Concat(msg.Content.OfType<TextBlock>().Select(t => t.Text));
-                    var toolUses = msg.Content.OfType<ToolUseBlock>().ToList();
-                    var toolCalls = toolUses.Select(tu =>
-                        ChatToolCall.CreateFunctionToolCall(
-                            tu.Id,
-                            tu.Name,
-                            BinaryData.FromString(tu.Arguments.GetRawText()))).ToList();
+                    {
+                        var text = string.Concat(msg.Content.OfType<TextBlock>().Select(t => t.Text));
+                        var toolUses = msg.Content.OfType<ToolUseBlock>().ToList();
+                        var toolCalls = toolUses.Select(tu =>
+                            ChatToolCall.CreateFunctionToolCall(
+                                tu.Id,
+                                tu.Name,
+                                BinaryData.FromString(tu.Arguments.GetRawText()))).ToList();
 
-                    AssistantChatMessage assistant;
-                    if (toolCalls.Count > 0)
-                    {
-                        assistant = new AssistantChatMessage(toolCalls);
-                        if (!string.IsNullOrEmpty(text))
+                        AssistantChatMessage assistant;
+                        if (toolCalls.Count > 0)
                         {
-                            assistant.Content.Add(ChatMessageContentPart.CreateTextPart(text));
+                            assistant = new AssistantChatMessage(toolCalls);
+                            if (!string.IsNullOrEmpty(text))
+                            {
+                                assistant.Content.Add(ChatMessageContentPart.CreateTextPart(text));
+                            }
                         }
+                        else
+                        {
+                            assistant = new AssistantChatMessage(text);
+                        }
+                        result.Add(assistant);
+                        break;
                     }
-                    else
-                    {
-                        assistant = new AssistantChatMessage(text);
-                    }
-                    result.Add(assistant);
-                    break;
-                }
                 case ChatRole.Tool:
-                {
-                    foreach (var trb in msg.Content.OfType<ToolResultBlock>())
                     {
-                        result.Add(new ToolChatMessage(trb.ToolUseId, trb.Content));
+                        foreach (var trb in msg.Content.OfType<ToolResultBlock>())
+                        {
+                            result.Add(new ToolChatMessage(trb.ToolUseId, trb.Content));
+                        }
+                        break;
                     }
-                    break;
-                }
             }
         }
 

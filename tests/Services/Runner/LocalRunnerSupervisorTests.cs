@@ -93,8 +93,11 @@ public class LocalRunnerSupervisorTests : IDisposable
     {
         var record = new LocalRunnerRecord
         {
-            Owner = "pksorensen", Project = "museliving",
-            Mode = LocalRunnerMode.Process, Pid = 4242, WorkDir = _workDir,
+            Owner = "pksorensen",
+            Project = "museliving",
+            Mode = LocalRunnerMode.Process,
+            Pid = 4242,
+            WorkDir = _workDir,
         };
         _processRunner
             .Setup(p => p.RunAsync("kill", "-TERM 4242", null, It.IsAny<CancellationToken>()))

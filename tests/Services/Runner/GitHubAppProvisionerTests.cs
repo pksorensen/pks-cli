@@ -236,7 +236,9 @@ public class GitHubAppProvisionerTests
         var vault = new FakeVaultCli { Identity = Enrolled() };
         vault.Grants.Add(new VaultGrant
         {
-            VaultId = "vlt_1", ItemId = "itm_2", Usable = false,
+            VaultId = "vlt_1",
+            ItemId = "itm_2",
+            Usable = false,
             Reason = "this host is not permitted by the policy",
         });
 
@@ -252,7 +254,10 @@ public class GitHubAppProvisionerTests
         var vault = new FakeVaultCli { Identity = Enrolled() };
         vault.Grants.Add(new VaultGrant
         {
-            VaultId = "vlt_1", ItemId = "itm_2", Usable = false, Reason = "expired",
+            VaultId = "vlt_1",
+            ItemId = "itm_2",
+            Usable = false,
+            Reason = "expired",
             ExpiresAt = "2026-01-01T00:00:00Z",
         });
 

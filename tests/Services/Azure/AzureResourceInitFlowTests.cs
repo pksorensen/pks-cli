@@ -99,7 +99,10 @@ public sealed class AzureResourceInitFlowTests : IDisposable
         => _discovery.Setup(d => d.ListSubscriptionsAsync(tenantId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(subscriptionIds.Select(s => new AzureSubscription
             {
-                SubscriptionId = s, DisplayName = "Sub " + s, State = "Enabled", TenantId = tenantId,
+                SubscriptionId = s,
+                DisplayName = "Sub " + s,
+                State = "Enabled",
+                TenantId = tenantId,
             }).ToList());
 
     private static LogAnalyticsWorkspace Workspace(string name, string customerId, string sub = Sub1) => new()
@@ -640,7 +643,10 @@ public sealed class AzureResourceInitFlowTests : IDisposable
 
     private static AcsPhoneNumber Number(string e164, string type, string sms) => new()
     {
-        Id = e164, PhoneNumber = e164, CountryCode = "DK", PhoneNumberType = type,
+        Id = e164,
+        PhoneNumber = e164,
+        CountryCode = "DK",
+        PhoneNumberType = type,
         Capabilities = new AcsPhoneNumberCapabilities { Sms = sms, Calling = "none" },
     };
 

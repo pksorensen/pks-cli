@@ -119,19 +119,19 @@ public class BrainIngestCommand : AsyncCommand<BrainIngestSettings>
         AnsiConsole.WriteLine();
         var t = new Table().Border(TableBorder.MinimalHeavyHead).HideHeaders();
         t.AddColumn(""); t.AddColumn("");
-        t.AddRow("[grey]Run id[/]",             run.RunId);
-        t.AddRow("[grey]Duration[/]",           run.Duration.ToString(@"hh\:mm\:ss\.fff"));
-        t.AddRow("[grey]Files scanned[/]",      run.FilesScanned.ToString("N0"));
-        t.AddRow("[grey]Files ingested[/]",     run.FilesIngested.ToString("N0"));
+        t.AddRow("[grey]Run id[/]", run.RunId);
+        t.AddRow("[grey]Duration[/]", run.Duration.ToString(@"hh\:mm\:ss\.fff"));
+        t.AddRow("[grey]Files scanned[/]", run.FilesScanned.ToString("N0"));
+        t.AddRow("[grey]Files ingested[/]", run.FilesIngested.ToString("N0"));
         t.AddRow("[grey]Skipped (up-to-date)[/]", run.FilesSkippedUpToDate.ToString("N0"));
         if (run.DuplicateCopiesSkipped > 0)
             t.AddRow("[grey]Duplicate copies[/]",
                 $"{run.DuplicateCopiesSkipped:N0}  [grey](same session found in more than one place)[/]");
-        t.AddRow("[grey]Files failed[/]",       run.FilesFailed.ToString("N0"));
-        t.AddRow("[grey]Prompts appended[/]",   run.PromptsAppended.ToString("N0"));
+        t.AddRow("[grey]Files failed[/]", run.FilesFailed.ToString("N0"));
+        t.AddRow("[grey]Prompts appended[/]", run.PromptsAppended.ToString("N0"));
         t.AddRow("[grey]Tool calls appended[/]", run.ToolCallsAppended.ToString("N0"));
-        t.AddRow("[grey]File ops appended[/]",  run.FileOpsAppended.ToString("N0"));
-        t.AddRow("[grey]Errors appended[/]",    run.ErrorsAppended.ToString("N0"));
+        t.AddRow("[grey]File ops appended[/]", run.FileOpsAppended.ToString("N0"));
+        t.AddRow("[grey]Errors appended[/]", run.ErrorsAppended.ToString("N0"));
         AnsiConsole.Write(t);
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("Next: [bold]pks brain status[/] for totals.");

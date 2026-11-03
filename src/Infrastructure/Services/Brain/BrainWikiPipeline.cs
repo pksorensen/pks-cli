@@ -281,9 +281,9 @@ public sealed class BrainWikiPipeline : IBrainWikiPipeline
         // — bias the heuristic ~1.5×.
         var perCall = resolvedModel switch
         {
-            var s when s.Contains("haiku")  => 0.08,
+            var s when s.Contains("haiku") => 0.08,
             var s when s.Contains("sonnet") => 0.30,
-            var s when s.Contains("opus")   => 1.50,
+            var s when s.Contains("opus") => 1.50,
             _ => 0.30,
         };
         return (perCall * aiCalls, $"heuristic ${perCall:0.##}/call for {resolvedModel}");
@@ -295,9 +295,9 @@ public sealed class BrainWikiPipeline : IBrainWikiPipeline
         var resolvedModel = (model ?? "haiku").ToLowerInvariant();
         double perCallSec = resolvedModel switch
         {
-            var s when s.Contains("haiku")  => 50,
+            var s when s.Contains("haiku") => 50,
             var s when s.Contains("sonnet") => 100,
-            var s when s.Contains("opus")   => 200,
+            var s when s.Contains("opus") => 200,
             _ => 60,
         };
         var totalSec = perCallSec * aiCalls / Math.Max(1, parallel);

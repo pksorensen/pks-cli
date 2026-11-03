@@ -147,7 +147,7 @@ public class ClaudeUsageCostTests
             Directory.CreateDirectory(projB);
             var wanted1 = Path.Combine(projA, "aaaa1111-2222-3333-4444-555566667777.jsonl");
             var wanted2 = Path.Combine(projB, "bbbb1111-2222-3333-4444-555566667777.jsonl");
-            var other   = Path.Combine(projA, "cccc1111-2222-3333-4444-555566667777.jsonl");
+            var other = Path.Combine(projA, "cccc1111-2222-3333-4444-555566667777.jsonl");
             File.WriteAllText(wanted1, "");
             File.WriteAllText(wanted2, "");
             File.WriteAllText(other, "");

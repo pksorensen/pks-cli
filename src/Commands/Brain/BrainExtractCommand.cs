@@ -219,21 +219,21 @@ public class BrainExtractCommand : AsyncCommand<BrainExtractSettings>
         AnsiConsole.WriteLine();
         var t = new Table().Border(TableBorder.MinimalHeavyHead).HideHeaders();
         t.AddColumn(""); t.AddColumn("");
-        t.AddRow("[grey]Run id[/]",             run.RunId);
-        t.AddRow("[grey]Duration[/]",           run.Duration.ToString(@"hh\:mm\:ss\.fff"));
-        t.AddRow("[grey]Eligible[/]",           run.Eligible.ToString("N0"));
+        t.AddRow("[grey]Run id[/]", run.RunId);
+        t.AddRow("[grey]Duration[/]", run.Duration.ToString(@"hh\:mm\:ss\.fff"));
+        t.AddRow("[grey]Eligible[/]", run.Eligible.ToString("N0"));
         t.AddRow("[grey]Skipped up-to-date[/]", run.SkippedUpToDate.ToString("N0"));
-        t.AddRow("[grey]Extracted[/]",          run.Extracted.ToString("N0"));
-        t.AddRow("[grey]Failed[/]",             run.Failed.ToString("N0"));
-        t.AddRow("[grey]Input tokens[/]",       FormatTokens(run.TotalInputTokens + run.TotalCacheReadTokens + run.TotalCacheCreationTokens));
-        t.AddRow("[grey]  (cache read)[/]",     FormatTokens(run.TotalCacheReadTokens));
-        t.AddRow("[grey]  (cache create)[/]",   FormatTokens(run.TotalCacheCreationTokens));
-        t.AddRow("[grey]Output tokens[/]",      FormatTokens(run.TotalOutputTokens));
-        t.AddRow("[grey]Total cost[/]",         $"${run.TotalCostUsd:0.####}");
+        t.AddRow("[grey]Extracted[/]", run.Extracted.ToString("N0"));
+        t.AddRow("[grey]Failed[/]", run.Failed.ToString("N0"));
+        t.AddRow("[grey]Input tokens[/]", FormatTokens(run.TotalInputTokens + run.TotalCacheReadTokens + run.TotalCacheCreationTokens));
+        t.AddRow("[grey]  (cache read)[/]", FormatTokens(run.TotalCacheReadTokens));
+        t.AddRow("[grey]  (cache create)[/]", FormatTokens(run.TotalCacheCreationTokens));
+        t.AddRow("[grey]Output tokens[/]", FormatTokens(run.TotalOutputTokens));
+        t.AddRow("[grey]Total cost[/]", $"${run.TotalCostUsd:0.####}");
         if (run.Extracted > 0)
         {
             var avgCost = run.TotalCostUsd / run.Extracted;
-            t.AddRow("[grey]Avg / extract[/]",  $"${avgCost:0.####}");
+            t.AddRow("[grey]Avg / extract[/]", $"${avgCost:0.####}");
         }
         AnsiConsole.Write(t);
         AnsiConsole.WriteLine();
@@ -245,9 +245,9 @@ public class BrainExtractCommand : AsyncCommand<BrainExtractSettings>
     }
 
     private static string FormatTokens(long n) =>
-        n < 10_000   ? n.ToString("N0")
+        n < 10_000 ? n.ToString("N0")
         : n < 1_000_000 ? $"{n / 1000.0:0.#}K"
-        :                 $"{n / 1_000_000.0:0.##}M";
+        : $"{n / 1_000_000.0:0.##}M";
 
     private static bool TryParseSince(string s, out DateTime? value)
     {
@@ -310,11 +310,11 @@ public class BrainExtractCommand : AsyncCommand<BrainExtractSettings>
             {
                 _completed++;
                 if (!info.Success) _failed++;
-                _inTokens         += info.InputTokens;
-                _outTokens        += info.OutputTokens;
-                _cacheReadTokens  += info.CacheReadInputTokens;
+                _inTokens += info.InputTokens;
+                _outTokens += info.OutputTokens;
+                _cacheReadTokens += info.CacheReadInputTokens;
                 _cacheCreateTokens += info.CacheCreationInputTokens;
-                _cost             += info.CostUsd;
+                _cost += info.CostUsd;
 
                 if (info.Duration > TimeSpan.Zero)
                 {

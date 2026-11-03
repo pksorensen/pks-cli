@@ -13,9 +13,9 @@ public sealed class BrainIndexStore : IBrainIndexStore
     private readonly Dictionary<BrainFirehose, SemaphoreSlim> _firehoseLocks = new()
     {
         [BrainFirehose.Prompts] = new(1, 1),
-        [BrainFirehose.Tools]   = new(1, 1),
-        [BrainFirehose.Files]   = new(1, 1),
-        [BrainFirehose.Errors]  = new(1, 1),
+        [BrainFirehose.Tools] = new(1, 1),
+        [BrainFirehose.Files] = new(1, 1),
+        [BrainFirehose.Errors] = new(1, 1),
     };
 
     public static readonly JsonSerializerOptions JsonOptions = new()

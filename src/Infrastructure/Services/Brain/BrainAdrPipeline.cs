@@ -308,9 +308,9 @@ public sealed class BrainAdrPipeline : IBrainAdrPipeline
         var resolvedModel = (model ?? "haiku").ToLowerInvariant();
         var perCall = resolvedModel switch
         {
-            var s when s.Contains("haiku")  => 0.06,
+            var s when s.Contains("haiku") => 0.06,
             var s when s.Contains("sonnet") => 0.25,
-            var s when s.Contains("opus")   => 1.20,
+            var s when s.Contains("opus") => 1.20,
             _ => 0.20,
         };
         return (perCall * aiCalls, $"heuristic ${perCall:0.##}/call for {resolvedModel}");
@@ -322,9 +322,9 @@ public sealed class BrainAdrPipeline : IBrainAdrPipeline
         var resolvedModel = (model ?? "haiku").ToLowerInvariant();
         double perCallSec = resolvedModel switch
         {
-            var s when s.Contains("haiku")  => 45,
+            var s when s.Contains("haiku") => 45,
             var s when s.Contains("sonnet") => 100,
-            var s when s.Contains("opus")   => 200,
+            var s when s.Contains("opus") => 200,
             _ => 60,
         };
         return TimeSpan.FromSeconds(perCallSec * aiCalls / Math.Max(1, parallel));

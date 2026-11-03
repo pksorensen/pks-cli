@@ -78,8 +78,8 @@ public sealed class PersonaScoreRunner
             {
                 case TextDeltaEvent t: text.Append(t.Text); break;
                 case MessageStopEvent stop: usage = stop.Usage; break;
-                // We don't ask for tools, so ToolUse* / Thinking events shouldn't appear;
-                // ignore them defensively if a provider emits them anyway.
+                    // We don't ask for tools, so ToolUse* / Thinking events shouldn't appear;
+                    // ignore them defensively if a provider emits them anyway.
             }
         }
         sw.Stop();

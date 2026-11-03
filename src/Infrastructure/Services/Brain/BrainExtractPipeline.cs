@@ -76,9 +76,9 @@ public sealed class BrainExtractPipeline : IBrainExtractPipeline
         }
         double perCallSec = priorDurations.Count >= 3 ? priorDurations.Average() : resolvedModel switch
         {
-            var s when s.Contains("haiku")  => 45,
+            var s when s.Contains("haiku") => 45,
             var s when s.Contains("sonnet") => 90,
-            var s when s.Contains("opus")   => 180,
+            var s when s.Contains("opus") => 180,
             _ => 60,
         };
         var totalSec = perCallSec * eligible / Math.Max(1, parallel);
@@ -325,9 +325,9 @@ public sealed class BrainExtractPipeline : IBrainExtractPipeline
         // Heuristic per model — broad upper bounds, conservative on purpose.
         var perCall = modelKey switch
         {
-            var s when s.Contains("haiku")  => 0.05,
+            var s when s.Contains("haiku") => 0.05,
             var s when s.Contains("sonnet") => 0.20,
-            var s when s.Contains("opus")   => 1.00,
+            var s when s.Contains("opus") => 1.00,
             _ => 0.20,
         };
         return (perCall * eligible, $"heuristic ${perCall:0.##}/call for {resolvedModel} (no prior runs)");

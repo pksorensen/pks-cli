@@ -70,7 +70,8 @@ public sealed class NaturalnessMergerTests : IDisposable
 
         var merged = _sut.Merge(_source, new Dictionary<string, NaturalnessCandidatesFile>
         {
-            ["opus"] = opus, ["gpt5"] = gpt5,
+            ["opus"] = opus,
+            ["gpt5"] = gpt5,
         });
 
         merged.Critics.Should().Equal("gpt5", "opus");
@@ -96,7 +97,8 @@ public sealed class NaturalnessMergerTests : IDisposable
 
         var merged = _sut.Merge(_source, new Dictionary<string, NaturalnessCandidatesFile>
         {
-            ["opus"] = opus, ["gpt5"] = gpt5,
+            ["opus"] = opus,
+            ["gpt5"] = gpt5,
         });
 
         merged.Candidates.Select(c => c.Line).Should().Equal(10, 15, 20);
@@ -189,7 +191,8 @@ public sealed class NaturalnessMergerTests : IDisposable
         var log = new List<string>();
         var merged = _sut.Merge(_source, new Dictionary<string, NaturalnessCandidatesFile>
         {
-            ["opus"] = opus, ["gpt5"] = gpt5,
+            ["opus"] = opus,
+            ["gpt5"] = gpt5,
         }, debugLog: log);
         merged.Candidates[0].Original.Should().Be("a much longer original text");
         log.Should().NotBeEmpty();

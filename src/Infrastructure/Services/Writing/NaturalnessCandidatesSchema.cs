@@ -123,8 +123,12 @@ Cap at {{maxCandidates}} candidates. Exactly 3 alternatives per candidate (label
         var json = WritingScoreSchema.ExtractJson(responseText);
         if (json is null)
         {
-            errors.Add(new() { Field = "$", Code = "no_json",
-                Message = "No JSON object found. Expected raw JSON or ```json fenced block." });
+            errors.Add(new()
+            {
+                Field = "$",
+                Code = "no_json",
+                Message = "No JSON object found. Expected raw JSON or ```json fenced block."
+            });
             return new ValidationResult { Ok = false, Errors = errors };
         }
 
@@ -164,8 +168,12 @@ Cap at {{maxCandidates}} candidates. Exactly 3 alternatives per candidate (label
             var candidates = candEl.EnumerateArray().ToList();
             if (candidates.Count > maxCandidates)
             {
-                errors.Add(new() { Field = "candidates", Code = "too_many",
-                    Message = $"got {candidates.Count}, max {maxCandidates}" });
+                errors.Add(new()
+                {
+                    Field = "candidates",
+                    Code = "too_many",
+                    Message = $"got {candidates.Count}, max {maxCandidates}"
+                });
             }
 
             int i = 0;
@@ -187,8 +195,12 @@ Cap at {{maxCandidates}} candidates. Exactly 3 alternatives per candidate (label
                 if (!c.TryGetProperty("line", out var lineEl) || !lineEl.TryGetInt32(out line))
                     errors.Add(new() { Field = $"{prefix}.line", Code = "missing_or_not_integer" });
                 else if (line < 1 || line > sourceLineCount)
-                    errors.Add(new() { Field = $"{prefix}.line", Code = "out_of_range",
-                        Message = $"got {line}, expected 1..{sourceLineCount}" });
+                    errors.Add(new()
+                    {
+                        Field = $"{prefix}.line",
+                        Code = "out_of_range",
+                        Message = $"got {line}, expected 1..{sourceLineCount}"
+                    });
                 cand.Line = line;
 
                 if (!c.TryGetProperty("alternatives", out var altEl) || altEl.ValueKind != JsonValueKind.Array)
@@ -199,8 +211,12 @@ Cap at {{maxCandidates}} candidates. Exactly 3 alternatives per candidate (label
                 {
                     var alts = altEl.EnumerateArray().ToList();
                     if (alts.Count != 3)
-                        errors.Add(new() { Field = $"{prefix}.alternatives", Code = "wrong_count",
-                            Message = $"got {alts.Count}, expected exactly 3" });
+                        errors.Add(new()
+                        {
+                            Field = $"{prefix}.alternatives",
+                            Code = "wrong_count",
+                            Message = $"got {alts.Count}, expected exactly 3"
+                        });
 
                     var seenLabels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     int j = 0;
@@ -216,15 +232,23 @@ Cap at {{maxCandidates}} candidates. Exactly 3 alternatives per candidate (label
                         if (string.IsNullOrWhiteSpace(alt.Label) ||
                             Array.IndexOf(RequiredLabels, alt.Label.ToUpperInvariant()) < 0)
                         {
-                            errors.Add(new() { Field = $"{ap}.label", Code = "unknown_enum",
-                                Message = $"got '{alt.Label}', expected one of A/B/C" });
+                            errors.Add(new()
+                            {
+                                Field = $"{ap}.label",
+                                Code = "unknown_enum",
+                                Message = $"got '{alt.Label}', expected one of A/B/C"
+                            });
                         }
                         else
                         {
                             alt.Label = alt.Label.ToUpperInvariant();
                             if (!seenLabels.Add(alt.Label))
-                                errors.Add(new() { Field = $"{ap}.label", Code = "duplicate",
-                                    Message = $"label '{alt.Label}' used more than once" });
+                                errors.Add(new()
+                                {
+                                    Field = $"{ap}.label",
+                                    Code = "duplicate",
+                                    Message = $"label '{alt.Label}' used more than once"
+                                });
                         }
                         if (string.IsNullOrWhiteSpace(alt.Text))
                             errors.Add(new() { Field = $"{ap}.text", Code = "missing" });
@@ -238,8 +262,12 @@ Cap at {{maxCandidates}} candidates. Exactly 3 alternatives per candidate (label
                         {
                             var v = alEl.GetDouble();
                             if (v < 0.0 || v > 1.0)
-                                errors.Add(new() { Field = $"{ap}.authorlikeness", Code = "out_of_range",
-                                    Message = $"got {v}, expected [0,1]" });
+                                errors.Add(new()
+                                {
+                                    Field = $"{ap}.authorlikeness",
+                                    Code = "out_of_range",
+                                    Message = $"got {v}, expected [0,1]"
+                                });
                             alt.Authorlikeness = v;
                         }
                         cand.Alternatives.Add(alt);

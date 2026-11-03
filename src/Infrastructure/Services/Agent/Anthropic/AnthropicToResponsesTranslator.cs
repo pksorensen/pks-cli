@@ -152,55 +152,55 @@ public static class AnthropicToResponsesTranslator
             switch (type)
             {
                 case "text":
-                {
-                    var text = block.TryGetProperty("text", out var txt) ? txt.GetString() ?? string.Empty : string.Empty;
-                    parts.Add(new JsonObject { ["type"] = textPartType, ["text"] = text });
-                    break;
-                }
-                case "image":
-                {
-                    // Only user images are supported as input_image.
-                    var dataUrl = ImageToDataUrl(block);
-                    if (dataUrl is not null)
                     {
-                        parts.Add(new JsonObject { ["type"] = "input_image", ["image_url"] = dataUrl });
+                        var text = block.TryGetProperty("text", out var txt) ? txt.GetString() ?? string.Empty : string.Empty;
+                        parts.Add(new JsonObject { ["type"] = textPartType, ["text"] = text });
+                        break;
                     }
-                    break;
-                }
+                case "image":
+                    {
+                        // Only user images are supported as input_image.
+                        var dataUrl = ImageToDataUrl(block);
+                        if (dataUrl is not null)
+                        {
+                            parts.Add(new JsonObject { ["type"] = "input_image", ["image_url"] = dataUrl });
+                        }
+                        break;
+                    }
                 case "tool_use":
-                {
-                    // Flush any buffered message parts first to preserve ordering.
-                    FlushParts(input, role, parts);
-                    parts = new JsonArray();
-
-                    var id = block.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? string.Empty : string.Empty;
-                    var name = block.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? string.Empty : string.Empty;
-                    var args = block.TryGetProperty("input", out var inp)
-                        ? inp.GetRawText()
-                        : "{}";
-                    input.Add(new JsonObject
                     {
-                        ["type"] = "function_call",
-                        ["call_id"] = id,
-                        ["name"] = name,
-                        ["arguments"] = args,
-                    });
-                    break;
-                }
+                        // Flush any buffered message parts first to preserve ordering.
+                        FlushParts(input, role, parts);
+                        parts = new JsonArray();
+
+                        var id = block.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? string.Empty : string.Empty;
+                        var name = block.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? string.Empty : string.Empty;
+                        var args = block.TryGetProperty("input", out var inp)
+                            ? inp.GetRawText()
+                            : "{}";
+                        input.Add(new JsonObject
+                        {
+                            ["type"] = "function_call",
+                            ["call_id"] = id,
+                            ["name"] = name,
+                            ["arguments"] = args,
+                        });
+                        break;
+                    }
                 case "tool_result":
-                {
-                    FlushParts(input, role, parts);
-                    parts = new JsonArray();
-
-                    var callId = block.TryGetProperty("tool_use_id", out var tu) ? tu.GetString() ?? string.Empty : string.Empty;
-                    input.Add(new JsonObject
                     {
-                        ["type"] = "function_call_output",
-                        ["call_id"] = callId,
-                        ["output"] = ToolResultText(block),
-                    });
-                    break;
-                }
+                        FlushParts(input, role, parts);
+                        parts = new JsonArray();
+
+                        var callId = block.TryGetProperty("tool_use_id", out var tu) ? tu.GetString() ?? string.Empty : string.Empty;
+                        input.Add(new JsonObject
+                        {
+                            ["type"] = "function_call_output",
+                            ["call_id"] = callId,
+                            ["output"] = ToolResultText(block),
+                        });
+                        break;
+                    }
                 case "thinking":
                 case "redacted_thinking":
                     // Reasoning is not replayed: Responses reconstructs its own reasoning state,

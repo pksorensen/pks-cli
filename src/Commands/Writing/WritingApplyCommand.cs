@@ -126,13 +126,13 @@ public class WritingApplyCommand : AsyncCommand<WritingApplySettings>
 
         var t = new Table().Border(TableBorder.Minimal).HideHeaders();
         t.AddColumn(""); t.AddColumn(new TableColumn("").RightAligned());
-        t.AddRow("Accepted",          $"[green]{result.Accepted}[/]");
-        t.AddRow("Rejected",          $"[grey]{result.Rejected}[/]");
-        t.AddRow("Allowlist added",   $"[green]{result.AllowlistAdded}[/]");
-        t.AddRow("Anglicisms added",  $"[green]{result.AnglicismsAdded}[/]");
-        t.AddRow("Lessons appended",  $"[green]{result.LessonsAppended}[/]");
+        t.AddRow("Accepted", $"[green]{result.Accepted}[/]");
+        t.AddRow("Rejected", $"[grey]{result.Rejected}[/]");
+        t.AddRow("Allowlist added", $"[green]{result.AllowlistAdded}[/]");
+        t.AddRow("Anglicisms added", $"[green]{result.AnglicismsAdded}[/]");
+        t.AddRow("Lessons appended", $"[green]{result.LessonsAppended}[/]");
         if (result.Warnings.Count > 0)
-            t.AddRow("Warnings",      $"[yellow]{result.Warnings.Count}[/]");
+            t.AddRow("Warnings", $"[yellow]{result.Warnings.Count}[/]");
         AnsiConsole.Write(t);
 
         if (result.Warnings.Count > 0)

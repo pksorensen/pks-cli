@@ -113,7 +113,7 @@ public sealed class BrainSynthesisPipeline : IBrainSynthesisPipeline
         }
 
         var clusterSkill = await _skillReader.ReadAsync("brain-synth-cluster", null, ct);
-        var habitsSkill  = hasHabits ? await _skillReader.ReadAsync("brain-synth-habits",  null, ct) : null;
+        var habitsSkill = hasHabits ? await _skillReader.ReadAsync("brain-synth-habits", null, ct) : null;
 
         long totalIn = 0, totalOut = 0, totalCacheRead = 0, totalCacheCreate = 0;
         double totalCost = 0;
@@ -410,9 +410,9 @@ public sealed class BrainSynthesisPipeline : IBrainSynthesisPipeline
         }
         var perCall = resolvedModel switch
         {
-            var s when s.Contains("haiku")  => 0.05,
+            var s when s.Contains("haiku") => 0.05,
             var s when s.Contains("sonnet") => 0.20,
-            var s when s.Contains("opus")   => 1.00,
+            var s when s.Contains("opus") => 1.00,
             _ => 0.20,
         };
         return (perCall * aiCalls, $"heuristic ${perCall:0.##}/call for {resolvedModel} (no prior runs)");
@@ -440,9 +440,9 @@ public sealed class BrainSynthesisPipeline : IBrainSynthesisPipeline
         }
         double perCallSec = priorDurations.Count >= 3 ? priorDurations.Average() : resolvedModel switch
         {
-            var s when s.Contains("haiku")  => 45,
+            var s when s.Contains("haiku") => 45,
             var s when s.Contains("sonnet") => 90,
-            var s when s.Contains("opus")   => 180,
+            var s when s.Contains("opus") => 180,
             _ => 60,
         };
         var totalSec = perCallSec * aiCalls / Math.Max(1, parallel);

@@ -249,7 +249,7 @@ public class AdoGitProxyCommand : AsyncCommand<AdoGitProxyCommand.Settings>
             }
         }
 
-        tryAuthService:
+    tryAuthService:
         // Source 2: full auth service / settings.json (local Docker scenario)
         try
         {

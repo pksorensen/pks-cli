@@ -17,7 +17,9 @@ public sealed class WritingCorpusAggregatorTests
         {
             p.Actions.Add(new LearnAction
             {
-                Kind = kind, Term = term, Accept = true,
+                Kind = kind,
+                Term = term,
+                Accept = true,
                 DanishAlternatives = alts ?? new(),
             });
         }

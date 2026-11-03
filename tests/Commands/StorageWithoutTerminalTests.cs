@@ -144,7 +144,10 @@ public class StorageWithoutTerminalTests
 
         var result = Sync(provider, console, new StorageSyncCommand.Settings
         {
-            AccountName = "beta", ShareName = "config", LocalPath = Path.GetTempPath(), DryRun = true
+            AccountName = "beta",
+            ShareName = "config",
+            LocalPath = Path.GetTempPath(),
+            DryRun = true
         });
 
         result.Should().Be(0);

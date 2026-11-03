@@ -188,9 +188,9 @@ public class BrainRefreshCommand : AsyncCommand<BrainRefreshSettings>
 
         // ── Build plans for the AI phases (after ingest, so counts are accurate) ─
         BrainExtractPlan? extractPlan = settings.SkipExtract ? null : await _extract.PlanAsync(extractOpts);
-        BrainSynthPlan?   synthPlan   = settings.SkipSynth   ? null : await _synth.PlanAsync(synthOpts);
-        BrainWikiPlan?    wikiPlan    = settings.SkipWiki    ? null : await _wiki.PlanAsync(wikiOpts);
-        BrainAdrPlan?     adrPlan     = settings.SkipAdr     ? null : await _adr.PlanAsync(adrOpts);
+        BrainSynthPlan? synthPlan = settings.SkipSynth ? null : await _synth.PlanAsync(synthOpts);
+        BrainWikiPlan? wikiPlan = settings.SkipWiki ? null : await _wiki.PlanAsync(wikiOpts);
+        BrainAdrPlan? adrPlan = settings.SkipAdr ? null : await _adr.PlanAsync(adrOpts);
 
         // Downstream skip rule: if extract has nothing new and --force wasn't passed,
         // synth/wiki/adr re-runs are pure waste (same extracts → same outputs).
@@ -346,11 +346,11 @@ public class BrainRefreshCommand : AsyncCommand<BrainRefreshSettings>
         AnsiConsole.Write(new Rule("[bold magenta]refresh complete[/]").RuleStyle("magenta dim"));
         var summary = new Table().Border(TableBorder.MinimalHeavyHead).HideHeaders();
         summary.AddColumn(""); summary.AddColumn("");
-        summary.AddRow("[grey]Ingest[/]",  ingestRun is null  ? "[grey]skipped[/]" : $"{ingestRun.FilesIngested:N0} files");
+        summary.AddRow("[grey]Ingest[/]", ingestRun is null ? "[grey]skipped[/]" : $"{ingestRun.FilesIngested:N0} files");
         summary.AddRow("[grey]Extract[/]", extractRun is null ? (settings.SkipExtract ? "[grey]skipped[/]" : "[grey]nothing eligible[/]") : $"{extractRun.Extracted:N0} extracts · ${extractRun.TotalCostUsd:0.####}");
-        summary.AddRow("[grey]Synth[/]",   synthRun is null   ? (settings.SkipSynth   ? "[grey]skipped[/]" : "[grey]skipped (no new extracts)[/]") : $"{synthRun.ClustersFound:N0} clusters · ${synthRun.TotalCostUsd:0.####}");
-        summary.AddRow("[grey]Wiki[/]",    wikiRun is null    ? (settings.SkipWiki    ? "[grey]skipped[/]" : "[grey]skipped (no new extracts)[/]") : $"{wikiRun.ClustersRendered:N0} pages · ${wikiRun.TotalCostUsd:0.####}");
-        summary.AddRow("[grey]ADR[/]",     adrRun is null     ? (settings.SkipAdr     ? "[grey]skipped[/]" : "[grey]skipped (no new extracts)[/]") : $"{adrRun.AdrsWritten:N0} ADRs · ${adrRun.TotalCostUsd:0.####}");
+        summary.AddRow("[grey]Synth[/]", synthRun is null ? (settings.SkipSynth ? "[grey]skipped[/]" : "[grey]skipped (no new extracts)[/]") : $"{synthRun.ClustersFound:N0} clusters · ${synthRun.TotalCostUsd:0.####}");
+        summary.AddRow("[grey]Wiki[/]", wikiRun is null ? (settings.SkipWiki ? "[grey]skipped[/]" : "[grey]skipped (no new extracts)[/]") : $"{wikiRun.ClustersRendered:N0} pages · ${wikiRun.TotalCostUsd:0.####}");
+        summary.AddRow("[grey]ADR[/]", adrRun is null ? (settings.SkipAdr ? "[grey]skipped[/]" : "[grey]skipped (no new extracts)[/]") : $"{adrRun.AdrsWritten:N0} ADRs · ${adrRun.TotalCostUsd:0.####}");
         var totalSpend = (extractRun?.TotalCostUsd ?? 0) + (synthRun?.TotalCostUsd ?? 0) + (wikiRun?.TotalCostUsd ?? 0) + (adrRun?.TotalCostUsd ?? 0);
         summary.AddRow("[bold]Total spend[/]", $"[bold green]${totalSpend:0.####}[/]");
         AnsiConsole.Write(summary);

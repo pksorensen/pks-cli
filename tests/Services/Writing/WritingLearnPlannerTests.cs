@@ -14,7 +14,8 @@ public sealed class WritingLearnPlannerTests
     {
         RuleId = "Writing.Anglicisms",
         Severity = WritingSeverity.Warning,
-        Line = line, Column = 1,
+        Line = line,
+        Column = 1,
         Match = match,
         Message = $"'{match}' reads as an anglicism in Danish.",
         Suggestions = new() { "udrulle" },
@@ -24,7 +25,11 @@ public sealed class WritingLearnPlannerTests
     {
         RuleId = $"Critic.{dimension}",
         Severity = WritingSeverity.Suggestion,
-        Line = line, Column = 1, Match = match, Message = msg, Suggestions = new(),
+        Line = line,
+        Column = 1,
+        Match = match,
+        Message = msg,
+        Suggestions = new(),
     };
 
     [Fact]

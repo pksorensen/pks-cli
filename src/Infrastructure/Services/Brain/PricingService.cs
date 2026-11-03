@@ -11,10 +11,10 @@ public sealed class PricingService : IPricingService
 {
     private static readonly Dictionary<string, ModelPricing> HardcodedPricing = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["haiku-4-5"]  = new(8e-7,  4e-6,   1e-6,    8e-8),
-        ["sonnet-4-6"] = new(3e-6,  1.5e-5, 3.75e-6, 3e-7),
-        ["opus-4-6"]   = new(1.5e-5, 7.5e-5, 1.875e-5, 1.5e-6),
-        ["opus-4-7"]   = new(1.5e-5, 7.5e-5, 1.875e-5, 1.5e-6),
+        ["haiku-4-5"] = new(8e-7, 4e-6, 1e-6, 8e-8),
+        ["sonnet-4-6"] = new(3e-6, 1.5e-5, 3.75e-6, 3e-7),
+        ["opus-4-6"] = new(1.5e-5, 7.5e-5, 1.875e-5, 1.5e-6),
+        ["opus-4-7"] = new(1.5e-5, 7.5e-5, 1.875e-5, 1.5e-6),
     };
 
     private readonly Dictionary<string, ModelPricing?> _cache = new(StringComparer.OrdinalIgnoreCase);
@@ -76,10 +76,10 @@ public sealed class PricingService : IPricingService
 
     public double EstimateCost(ModelPricing pricing, long input, long output, long cacheRead, long cacheCreate)
     {
-        return input  * pricing.InputPerToken
+        return input * pricing.InputPerToken
              + output * pricing.OutputPerToken
              + cacheCreate * pricing.CacheCreatePerToken
-             + cacheRead   * pricing.CacheReadPerToken;
+             + cacheRead * pricing.CacheReadPerToken;
     }
 
     // ── private ────────────────────────────────────────────────────────────────
