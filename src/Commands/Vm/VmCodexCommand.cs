@@ -236,7 +236,30 @@ public sealed class VmCodexCommand : AsyncCommand<VmCodexCommand.Settings>
             ? $"ssh -L 1455:localhost:1455 {alias} -t codex login"
             : $"ssh -L 1455:localhost:1455 {settings.User}@{host.Host} -t codex login";
 
-        _console.MarkupLine("[bold]One step left — sign the account in once. Only a human can do this:[/]");
+        // Two genuinely different next steps, and the order matters. The app will offer a "Sign in
+        // to Codex" button for this account, and pressing it opens an OpenAI sign-in — which works,
+        // and bills a ChatGPT account, and bypasses a gateway entirely. Anyone whose laptop already
+        // talks to a gateway wants the first of these, so it goes first.
+        // Spelled the way it was invoked, so it can be copied as-is: a named target stays a named
+        // target, and --host stays --host. A non-default account has to be repeated, or the sync
+        // would write into a different home than the one just created.
+        var target = !string.IsNullOrWhiteSpace(settings.Target) ? settings.Target!
+            : !string.IsNullOrWhiteSpace(settings.Host) ? $"--host {settings.Host}"
+            : label;
+        if (host.Port != 22) target += $" --port {host.Port}";
+        if (!string.Equals(settings.User, VmCodexBootstrapScript.DefaultUser, StringComparison.Ordinal))
+            target += $" --user {settings.User}";
+
+        _console.MarkupLine("[bold]The account has no credentials yet. Two ways to give it some:[/]");
+        _console.WriteLine();
+        _console.MarkupLine("[green]1. Your own gateway[/] [dim]— if Codex on this machine already talks to one, copy that[/]");
+        _console.MarkupLine("   [dim]configuration over. There is no sign-in in this case: the configuration is the[/]");
+        _console.MarkupLine("   [dim]authentication.[/]");
+        _console.WriteLine();
+        _console.MarkupLine($"   [grey85]pks vm codex sync-config {Markup.Escape(target)}[/]");
+        _console.WriteLine();
+        _console.MarkupLine("[green]2. An OpenAI account[/] [dim]— only if the box should bill a ChatGPT plan rather than a[/]");
+        _console.MarkupLine("   [dim]gateway. Needs a human; this is also what the app's \"Sign in to Codex\" button does.[/]");
         _console.WriteLine();
         _console.MarkupLine($"   [grey85]{Markup.Escape(login)}[/]");
         _console.WriteLine();
@@ -245,7 +268,7 @@ public sealed class VmCodexCommand : AsyncCommand<VmCodexCommand.Settings>
         _console.MarkupLine("   [dim]login enabled on the account; otherwise forward the port instead:[/]");
         _console.MarkupLine($"   [dim]{Markup.Escape(forward)}[/]");
         _console.WriteLine();
-        _console.MarkupLine($"[dim]Then in Codex: Settings → Connections, enable [bold]{Markup.Escape(alias)}[/], pick a project folder.[/]");
+        _console.MarkupLine($"[dim]Either way, then in Codex: Settings → Connections, enable [bold]{Markup.Escape(alias)}[/], pick a project folder.[/]");
     }
 
     /// <summary>

@@ -107,7 +107,7 @@ There are two entirely different endings, and the command reports whichever appl
 
 If the account's `~/.codex/config.toml` names a `model_provider`, the box authenticates through that provider's header. There is no sign-in: **the configuration is the authentication**, and `codex login` is not a step that exists. The command says which provider it found and stops.
 
-**This command does not author that file.** It installs the CLI, creates the account and makes the box reachable under an alias; what the provider is, which model, and which credential belong to whoever owns the estate — for the Agentics/Context& gateway that is the `Install-FoundryCodex.ps1` / `install-foundry-codex.sh` installer, which already knows how to compose the file and can write it over the alias this command wrote. The two are deliberately not symmetrical.
+**This command does not author that file**, and neither does `sync-config`. What the provider is, which model, and which credential belong to whoever owns the estate — for the Agentics/Context& gateway that is the `Install-FoundryCodex.ps1` / `install-foundry-codex.sh` installer. What pks does is move a configuration that installer already produced onto the box, with the one change SSH requires: see §5.
 
 > **If you write that file on a remote box, use `http_headers`, not `env_http_headers`.**
 >
@@ -115,7 +115,7 @@ If the account's `~/.codex/config.toml` names a `model_provider`, the box authen
 >
 > So a key written into a shell profile is present for a human at a prompt and **absent for the app server**, and the gateway answers **401** — which reads as a bad key rather than a missing variable. On a laptop this never shows: macOS gets `launchctl setenv` and Windows a User-scope variable. It only bites over SSH.
 >
-> `http_headers` carries the value in the file, which at `0600` owned by the account is tighter than an `export` line in a `0644` profile. The command warns when it finds `env_http_headers` in a remote config.
+> `http_headers` carries the value in the file, which at `0600` owned by the account is tighter than an `export` line in a `0644` profile. `pks vm codex` warns when it finds `env_http_headers` in a remote config, and `pks vm codex sync-config` performs exactly this substitution rather than leaving it to a reader.
 >
 > The other remote trap: `base_url` must be reachable **from the box**. A loopback URL copied from a laptop config gives a connection refused that also looks like a bad key.
 
@@ -137,6 +137,43 @@ ssh -L 1455:localhost:1455 pks-vm-a1b2-codex -t codex login
 
 Then, in Codex: **Settings → Connections**, enable the host, and pick a project folder.
 
+## 5. Moving a working configuration onto the box
+
+```bash
+pks vm codex sync-config hetzner
+pks vm codex sync-config --host root@example.com --dry-run
+pks vm codex sync-config hetzner --from "D:/profiles/poul/.codex" --yes
+```
+
+If Codex on *this* machine already talks to a gateway, the file that makes that work is the file the box needs. This copies it, shows what it is about to do, and applies the one rewrite that a box requires.
+
+It reads `CODEX_HOME`, else `~/.codex`, and takes three kinds of file:
+
+| File | What it is | How it travels |
+|---|---|---|
+| `config.toml` | the provider, the header, the catalogue it points at | rewritten |
+| `<customer>.config.toml` | the profile `codex -p <customer>` layers | rewritten |
+| `models.<customer>.azure.json` | that customer's model catalogue | verbatim |
+
+Everything else is left behind, `auth.json` above all: that is an OpenAI credential, and copying it would sign the box into a ChatGPT account and clear the app's "logged out" banner for a reason that has nothing to do with whether the gateway works. `history.jsonl`, `sessions/` and `log/` are this machine's transcripts, which are not configuration and are frequently the most sensitive thing in the folder.
+
+**The two rewrites.**
+
+- `env_http_headers` becomes `http_headers`, with the value read from this machine's environment and written into the file. Every occurrence: a reader on two customers has a provider block each, and the installer emits one more inside `[mcp_servers.home]`. The reason is §4 — a variable named in the file is empty for the app server Codex starts over SSH.
+- `model_catalog_json` is repointed at the account's own `.codex`. The local value is a Windows path, which on the box names nothing; Codex then has an empty model picker and a `model` line that resolves to no model. The directory is read from the box with `getent passwd`, not assumed.
+
+**What it refuses to do.** An `env_http_headers` whose shape it does not recognise — a hand-edited multi-line table, say — is a refusal, not a pass-through, and nothing is written at all. A variable this machine does not have is the same. Both would produce a box that looks configured and answers 401, which is the failure the whole command exists to prevent. A missing variable usually means a terminal opened before the installer ran: the installer writes at User scope, so a new terminal sees it.
+
+**The credential ends up in a file.** That is the point, and it is stated before anything is written: `0600`, owned by the account, which is tighter than an `export` line in a `0644` profile. The value never reaches an ssh argv — it goes down the pipe, so it is in no shell history, no `ps` output and no auditd execve record — and the console shows it masked. An existing remote file is copied to `.bak-<stamp>` first.
+
+**Checking it.** The command verifies owner, mode, and that no variable survived into the file. It deliberately does not call a model, because proving the gateway answers costs money. It prints the command that does:
+
+```bash
+ssh pks-vm-a1b2-codex 'codex exec "reply ok"'
+```
+
+That is a non-interactive, non-login shell — the harshest case for the header, and exactly what Codex Desktop gets. If it answers, the configuration is proven whatever the app shows. Then disconnect and reconnect the host in **Settings → Connections**: an app server already listening on 9234 holds the old configuration.
+
 ## Gotchas
 
 - **The account must have a real login shell.** The app starts `codex app-server` *through* it. A `nologin` service account cannot host Codex, and the command repairs one it finds.
@@ -146,6 +183,7 @@ Then, in Codex: **Settings → Connections**, enable the host, and pick a projec
 - **`AllowUsers`/`AllowGroups` in `sshd_config` silently wins.** The new account is rejected however correct its keys are, and the app shows that as a plain connection failure. The command warns; it never edits `sshd_config`, because a bad edit there locks everyone out of the box.
 - **`--docker` is root by another name.** Docker group membership on the host is equivalent to root, so it undoes most of what a separate account bought. Opt in knowingly.
 - **A credential in a shell profile does not reach the app server.** The thing Codex starts over SSH is a non-interactive shell, which reads no `~/.bashrc` and usually no `~/.profile`, so `env_http_headers` resolves to nothing and the gateway answers 401. See §4 — this is the single most expensive trap in the remote setup, because it looks like a key problem.
+- **The app's "Sign in to Codex" button is the wrong door for a gateway box.** With no `~/.codex/config.toml` the account falls back to Codex's default provider, which is OpenAI, so the app reports the remote account as logged out and offers that button. Pressing it works — and signs the account into a ChatGPT account, bypassing the gateway, with no attribution and no customer billing. Run `pks vm codex sync-config` instead. With a provider configured there is no sign-in at all.
 - **A Windows remote host is not supported** by the app's SSH bootstrap, which assumes a POSIX login shell. Linux is the working path.
 
 ## When `vm init --codex` is used
