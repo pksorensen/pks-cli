@@ -1554,11 +1554,22 @@ app.Configure(config =>
         vm.AddCommand<PKS.Commands.Vm.VmTailscaleCommand>("tailscale")
             .WithDescription("Start a VM and connect it to your Tailscale network")
             .WithExample(new[] { "vm", "tailscale" });
-        vm.AddCommand<PKS.Commands.Vm.VmCodexCommand>("codex")
-            .WithDescription("Install the Codex CLI on a box and create a dedicated non-root account for Codex Desktop")
-            .WithExample(new[] { "vm", "codex" })
-            .WithExample(new[] { "vm", "codex", "hetzner" })
-            .WithExample(new[] { "vm", "codex", "--host", "root@example.com", "--docker" });
+        // A branch with a default command, so `pks vm codex <box>` still bootstraps and
+        // `pks vm codex sync-config <box>` finishes the job. The two have to agree about --user:
+        // one creates the account, the other writes into its .codex.
+        // Untyped on purpose: a typed branch would declare [TARGET] at the branch level, and the
+        // usage line then reads `vm codex [TARGET] sync-config`, with the box named before the
+        // subcommand. Each leaf carries its own target options instead.
+        vm.AddBranch("codex", codex =>
+        {
+            codex.SetDescription("Make a box Codex-ready, and move this machine's Codex configuration onto it");
+            codex.SetDefaultCommand<PKS.Commands.Vm.VmCodexCommand>();
+            codex.AddCommand<PKS.Commands.Vm.VmCodexSyncConfigCommand>("sync-config")
+                .WithDescription("Copy this machine's Codex configuration to the box, rewritten so it works over SSH")
+                .WithExample(new[] { "vm", "codex", "sync-config" })
+                .WithExample(new[] { "vm", "codex", "sync-config", "hetzner" })
+                .WithExample(new[] { "vm", "codex", "sync-config", "--host", "root@example.com", "--dry-run" });
+        });
         vm.AddCommand<PKS.Commands.Vm.VmAutoshutdownCommand>("autoshutdown")
             .WithDescription("Configure auto-shutdown for a VM")
             .WithExample(new[] { "vm", "autoshutdown", "my-vm", "--idle", "30" })
