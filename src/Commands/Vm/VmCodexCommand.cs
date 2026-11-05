@@ -36,29 +36,8 @@ public sealed class VmCodexCommand : AsyncCommand<VmCodexCommand.Settings>
         _console = console;
     }
 
-    public sealed class Settings : VmSettings
+    public sealed class Settings : VmCodexTargetSettings
     {
-        [CommandArgument(0, "[TARGET]")]
-        [Description("Registered SSH target, by label or host (interactive picker if omitted). See 'pks ssh list'")]
-        public string? Target { get; set; }
-
-        // Spectre rejects '@' in an option value name, so the placeholder cannot spell the shape.
-        [CommandOption("--host <USER_AT_HOST>")]
-        [Description("Bootstrap a box that is not a registered target, e.g. root@example.com")]
-        public string? Host { get; set; }
-
-        [CommandOption("--port <PORT>")]
-        [Description("SSH port for --host (default: 22)")]
-        public int Port { get; set; } = 22;
-
-        [CommandOption("--key <PATH>")]
-        [Description("Private key for --host (default: whatever ssh would pick)")]
-        public string? KeyPath { get; set; }
-
-        [CommandOption("--user <NAME>")]
-        [Description($"Account to create and run Codex as (default: {VmCodexBootstrapScript.DefaultUser})")]
-        public string User { get; set; } = VmCodexBootstrapScript.DefaultUser;
-
         [CommandOption("--authorized-key <KEY_OR_PATH>")]
         [Description("Public key to authorise for the account; repeatable. Default: inherit the keys the account we connect as already trusts")]
         public string[] AuthorizedKeys { get; set; } = Array.Empty<string>();
@@ -133,11 +112,10 @@ public sealed class VmCodexCommand : AsyncCommand<VmCodexCommand.Settings>
             return 0;
         }
 
-        var resolved = await ResolveAsync(settings);
+        using var resolved = await VmCodexTarget.ResolveAsync(settings, _sshTargets, _keyStore, _console);
         if (resolved is null) return 1;
-        var (host, label, localKeyPath, materialized) = resolved.Value;
+        var (host, label, localKeyPath, _) = resolved;
 
-        try
         {
             _console.MarkupLine($"[green]Box:[/] {Markup.Escape(label)} [dim]({Markup.Escape(host.Username)}@{Markup.Escape(host.Host)}:{host.Port})[/]");
             _console.MarkupLine($"[green]Account:[/] {Markup.Escape(settings.User)}"
@@ -172,10 +150,6 @@ public sealed class VmCodexCommand : AsyncCommand<VmCodexCommand.Settings>
 
             PrintNextSteps(settings, host, label, localKeyPath, signedIn, provider);
             return 0;
-        }
-        finally
-        {
-            materialized?.Dispose();
         }
     }
 
@@ -262,7 +236,30 @@ public sealed class VmCodexCommand : AsyncCommand<VmCodexCommand.Settings>
             ? $"ssh -L 1455:localhost:1455 {alias} -t codex login"
             : $"ssh -L 1455:localhost:1455 {settings.User}@{host.Host} -t codex login";
 
-        _console.MarkupLine("[bold]One step left — sign the account in once. Only a human can do this:[/]");
+        // Two genuinely different next steps, and the order matters. The app will offer a "Sign in
+        // to Codex" button for this account, and pressing it opens an OpenAI sign-in — which works,
+        // and bills a ChatGPT account, and bypasses a gateway entirely. Anyone whose laptop already
+        // talks to a gateway wants the first of these, so it goes first.
+        // Spelled the way it was invoked, so it can be copied as-is: a named target stays a named
+        // target, and --host stays --host. A non-default account has to be repeated, or the sync
+        // would write into a different home than the one just created.
+        var target = !string.IsNullOrWhiteSpace(settings.Target) ? settings.Target!
+            : !string.IsNullOrWhiteSpace(settings.Host) ? $"--host {settings.Host}"
+            : label;
+        if (host.Port != 22) target += $" --port {host.Port}";
+        if (!string.Equals(settings.User, VmCodexBootstrapScript.DefaultUser, StringComparison.Ordinal))
+            target += $" --user {settings.User}";
+
+        _console.MarkupLine("[bold]The account has no credentials yet. Two ways to give it some:[/]");
+        _console.WriteLine();
+        _console.MarkupLine("[green]1. Your own gateway[/] [dim]— if Codex on this machine already talks to one, copy that[/]");
+        _console.MarkupLine("   [dim]configuration over. There is no sign-in in this case: the configuration is the[/]");
+        _console.MarkupLine("   [dim]authentication.[/]");
+        _console.WriteLine();
+        _console.MarkupLine($"   [grey85]pks vm codex sync-config {Markup.Escape(target)}[/]");
+        _console.WriteLine();
+        _console.MarkupLine("[green]2. An OpenAI account[/] [dim]— only if the box should bill a ChatGPT plan rather than a[/]");
+        _console.MarkupLine("   [dim]gateway. Needs a human; this is also what the app's \"Sign in to Codex\" button does.[/]");
         _console.WriteLine();
         _console.MarkupLine($"   [grey85]{Markup.Escape(login)}[/]");
         _console.WriteLine();
@@ -271,7 +268,7 @@ public sealed class VmCodexCommand : AsyncCommand<VmCodexCommand.Settings>
         _console.MarkupLine("   [dim]login enabled on the account; otherwise forward the port instead:[/]");
         _console.MarkupLine($"   [dim]{Markup.Escape(forward)}[/]");
         _console.WriteLine();
-        _console.MarkupLine($"[dim]Then in Codex: Settings → Connections, enable [bold]{Markup.Escape(alias)}[/], pick a project folder.[/]");
+        _console.MarkupLine($"[dim]Either way, then in Codex: Settings → Connections, enable [bold]{Markup.Escape(alias)}[/], pick a project folder.[/]");
     }
 
     /// <summary>
@@ -332,74 +329,6 @@ public sealed class VmCodexCommand : AsyncCommand<VmCodexCommand.Settings>
             .Select(l => l.Trim())
             .Where(l => l.StartsWith("pks vm codex: ", StringComparison.Ordinal))
             .Select(l => l["pks vm codex: ".Length..]);
-
-    private async Task<(RemoteHostConfig Host, string Label, string? LocalKeyPath, MaterializedKey? Key)?> ResolveAsync(Settings settings)
-    {
-        if (!string.IsNullOrWhiteSpace(settings.Host))
-        {
-            var raw = settings.Host!.Trim();
-            var at = raw.LastIndexOf('@');
-            if (at <= 0 || at == raw.Length - 1)
-            {
-                _console.MarkupLine($"[red]--host wants user@host[/] [dim](got '{Markup.Escape(raw)}')[/]");
-                return null;
-            }
-
-            var cfg = new RemoteHostConfig
-            {
-                Username = raw[..at],
-                Host = raw[(at + 1)..],
-                Port = settings.Port,
-                KeyPath = settings.KeyPath,
-            };
-            return (cfg, cfg.Host, settings.KeyPath, null);
-        }
-
-        var targets = await _sshTargets.ListTargetsAsync();
-        SshTarget? target;
-
-        if (!string.IsNullOrWhiteSpace(settings.Target))
-        {
-            target = await _sshTargets.FindTargetAsync(settings.Target!);
-            if (target is null)
-            {
-                _console.MarkupLine($"[red]No SSH target '{Markup.Escape(settings.Target!)}'.[/] [dim]See [bold]pks ssh list[/], or pass [bold]--host user@host[/].[/]");
-                return null;
-            }
-        }
-        else if (targets.Count == 0)
-        {
-            _console.MarkupLine("[yellow]No registered SSH targets.[/] [dim]Pass [bold]--host user@host[/], or register one with [bold]pks ssh register[/].[/]");
-            return null;
-        }
-        else if (targets.Count == 1)
-        {
-            target = targets[0];
-        }
-        else
-        {
-            var choice = _console.Prompt(new SelectionPrompt<string>()
-                .Title("[cyan]Which box should Codex run on?[/]")
-                .HighlightStyle(Style.Parse("cyan"))
-                .AddChoices(targets.Select(Describe)));
-            target = targets.First(t => Describe(t) == choice);
-        }
-
-        // A target may hold its key in the pks key store rather than at a path, in which case this
-        // decrypts it to a short-lived 0600 temp that the caller must dispose.
-        var (config, materialized) = await target.ToRemoteHostConfigAsync(_keyStore);
-
-        // The stanza is for the laptop, so it may only name a key that exists as a file there. A
-        // target whose key pks holds in its own store (ManagedKeyId) has no such path -- the
-        // materialized copy is a short-lived temp that is shredded when this command returns.
-        var localKey = string.IsNullOrWhiteSpace(target.ManagedKeyId) && !string.IsNullOrWhiteSpace(target.KeyPath)
-            ? target.KeyPath
-            : null;
-        return (config, target.Label ?? target.Host, localKey, materialized);
-    }
-
-    private static string Describe(SshTarget t)
-        => string.IsNullOrWhiteSpace(t.Label) ? $"{t.Username}@{t.Host}" : $"{t.Label} ({t.Username}@{t.Host})";
 
     /// <summary>
     /// Accepts a literal public key or a path to one. A path is the form people reach for first, and
