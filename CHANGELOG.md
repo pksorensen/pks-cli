@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.14.0](https://github.com/pksorensen/pks-cli/compare/v7.13.0...v7.14.0) (2026-11-05)
+
+
+### Features
+
+* **vm:** pks vm codex sync-config moves a local Codex config onto a box ([#151](https://github.com/pksorensen/pks-cli/issues/151)) ([ed92f71](https://github.com/pksorensen/pks-cli/commit/ed92f71a4c037855117c4235191292bbbed4be68))
+
 ## [7.13.0](https://github.com/pksorensen/pks-cli/compare/v7.12.0...v7.13.0) (2026-11-03)
 
 
