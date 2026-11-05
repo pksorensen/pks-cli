@@ -1,0 +1,223 @@
+name: 'Report Dependencies'
+description: >-
+  Report this repository's dependencies to Agentics Exposure via GitHub OIDC
+  trusted publishing — no stored token. The server binds the inventory to the
+  OIDC `repository` and `repository_id` claims, so a repo can only ever report
+  as itself, and a rename cannot split one system into two. Generates a
+  CycloneDX SBOM with syft (or takes one you already built), gzips it, and POSTs
+  it. The response says what the registry found, so a vulnerability with a fix
+  available shows up in the job summary rather than only on your phone.
+
+inputs:
+  server:
+    description: 'Agentics Exposure server URL'
+    required: false
+    default: 'https://exposure.agentics.dk'
+  audience:
+    description: 'OIDC audience for trusted publishing (must match the server)'
+    required: false
+    default: 'https://exposure.agentics.dk'
+  system:
+    description: 'System name in the registry. Defaults to this repository name.'
+    required: false
+    default: ''
+  path:
+    description: 'Directory to scan. Ignored when "image" or "sbom" is given.'
+    required: false
+    default: '.'
+  image:
+    description: 'Scan a built container image instead of the checkout (e.g. ghcr.io/owner/app@sha256:…).'
+    required: false
+    default: ''
+  sbom:
+    description: 'Path to an existing CycloneDX JSON file. Skips syft entirely.'
+    required: false
+    default: ''
+  syft-version:
+    description: 'Pinned syft version. Only used when syft is not already on PATH.'
+    required: false
+    default: '1.33.0'
+  fail-on-actionable:
+    description: >-
+      Fail the step when the registry reports findings you can act on. Off by
+      default: a report is an inventory update, and breaking an unrelated build
+      because a dependency published an advisory overnight is how teams stop
+      reporting.
+    required: false
+    default: 'false'
+
+outputs:
+  components:
+    description: 'Number of components accepted into the inventory'
+    value: ${{ steps.report.outputs.components }}
+  actionable:
+    description: 'Findings with a fix available'
+    value: ${{ steps.report.outputs.actionable }}
+  waiting:
+    description: 'Findings with no fix yet'
+    value: ${{ steps.report.outputs.waiting }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Report dependencies
+      id: report
+      shell: bash
+      env:
+        IN_SERVER: ${{ inputs.server }}
+        IN_AUDIENCE: ${{ inputs.audience }}
+        IN_SYSTEM: ${{ inputs.system }}
+        IN_PATH: ${{ inputs.path }}
+        IN_IMAGE: ${{ inputs.image }}
+        IN_SBOM: ${{ inputs.sbom }}
+        IN_SYFT_VERSION: ${{ inputs.syft-version }}
+        IN_FAIL_ON_ACTIONABLE: ${{ inputs.fail-on-actionable }}
+      run: |
+        set -euo pipefail
+
+        # Checked first, before any slow work, so a missing permission block is
+        # a one-second failure with the fix in the message instead of a failure
+        # after a four-minute image scan.
+        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+          echo "::error::OIDC env not present — the job needs 'permissions: id-token: write'"
+          exit 1
+        fi
+
+        SYSTEM="$IN_SYSTEM"
+        [ -n "$SYSTEM" ] || SYSTEM="${GITHUB_REPOSITORY#*/}"
+        # The registry's system names are lowercase path segments. Normalised
+        # here so a repo with a capital letter gets a working default instead of
+        # a 400 nobody expects.
+        SYSTEM=$(printf '%s' "$SYSTEM" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g; s/^[-.]+//')
+        if [ -z "$SYSTEM" ]; then
+          echo "::error::Could not derive a system name; pass the 'system' input"
+          exit 1
+        fi
+
+        WORK=$(mktemp -d)
+        trap 'rm -rf "$WORK"' EXIT
+        SBOM="$WORK/sbom.cdx.json"
+
+        if [ -n "$IN_SBOM" ]; then
+          if [ ! -f "$IN_SBOM" ]; then
+            echo "::error::sbom '$IN_SBOM' not found"
+            exit 1
+          fi
+          cp "$IN_SBOM" "$SBOM"
+          echo "Using the SBOM at $IN_SBOM"
+        else
+          if ! command -v syft >/dev/null 2>&1; then
+            echo "Installing syft v${IN_SYFT_VERSION}…"
+            # Pinned, and the installer is fetched over TLS from the project's
+            # own release host. An unpinned installer decides on every run what
+            # code generates the inventory a security service trusts.
+            curl -sSfL "https://get.anchore.io/syft" \
+              | sh -s -- -b "$WORK/bin" "v${IN_SYFT_VERSION}" >/dev/null
+            export PATH="$WORK/bin:$PATH"
+          fi
+          syft version | head -1
+
+          if [ -n "$IN_IMAGE" ]; then
+            echo "Scanning image $IN_IMAGE…"
+            syft scan "$IN_IMAGE" -o cyclonedx-json="$SBOM" -q
+          else
+            echo "Scanning $IN_PATH…"
+            syft scan "dir:$IN_PATH" -o cyclonedx-json="$SBOM" -q
+          fi
+        fi
+
+        if ! jq -e '.components | length > 0' "$SBOM" >/dev/null 2>&1; then
+          echo "::error::The SBOM has no components — nothing to report. Check the 'path' input."
+          exit 1
+        fi
+        COUNT=$(jq -r '.components | length' "$SBOM")
+        echo "Found $COUNT component(s)"
+
+        # Secret-bearing fields are stripped before the document leaves the
+        # runner. A CycloneDX built from a checkout can carry .npmrc tokens and
+        # registry credentials in component properties and external references,
+        # and grype has had a credential-disclosure of its own (GHSA-6gxw-85q2-q646).
+        # The registry stores SBOMs 0600 and exposes them on no endpoint, but the
+        # right place to drop a credential is before it is transmitted.
+        jq '
+          def scrub:
+            walk(
+              if type == "object" then
+                with_entries(
+                  select(
+                    (.key | ascii_downcase
+                      | test("token|password|secret|apikey|api_key|credential|authorization|passphrase")) | not
+                  )
+                )
+              else . end
+            );
+          scrub
+        ' "$SBOM" > "$WORK/clean.json"
+        mv "$WORK/clean.json" "$SBOM"
+
+        gzip -9 -c "$SBOM" > "$SBOM.gz"
+        echo "Payload: $(wc -c < "$SBOM.gz") bytes gzipped (from $(wc -c < "$SBOM"))"
+
+        # Minted LAST, after the scan. GitHub's OIDC assertion is short-lived and
+        # an image scan is slow; minting first is how a long build arrives at the
+        # POST with an expired token.
+        OIDC=$(curl -fsS -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${IN_AUDIENCE}" | jq -r '.value')
+        if [ -z "$OIDC" ] || [ "$OIDC" = "null" ]; then
+          echo "::error::failed to mint OIDC token"
+          exit 1
+        fi
+        echo "::add-mask::$OIDC"
+
+        URL="${IN_SERVER%/}/api/ingest/sbom?system=${SYSTEM}&kind=repo"
+        HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
+          -X POST \
+          -H "Authorization: Bearer ${OIDC}" \
+          -H "Content-Type: application/vnd.cyclonedx+json" \
+          -H "Content-Encoding: gzip" \
+          --data-binary "@${SBOM}.gz" \
+          "$URL")
+
+        HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -1)
+        BODY=$(echo "$HTTP_RESPONSE" | head -n -1 | head -c 2000)
+        echo "Response ($HTTP_CODE): $(printf '%s' "$BODY" | head -c 400)"
+
+        if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+          echo "::error::Failed to report dependencies (HTTP $HTTP_CODE): $BODY"
+          exit 1
+        fi
+
+        ACCEPTED=$(printf '%s' "$BODY" | jq -r '.components // 0')
+        ACTIONABLE=$(printf '%s' "$BODY" | jq -r '.actionable // 0')
+        WAITING=$(printf '%s' "$BODY" | jq -r '.waiting // 0')
+        BLOCKED=$(printf '%s' "$BODY" | jq -r '.blocked // 0')
+        BASELINE=$(printf '%s' "$BODY" | jq -r '.baseline // false')
+
+        echo "components=$ACCEPTED" >> "$GITHUB_OUTPUT"
+        echo "actionable=$ACTIONABLE" >> "$GITHUB_OUTPUT"
+        echo "waiting=$WAITING" >> "$GITHUB_OUTPUT"
+
+        {
+          echo "### Exposure report — \`$SYSTEM\`"
+          echo
+          echo "| | |"
+          echo "|---|---|"
+          echo "| Components | $ACCEPTED |"
+          echo "| **Fix available** | **$ACTIONABLE** |"
+          echo "| Waiting for a fix | $WAITING |"
+          echo "| No fix expected | $BLOCKED |"
+          echo
+          if [ "$BASELINE" = "true" ]; then
+            echo "First report for this system — these counts are its starting point,"
+            echo "not news. Later reports only announce what changes."
+          fi
+          echo "[Open in Exposure](${IN_SERVER%/}/systems/$SYSTEM)"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [ "$ACTIONABLE" -gt 0 ]; then
+          echo "::notice::$ACTIONABLE finding(s) have a fix available for $SYSTEM"
+        fi
+        if [ "$IN_FAIL_ON_ACTIONABLE" = "true" ] && [ "$ACTIONABLE" -gt 0 ]; then
+          echo "::error::$ACTIONABLE actionable finding(s); fail-on-actionable is set"
+          exit 1
+        fi
