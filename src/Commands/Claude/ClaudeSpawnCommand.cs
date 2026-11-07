@@ -165,7 +165,11 @@ public class ClaudeSpawnCommand : DevcontainerSpawnCommand
         env["ANTHROPIC_FOUNDRY_RESOURCE"] = creds.SelectedResourceName;
         env["IDENTITY_ENDPOINT"] = server.Endpoint;
         env["IDENTITY_HEADER"] = server.Secret;
-        SecretSink.SetEnvironmentVariable(env, "ANTHROPIC_FOUNDRY_API_KEY", creds.ApiKey);
+        // psi, not env: ProcessStartInfo.Environment is IDictionary<string, string?>, and
+        // the dictionary overload takes IDictionary<string, string>. IDictionary is
+        // invariant, so that is CS8620 — and ci.yml builds with warnings as errors.
+        // SecretSink has a ProcessStartInfo overload for exactly this shape.
+        SecretSink.SetEnvironmentVariable(psi, "ANTHROPIC_FOUNDRY_API_KEY", creds.ApiKey);
 
         var enabledModels = creds.EnabledModels.Count > 0 ? creds.EnabledModels : new List<string> { creds.DefaultModel };
 
