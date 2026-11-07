@@ -30,7 +30,6 @@ public sealed class ChatCompletionsToAnthropicStreamConverter
     private string _messageId = "msg_" + Guid.NewGuid().ToString("N");
     private bool _messageStarted;
     private bool _messageStopped;
-    private bool _finishSeen;
     private int _nextIndex;
     private int _inputTokens;
     private int _outputTokens;
@@ -99,7 +98,6 @@ public sealed class ChatCompletionsToAnthropicStreamConverter
 
             if (choice.TryGetProperty("finish_reason", out var fr) && fr.ValueKind == JsonValueKind.String)
             {
-                _finishSeen = true;
                 _stopReason = MapFinishReason(fr.GetString());
             }
         }
