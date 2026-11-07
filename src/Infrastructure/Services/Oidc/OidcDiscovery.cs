@@ -21,7 +21,9 @@ public sealed class OidcDiscovery(HttpClient http) : IOidcDiscovery
         return new ProtectedResourceMetadata(
             doc.Resource,
             doc.AuthorizationServers ?? [],
-            doc.ScopesSupported ?? []);
+            doc.ScopesSupported ?? [],
+            doc.ClientId,
+            doc.Audience);
     }
 
     public async Task<OidcEndpoints?> EndpointsAsync(string issuer, CancellationToken ct = default)
@@ -67,6 +69,10 @@ public sealed class OidcDiscovery(HttpClient http) : IOidcDiscovery
         [JsonPropertyName("resource")] public string? Resource { get; set; }
         [JsonPropertyName("authorization_servers")] public List<string>? AuthorizationServers { get; set; }
         [JsonPropertyName("scopes_supported")] public List<string>? ScopesSupported { get; set; }
+
+        // House extensions — see ProtectedResourceMetadata.
+        [JsonPropertyName("client_id")] public string? ClientId { get; set; }
+        [JsonPropertyName("audience")] public string? Audience { get; set; }
     }
 
     private sealed class AsMetadataDto
