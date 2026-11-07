@@ -280,7 +280,8 @@ public sealed class AgentSetupClient(
             if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
             if (!resp.IsSuccessStatusCode) return null;
 
-            return JsonSerializer.Deserialize<AspCredential>(await resp.Content.ReadAsStringAsync(ct), Json);
+            return JsonSerializer.Deserialize<AspCredential>(
+                AspJsonNames.Normalize(await resp.Content.ReadAsStringAsync(ct)), Json);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
         {
@@ -323,7 +324,7 @@ public sealed class AgentSetupClient(
 
             try
             {
-                return (JsonSerializer.Deserialize<T>(body, Json), null);
+                return (JsonSerializer.Deserialize<T>(AspJsonNames.Normalize(body), Json), null);
             }
             catch (JsonException)
             {
