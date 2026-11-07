@@ -93,10 +93,10 @@ public class VmStatusCommand : Command<VmStatusCommand.Settings>
             ? $"{Markup.Escape(record.ScheduledShutdownUtc)} UTC"
             : "none";
         var diskDisplay = record.OsDiskSizeGb > 0 ? $"{record.OsDiskSizeGb} GB" : "unknown";
-        var locationLabel = provider.ProviderKey == "scaleway" ? "Zone" : "Resource Group";
-        var locationValue = provider.ProviderKey == "scaleway"
-            ? (record.Zone ?? record.Location)
-            : record.ResourceGroup;
+        var locationLabel = provider.ProviderKey == "azure" ? "Resource Group" : "Zone";
+        var locationValue = provider.ProviderKey == "azure"
+            ? record.ResourceGroup
+            : (record.Zone ?? record.Location);
 
         _console.Write(new Panel(
             $"[cyan1]VM Name:[/]       {Markup.Escape(record.VmName)}\n" +
@@ -300,6 +300,8 @@ public class VmStatusCommand : Command<VmStatusCommand.Settings>
             // Outside a Status spinner so the guard can prompt for a two-factor code if gated.
             await provider.StopAsync(record);
             _console.MarkupLine("[green]VM stop command sent.[/]");
+            if (provider.ProviderKey == "hetzner")
+                _console.MarkupLine("[yellow]Hetzner bills a server until it is deleted, powered off or not — choose Destroy VM to stop paying.[/]");
             return 0;
         }
 

@@ -59,15 +59,29 @@ public class VmInitCommandTests
         scalewayMock.Setup(x => x.IsAuthenticatedAsync()).ReturnsAsync(false);
         var tailscaleMock = new Mock<ITailscaleService>();
         tailscaleMock.Setup(x => x.IsAuthenticatedAsync()).ReturnsAsync(false);
+        var hetznerMock = new Mock<IHetznerCloudService>();
+        hetznerMock.Setup(x => x.IsAuthenticatedAsync()).ReturnsAsync(false);
 
         var azureInitMock = new Mock<AzureInitCommand>(authMock.Object, console);
         azureInitMock
             .Setup(x => x.Execute(It.IsAny<CommandContext>(), It.IsAny<AzureInitCommand.Settings>()))
             .Returns(azureInitResult);
 
-        var scalewayInitMock = new Mock<ScalewayInitCommand>(scalewayMock.Object, console);
+        // ScalewayInitCommand takes an IActionGuard; without it Moq throws from the helper rather
+        // than from the code under test.
+        var scalewayInitMock = new Mock<ScalewayInitCommand>(
+            scalewayMock.Object,
+            new Mock<PKS.Infrastructure.Services.Security.IActionGuard>().Object,
+            console);
         scalewayInitMock
             .Setup(x => x.Execute(It.IsAny<CommandContext>(), It.IsAny<ScalewayInitCommand.Settings>()))
+            .Returns(0);
+        var hetznerInitMock = new Mock<PKS.Commands.Hetzner.HetznerInitCommand>(
+            hetznerMock.Object,
+            new Mock<PKS.Infrastructure.Services.Security.IActionGuard>().Object,
+            console);
+        hetznerInitMock
+            .Setup(x => x.Execute(It.IsAny<CommandContext>(), It.IsAny<PKS.Commands.Hetzner.HetznerInitCommand.Settings>()))
             .Returns(0);
 
         return new VmInitCommand(
@@ -76,9 +90,11 @@ public class VmInitCommandTests
             sshServiceMock.Object,
             metadataMock.Object,
             scalewayMock.Object,
+            hetznerMock.Object,
             tailscaleMock.Object,
             azureInitMock.Object,
             scalewayInitMock.Object,
+            hetznerInitMock.Object,
             new Mock<PKS.Infrastructure.Services.Security.IActionGuard>().Object,
             NoPimHttpClientFactory(),
             new Mock<IAzureVmDiskService>().Object,

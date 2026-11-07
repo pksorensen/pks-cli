@@ -21,10 +21,12 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
     private readonly ISshTargetConfigurationService _sshService;
     private readonly IAzureVmMetadataService _vmMetadata;
     private readonly IScalewayService _scaleway;
+    private readonly IHetznerCloudService _hetzner;
     private readonly ITailscaleService _tailscale;
     private readonly IAnsiConsole _console;
     private readonly AzureInitCommand _azureInit;
     private readonly PKS.Commands.Scaleway.ScalewayInitCommand _scalewayInit;
+    private readonly PKS.Commands.Hetzner.HetznerInitCommand _hetznerInit;
     private readonly IActionGuard _guard;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IAzureVmDiskService _disks;
@@ -35,9 +37,11 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
         ISshTargetConfigurationService sshService,
         IAzureVmMetadataService vmMetadata,
         IScalewayService scaleway,
+        IHetznerCloudService hetzner,
         ITailscaleService tailscale,
         AzureInitCommand azureInit,
         PKS.Commands.Scaleway.ScalewayInitCommand scalewayInit,
+        PKS.Commands.Hetzner.HetznerInitCommand hetznerInit,
         IActionGuard guard,
         IHttpClientFactory httpClientFactory,
         IAzureVmDiskService disks,
@@ -48,9 +52,11 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
         _sshService = sshService;
         _vmMetadata = vmMetadata;
         _scaleway = scaleway;
+        _hetzner = hetzner;
         _tailscale = tailscale;
         _azureInit = azureInit;
         _scalewayInit = scalewayInit;
+        _hetznerInit = hetznerInit;
         _guard = guard;
         _httpClientFactory = httpClientFactory;
         _disks = disks;
@@ -80,11 +86,13 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
             new SelectionPrompt<string>()
                 .Title("[cyan]Which cloud?[/]")
                 .HighlightStyle(Style.Parse("cyan"))
-                .AddChoices("Azure", "Scaleway (GPU)"));
+                .AddChoices("Azure", "Scaleway (GPU)", "Hetzner Cloud (per hour, billed until deleted)"));
 
-        return providerChoice.StartsWith("Scaleway")
-            ? await RunScalewayInitAsync(context, settings)
-            : await RunAzureInitAsync(context, settings);
+        if (providerChoice.StartsWith("Scaleway"))
+            return await RunScalewayInitAsync(context, settings);
+        if (providerChoice.StartsWith("Hetzner"))
+            return await RunHetznerInitAsync(context, settings);
+        return await RunAzureInitAsync(context, settings);
     }
 
     private async Task<int> RunAzureInitAsync(CommandContext context, Settings settings)
@@ -768,6 +776,365 @@ public class VmInitCommand : Command<VmInitCommand.Settings>
             .Header(" [bold green]Success[/] "));
 
         return 0;
+    }
+
+    private async Task<int> RunHetznerInitAsync(CommandContext context, Settings settings)
+    {
+        // 1. Ensure Hetzner authentication — chain into hetzner init if not yet done
+        if (!await _hetzner.IsAuthenticatedAsync())
+        {
+            _console.MarkupLine("[cyan]Hetzner Cloud not yet authenticated. Starting Hetzner sign-in...[/]");
+            var initResult = _hetznerInit.Execute(context, new PKS.Commands.Hetzner.HetznerInitCommand.Settings());
+            if (initResult != 0 || !await _hetzner.IsAuthenticatedAsync())
+            {
+                _console.MarkupLine("[red]Hetzner Cloud authentication required to provision a server.[/]");
+                return 1;
+            }
+        }
+
+        var creds = await _hetzner.GetStoredCredentialsAsync();
+        if (creds == null)
+        {
+            _console.MarkupLine("[red]Failed to load Hetzner Cloud credentials.[/]");
+            return 1;
+        }
+
+        // 2. Name — Hetzner requires an RFC 1123 hostname (lowercase letters, digits, hyphens).
+        var defaultName = $"pks-hc-{Guid.NewGuid().ToString("N")[..4]}";
+        var vmName = _console.Prompt(
+            new TextPrompt<string>("[cyan]Server name:[/]")
+                .DefaultValue(defaultName)
+                .Validate(n => System.Text.RegularExpressions.Regex.IsMatch(n, "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+                    ? ValidationResult.Success()
+                    : ValidationResult.Error("[red]Use lowercase letters, digits and hyphens only (a hostname).[/]")));
+        if (string.IsNullOrWhiteSpace(vmName)) vmName = defaultName;
+
+        // 3. Catalog: locations, server types with per-location prices, and the IPv4/snapshot/volume price list
+        List<PKS.Infrastructure.Services.Models.HetznerLocation> locations = new();
+        List<PKS.Infrastructure.Services.Models.HetznerServerType> types = new();
+        PKS.Infrastructure.Services.Models.HetznerPricing pricing = new();
+        await _console.Status()
+            .SpinnerStyle(Style.Parse("cyan")).Spinner(Spinner.Known.Dots)
+            .StartAsync("Loading locations, server types and prices...", async _ =>
+            {
+                var locTask = _hetzner.ListLocationsAsync();
+                var typesTask = _hetzner.ListServerTypesAsync();
+                var pricingTask = _hetzner.GetPricingAsync();
+                await Task.WhenAll(locTask, typesTask, pricingTask);
+                locations = locTask.Result;
+                types = typesTask.Result;
+                pricing = pricingTask.Result;
+            });
+
+        if (types.Count == 0)
+        {
+            _console.MarkupLine("[red]No server types returned by Hetzner Cloud.[/]");
+            return 1;
+        }
+
+        // 4. Location — default first
+        var orderedLocations = locations
+            .OrderByDescending(l => string.Equals(l.Name, creds.DefaultLocation, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(l => l.NetworkZone == "eu-central" ? 0 : 1)
+            .ThenBy(l => l.Name)
+            .ToList();
+        var location = orderedLocations.Count == 0
+            ? creds.DefaultLocation
+            : _console.Prompt(
+                new SelectionPrompt<PKS.Infrastructure.Services.Models.HetznerLocation>()
+                    .Title("[cyan]Location:[/]")
+                    .HighlightStyle(Style.Parse("cyan"))
+                    .PageSize(12)
+                    .UseConverter(l => l.DisplayLabel)
+                    .AddChoices(orderedLocations)).Name;
+
+        // 5. Server type — only what is orderable here, cheapest first, price in the label (Azure-style)
+        var orderable = types
+            .Where(t => !t.IsDeprecated && t.IsAvailableAt(location) && t.PriceAt(location) != null)
+            .OrderBy(t => t.PriceAt(location)!.HourlyNet)
+            .ThenBy(t => t.Name)
+            .ToList();
+        if (orderable.Count == 0)
+        {
+            _console.MarkupLine($"[yellow]No server type is currently orderable in {Markup.Escape(location)} — showing every type instead.[/]");
+            orderable = types.Where(t => !t.IsDeprecated).OrderBy(t => t.Name).ToList();
+        }
+        var selectedType = _console.Prompt(
+            new SelectionPrompt<PKS.Infrastructure.Services.Models.HetznerServerType>()
+                .Title($"[cyan]Select server type[/] [dim]({orderable.Count} orderable in {Markup.Escape(location)}, net prices excl. VAT, IPv4 extra)[/]:")
+                .PageSize(15)
+                .UseConverter(t => t.DisplayLabel(location))
+                .HighlightStyle(Style.Parse("cyan"))
+                .AddChoices(orderable));
+
+        // 6. Image — system images for the type's architecture, Ubuntu LTS first so Enter picks it
+        var arch = selectedType.IsArm ? "arm" : "x86";
+        List<PKS.Infrastructure.Services.Models.HetznerImage> images = new();
+        await _console.Status()
+            .SpinnerStyle(Style.Parse("cyan")).Spinner(Spinner.Known.Dots)
+            .StartAsync("Loading images...", async _ => { images = await _hetzner.ListImagesAsync(arch); });
+        if (images.Count == 0)
+        {
+            _console.MarkupLine("[red]No system images available for this architecture.[/]");
+            return 1;
+        }
+        var orderedImages = images
+            .OrderByDescending(i => string.Equals(i.Name, "ubuntu-24.04", StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(i => (i.Name ?? "").StartsWith("ubuntu", StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(i => i.Name)
+            .ToList();
+        var selectedImage = _console.Prompt(
+            new SelectionPrompt<PKS.Infrastructure.Services.Models.HetznerImage>()
+                .Title("[cyan]Select OS image:[/]")
+                .PageSize(15)
+                .UseConverter(i => i.DisplayName)
+                .HighlightStyle(Style.Parse("cyan"))
+                .AddChoices(orderedImages));
+
+        // 7. SSH key (same scheme as Azure/Scaleway: ~/.pks-cli/keys/<name>)
+        var keyDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".pks-cli", "keys");
+        Directory.CreateDirectory(keyDir);
+        var keyPath = Path.Combine(keyDir, vmName);
+        if (!File.Exists(keyPath))
+        {
+            var keygen = Process.Start(new ProcessStartInfo("ssh-keygen")
+            {
+                Arguments = $"-t ed25519 -f \"{keyPath}\" -N \"\" -C \"pks-{vmName}\"",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            });
+            if (keygen != null) await keygen.WaitForExitAsync();
+        }
+        var pubKey = File.Exists(keyPath + ".pub") ? (await File.ReadAllTextAsync(keyPath + ".pub")).Trim() : string.Empty;
+        const string adminUser = "root";
+
+        // 7b. Optionally join the tailnet at boot
+        var tailscaleUpArgs = SecretValue.None;
+        if (await _tailscale.IsAuthenticatedAsync()
+            && _console.Confirm("[cyan]Join this server to your Tailscale network at boot?[/]", defaultValue: true))
+        {
+            var tsCreds = (await _tailscale.GetStoredCredentialsAsync())!;
+            tailscaleUpArgs = _tailscale.BuildUpArgs(tsCreds, vmName);
+        }
+
+        // 8. The price of what is about to be created — the thing Azure shows and Hetzner's console shows late.
+        var typePrice = selectedType.PriceAt(location);
+        var serverHourly = typePrice?.HourlyNet ?? 0m;
+        var serverMonthly = typePrice?.MonthlyNet ?? 0m;
+        var ipv4Hourly = pricing.Ipv4HourlyNetAt(location) ?? 0m;
+        var ipv4Monthly = pricing.Ipv4MonthlyNetAt(location) ?? 0m;
+        var totalHourly = serverHourly + ipv4Hourly;
+        var totalMonthly = serverMonthly + ipv4Monthly;
+        var oneHourADay = PKS.Infrastructure.Services.Models.HetznerCost.MonthlyForDailyHours(totalHourly, 1);
+        var snapshotMonthly = pricing.SnapshotPerGbMonthNet * selectedType.DiskGb;
+        var volumeMonthly = pricing.VolumePerGbMonthNet * selectedType.DiskGb;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+
+        _console.Write(new Panel(
+            $"""
+            [cyan1]Server:[/] {Markup.Escape(vmName)}
+            [cyan1]Location:[/] {Markup.Escape(location)}
+            [cyan1]Type:[/] {Markup.Escape(selectedType.DisplayLabel(location))}
+            [cyan1]Image:[/] {Markup.Escape(selectedImage.DisplayName)}
+            [cyan1]Project:[/] {Markup.Escape(creds.ProjectName)}
+            [cyan1]SSH Key:[/] {Markup.Escape(keyPath)}
+            [cyan1]Tailscale:[/] {(tailscaleUpArgs.HasValue ? "[green]join at boot[/]" : "[dim]no[/]")}
+
+            [bold]Price (net, excl. VAT)[/]
+            [cyan1]Server:[/] €{serverHourly.ToString("0.0000", inv)}/hr   (cap €{serverMonthly.ToString("0.00", inv)}/mo)
+            [cyan1]Primary IPv4:[/] €{ipv4Hourly.ToString("0.0000", inv)}/hr   (cap €{ipv4Monthly.ToString("0.00", inv)}/mo)
+            [cyan1]Total:[/] [bold]€{totalHourly.ToString("0.0000", inv)}/hr[/]   (cap €{totalMonthly.ToString("0.00", inv)}/mo)
+            [cyan1]1 hour a day:[/] ≈ €{oneHourADay.ToString("0.00", inv)}/mo — only if the server is [bold]deleted[/] between runs
+            [cyan1]Powered off:[/] still €{totalMonthly.ToString("0.00", inv)}/mo — Hetzner bills until delete
+            [cyan1]Park the disk:[/] snapshot ≤ €{snapshotMonthly.ToString("0.00", inv)}/mo, or a {selectedType.DiskGb} GB volume €{volumeMonthly.ToString("0.00", inv)}/mo
+            """)
+            .Border(BoxBorder.Rounded).BorderStyle("cyan")
+            .Header(" [bold cyan]Hetzner Cloud Server[/] "));
+
+        if (!_console.Confirm("[cyan]Create server?[/]", defaultValue: true))
+            return 0;
+
+        // 9. Create — gated before the Status spinner so the guard can prompt.
+        try
+        {
+            await _guard.RequireAsync(new ActionRequest(ActionIds.VmCreate,
+                $"Create Hetzner Cloud server '{vmName}' ({selectedType.Name}) in {location}",
+                $"€{totalHourly.ToString("0.0000", inv)}/hr net until the server is deleted."));
+        }
+        catch (ActionGuardDeniedException ex) { _console.MarkupLine($"[red]Create denied:[/] {Markup.Escape(ex.Message)}"); return 1; }
+
+        // Everything below is timed: the point of a per-hour machine is knowing how long it
+        // takes to become useful, against what it costs.
+        var clock = Stopwatch.StartNew();
+        var marks = new List<(string Phase, TimeSpan At)>();
+
+        PKS.Infrastructure.Services.Models.HetznerServer? server = null;
+        Exception? createError = null;
+        await _console.Status()
+            .SpinnerStyle(Style.Parse("cyan")).Spinner(Spinner.Known.Dots)
+            .StartAsync("Uploading SSH key and creating server...", async ctx =>
+            {
+                try
+                {
+                    var keyIds = Array.Empty<long>();
+                    if (!string.IsNullOrEmpty(pubKey))
+                        keyIds = new[] { await _hetzner.EnsureSshKeyAsync($"pks-{vmName}", pubKey) };
+
+                    server = await _hetzner.CreateServerAsync(new PKS.Infrastructure.Services.Models.HetznerCreateOptions
+                    {
+                        Name = vmName,
+                        ServerType = selectedType.Name,
+                        Image = selectedImage.Name ?? selectedImage.Id.ToString(inv),
+                        Location = location,
+                        SshKeyIds = keyIds,
+                        SshPublicKey = pubKey,
+                        InstallDocker = true,
+                        TailscaleUpArgs = tailscaleUpArgs
+                    });
+                    marks.Add(("API accepted create", clock.Elapsed));
+
+                    ctx.Status("Waiting for the server to report running...");
+                    server = await _hetzner.WaitForStatusAsync(server.Id, "running", TimeSpan.FromMinutes(5), msg => ctx.Status(msg)) ?? server;
+                    marks.Add(("Status: running", clock.Elapsed));
+                }
+                catch (Exception ex) { createError = ex; }
+            });
+
+        if (createError != null || server == null)
+        {
+            _console.MarkupLine($"[red]Server creation failed:[/] {Markup.Escape(createError?.Message ?? "unknown error")}");
+            return 1;
+        }
+
+        var ip = server.PublicIpAddress;
+        if (string.IsNullOrEmpty(ip))
+        {
+            var refreshed = await _hetzner.GetServerAsync(server.Id);
+            ip = refreshed?.PublicIpAddress ?? string.Empty;
+        }
+
+        // 10. Wait for SSH, then for cloud-init (Docker install) — each a timing mark
+        var sshReady = false;
+        if (!string.IsNullOrEmpty(ip))
+        {
+            await _console.Status()
+                .SpinnerStyle(Style.Parse("cyan")).Spinner(Spinner.Known.Dots)
+                .StartAsync("Waiting for SSH...", async _ =>
+                {
+                    sshReady = await _vmService.WaitForSshAsync(ip, 22, TimeSpan.FromMinutes(5));
+                });
+            marks.Add((sshReady ? "SSH port open" : "SSH port open (timed out)", clock.Elapsed));
+
+            if (sshReady)
+            {
+                await _console.Status()
+                    .SpinnerStyle(Style.Parse("cyan")).Spinner(Spinner.Known.Dots)
+                    .StartAsync("Waiting for cloud-init to complete (installing Docker...)...", async ctx =>
+                    {
+                        await WaitForCloudInitAsync(ip, adminUser, keyPath, TimeSpan.FromMinutes(10), ctx);
+                    });
+                marks.Add(("cloud-init done (Docker installed)", clock.Elapsed));
+            }
+
+            // 11. Register SSH target
+            await _sshService.AddTargetAsync(ip, adminUser, 22, keyPath, label: vmName);
+        }
+        else
+        {
+            _console.MarkupLine("[yellow]The server has no public IPv4 yet; register it later with 'pks vm add-ssh-key'.[/]");
+        }
+
+        // 12. Save record
+        await _vmMetadata.SaveAsync(new AzureVmRecord
+        {
+            Provider = "hetzner",
+            VmName = vmName,
+            AdminUsername = adminUser,
+            Zone = location,
+            ServerId = server.Id.ToString(inv),
+            ProjectId = creds.ProjectName,
+            Location = location,
+            PublicIpAddress = ip,
+            SshKeyPath = keyPath,
+            VmSize = selectedType.Name,
+            OsDiskSizeGb = selectedType.DiskGb,
+            IdleShutdownMinutes = 0,
+            CreatedAt = DateTime.UtcNow
+        });
+
+        // 13. Boot timing vs price
+        var timing = new Table().Border(TableBorder.Rounded)
+            .Title("[bold]Boot timeline[/]")
+            .AddColumn("[bold]Phase[/]").AddColumn("[bold]At[/]").AddColumn("[bold]Step[/]");
+        TimeSpan prev = TimeSpan.Zero;
+        foreach (var (phase, at) in marks)
+        {
+            timing.AddRow(Markup.Escape(phase), $"{at.TotalSeconds:0.0} s", $"+{(at - prev).TotalSeconds:0.0} s");
+            prev = at;
+        }
+        _console.Write(timing);
+        var bootCost = totalHourly * (decimal)clock.Elapsed.TotalHours;
+        _console.MarkupLine($"[dim]Time to usable: {clock.Elapsed.TotalSeconds:0} s — that boot cost ≈ €{bootCost.ToString("0.0000", inv)} at €{totalHourly.ToString("0.0000", inv)}/hr.[/]");
+
+        _console.Write(new Panel(
+            $"""
+            [green]Server provisioned![/]
+
+            [cyan1]Server:[/] {Markup.Escape(vmName)}
+            [cyan1]Public IP:[/] {Markup.Escape(ip)}
+            [cyan1]Admin User:[/] {adminUser}
+            [cyan1]SSH Key:[/] {Markup.Escape(keyPath)}
+
+            [dim]Connect: ssh -i {Markup.Escape(keyPath)} {adminUser}@{Markup.Escape(ip)}[/]
+            [dim]Spawn devcontainer: pks devcontainer spawn --ssh-target {Markup.Escape(vmName)}[/]
+            [yellow]Stop billing: pks vm destroy {Markup.Escape(vmName)} — a powered-off Hetzner server still costs €{totalMonthly.ToString("0.00", inv)}/mo.[/]
+            """)
+            .Border(BoxBorder.Rounded).BorderStyle("green")
+            .Header(" [bold green]Success[/] "));
+
+        return 0;
+    }
+
+    /// <summary>Polls <c>cloud-init status</c> over SSH until it reports done, disabled, or an error.</summary>
+    private async Task WaitForCloudInitAsync(string ip, string user, string keyPath, TimeSpan timeout, StatusContext ctx)
+    {
+        var sshArgs = $"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes -p 22";
+        if (!string.IsNullOrEmpty(keyPath))
+            sshArgs += $" -i \"{keyPath}\"";
+
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo("ssh")
+                {
+                    Arguments = $"{sshArgs} {user}@{ip} \"cloud-init status 2>/dev/null || echo done\"",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+                using var proc = Process.Start(psi);
+                if (proc != null)
+                {
+                    var output = await proc.StandardOutput.ReadToEndAsync();
+                    await proc.WaitForExitAsync();
+                    if (output.Contains("done") || output.Contains("disabled"))
+                        return;
+                    if (output.Contains("running"))
+                        ctx.Status($"cloud-init still running... ({(int)(deadline - DateTime.UtcNow).TotalMinutes}m left)");
+                    else if (output.Contains("error"))
+                    {
+                        _console.MarkupLine("[yellow]cloud-init reported an error — Docker may not have installed correctly.[/]");
+                        return;
+                    }
+                }
+            }
+            catch { }
+            await Task.Delay(TimeSpan.FromSeconds(5));
+        }
     }
 
     // Extract the human-readable message from an ARM error, falling back to the raw exception message

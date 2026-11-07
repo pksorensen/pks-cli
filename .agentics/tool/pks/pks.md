@@ -123,6 +123,7 @@ Where the agents actually run.
 | [pks rsync](/tools/pks/rsync) | Register rsync backup targets such as a NAS or a remote host. |
 | [pks tailscale](/tools/pks/tailscale) | Store a Tailscale auth key and join preferences for VM enrollment. |
 | [pks scaleway](/tools/pks/scaleway) | Authenticate against Scaleway with a static API key pair. |
+| [pks hetzner](/tools/pks/hetzner) | Authenticate against Hetzner Cloud with a project API token, for per-hour servers billed until deleted. |
 
 ### Cloud identity, secrets, and signing
 

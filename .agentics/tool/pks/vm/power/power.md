@@ -56,6 +56,8 @@ The machine is deallocated. Its disk and attached storage are preserved, so `pks
 
 `vm.stop` does not require a second factor by default, unlike start, create, and destroy.
 
+> **Hetzner Cloud.** On Hetzner `stop` is a graceful ACPI shutdown and **does not stop billing** — a powered-off server costs the full hourly rate up to its monthly cap, plus its IPv4. The command says so after it runs. `pks vm destroy` is the only off switch there; snapshot the disk first if you want it back. See [pks hetzner](/tools/pks/hetzner).
+
 ## destroy
 
 ```bash

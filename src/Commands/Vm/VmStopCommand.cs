@@ -79,6 +79,8 @@ public class VmStopCommand : Command<VmStopCommand.Settings>
         _console.MarkupLine(
             $"[green]VM '{Markup.Escape(record.VmName)}' stopped.[/] Disk preserved — start again with " +
             $"'pks vm start {Markup.Escape(record.VmName)}' or 'pks vm tailscale {Markup.Escape(record.VmName)}'.");
+        if (provider.ProviderKey == "hetzner")
+            _console.MarkupLine($"[yellow]Hetzner bills a server until it is deleted, powered off or not — to stop paying, run 'pks vm destroy {Markup.Escape(record.VmName)}'.[/]");
         return 0;
     }
 }
