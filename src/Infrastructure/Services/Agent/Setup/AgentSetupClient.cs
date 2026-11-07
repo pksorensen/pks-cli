@@ -92,10 +92,11 @@ public sealed class AgentSetupClient(
         // Index first, then the documented default path.
         var serviceUrl = await FromIndexAsync(origin, ct) ?? origin + DefaultPath;
 
-        var doc = await GetJsonAsync<AspServiceDocument>(serviceUrl, ct);
+        var (doc, problem) = await GetJsonDetailedAsync<AspServiceDocument>(serviceUrl, ct);
         if (doc is null)
             return AgentSetupDiscovery.Failed(origin,
-                $"{origin} does not publish an agent-setup service document (looked at {serviceUrl}).");
+                $"{origin} does not publish an agent-setup service document (looked at {serviceUrl})."
+                + (problem is null ? "" : $" {problem}"));
 
         if (doc.V != 1)
             return AgentSetupDiscovery.Failed(origin,
@@ -290,6 +291,24 @@ public sealed class AgentSetupClient(
     // ---- helpers ----
 
     private async Task<T?> GetJsonAsync<T>(string url, CancellationToken ct, string? bearer = null) where T : class
+        => (await GetJsonDetailedAsync<T>(url, ct, bearer)).Value;
+
+    /// <summary>
+    /// A GET that says WHY it has no document, because the three reasons need three different
+    /// actions from the reader.
+    ///
+    /// <para>
+    /// The one worth separating is a 200 that is not JSON. Nearly every platform is a single-page
+    /// app with a catch-all fallback, so an unconfigured route does not answer 404: it answers 200
+    /// with <c>index.html</c>. Reported as "does not publish an agent-setup service document" that
+    /// is actively misleading, because the platform may publish it perfectly well and the fallback
+    /// is simply eating the request. It is also invisible from outside, which is the worst kind of
+    /// discovery failure: the reader is told the feature is absent and has nothing to go on.
+    /// Home's own dev server does exactly this until a proxy rule is added for /.well-known.
+    /// </para>
+    /// </summary>
+    private async Task<(T? Value, string? Problem)> GetJsonDetailedAsync<T>(
+        string url, CancellationToken ct, string? bearer = null) where T : class
     {
         try
         {
@@ -297,13 +316,31 @@ public sealed class AgentSetupClient(
             if (bearer is not null) req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
 
             using var resp = await http.SendAsync(req, ct);
-            if (!resp.IsSuccessStatusCode) return null;
+            if (!resp.IsSuccessStatusCode)
+                return (null, $"{url} answered {(int)resp.StatusCode}.");
 
-            return JsonSerializer.Deserialize<T>(await resp.Content.ReadAsStringAsync(ct), Json);
+            var body = await resp.Content.ReadAsStringAsync(ct);
+
+            try
+            {
+                return (JsonSerializer.Deserialize<T>(body, Json), null);
+            }
+            catch (JsonException)
+            {
+                var type = resp.Content.Headers.ContentType?.MediaType;
+                var looksLikeAPage = type?.Contains("html", StringComparison.OrdinalIgnoreCase) == true
+                    || body.TrimStart().StartsWith('<');
+
+                return (null, looksLikeAPage
+                    ? $"{url} answered 200 with a web page, not JSON. A single-page-app fallback is " +
+                      "almost certainly answering instead of the route, so the document is unreachable " +
+                      "even if the platform serves it."
+                    : $"{url} answered 200 but the body is not the document I expected.");
+            }
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
-            return null;
+            return (null, $"Could not reach {url}: {ex.Message}");
         }
     }
 
