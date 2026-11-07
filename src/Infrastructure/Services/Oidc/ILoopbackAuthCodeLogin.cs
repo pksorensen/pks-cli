@@ -33,6 +33,20 @@ public interface ILoopbackAuthCodeLogin
 /// A short list rather than one port, because something else may hold it.
 /// </param>
 /// <param name="RedirectPath">Path component of the redirect. Must match the document too.</param>
+/// <param name="RedirectHost">
+/// Host component of the redirect, and **not** a client constant — this is the one
+/// field that lets a single binary serve two issuers.
+///
+/// Keycloak compares the whole `redirect_uri` byte-for-byte against the CIMD
+/// document, and ours says `127.0.0.1`. Entra matches the port loosely but the
+/// **host exactly**, and Context& Home registered `localhost`. `127.0.0.1` and
+/// `localhost` are not the same string to Entra, so a hardcoded host works
+/// against one of the two and fails against the other with an error that blames
+/// the browser.
+///
+/// The platform declares what its authorization server will accept, in its ASP
+/// service document's `loopback_redirect_uris`, and we send that.
+/// </param>
 /// <param name="OnAuthorizeUrl">
 /// Shows the URL to the human. The service tries to open a browser as well, but
 /// printing is what makes it work when it cannot.
@@ -44,7 +58,10 @@ public sealed record LoopbackLoginRequest(
     string? Resource,
     IReadOnlyList<int> RedirectPorts,
     string RedirectPath,
-    Action<string> OnAuthorizeUrl)
+    Action<string> OnAuthorizeUrl,
+    // The literal, not DefaultHost: a record's primary-constructor default cannot
+    // reference a constant declared in its own body.
+    string RedirectHost = "127.0.0.1")
 {
     /// What agentics.dk publishes in its CIMD document. A receiver that publishes
     /// different ones is not discoverable from here — the document is fetched by
@@ -53,4 +70,8 @@ public sealed record LoopbackLoginRequest(
     public static readonly IReadOnlyList<int> DefaultPorts = [51789, 51790, 51791];
 
     public const string DefaultPath = "/callback";
+
+    /// What our own CIMD document registers. Entra-backed platforms say `localhost`
+    /// instead, and say so in their service document.
+    public const string DefaultHost = "127.0.0.1";
 }

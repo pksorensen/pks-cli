@@ -29,7 +29,7 @@ public sealed class LoopbackAuthCodeLogin(HttpClient http) : ILoopbackAuthCodeLo
         // The redirect_uri has to be spelled exactly as the metadata document
         // spells it, so it is built without a trailing slash even though the
         // HttpListener prefix needs one.
-        var redirect = $"http://127.0.0.1:{port}{request.RedirectPath}";
+        var redirect = $"http://{request.RedirectHost}:{port}{request.RedirectPath}";
         var verifier = Base64Url(RandomNumberGenerator.GetBytes(32));
         var challenge = Base64Url(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));
         var state = Base64Url(RandomNumberGenerator.GetBytes(16));
@@ -122,7 +122,8 @@ public sealed class LoopbackAuthCodeLogin(HttpClient http) : ILoopbackAuthCodeLo
             // The whole loopback root, not just the callback path: HttpListener
             // matches prefixes by path segment, so a prefix of `/callback/`
             // would not match a request for `/callback`.
-            listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+            foreach (var prefix in ListenPrefixes(request.RedirectHost, port))
+                listener.Prefixes.Add(prefix);
             try
             {
                 listener.Start();
@@ -139,6 +140,26 @@ public sealed class LoopbackAuthCodeLogin(HttpClient http) : ILoopbackAuthCodeLo
         bound = 0;
 
         return null;
+    }
+
+    /// <summary>
+    /// What to bind for a given redirect host.
+    ///
+    /// <para>
+    /// For <c>localhost</c> this listens on **both** loopback literals as well, and that is not
+    /// belt-and-braces. On a dual-stack host <c>localhost</c> resolves to <c>::1</c> first, so a
+    /// browser sent to <c>http://localhost:51789/callback</c> connects over IPv6 while a listener
+    /// bound only to <c>127.0.0.1</c> hears nothing. The login then hangs until it times out, with
+    /// the authorization server, the browser and the CLI all behaving correctly — which is a
+    /// miserable thing to debug.
+    /// </para>
+    /// </summary>
+    private static IEnumerable<string> ListenPrefixes(string host, int port)
+    {
+        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+            return [$"http://localhost:{port}/", $"http://127.0.0.1:{port}/", $"http://[::1]:{port}/"];
+
+        return [$"http://{host}:{port}/"];
     }
 
     private static async Task RespondAsync(HttpListenerContext ctx, bool ok, string? error)
