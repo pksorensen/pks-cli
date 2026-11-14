@@ -100,6 +100,9 @@ public class AgenticsInitIssuerDiscoveryTests
 
         public Task<ProtectedResourceMetadata?> ProtectedResourceAsync(string resourceUrl, CancellationToken ct = default)
             => Task.FromResult<ProtectedResourceMetadata?>(null);
+
+        public Task<ProtectedResourceMetadata?> ProtectedResourceAtAsync(string metadataUrl, CancellationToken ct = default)
+            => ProtectedResourceAsync(metadataUrl, ct);
     }
 
     /// The login itself is not under test, and failing it keeps the command from

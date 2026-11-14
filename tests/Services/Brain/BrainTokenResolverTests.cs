@@ -169,6 +169,9 @@ public class BrainTokenResolverTests : IDisposable
         public Task<ProtectedResourceMetadata?> ProtectedResourceAsync(string resourceUrl, CancellationToken ct = default)
             => Task.FromResult<ProtectedResourceMetadata?>(new ProtectedResourceMetadata(ApiBase, [Issuer], []));
 
+        public Task<ProtectedResourceMetadata?> ProtectedResourceAtAsync(string metadataUrl, CancellationToken ct = default)
+            => ProtectedResourceAsync(metadataUrl, ct);
+
         public Task<OidcEndpoints?> EndpointsAsync(string issuer, CancellationToken ct = default)
             => Task.FromResult<OidcEndpoints?>(new OidcEndpoints(
                 Issuer, $"{Issuer}/protocol/openid-connect/token", null, null));
