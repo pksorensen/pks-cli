@@ -35,6 +35,10 @@ public class AgenticsRunnerRegisterCommand(
         [CommandOption("--server <SERVER>")]
         [Description("Agentics server URL (falls back to AGENTIC_SERVER env, then agentics.dk)")]
         public string? Server { get; set; }
+
+        [CommandOption("--token <TOKEN>")]
+        [Description("Bearer token for the registration call (e.g. a one-time registration token minted by the server). Falls back to AGENTICS_REGISTRATION_TOKEN env; when neither is set the usual user sign-in / GitHub Actions OIDC is used.")]
+        public string? Token { get; set; }
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -105,8 +109,13 @@ public class AgenticsRunnerRegisterCommand(
                         // Registration mints a live runner token, so the server accepts only a
                         // user credential or GitHub Actions OIDC here — never another runner
                         // token. See RunnerRegistrar.DefaultAuth for why this was missing.
+                        var explicitToken = !string.IsNullOrWhiteSpace(settings.Token)
+                            ? settings.Token
+                            : Environment.GetEnvironmentVariable("AGENTICS_REGISTRATION_TOKEN");
                         var bearer = await agenticsAuth.GetTokenAsync(
-                            $"{serverUrl}/p/{owner}/{project}", null, owner, project);
+                            $"{serverUrl}/p/{owner}/{project}",
+                            string.IsNullOrWhiteSpace(explicitToken) ? null : explicitToken.Trim(),
+                            owner, project);
                         if (!string.IsNullOrEmpty(bearer))
                         {
                             httpClient.DefaultRequestHeaders.Authorization =
