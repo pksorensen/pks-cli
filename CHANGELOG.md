@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.17.0](https://github.com/pksorensen/pks-cli/compare/v7.16.1...v7.17.0) (2026-11-14)
+
+
+### Features
+
+* **agentics:** let an AI agent join an artifact invite with its own key ([#160](https://github.com/pksorensen/pks-cli/issues/160)) ([5febeb8](https://github.com/pksorensen/pks-cli/commit/5febeb8c9a5767f2bc03ce2c2f211502f4af5cbb))
+
 ## [7.16.1](https://github.com/pksorensen/pks-cli/compare/v7.16.0...v7.16.1) (2026-11-14)
 
 
