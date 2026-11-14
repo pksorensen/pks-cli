@@ -67,11 +67,23 @@ public sealed class AgentSetupClient(
     /// <para>
     /// <b>An identifier, not a location.</b> It stays byte-identical on every host that implements
     /// the service — a self-hosted platform at example.com still keys its entry with this exact
-    /// string, exactly as a link relation or an RDF vocabulary would. Interpolating the host into
-    /// the key matches nothing anywhere but agentics.dk.
+    /// string, exactly as a link relation or an RDF vocabulary would. The identifier lives in the
+    /// specification's namespace rather than any platform's, so interpolating the host into the
+    /// key matches nothing anywhere.
     /// </para>
     /// </summary>
-    public const string RelUri = "https://agentics.dk/rel/agent-setup/v1";
+    public const string RelUri = "https://agentsetupprotocol.com/rel/agent-setup/v1";
+
+    /// <summary>
+    /// The key agentics.dk published before the specification had a home of its own.
+    ///
+    /// <para>
+    /// Tried after <see cref="RelUri"/>, because the rel URI is compared byte for byte and a
+    /// platform that has not redeployed still advertises the old string. Reading both costs one
+    /// dictionary lookup; dropping it strands every platform on the previous release.
+    /// </para>
+    /// </summary>
+    public const string RelUriLegacy = "https://agentics.dk/rel/agent-setup/v1";
 
     /// <summary>
     /// Where the service document lives when the platform publishes no index.
@@ -115,7 +127,10 @@ public sealed class AgentSetupClient(
 
             using var json = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
             if (!json.RootElement.TryGetProperty("services", out var services)) return null;
-            if (!services.TryGetProperty(RelUri, out var entry)) return null;
+            // Current key first, then the pre-agentsetupprotocol.com one. A platform
+            // mid-rollout serves both and either answer is the same document.
+            if (!services.TryGetProperty(RelUri, out var entry)
+                && !services.TryGetProperty(RelUriLegacy, out entry)) return null;
 
             return entry.TryGetProperty("href", out var href) ? href.GetString() : null;
         }

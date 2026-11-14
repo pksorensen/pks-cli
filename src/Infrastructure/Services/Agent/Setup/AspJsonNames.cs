@@ -72,9 +72,17 @@ internal static class AspJsonNames
             case JsonObject obj:
             {
                 var renames = new List<(string From, string To)>();
+
+                // The recursion's answer has to be kept. Discarding it made Normalize a no-op for
+                // every document whose root keys happen to need no renaming — which is all of them
+                // except the service document: a profile list's roots are v, source, subject and
+                // profiles. The nested rewrites still happened in the tree, and were then thrown
+                // away with it when this level reported no change. Measured 13/11-2026.
+                var nested = false;
+
                 foreach (var (key, value) in obj)
                 {
-                    if (value is not null) Walk(value);
+                    if (value is not null) nested |= Walk(value);
 
                     var snake = ToSnake(key);
                     if (snake is not null && !obj.ContainsKey(snake)) renames.Add((key, snake));
@@ -90,7 +98,7 @@ internal static class AspJsonNames
                     obj[to] = value?.DeepClone();
                 }
 
-                return renames.Count > 0;
+                return nested || renames.Count > 0;
             }
 
             default:

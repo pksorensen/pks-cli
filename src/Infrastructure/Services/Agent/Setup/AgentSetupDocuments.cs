@@ -96,20 +96,20 @@ public sealed class AspSource
     /// <summary>The platform's short slug. Every namespace we write is built on it.</summary>
     [JsonPropertyName("id")] public string Id { get; set; } = string.Empty;
 
-    [JsonPropertyName("displayName")] public string? DisplayName { get; set; }
+    [JsonPropertyName("display_name")] public string? DisplayName { get; set; }
     [JsonPropertyName("origin")] public string? Origin { get; set; }
 }
 
 public sealed class AspSubject
 {
     [JsonPropertyName("handle")] public string? Handle { get; set; }
-    [JsonPropertyName("displayName")] public string? DisplayName { get; set; }
+    [JsonPropertyName("display_name")] public string? DisplayName { get; set; }
 }
 
 public sealed class AspProfile
 {
     [JsonPropertyName("id")] public string Id { get; set; } = string.Empty;
-    [JsonPropertyName("displayName")] public string? DisplayName { get; set; }
+    [JsonPropertyName("display_name")] public string? DisplayName { get; set; }
     [JsonPropertyName("description")] public string? Description { get; set; }
 
     /// <summary>Groups the picker — an owner, a tenant, a customer.</summary>
@@ -120,7 +120,7 @@ public sealed class AspProfile
 
     [JsonPropertyName("model")] public AspModel? Model { get; set; }
     [JsonPropertyName("models")] public List<AspModelEntry>? Models { get; set; }
-    [JsonPropertyName("mcpServers")] public List<AspMcpServer>? McpServers { get; set; }
+    [JsonPropertyName("mcp_servers")] public List<AspMcpServer>? McpServers { get; set; }
     [JsonPropertyName("marketplaces")] public List<AspMarketplace>? Marketplaces { get; set; }
 
     /// <summary>Where to POST for this profile's credential. Absent when there is nothing to mint.</summary>
@@ -130,10 +130,10 @@ public sealed class AspProfile
 public sealed class AspProvider
 {
     [JsonPropertyName("name")] public string? Name { get; set; }
-    [JsonPropertyName("baseUrl")] public string? BaseUrl { get; set; }
+    [JsonPropertyName("base_url")] public string? BaseUrl { get; set; }
 
     /// <summary>Codex needs <c>responses</c>; a chat-completions endpoint fails with no diagnostic.</summary>
-    [JsonPropertyName("wireApi")] public string? WireApi { get; set; }
+    [JsonPropertyName("wire_api")] public string? WireApi { get; set; }
 
     [JsonPropertyName("auth")] public AspProviderAuth? Auth { get; set; }
 }
@@ -164,13 +164,13 @@ public sealed class AspModel
 {
     [JsonPropertyName("default")] public string? Default { get; set; }
     [JsonPropertyName("allow")] public List<string>? Allow { get; set; }
-    [JsonPropertyName("reasoningEffort")] public string? ReasoningEffort { get; set; }
+    [JsonPropertyName("reasoning_effort")] public string? ReasoningEffort { get; set; }
 }
 
 public sealed class AspModelEntry
 {
     [JsonPropertyName("id")] public string Id { get; set; } = string.Empty;
-    [JsonPropertyName("maxTokens")] public int? MaxTokens { get; set; }
+    [JsonPropertyName("max_tokens")] public int? MaxTokens { get; set; }
 }
 
 public sealed class AspMcpServer
@@ -181,7 +181,7 @@ public sealed class AspMcpServer
     [JsonPropertyName("args")] public List<string>? Args { get; set; }
 
     /// <summary>Only for a server that answers <c>appInfo</c> in <c>ui/initialize</c>.</summary>
-    [JsonPropertyName("mcpApps")] public bool? McpApps { get; set; }
+    [JsonPropertyName("mcp_apps")] public bool? McpApps { get; set; }
 }
 
 public sealed class AspMarketplace
@@ -195,5 +195,5 @@ public sealed class AspCredential
 {
     [JsonPropertyName("env")] public string? Env { get; set; }
     [JsonPropertyName("value")] public string? Value { get; set; }
-    [JsonPropertyName("expiresAt")] public DateTimeOffset? ExpiresAt { get; set; }
+    [JsonPropertyName("expires_at")] public DateTimeOffset? ExpiresAt { get; set; }
 }
