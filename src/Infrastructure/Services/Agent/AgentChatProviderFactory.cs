@@ -65,26 +65,14 @@ public sealed class AgentChatProviderFactory
                 candidates.Add(id);
         }
 
-        // 1. The chat deployments picked in `pks foundry init` / `pks providers init`, the default
-        // first — the first entry is what a runner with no explicit chat model serves.
-        var foundry = await FoundryChatDeploymentsAsync();
-        foreach (var id in foundry)
-            Add(id);
-
-        // 2. Built-in known models. One that only resolves through the Foundry fallback is skipped
-        // when the Foundry resource has no deployment by that name: it would list fine and then
-        // fail on the first message.
+        // 1. Built-in known models.
         foreach (var id in BuiltInDefaults.Keys)
-        {
-            if (await OnlyServedByFoundryFallbackAsync(id) && !foundry.Contains(id, StringComparer.OrdinalIgnoreCase))
-                continue;
             Add(id);
-        }
 
-        // 3. Custom model ids configured directly in settings (agent.models.<id>.provider).
+        // 2. Custom model ids configured directly in settings (agent.models.<id>.provider).
         const string prefix = "agent.models.";
         const string suffix = ".provider";
-        var all = await _config.GetAllAsync() ?? new Dictionary<string, string>();
+        var all = await _config.GetAllAsync();
         foreach (var key in all.Keys)
         {
             if (key.StartsWith(prefix, StringComparison.Ordinal)
@@ -92,6 +80,17 @@ public sealed class AgentChatProviderFactory
                 && key.Length > prefix.Length + suffix.Length)
             {
                 Add(key.Substring(prefix.Length, key.Length - prefix.Length - suffix.Length));
+            }
+        }
+
+        // 3. Models the user enabled via `pks foundry init` / `pks foundry select`.
+        if (_foundryAuth is not null)
+        {
+            var creds = await _foundryAuth.GetStoredCredentialsAsync();
+            if (creds is not null && creds.EnabledModels.Count > 0)
+            {
+                foreach (var id in creds.EnabledModels)
+                    Add(id);
             }
         }
 
@@ -132,47 +131,6 @@ public sealed class AgentChatProviderFactory
         {
             return false;
         }
-    }
-
-    /// <summary>
-    /// The Foundry deployments enabled in <c>pks foundry init</c> that can serve a chat, default
-    /// first. The stored credentials keep only deployment names, so speech, embedding and image
-    /// deployments (which the init flow offers too) are left out by name.
-    /// </summary>
-    private async Task<IReadOnlyList<string>> FoundryChatDeploymentsAsync()
-    {
-        if (_foundryAuth is null)
-            return Array.Empty<string>();
-        var creds = await _foundryAuth.GetStoredCredentialsAsync();
-        if (creds is null || string.IsNullOrWhiteSpace(creds.SelectedResourceEndpoint))
-            return Array.Empty<string>();
-
-        return new[] { creds.DefaultModel }
-            .Concat(creds.EnabledModels)
-            .Where(id => !string.IsNullOrWhiteSpace(id) && IsChatDeploymentName(id))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-    }
-
-    private static readonly string[] NonChatDeploymentMarkers =
-        ["tts", "whisper", "embedding", "dall-e", "image", "transcribe", "realtime", "audio", "speech", "sora"];
-
-    internal static bool IsChatDeploymentName(string deployment) =>
-        !NonChatDeploymentMarkers.Any(m => deployment.Contains(m, StringComparison.OrdinalIgnoreCase));
-
-    /// <summary>Claude deployments go to Foundry's Anthropic route, everything else to its OpenAI one.</summary>
-    private static bool IsClaudeDeploymentName(string deployment) =>
-        deployment.Contains("claude", StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>A built-in azure-openai model with no endpoint of its own in settings or the environment.</summary>
-    private async Task<bool> OnlyServedByFoundryFallbackAsync(string modelId)
-    {
-        if (!BuiltInDefaults.TryGetValue(modelId, out var defaults) || defaults.Provider != "azure-openai" || defaults.Endpoint is not null)
-            return false;
-        if (!string.IsNullOrWhiteSpace(await _config.GetAsync($"agent.models.{modelId}.provider")))
-            return false;
-
-        return string.IsNullOrWhiteSpace(await _config.GetAsync($"agent.models.{modelId}.endpoint"));
     }
 
     private IChatProvider BuildAzureOpenAI(ModelEntry entry)
@@ -225,21 +183,6 @@ public sealed class AgentChatProviderFactory
         //   agent.models.<id>.deployment
         //   agent.models.<id>.apiKey
         var provider = await _config.GetAsync($"agent.models.{modelId}.provider");
-
-        // A deployment picked in `pks foundry init` serves under its own name, ahead of a built-in
-        // default of the same name: that is the resource the operator chose. Settings still win.
-        if (string.IsNullOrWhiteSpace(provider) && _foundryAuth is not null
-            && (await FoundryChatDeploymentsAsync()).Contains(modelId, StringComparer.OrdinalIgnoreCase))
-        {
-            var creds = (await _foundryAuth.GetStoredCredentialsAsync())!;
-            var host = new Uri(creds.SelectedResourceEndpoint);
-            return IsClaudeDeploymentName(modelId)
-                // Foundry's Claude route is {host}/anthropic; a stored resource key is not an
-                // Anthropic key, so BuildAnthropic takes the Entra token path.
-                ? new ModelEntry("anthropic", $"{host.Scheme}://{host.Host}/anthropic", modelId, null)
-                : new ModelEntry("azure-openai", creds.SelectedResourceEndpoint, modelId, creds.ApiKey.Reveal());
-        }
-
         BuiltInDefaults.TryGetValue(modelId, out var defaults);
         if (string.IsNullOrWhiteSpace(provider) && defaults is null)
         {
