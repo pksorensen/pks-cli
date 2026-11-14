@@ -61,6 +61,57 @@ public sealed class AgentSetupDiscoveryTests
         result.Document!.Profiles.Should().Be("https://platform.test/api/v1/setup/profiles");
     }
 
+    [Fact]
+    public async Task WithNoIndex_TheWellKnownPathIsTried_BeforeThePreMoveOne()
+    {
+        // A platform that serves only the well-known document and publishes no index at all is
+        // conforming. Before this, discovery asked for /api/v1/setup, got nothing, and told the
+        // reader the host does not speak the protocol.
+        var asked = new List<string>();
+        var client = ClientOver(uri =>
+        {
+            asked.Add(uri.AbsolutePath);
+
+            return uri.AbsolutePath == "/.well-known/agent-setup"
+                ? Json("""{"v":1,"tools":["codex"],"profiles":"https://platform.test/p"}""")
+                : new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var result = await client.DiscoverAsync("https://platform.test");
+
+        result.Ok.Should().BeTrue(result.Error);
+        asked.Should().NotContain("/api/v1/setup",
+            "the well-known path answered, so the pre-move path is never asked for");
+    }
+
+    [Fact]
+    public async Task WithNoIndex_ThePreMovePathIsStillTried_WhenTheWellKnownOneIs404()
+    {
+        // The other direction: a platform released before the move serves only /api/v1/setup,
+        // and a client that stopped asking for it would break every one of them.
+        var client = ClientOver(uri =>
+            uri.AbsolutePath == "/api/v1/setup"
+                ? Json("""{"v":1,"tools":["codex"],"profiles":"https://platform.test/p"}""")
+                : new HttpResponseMessage(HttpStatusCode.NotFound));
+
+        var result = await client.DiscoverAsync("https://platform.test");
+
+        result.Ok.Should().BeTrue(result.Error);
+    }
+
+    [Fact]
+    public async Task WhenNeitherPathAnswers_BothAreNamed()
+    {
+        // "looked at X" when two were tried sends the reader to check one address and conclude
+        // the other was never attempted.
+        var client = ClientOver(_ => new HttpResponseMessage(HttpStatusCode.NotFound));
+
+        var result = await client.DiscoverAsync("https://platform.test");
+
+        result.Error.Should().Contain("/.well-known/agent-setup");
+        result.Error.Should().Contain("/api/v1/setup");
+    }
+
     private static HttpResponseMessage Json(string body) => new(HttpStatusCode.OK)
     {
         Content = new StringContent(body, Encoding.UTF8, "application/json"),

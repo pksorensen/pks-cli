@@ -96,18 +96,48 @@ public sealed class AgentSetupClient(
     /// </summary>
     public const string DefaultPath = "/api/v1/setup";
 
+    /// <summary>
+    /// The path an RFC 8615 well-known address puts the service document at, and the first one
+    /// tried when a platform publishes no index.
+    ///
+    /// <para>
+    /// It matters that this is guessable: the fallback chain has to end somewhere a client can
+    /// try on a host it knows nothing about, and the pre-move <see cref="DefaultPath"/> is not
+    /// that — it is one platform's API layout, which a second implementer has no reason to copy.
+    /// A platform may serve either or both; this platform serves both, and a new one needs only
+    /// the well-known path.
+    /// </para>
+    /// </summary>
+    public const string WellKnownPath = "/.well-known/agent-setup";
+
     public async Task<AgentSetupDiscovery> DiscoverAsync(string url, CancellationToken ct = default)
     {
         var origin = NormalizeOrigin(url);
         if (origin is null) return AgentSetupDiscovery.Failed(url, $"'{url}' is not a URL I can use.");
 
-        // Index first, then the documented default path.
-        var serviceUrl = await FromIndexAsync(origin, ct) ?? origin + DefaultPath;
+        // The index is authoritative when there is one. Without it, the two documented paths in
+        // order: the well-known address any client can guess, then the pre-move path, which a
+        // platform standing still on an older layout may be the only thing serving.
+        var fromIndex = await FromIndexAsync(origin, ct);
+        var candidates = fromIndex is not null
+            ? new[] { fromIndex }
+            : new[] { origin + WellKnownPath, origin + DefaultPath };
 
-        var (doc, problem) = await GetJsonDetailedAsync<AspServiceDocument>(serviceUrl, ct);
+        AspServiceDocument? doc = null;
+        string? problem = null;
+        var serviceUrl = candidates[0];
+
+        foreach (var candidate in candidates)
+        {
+            (doc, problem) = await GetJsonDetailedAsync<AspServiceDocument>(candidate, ct);
+            serviceUrl = candidate;
+            if (doc is not null) break;
+        }
+
         if (doc is null)
             return AgentSetupDiscovery.Failed(origin,
-                $"{origin} does not publish an agent-setup service document (looked at {serviceUrl})."
+                $"{origin} does not publish an agent-setup service document "
+                + $"(looked at {string.Join(" and ", candidates)})."
                 + (problem is null ? "" : $" {problem}"));
 
         if (doc.V != 1)
