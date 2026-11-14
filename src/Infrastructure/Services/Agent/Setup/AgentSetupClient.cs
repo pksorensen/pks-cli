@@ -181,9 +181,8 @@ public sealed class AgentSetupClient(
                 $"{disco.Origin} publishes setup for {string.Join(", ", doc.Tools)} — not {tool}.");
 
         var profilesUrl = doc.Profiles ?? disco.Origin + DefaultPath + "/profiles";
-        var resourceUrl = disco.ServiceUrl ?? disco.Origin + DefaultPath;
 
-        var auth = await AuthenticateAsync(resourceUrl, doc, forceLogin, onAuthorizeUrl, ct);
+        var auth = await AuthenticateAsync(disco.Origin, profilesUrl, doc, forceLogin, onAuthorizeUrl, ct);
         if (auth.Error is not null) return AgentSetupProfilesResult.Failed(auth.Error);
 
         var list = await GetJsonAsync<AspProfileList>(profilesUrl, ct, auth.Token);
@@ -207,25 +206,28 @@ public sealed class AgentSetupClient(
     /// </para>
     /// </summary>
     private async Task<(string? Token, string? Issuer, string? ClientId, string? Error)> AuthenticateAsync(
-        string resourceUrl, AspServiceDocument doc, bool forceLogin, Action<string> onAuthorizeUrl, CancellationToken ct)
+        string origin, string profilesUrl, AspServiceDocument doc, bool forceLogin,
+        Action<string> onAuthorizeUrl, CancellationToken ct)
     {
-        var prm = await discovery.ProtectedResourceAsync(resourceUrl, ct);
+        var (metadataUrl, metadataError) = ResourceMetadataUrl(origin, profilesUrl, doc);
+        if (metadataError is not null) return (null, null, null, metadataError);
+
+        var prm = await discovery.ProtectedResourceAtAsync(metadataUrl, ct);
         if (prm is null)
             return (null, null, null,
-                $"{resourceUrl} publishes no RFC 9728 metadata, so I cannot tell where to sign in. " +
-                "The platform needs /.well-known/oauth-protected-resource" +
-                new Uri(resourceUrl).AbsolutePath + ".");
+                $"{metadataUrl} is not an RFC 9728 metadata document, so I cannot tell where to sign in.");
 
-        // Never trust a resource's own idea of which issuer owns it without checking the resource
-        // it names is the one we asked about: a document that redirected us to an attacker's
-        // issuer would be handed a token for this API.
-        if (!SameOrigin(prm.Resource, resourceUrl))
+        // Never trust a resource's own idea of which issuer owns it without checking that the
+        // resource it names is the one the token is for: a document that redirected us to an
+        // attacker's issuer would be handed a token for this API. Compared against the profiles
+        // URL, because that is where the token actually goes.
+        if (!SameOrigin(prm.Resource, profilesUrl))
             return (null, null, null,
-                $"{resourceUrl} published metadata for a different resource ({prm.Resource}). Refusing to sign in.");
+                $"{metadataUrl} published metadata for a different resource ({prm.Resource}). Refusing to sign in.");
 
         var issuer = prm.AuthorizationServers.FirstOrDefault();
         if (string.IsNullOrEmpty(issuer))
-            return (null, null, null, $"{resourceUrl} named no authorization server.");
+            return (null, null, null, $"{metadataUrl} named no authorization server.");
 
         // The client id comes from the platform. This single line is what lets one binary serve
         // both a Keycloak that resolves a CIMD URL and an Entra tenant that cannot.
@@ -236,6 +238,19 @@ public sealed class AgentSetupClient(
                 "`client_id` in its protected-resource metadata; there is no registration I can fall back on.");
 
         var audience = prm.Audience ?? prm.Resource;
+
+        // RFC 8707 §2: a resource indicator is an absolute URI. A platform that publishes a bare
+        // name in the house `audience` field is describing a client or an API name, not a resource,
+        // and sending it anyway is not a cosmetic error: Keycloak answers `invalid_target` and
+        // redirects straight back to the loopback, so the reader's browser never shows a login page
+        // and the failure arrives as a dead callback rather than a message. Measured 14/11-2026
+        // against a platform publishing `"audience": "pks-cli"`.
+        //
+        // Omitted rather than corrected, because the fallback is already right: `prm.Resource` is a
+        // URI by RFC 9728, and an authorization server that binds the resource it was asked about
+        // needs no parameter to do it. The value still keys the credential cache, so a cached token
+        // keeps matching whatever the platform calls its audience.
+        var resourceIndicator = Uri.IsWellFormedUriString(audience, UriKind.Absolute) ? audience : null;
 
         if (!forceLogin)
         {
@@ -255,7 +270,7 @@ public sealed class AgentSetupClient(
         var (host, ports, path) = ParseRedirects(doc.LoopbackRedirectUris);
 
         var result = await loopbackLogin.LoginAsync(new LoopbackLoginRequest(
-            endpoints, clientId, scope, audience, ports, path, onAuthorizeUrl, host), ct);
+            endpoints, clientId, scope, resourceIndicator, ports, path, onAuthorizeUrl, host), ct);
 
         if (!result.Ok) return (null, null, null, result.Error ?? "Sign-in failed.");
 
@@ -407,6 +422,63 @@ public sealed class AgentSetupClient(
         if (uri.Scheme is not ("http" or "https")) return null;
 
         return $"{uri.Scheme}://{uri.Authority}";
+    }
+
+    /// <summary>
+    /// Where this platform's RFC 9728 metadata lives, and null-error when it can be reached.
+    /// </summary>
+    /// <remarks>
+    /// The service document's own <c>authorization</c> field, because the spec says a client
+    /// reads the metadata document <b>named by</b> it, and only the platform knows which path
+    /// its API is protected at.
+    ///
+    /// <para>
+    /// This used to derive the well-known path from wherever the service document was served,
+    /// which is the same answer only while the document and the protected resource share a path.
+    /// The moment a platform moved its document to <c>/.well-known/agent-setup</c> and left its
+    /// API on <c>/api/v1/setup</c>, every connect asked for
+    /// <c>/.well-known/oauth-protected-resource/.well-known/agent-setup</c> and told the reader
+    /// that a correctly configured platform published no metadata. Measured against a live
+    /// platform 14/11-2026, where the document named the right URL all along.
+    /// </para>
+    ///
+    /// <para>
+    /// A cross-origin <c>authorization</c> is refused rather than fetched. RFC 9728 puts a
+    /// resource's metadata on the resource's own host, so a document naming another origin is
+    /// either broken or pointing sign-in at an issuer that does not own this API — and a reader
+    /// who completed that flow would be typing their password into whatever that issuer served.
+    /// </para>
+    /// </remarks>
+    private static (string Url, string? Error) ResourceMetadataUrl(
+        string origin, string profilesUrl, AspServiceDocument doc)
+    {
+        if (!string.IsNullOrWhiteSpace(doc.Authorization))
+        {
+            if (!SameOrigin(doc.Authorization, origin))
+                return ("", $"{origin} names its authorization metadata at {doc.Authorization}, " +
+                            "which is a different origin. Refusing to sign in there.");
+
+            return (doc.Authorization, null);
+        }
+
+        // No `authorization` field. Derive it from the API the document DID publish — the
+        // profiles URL minus its last segment — and never from where the document was served.
+        var resource = ParentOf(profilesUrl) ?? origin + DefaultPath;
+
+        return Uri.TryCreate(resource, UriKind.Absolute, out var uri)
+            ? ($"{uri.Scheme}://{uri.Authority}/.well-known/oauth-protected-resource{uri.AbsolutePath.TrimEnd('/')}", null)
+            : ("", $"{origin} published neither authorization metadata nor a usable profiles URL.");
+    }
+
+    /// <summary>The profiles URL minus its last segment: the resource a token is minted for.</summary>
+    private static string? ParentOf(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return null;
+
+        var path = uri.AbsolutePath.TrimEnd('/');
+        var cut = path.LastIndexOf('/');
+
+        return cut <= 0 ? null : $"{uri.Scheme}://{uri.Authority}{path[..cut]}";
     }
 
     private static bool SameOrigin(string a, string b) =>

@@ -13,6 +13,16 @@ public interface IOidcDiscovery
     /// publish one — which is normal for a receiver that only accepts tokens.
     Task<ProtectedResourceMetadata?> ProtectedResourceAsync(string resourceUrl, CancellationToken ct = default);
 
+    /// Reads the PRM document at the URL that NAMED it, instead of deriving the
+    /// well-known path from a resource URL.
+    ///
+    /// ASP's service document carries this URL in its `authorization` field, and the
+    /// spec says a client reads the document *named by* it. Deriving gives the same
+    /// answer only while the service document and the protected resource share a
+    /// path, so a platform that serves its document from `/.well-known/agent-setup`
+    /// and its API from `/api/v1/setup` cannot be reached by derivation at all.
+    Task<ProtectedResourceMetadata?> ProtectedResourceAtAsync(string metadataUrl, CancellationToken ct = default);
+
     /// Reads `<issuer>/.well-known/openid-configuration`, falling back to
     /// `oauth-authorization-server`. Returns null when neither answers.
     Task<OidcEndpoints?> EndpointsAsync(string issuer, CancellationToken ct = default);

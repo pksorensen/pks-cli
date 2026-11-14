@@ -7,15 +7,24 @@ public sealed class OidcDiscovery(HttpClient http) : IOidcDiscovery
 {
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
 
-    public async Task<ProtectedResourceMetadata?> ProtectedResourceAsync(string resourceUrl, CancellationToken ct = default)
+    public Task<ProtectedResourceMetadata?> ProtectedResourceAsync(string resourceUrl, CancellationToken ct = default)
     {
-        if (!Uri.TryCreate(resourceUrl, UriKind.Absolute, out var uri)) return null;
+        if (!Uri.TryCreate(resourceUrl, UriKind.Absolute, out var uri))
+            return Task.FromResult<ProtectedResourceMetadata?>(null);
 
         // RFC 9728 §3.1: the well-known segment is inserted after the host, and
         // the resource's path is appended to it. `/api/brain/v1` on example.com
         // becomes example.com/.well-known/oauth-protected-resource/api/brain/v1.
         var url = $"{uri.Scheme}://{uri.Authority}/.well-known/oauth-protected-resource{uri.AbsolutePath.TrimEnd('/')}";
-        var doc = await GetJsonAsync<PrmDto>(url, ct);
+
+        return ProtectedResourceAtAsync(url, ct);
+    }
+
+    public async Task<ProtectedResourceMetadata?> ProtectedResourceAtAsync(string metadataUrl, CancellationToken ct = default)
+    {
+        if (!Uri.TryCreate(metadataUrl, UriKind.Absolute, out _)) return null;
+
+        var doc = await GetJsonAsync<PrmDto>(metadataUrl, ct);
         if (doc is null || string.IsNullOrEmpty(doc.Resource)) return null;
 
         return new ProtectedResourceMetadata(
