@@ -38,7 +38,10 @@
     <PackageReference Include="Spectre.Console" Version="0.47.0" />
     <PackageReference Include="Spectre.Console.Cli" Version="0.47.0" />
     <PackageReference Include="Spectre.Console.Testing" Version="0.47.0" />
-    <PackageReference Include="Aspire.Hosting.Testing" Version="9.2.1" />
+    <!-- Aspire.Hosting.Testing is deliberately not referenced: only the excluded
+         Aspire/** sources use it, and 9.2.1 drags in Aspire.Hosting(.AppHost) 9.2.1,
+         which NuGet audit fails on (GHSA-f7vh-h5g3-7jrh). Re-add it, on a patched
+         version, together with the Aspire test project. -->
     <PackageReference Include="Microsoft.Playwright" Version="1.50.0" />
 
     <!-- Pinned up for the same reason as in src/pks-cli.csproj: the test graph

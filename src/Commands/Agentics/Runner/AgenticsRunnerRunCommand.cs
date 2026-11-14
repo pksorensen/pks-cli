@@ -206,6 +206,10 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         [Description("Log every chat-llm:v1 Chat Channel frame (chat.completion.request/chunk/done/error, chat.models.request/response, chat.end) to this console as it's sent/received, for debugging the chat pipeline. Frame text is markup-escaped and truncated -- it can include the user's own chat content, so avoid this on a shared/recorded terminal if that matters.")]
         public bool ChatLlmVerbose { get; set; }
 
+        [CommandOption("--mcp-config <PATH>")]
+        [Description("Host allowlist of stdio MCP servers for mcp_task jobs (default: PKS_MCP_TASK_CONFIG env, else ~/.config/pks/mcp-task-servers.json). Only when this file exists and parses does the runner advertise mcp-task:v1 and mcp-server:<name>. The server sends server names only; commands come from this file.")]
+        public string? McpConfig { get; set; }
+
         [CommandOption("--no-prompt")]
         [Description("Never ask anything, even on a terminal that could answer. Set automatically by the detached 'runner start' -- a tmux pane has a TTY, so the interactive gates would otherwise fire into a pane nobody is watching and the runner would sit on a prompt instead of polling.")]
         public bool NoPrompt { get; set; }
@@ -1231,7 +1235,8 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
     internal async Task<List<string>> ComputeCapabilitiesAsync(
         bool inProcess, string? chatLlmBackendUrl, string chatLlmModelId, CancellationToken ct,
         List<string>? capabilityOverride = null,
-        bool spawnEnabled = true)
+        bool spawnEnabled = true,
+        string? mcpConfigPath = null)
     {
         var caps = new List<string>();
 
@@ -1350,7 +1355,31 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         if (capabilityOverride is { Count: > 0 })
             caps = caps.Where(c => capabilityOverride.Contains(c, StringComparer.OrdinalIgnoreCase)).ToList();
 
+        // mcp_task (customers/famai/docs/mcp-task-protocol.md): mcp-task:v1 + mcp-server:<name> only
+        // while the host allowlist file exists and parses. Added AFTER the operator override on
+        // purpose: creating that file IS the explicit opt-in, and a profile persisted before this
+        // job type existed would otherwise silently strip it. No file => nothing changes.
+        caps.AddRange(LoadMcpTaskConfig(mcpConfigPath)?.Capabilities() ?? []);
+
         return caps;
+    }
+
+    /// <summary>Tests point this at a scratch path so a real ~/.config/pks file can't change their capability set.</summary>
+    internal string? McpTaskDefaultConfigPathOverride { get; set; }
+
+    /// <summary>Last mcp-task config load error printed, so a broken file is reported once, not every poll.</summary>
+    private string? _lastMcpConfigError;
+
+    /// <summary>Loads the host mcp_task allowlist (<c>--mcp-config</c> → <c>PKS_MCP_TASK_CONFIG</c> →
+    /// <c>~/.config/pks/mcp-task-servers.json</c>). Null when absent or invalid; never throws.</summary>
+    private PKS.Infrastructure.Services.Runner.McpTask.McpTaskConfig? LoadMcpTaskConfig(string? cliPath)
+    {
+        var path = PKS.Infrastructure.Services.Runner.McpTask.McpTaskConfig.ResolvePath(cliPath, defaultPath: McpTaskDefaultConfigPathOverride);
+        var cfg = PKS.Infrastructure.Services.Runner.McpTask.McpTaskConfig.TryLoad(path, out var error);
+        if (error != null && error != _lastMcpConfigError)
+            _console.MarkupLine($"[yellow]Ignoring MCP task config {path.EscapeMarkup()}: {error.EscapeMarkup()}[/]");
+        _lastMcpConfigError = error;
+        return cfg;
     }
 
     /// <summary>
@@ -1495,7 +1524,8 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         // devcontainer-session:v1 behind its back.
         var capabilities = await ComputeCapabilitiesAsync(
             settings.InProcess, chatLlmBackendUrl, chatLlmModelId, ct, registration.Profile?.Capabilities,
-            spawnEnabled: settings.InProcess || credentialServer != null);
+            spawnEnabled: settings.InProcess || credentialServer != null,
+            mcpConfigPath: settings.McpConfig);
         if (_lastLoggedCapabilities == null || !_lastLoggedCapabilities.SequenceEqual(capabilities))
         {
             _console.MarkupLine($"[dim]Runner capabilities: {string.Join(", ", capabilities)}[/]");
@@ -1574,6 +1604,37 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
                     }
                 }, ct);
                 TrackRunningJob(chatJobTask);
+                jobsProcessed++;
+            }
+            else if (job.IsMcpTask)
+            {
+                // mcp_task (customers/famai/docs/mcp-task-protocol.md): no container, no Docker. Runs
+                // on its own background Task like chat_llm so a slow tool loop never starves the poll.
+                var mcpJob = job;
+                var mcpTraceparent = mcpJob.AgentDef?.Traceparent;
+                var mcpJobTask = Task.Run(async () =>
+                {
+                    System.Diagnostics.ActivityContext mcpParentCtx = default;
+                    if (!string.IsNullOrEmpty(mcpTraceparent))
+                        System.Diagnostics.ActivityContext.TryParse(mcpTraceparent, null, isRemote: true, out mcpParentCtx);
+                    using var mcpJobActivity = _activitySource.StartActivity(
+                        "runner.execute_job", System.Diagnostics.ActivityKind.Consumer, mcpParentCtx);
+                    mcpJobActivity?.SetTag("agentics.job_id", mcpJob.Id);
+                    mcpJobActivity?.SetTag("agentics.mode", "mcp_task");
+                    try
+                    {
+                        await ExecuteMcpTaskJobAsync(registration, mcpJob, settings, ct);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Shutdown -- ExecuteMcpTaskJobAsync already reported the job as cancelled.
+                    }
+                    catch (Exception ex)
+                    {
+                        _console.MarkupLine($"[red]MCP task job failed:[/] {mcpJob.Id} {ex.Message.EscapeMarkup()}");
+                    }
+                }, ct);
+                TrackRunningJob(mcpJobTask);
                 jobsProcessed++;
             }
             else if (settings.InProcess)
@@ -4268,6 +4329,148 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
     /// Foundry/Anthropic/Azure OpenAI credential resolution `pks agent` uses) — the Server only ever sees
     /// the resulting chunks either way.
     /// </summary>
+    /// <summary>
+    /// mcp_task: claim, mark in_progress, run <see cref="PKS.Infrastructure.Services.Runner.McpTask.McpTaskExecutor"/>
+    /// with a ~20s progress heartbeat, then PATCH the outcome (with <c>result</c> on success). Tool
+    /// arguments/results never leave this machine -- only names, ok flags and timings.
+    /// </summary>
+    private async Task ExecuteMcpTaskJobAsync(AgenticsRunnerRegistration registration, RunnerJob job, Settings settings, CancellationToken ct)
+    {
+        using var client = _httpClientFactory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", registration.Token);
+        var baseUrl = $"{registration.ApiBase}/api/owners/{registration.Owner}/projects/{registration.Project}";
+
+        // 1. Claim. The contract puts agentDefinition on the claim response's job; prefer it over the polled copy.
+        string runId;
+        var agentDef = job.AgentDef;
+        _console.MarkupLine($"[cyan]McpTask: claiming job {job.Id.EscapeMarkup()}...[/]");
+        try
+        {
+            var claimResponse = await client.PostAsJsonAsync(
+                $"{baseUrl}/runners/generate-jitconfig", new { jobId = job.Id, name = "mcp-task-runner" }, ct);
+            claimResponse.EnsureSuccessStatusCode();
+            var claimData = JsonSerializer.Deserialize<JsonElement>(await claimResponse.Content.ReadAsStringAsync(ct), JsonOptions);
+            var hasClaimedJob = claimData.TryGetProperty("job", out var claimedJob) && claimedJob.ValueKind == JsonValueKind.Object;
+            runId = (claimData.TryGetProperty("runId", out var rid) && rid.ValueKind == JsonValueKind.String ? rid.GetString() : null)
+                ?? (hasClaimedJob && claimedJob.TryGetProperty("runId", out var jrid) && jrid.ValueKind == JsonValueKind.String ? jrid.GetString() : null)
+                ?? job.RunId
+                ?? throw new InvalidOperationException("claim response carried no runId");
+            if (hasClaimedJob && claimedJob.TryGetProperty("agentDefinition", out var claimedDef) && claimedDef.ValueKind == JsonValueKind.Object)
+                agentDef = claimedDef.Deserialize<RunnerAgentDefinition>(JsonOptions) ?? agentDef;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[red]McpTask: failed to claim job: {ex.Message.EscapeMarkup()}[/]");
+            return;
+        }
+
+        await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "in_progress", null, ct);
+
+        // 2. Run with a heartbeat that reports the executor's latest (name-only) stage.
+        var stage = "starting";
+        using var heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var heartbeat = Task.Run(async () =>
+        {
+            while (!heartbeatCts.IsCancellationRequested)
+            {
+                try { await Task.Delay(TimeSpan.FromSeconds(20), heartbeatCts.Token); }
+                catch (OperationCanceledException) { break; }
+                await PostJobProgressAsync(client, baseUrl, runId, job.Id, "mcp_task", Volatile.Read(ref stage), heartbeatCts.Token);
+            }
+        });
+
+        var request = new PKS.Infrastructure.Services.Runner.McpTask.McpTaskRequest
+        {
+            Prompt = agentDef?.Prompt ?? "",
+            SystemPrompt = agentDef?.SystemPrompt,
+            McpServers = agentDef?.McpServers ?? new List<string>(),
+            Model = agentDef?.Model,
+            MaxSteps = agentDef?.MaxSteps,
+            MaxTokens = agentDef?.MaxTokens,
+        };
+        // A separate client for the model: the platform client above carries the runner's Bearer token,
+        // which must never reach api.anthropic.com (or whatever ANTHROPIC_BASE_URL points at).
+        using var modelHttp = _httpClientFactory.CreateClient();
+        modelHttp.Timeout = TimeSpan.FromMinutes(5);
+        var executor = new PKS.Infrastructure.Services.Runner.McpTask.McpTaskExecutor(
+            new PKS.Infrastructure.Services.Runner.McpTask.StdioMcpServerLauncher(),
+            modelHttp,
+            localLog: settings.Verbose ? m => _console.MarkupLine($"[dim]McpTask: {m.EscapeMarkup()}[/]") : null);
+
+        PKS.Infrastructure.Services.Runner.McpTask.McpTaskOutcome outcome;
+        var cancelled = false;
+        // Hard per-job deadline: a hung tool call must not hold the job (and its heartbeat) open forever.
+        using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadlineCts.CancelAfter(McpTaskJobDeadline);
+        try
+        {
+            outcome = await executor.RunAsync(request, LoadMcpTaskConfig(settings.McpConfig),
+                s => Volatile.Write(ref stage, s), deadlineCts.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            outcome = PKS.Infrastructure.Services.Runner.McpTask.McpTaskOutcome.Fail("job_timeout",
+                $"The task did not finish within {McpTaskJobDeadline.TotalMinutes:0} minutes.");
+        }
+        catch (OperationCanceledException)
+        {
+            cancelled = true;
+            outcome = PKS.Infrastructure.Services.Runner.McpTask.McpTaskOutcome.Fail("runner_shutdown", "Runner stopped while the task was running.");
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[red]McpTask: unexpected error: {ex.Message.EscapeMarkup()}[/]");
+            outcome = PKS.Infrastructure.Services.Runner.McpTask.McpTaskOutcome.Fail("runner_error", $"Runner error ({ex.GetType().Name}).");
+        }
+        finally
+        {
+            heartbeatCts.Cancel();
+            try { await heartbeat; } catch { /* best-effort */ }
+        }
+
+        // 3. Final PATCH on its own token: a shutdown must still report the job.
+        var patch = PKS.Infrastructure.Services.Runner.McpTask.RunnerJobCompletionPatch.From(outcome);
+        if (cancelled) patch.Conclusion = "cancelled";
+        using var patchCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await PatchJobCompletionAsync(client, baseUrl, runId, job.Id, patch, patchCts.Token);
+
+        if (outcome.Success)
+            _console.MarkupLine($"[green]McpTask job completed.[/] {job.Id.EscapeMarkup()} ({outcome.Result?.Steps} step(s), {outcome.Result?.ToolCalls.Count} tool call(s))");
+        else
+            _console.MarkupLine($"[yellow]McpTask job failed:[/] {job.Id.EscapeMarkup()} {outcome.CompletionReason?.EscapeMarkup()} -- {outcome.Logs?.EscapeMarkup()}");
+    }
+
+    /// <summary>Upper bound on one mcp_task job, spawn to final answer. Settable for tests.</summary>
+    internal TimeSpan McpTaskJobDeadline { get; set; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>Final PATCH with a typed body (null members omitted, so <c>result</c> only appears when set).</summary>
+    private async Task PatchJobCompletionAsync(HttpClient client, string baseUrl, string runId, string jobId,
+        PKS.Infrastructure.Services.Runner.McpTask.RunnerJobCompletionPatch patch, CancellationToken ct)
+    {
+        try
+        {
+            using var msg = new HttpRequestMessage(HttpMethod.Patch, $"{baseUrl}/runs/{runId}/jobs/{jobId}")
+            {
+                Content = new StringContent(patch.ToJson(), Encoding.UTF8, "application/json"),
+            };
+            var resp = await client.SendAsync(msg, ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                var body = await resp.Content.ReadAsStringAsync(ct);
+                _console.MarkupLine($"[yellow]PATCH job status warning: {(int)resp.StatusCode} {body.EscapeMarkup()}[/]");
+            }
+            else
+            {
+                _console.MarkupLine($"[dim]Job {jobId} → {patch.Status}/{patch.Conclusion} (✓)[/]");
+            }
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[yellow]PATCH job status error: {ex.Message.EscapeMarkup()}[/]");
+        }
+    }
+
     private async Task ExecuteChatLlmJobAsync(
         AgenticsRunnerRegistration registration,
         RunnerJob job,
@@ -7318,6 +7521,14 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         /// belt-and-suspenders check as IsChatSession. Not yet read anywhere -- reserved for Phase 3,
         /// which needs to tell this apart from a Kind A chat session (e.g. to launch the agent-share
         /// channel bridge instead of dialing the ALP Chat Channel).</summary>
+        /// <summary>mcp_task job (customers/famai/docs/mcp-task-protocol.md). Matched on jobType OR on
+        /// needs containing mcp-task:v1, so a poll that omits agentDefinition (the contract puts it on the
+        /// claim) can never fall through to the devcontainer spawn path.</summary>
+        public bool IsMcpTask =>
+            AgentDefinition?.JobType == "mcp_task" ||
+            (Needs?.Contains(PKS.Infrastructure.Services.Runner.McpTask.McpTaskConfig.TaskCapability) ?? false) ||
+            (AgentDefinition?.Needs?.Contains(PKS.Infrastructure.Services.Runner.McpTask.McpTaskConfig.TaskCapability) ?? false);
+
         public bool IsDevAgentSession =>
             (Needs?.Contains(DevAgentSessionCapability) ?? false) ||
             (AgentDefinition?.Needs?.Contains(DevAgentSessionCapability) ?? false);
@@ -7435,6 +7646,16 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         /// wiring Claude's `agent-share channel` stdio bridge to this inbox so the in-container session
         /// long-polls it and can reply via `complete()`.</summary>
         public RunnerDevAgentChannel? DevAgentChannel { get; set; }
+        /// <summary>mcp_task: names of host-allowlisted MCP servers (never commands). JSON <c>mcpServers</c>.</summary>
+        public List<string>? McpServers { get; set; }
+        /// <summary>mcp_task: Anthropic model id (runner default claude-haiku-5-5).</summary>
+        public string? Model { get; set; }
+        /// <summary>mcp_task: optional system prompt (runner has a Danish default).</summary>
+        public string? SystemPrompt { get; set; }
+        /// <summary>mcp_task: model-call budget (default 12).</summary>
+        public int? MaxSteps { get; set; }
+        /// <summary>mcp_task: max_tokens per model call (default 2000).</summary>
+        public int? MaxTokens { get; set; }
     }
 
     private class CommitBackRepositoryDefinition
