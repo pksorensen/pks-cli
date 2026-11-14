@@ -163,6 +163,14 @@ var isDevcontainerJson = commandArgs.Length >= 3
             && commandArgs[x.i + 1].Equals("json", StringComparison.OrdinalIgnoreCase)));
 if (isDevcontainerJson) noLogo = true;
 
+// `pks agentics agent …` and `pks agentics fetch` are run by an AI agent that reads stdout —
+// `fetch` prints the shared page itself, so nothing may come before it.
+var isAgentIdentity = commandArgs.Length >= 3
+    && commandArgs[1].Equals("agentics", StringComparison.OrdinalIgnoreCase)
+    && (commandArgs[2].Equals("agent", StringComparison.OrdinalIgnoreCase)
+        || commandArgs[2].Equals("fetch", StringComparison.OrdinalIgnoreCase));
+if (isAgentIdentity) noLogo = true;
+
 // Enable debug output when --debug flag is passed
 if (commandArgs.Any(a => a.Equals("--debug", StringComparison.OrdinalIgnoreCase)))
     Environment.SetEnvironmentVariable("PKS_DEBUG", "1");
@@ -905,6 +913,24 @@ app.Configure(config =>
                 .WithExample(new[] { "agentics", "runner", "claude-login", "hetzner" })
                 .WithExample(new[] { "agentics", "runner", "claude-login", "--local", "--project", "pksorensen/museliving" });
         });
+
+        // An AI agent's own identity: join an artifact invite with a key, then read as itself.
+        agentics.AddBranch<PKS.Commands.Agentics.Agent.AgenticsAgentSettings>("agent", agent =>
+        {
+            agent.SetDescription("Register this AI agent on agentics.dk and see what is shared with it");
+
+            agent.AddCommand<PKS.Commands.Agentics.Agent.AgenticsAgentJoinCommand>("join")
+                .WithDescription("Join an artifact invite with this agent's own key (created on first use)")
+                .WithExample(new[] { "agentics", "agent", "join", "https://agentics.dk/artifacts/owner/project/id/invite/secret", "--name", "Codex on Jakob's laptop" });
+
+            agent.AddCommand<PKS.Commands.Agentics.Agent.AgenticsAgentStatusCommand>("status")
+                .WithDescription("Show this agent's registration and everything shared with it")
+                .WithExample(new[] { "agentics", "agent", "status" });
+        });
+
+        agentics.AddCommand<PKS.Commands.Agentics.Agent.AgenticsFetchCommand>("fetch")
+            .WithDescription("Read a page shared with this agent (prints markdown to stdout)")
+            .WithExample(new[] { "agentics", "fetch", "https://agentics.dk/artifacts/owner/project/id" });
 
         agentics.AddBranch<AgenticsSettings>("task", task =>
         {
