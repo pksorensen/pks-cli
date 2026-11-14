@@ -341,8 +341,13 @@ public class McpTaskTests
     {
         var registration = new AgenticsRunnerRegistration
         {
-            Id = "runner-1", Name = "t", Token = "tok", Owner = "fam", Project = "home",
-            Server = "https://famai.test", RegisteredAt = DateTime.UtcNow,
+            Id = "runner-1",
+            Name = "t",
+            Token = "tok",
+            Owner = "fam",
+            Project = "home",
+            Server = "https://famai.test",
+            RegisteredAt = DateTime.UtcNow,
         };
         var baseUrl = $"{registration.Server}/api/owners/fam/projects/home";
         var patches = new List<string>();
