@@ -49,6 +49,20 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.15.0](https://github.com/pksorensen/pks-cli/compare/v7.14.0...v7.15.0) (2026-11-14)
+
+
+### Features
+
+* **actions:** report-dependencies reports an SBOM to Agentics Exposure ([6b518b3](https://github.com/pksorensen/pks-cli/commit/6b518b39ba680bbf1a2e50a20efd6c7ef240c633))
+* **runner:** mcp_task job type for host-allowlisted stdio MCP servers ([#155](https://github.com/pksorensen/pks-cli/issues/155)) ([25bc851](https://github.com/pksorensen/pks-cli/commit/25bc851bea6e35ac1b01c50a7903ad34ff5814c7))
+
+
+### Bug Fixes
+
+* **build:** two warnings-as-errors that were hiding behind the failed restore ([dbe570b](https://github.com/pksorensen/pks-cli/commit/dbe570b7206fe317c267ac45f175ca7fe8cf87b9))
+* **deps:** pin the two vulnerable transitives NuGet audit fails on ([0a74714](https://github.com/pksorensen/pks-cli/commit/0a74714fb0ad37f8a0396d140b97aae4e0b42ad9))
+
 ## [7.14.0](https://github.com/pksorensen/pks-cli/compare/v7.13.0...v7.14.0) (2026-11-05)
 
 
