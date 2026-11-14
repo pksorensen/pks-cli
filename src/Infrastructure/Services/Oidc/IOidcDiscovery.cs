@@ -24,10 +24,29 @@ public interface IOidcDiscovery
 /// would be a redirect primitive, so callers check it is same-origin with the
 /// resource they asked about.
 /// </param>
+/// <param name="ClientId">
+/// House extension, and the field that lets one binary serve two issuers.
+///
+/// RFC 9728 has no field for it and RFC 7591 dynamic registration is implemented
+/// by none of the providers we reach, so the resource tells us which client id to
+/// present. Keycloak takes a CIMD URL and resolves it by fetching it, so no
+/// registration exists anywhere; Entra does not implement CIMD and hands out a
+/// pre-registered GUID instead. A client that holds its own constant works
+/// against exactly one of the two.
+///
+/// Null when the resource does not publish one, in which case the caller falls
+/// back to whatever it was built with.
+/// </param>
+/// <param name="Audience">
+/// House extension: the RFC 8707 resource indicator to request, when it is not
+/// the resource URL itself.
+/// </param>
 public sealed record ProtectedResourceMetadata(
     string Resource,
     IReadOnlyList<string> AuthorizationServers,
-    IReadOnlyList<string> ScopesSupported);
+    IReadOnlyList<string> ScopesSupported,
+    string? ClientId = null,
+    string? Audience = null);
 
 public sealed record OidcEndpoints(
     string Issuer,

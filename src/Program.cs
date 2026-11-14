@@ -288,6 +288,11 @@ services.AddHttpClient<PKS.Infrastructure.Services.Oidc.IDeviceCodeLogin, PKS.In
 // cannot be logged into with the device grant at all.
 services.AddHttpClient<PKS.Infrastructure.Services.Oidc.ILoopbackAuthCodeLogin, PKS.Infrastructure.Services.Oidc.LoopbackAuthCodeLogin>();
 services.AddSingleton<PKS.Infrastructure.Services.Oidc.IIssuerCredentialStore, PKS.Infrastructure.Services.Oidc.IssuerCredentialStore>();
+// Agent Setup Protocol (ASP): `pks codex connect <platform>`. Discovery and the
+// profile fetch are quick JSON reads; the interactive sign-in it delegates to
+// ILoopbackAuthCodeLogin above, which deliberately has no short timeout.
+services.AddHttpClient<PKS.Infrastructure.Services.Agent.Setup.IAgentSetupClient, PKS.Infrastructure.Services.Agent.Setup.AgentSetupClient>(
+    c => c.Timeout = TimeSpan.FromSeconds(30));
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainDaemonService, PKS.Infrastructure.Services.Brain.BrainDaemonService>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IBrainSkillReader, PKS.Infrastructure.Services.Brain.BrainSkillReader>();
 services.AddSingleton<PKS.Infrastructure.Services.Brain.IFirehoseReader, PKS.Infrastructure.Services.Brain.FirehoseReader>();
@@ -1409,6 +1414,27 @@ app.Configure(config =>
             .WithDescription("Set up ~/.codex/config.toml to run codex against Azure AI Foundry")
             .WithExample(["codex", "init"])
             .WithExample(["codex", "init", "--model", "gpt-5-codex"]);
+
+        // Agent Setup Protocol. `connect` is also the update path — re-running it is how a
+        // reader picks up a project that was added or a marketplace that was enabled.
+        codex.AddCommand<PKS.Commands.Codex.CodexConnectCommand>("connect")
+            .WithDescription("Configure Codex from a platform that speaks the Agent Setup Protocol")
+            .WithExample(["codex", "connect", "agentics.dk"])
+            .WithExample(["codex", "connect", "http://localhost:3000", "--use", "my-project"])
+            .WithExample(["codex", "connect", "--all"]);
+
+        codex.AddCommand<PKS.Commands.Codex.CodexProfilesCommand>("profiles")
+            .WithDescription("List the Codex profiles connected from platforms")
+            .WithExample(["codex", "profiles"]);
+
+        codex.AddCommand<PKS.Commands.Codex.CodexUseCommand>("use")
+            .WithDescription("Make a connected profile the one a bare `codex` uses")
+            .WithExample(["codex", "use", "agentics-my-project"])
+            .WithExample(["codex", "use", "--none"]);
+
+        codex.AddCommand<PKS.Commands.Codex.CodexRemoveCommand>("remove")
+            .WithDescription("Remove a connected Codex profile from this machine")
+            .WithExample(["codex", "remove", "agentics-my-project"]);
     });
 
     config.AddCommand<PKS.Commands.OpenCode.OpenCodeCommand>("opencode")
