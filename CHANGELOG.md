@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.16.1](https://github.com/pksorensen/pks-cli/compare/v7.16.0...v7.16.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **codex:** sign in against the resource, not against the document's address ([#158](https://github.com/pksorensen/pks-cli/issues/158)) ([522faf8](https://github.com/pksorensen/pks-cli/commit/522faf8e9425e9c88ce5c05553308186e0ea5969))
+
 ## [7.16.0](https://github.com/pksorensen/pks-cli/compare/v7.15.0...v7.16.0) (2026-11-14)
 
 
