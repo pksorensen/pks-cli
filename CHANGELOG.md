@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.16.0](https://github.com/pksorensen/pks-cli/compare/v7.15.0...v7.16.0) (2026-11-14)
+
+
+### Features
+
+* **codex:** pks codex connect — the Agent Setup Protocol client ([#156](https://github.com/pksorensen/pks-cli/issues/156)) ([dd64e2e](https://github.com/pksorensen/pks-cli/commit/dd64e2ef9a9705dc46252d787f3c3c078baed06e))
+
 ## [7.15.0](https://github.com/pksorensen/pks-cli/compare/v7.14.0...v7.15.0) (2026-11-14)
 
 
