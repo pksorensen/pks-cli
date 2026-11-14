@@ -61,45 +61,45 @@ internal static class AspJsonNames
         switch (node)
         {
             case JsonArray array:
-            {
-                var changed = false;
-                foreach (var item in array)
-                    if (item is not null) changed |= Walk(item);
+                {
+                    var changed = false;
+                    foreach (var item in array)
+                        if (item is not null) changed |= Walk(item);
 
-                return changed;
-            }
+                    return changed;
+                }
 
             case JsonObject obj:
-            {
-                var renames = new List<(string From, string To)>();
-
-                // The recursion's answer has to be kept. Discarding it made Normalize a no-op for
-                // every document whose root keys happen to need no renaming — which is all of them
-                // except the service document: a profile list's roots are v, source, subject and
-                // profiles. The nested rewrites still happened in the tree, and were then thrown
-                // away with it when this level reported no change. Measured 13/11-2026.
-                var nested = false;
-
-                foreach (var (key, value) in obj)
                 {
-                    if (value is not null) nested |= Walk(value);
+                    var renames = new List<(string From, string To)>();
 
-                    var snake = ToSnake(key);
-                    if (snake is not null && !obj.ContainsKey(snake)) renames.Add((key, snake));
+                    // The recursion's answer has to be kept. Discarding it made Normalize a no-op for
+                    // every document whose root keys happen to need no renaming — which is all of them
+                    // except the service document: a profile list's roots are v, source, subject and
+                    // profiles. The nested rewrites still happened in the tree, and were then thrown
+                    // away with it when this level reported no change. Measured 13/11-2026.
+                    var nested = false;
+
+                    foreach (var (key, value) in obj)
+                    {
+                        if (value is not null) nested |= Walk(value);
+
+                        var snake = ToSnake(key);
+                        if (snake is not null && !obj.ContainsKey(snake)) renames.Add((key, snake));
+                    }
+
+                    foreach (var (from, to) in renames)
+                    {
+                        var value = obj[from];
+                        obj.Remove(from);
+
+                        // Detaching first: a JsonNode may have only one parent, and re-adding one that
+                        // still believes it is owned elsewhere throws rather than moving it.
+                        obj[to] = value?.DeepClone();
+                    }
+
+                    return nested || renames.Count > 0;
                 }
-
-                foreach (var (from, to) in renames)
-                {
-                    var value = obj[from];
-                    obj.Remove(from);
-
-                    // Detaching first: a JsonNode may have only one parent, and re-adding one that
-                    // still believes it is owned elsewhere throws rather than moving it.
-                    obj[to] = value?.DeepClone();
-                }
-
-                return nested || renames.Count > 0;
-            }
 
             default:
                 return false;
