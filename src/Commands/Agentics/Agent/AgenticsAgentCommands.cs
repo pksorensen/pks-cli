@@ -111,6 +111,25 @@ public sealed class AgenticsAgentJoinCommand : AsyncCommand<AgenticsAgentJoinCom
             ["client"] = JsonSerializer.SerializeToNode(AgentClientInfo.Collect()),
         };
 
+        // Persist the key BEFORE the server learns it: the invite is single-use, so a key
+        // lost after a successful join (save failed, response dropped) would strand the
+        // invite. Saved first, a retry presents the same key and lands on already-yours.
+        string path;
+        if (created)
+        {
+            identity.Name = name;
+            try
+            {
+                path = identity.Save(settings.KeyDir);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Could not save the agent key to {AgentIdentity.KeyPath(server, settings.KeyDir)}: {ex.Message}");
+                Console.Error.WriteLine("Nothing was sent to the server. Run join from a place that can write there, or set PKS_AGENT_KEY_DIR.");
+                return 1;
+            }
+        }
+
         using var http = AgentHttp.Create();
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{server}/api/artifact-agents/join")
         {
@@ -138,16 +157,15 @@ public sealed class AgenticsAgentJoinCommand : AsyncCommand<AgenticsAgentJoinCom
 
         identity.Name = result.Json?["agent"]?["name"]?.GetValue<string>() ?? name;
         identity.OnBehalfOf = result.Json?["agent"]?["onBehalfOf"]?.GetValue<string>();
-        string path;
         try
         {
             path = identity.Save(settings.KeyDir);
         }
         catch (Exception ex)
         {
-            // The server already knows the key; without the file it is useless. Say so loudly.
-            Console.Error.WriteLine($"Joined, but could not save the key: {ex.Message}. Run join again from a place that can write {AgentIdentity.KeyPath(server, settings.KeyDir)}.");
-            return 1;
+            // The key itself is already on disk; only the name/on-behalf-of labels are stale.
+            Console.Error.WriteLine($"Joined, but could not update the key file's labels: {ex.Message}");
+            path = AgentIdentity.KeyPath(server, settings.KeyDir);
         }
 
         var art = result.Json?["artifact"];
