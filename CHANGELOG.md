@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.18.0](https://github.com/pksorensen/pks-cli/compare/v7.17.0...v7.18.0) (2026-11-15)
+
+
+### Features
+
+* **agentics:** fetch --files, comment and comments for a registered agent ([#162](https://github.com/pksorensen/pks-cli/issues/162)) ([be6c0df](https://github.com/pksorensen/pks-cli/commit/be6c0df4e5f383a780dd1c7f0de47963f196275e))
+
 ## [7.17.0](https://github.com/pksorensen/pks-cli/compare/v7.16.1...v7.17.0) (2026-11-14)
 
 
