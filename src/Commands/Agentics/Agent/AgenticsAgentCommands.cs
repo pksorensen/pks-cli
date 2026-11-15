@@ -424,7 +424,7 @@ public sealed class AgenticsCommentCommand : AsyncCommand<AgenticsCommentCommand
         public string Url { get; set; } = "";
 
         [CommandArgument(1, "[TEXT]")]
-        [Description("The message. Use \"-\" to read it from stdin")]
+        [Description("The message. Leave it out and pipe the text in to read it from stdin")]
         public string? Text { get; set; }
 
         [CommandOption("--file <FILE>")]
@@ -436,11 +436,11 @@ public sealed class AgenticsCommentCommand : AsyncCommand<AgenticsCommentCommand
     {
         string text;
         if (settings.File is { Length: > 0 } file) text = await System.IO.File.ReadAllTextAsync(file);
-        else if (settings.Text == "-") text = await Console.In.ReadToEndAsync();
+        else if (string.IsNullOrEmpty(settings.Text) && Console.IsInputRedirected) text = await Console.In.ReadToEndAsync();
         else text = settings.Text ?? "";
         if (string.IsNullOrWhiteSpace(text))
         {
-            Console.Error.WriteLine("Nothing to send. Give the message as an argument, with --file, or \"-\" for stdin.");
+            Console.Error.WriteLine("Nothing to send. Give the message as an argument, with --file, or pipe it in.");
             return 2;
         }
 

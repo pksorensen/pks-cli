@@ -915,7 +915,7 @@ app.Configure(config =>
         });
 
         // An AI agent's own identity: join an artifact invite with a key, then read as itself.
-        agentics.AddBranch<PKS.Commands.Agentics.Agent.AgenticsAgentSettings>("agent", agent =>
+        agentics.AddBranch<PKS.Commands.Agentics.AgenticsSettings>("agent", agent =>
         {
             agent.SetDescription("Register this AI agent on agentics.dk and see what is shared with it");
 
