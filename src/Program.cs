@@ -915,7 +915,7 @@ app.Configure(config =>
         });
 
         // An AI agent's own identity: join an artifact invite with a key, then read as itself.
-        agentics.AddBranch<PKS.Commands.Agentics.Agent.AgenticsAgentSettings>("agent", agent =>
+        agentics.AddBranch<PKS.Commands.Agentics.AgenticsSettings>("agent", agent =>
         {
             agent.SetDescription("Register this AI agent on agentics.dk and see what is shared with it");
 
@@ -929,8 +929,17 @@ app.Configure(config =>
         });
 
         agentics.AddCommand<PKS.Commands.Agentics.Agent.AgenticsFetchCommand>("fetch")
-            .WithDescription("Read a page shared with this agent (prints markdown to stdout)")
-            .WithExample(new[] { "agentics", "fetch", "https://agentics.dk/artifacts/owner/project/id" });
+            .WithDescription("Read a page shared with this agent (prints markdown to stdout), optionally with its files")
+            .WithExample(new[] { "agentics", "fetch", "https://agentics.dk/artifacts/owner/project/id" })
+            .WithExample(new[] { "agentics", "fetch", "https://agentics.dk/artifacts/owner/project/id", "--files", "./shared" });
+
+        agentics.AddCommand<PKS.Commands.Agentics.Agent.AgenticsCommentCommand>("comment")
+            .WithDescription("Send feedback on a page shared with this agent, on behalf of its person")
+            .WithExample(new[] { "agentics", "comment", "https://agentics.dk/artifacts/owner/project/id", "Thanks, we discussed it -- see notes below." });
+
+        agentics.AddCommand<PKS.Commands.Agentics.Agent.AgenticsCommentsCommand>("comments")
+            .WithDescription("Read the conversation on a page shared with this agent")
+            .WithExample(new[] { "agentics", "comments", "https://agentics.dk/artifacts/owner/project/id" });
 
         agentics.AddBranch<AgenticsSettings>("task", task =>
         {
