@@ -22,7 +22,7 @@ namespace PKS.Commands.Agentics.Runner;
 /// <summary>
 /// Start the runner daemon to poll for and execute jobs
 /// </summary>
-public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Settings>
+public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Settings>
 {
     private readonly IAgenticsRunnerConfigurationService _configService;
     private readonly IDevcontainerSpawnerService _spawnerService;
@@ -502,7 +502,7 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
                 if (!await VerifyAppInstallationAsync(projectGitUrl))
                     return 1;
             }
-            else if (!settings.InProcess && spawnModeAvailable && requiresGitHub)
+            else if (NeedsOperatorGitHubLogin(settings.InProcess, spawnModeAvailable, requiresGitHub, actsAsGitHubApp: _githubAppTokens != null))
             {
                 var isAuthenticated = await _githubAuth.IsAuthenticatedAsync();
 
@@ -1392,9 +1392,19 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
     /// GitHub App installation check possible at startup: the job's own repository is not known
     /// until one is claimed, but the project's is known as soon as the runner registers.
     /// </summary>
-    private sealed record ProjectRepoInfo(bool RequiresGitHub, string? GitUrl, GitHubAppPointer? GitHubApp);
+    internal sealed record ProjectRepoInfo(bool RequiresGitHub, string? GitUrl, GitHubAppPointer? GitHubApp);
 
-    private async Task<ProjectRepoInfo> ProjectRepoInfoAsync(AgenticsRunnerRegistration registration)
+    /// <summary>
+    /// Whether startup must make sure the operator's own GitHub token exists (refresh, then
+    /// device-code login). Only a spawn-mode runner on a project that uses GitHub and is not
+    /// acting as a GitHub App. A project whose repo-info says <c>requiresGitHub:false</c> — the
+    /// embedded ALP controller, whose jobs carry their own installation token in
+    /// <c>commitBackRepository</c> — never gets here.
+    /// </summary>
+    internal static bool NeedsOperatorGitHubLogin(bool inProcess, bool spawnModeAvailable, bool requiresGitHub, bool actsAsGitHubApp) =>
+        !actsAsGitHubApp && !inProcess && spawnModeAvailable && requiresGitHub;
+
+    internal async Task<ProjectRepoInfo> ProjectRepoInfoAsync(AgenticsRunnerRegistration registration)
     {
         try
         {
@@ -2345,8 +2355,16 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         // invisible to another. A fixed path is the same for root, node and vscode alike.
         scriptLines.AppendLine(
             $"export CLAUDE_CONFIG_DIR=${{CLAUDE_CONFIG_DIR:-{ClaudeCredentialVolumes.MountTarget}}}");
-        scriptLines.AppendLine($"export AGENTICS_SERVER={agenticServerForContainer}");
-        scriptLines.AppendLine($"export AGENTIC_SERVER={agenticServerForContainer}"); // deprecated, kept for backwards compat
+        // AGENTIC_SERVER is deprecated, kept for backwards compat. operatorConfig.serverUrl (embedded
+        // ALP) replaces the derived bare host:port with a full URL; absent, the lines are unchanged.
+        var operatorServerUrl = job.AgentDef?.OperatorConfig?.ServerUrl;
+        if (RejectedOperatorServerUrlWarning(operatorServerUrl, agenticServerForContainer) is { } serverUrlWarning)
+            _console.MarkupLine($"[yellow]{serverUrlWarning.EscapeMarkup()}[/]");
+        foreach (var line in BuildAgenticsServerExportLines(agenticServerForContainer, operatorServerUrl))
+            scriptLines.AppendLine(line);
+        // operatorConfig.broadcast == "off" → VIBECAST_BROADCAST=off; nothing otherwise.
+        foreach (var line in BuildBroadcastExportLines(job.AgentDef?.OperatorConfig))
+            scriptLines.AppendLine(line);
         scriptLines.AppendLine($"export AGENTICS_PROJECT={registration.Owner}/{registration.Project}");
         scriptLines.AppendLine($"export AGENTICS_JOB_ID={job.Id}");
         // The bearer for this job's credential socket. The helper and askpass scripts read
@@ -2358,7 +2376,7 @@ public class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand.Setting
         // rewritten for every job, warm or cold, and everything vibecast spawns inherits it.
         if (jobToken is not null)
             scriptLines.AppendLine($"export PKS_TOKEN='{jobToken}'");
-        scriptLines.AppendLine($"export AGENTICS_TOKEN='{registration.Token}'");
+        scriptLines.AppendLine($"export AGENTICS_TOKEN={ShellSingleQuote(registration.Token)}");
         scriptLines.AppendLine($"export AGENTICS_OWNER='{registration.Owner}'");
         scriptLines.AppendLine($"export AGENTICS_PROJECT_NAME='{registration.Project}'");
         var agenticsBaseUrl = $"{serverUri.Scheme}://{serverUri.Host}{(serverUri.IsDefaultPort ? "" : $":{serverUri.Port}")}";
@@ -2538,15 +2556,8 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             }
             if (job.AgentDef.CommitBackRepository is { } commitBack)
             {
-                var escapedUrl = commitBack.Url?.Replace("'", "'\\''");
-                var escapedKind = commitBack.CredentialKind?.Replace("'", "'\\''");
-                scriptLines.AppendLine($"export AGENTICS_COMMIT_BACK_URL='{escapedUrl}'");
-                scriptLines.AppendLine($"export AGENTICS_COMMIT_BACK_CREDENTIAL_KIND='{escapedKind}'");
-                if (!string.IsNullOrWhiteSpace(commitBack.Token))
-                {
-                    var escapedToken = commitBack.Token.Replace("'", "'\\''");
-                    scriptLines.AppendLine($"export AGENTICS_COMMIT_BACK_TOKEN='{escapedToken}'");
-                }
+                foreach (var line in BuildCommitBackExportLines(commitBack))
+                    scriptLines.AppendLine(line);
             }
             else if (!string.IsNullOrWhiteSpace(job.AgentDef.ProjectRepoToken))
             {
@@ -2693,8 +2704,12 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                 $"bash -c 'which {agentBinary} && echo agent-ok || echo agent-missing'", timeoutSeconds: 10, user: agentUser);
             agentCheckOutput = agentCheck.Output;
         }
+        // The base is either today's derived {scheme}://{host:port} or a serverUrl that passed
+        // ValidOperatorServerUrl, whose shape allows no quote, whitespace or shell metacharacter —
+        // it sits unquoted inside the single-quoted bash -c below, so that check is what keeps a
+        // hostile serverUrl from closing the quote.
         var reachCheck = await _spawnerService.ExecInContainerAsync(containerId,
-            $"bash -c 'curl -sf --max-time 5 {serverUri.Scheme}://{agenticServerForContainer}/api/healthz -o /dev/null && echo reachable || echo unreachable'",
+            $"bash -c 'curl -sf --max-time 5 {ContainerReachCheckBase(serverUri.Scheme, agenticServerForContainer, operatorServerUrl)}/api/healthz -o /dev/null && echo reachable || echo unreachable'",
             timeoutSeconds: 15, user: agentUser);
         _console.MarkupLine($"[grey]tmux: {preFlight.Output.Trim()}[/]");
         _console.MarkupLine($"[grey]npx:  {npxCheck.Output.Trim()}[/]");
@@ -3174,6 +3189,10 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         // job whose agent never launched still reported completed/success — the single most
         // expensive defect here, because it makes a broken container look like a working one.
         string? failureReason = null;
+        // Why the wait ended, for the embedded-ALP completion PATCH only (see step 13). Stays
+        // "max_timeout" when the loop runs out of time.
+        var waitEndReason = "max_timeout";
+        var embeddedJob = IsEmbeddedOperatorConfig(job.AgentDef?.OperatorConfig);
         // The agent's own pane. Vibecast names it "main"; the info/help panes exist either way, so
         // their presence proves nothing. If "main" never appears, the agent never started.
         var agentPaneSeen = false;
@@ -3186,6 +3205,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             if (tmuxCheck.Output.Contains("done"))
             {
                 _console.MarkupLine("[green]Vibecast session ended — job complete.[/]");
+                waitEndReason = "session_ended";
                 break;
             }
 
@@ -3206,6 +3226,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                     _console.MarkupLine($"[red]The agent pane never started (tmux windows: {seen.EscapeMarkup()}).[/]");
                     _console.MarkupLine($"[yellow]Hint:[/] [dim]read {vibecastHome}/vibecast.log in the container — the agent's own launch error is at the top, above the repeated [[pane-lost]] lines.[/]");
                     failureReason = $"agent pane never started (tmux windows: {seen})";
+                    waitEndReason = "agent_pane_missing";
                     break;
                 }
             }
@@ -3217,6 +3238,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             if (signalCheck.Output.Contains("yes"))
             {
                 _console.MarkupLine("[green]Task completion signal detected.[/]");
+                waitEndReason = "task_complete_signal";
                 break;
             }
 
@@ -3262,6 +3284,7 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
                                     _console.MarkupLine($"[yellow]Agent idle for {idleSec}s — completing job.[/]");
                                 }
                             }
+                            waitEndReason = failureReason != null ? "idle_failure" : "idle";
                             break;
                         }
                     }
@@ -3284,21 +3307,77 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             if ((int)elapsed.TotalSeconds % 60 < 30)
                 _console.MarkupLine($"[dim]{elapsed.Minutes}m elapsed...[/]");
 
-            await Task.Delay(30_000, ct);
+            if (embeddedJob)
+            {
+                // Embedded ALP: a cancelled wait still owes the controller a completion PATCH, so
+                // the cancellation ends the wait instead of unwinding the whole job. agentics.dk
+                // jobs keep the old behaviour (the exception propagates, no PATCH).
+                try { await Task.Delay(30_000, ct); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    waitEndReason = "cancelled";
+                    break;
+                }
+            }
+            else
+            {
+                await Task.Delay(30_000, ct);
+            }
         }
 
         // 12. Stop vibecast and clean up
         _console.MarkupLine("[cyan]Stopping vibecast...[/]");
+        // An embedded job whose wait was cancelled tells vibecast so, and its session-event end
+        // carries conclusion=cancelled. Every other path posts the same bare stop as before.
+        var stopBroadcastPath = embeddedJob && waitEndReason == "cancelled"
+            ? "/stop-broadcast?conclusion=cancelled"
+            : "/stop-broadcast";
         await _spawnerService.ExecInContainerAsync(containerId,
-            $"curl -sf --unix-socket {controlSocket} -X POST http://localhost/stop-broadcast || true",
+            $"curl -sf --unix-socket {controlSocket} -X POST http://localhost{stopBroadcastPath} || true",
             timeoutSeconds: 10, user: agentUser);
-        await Task.Delay(2000, ct);
+        await Task.Delay(2000, embeddedJob ? CancellationToken.None : ct);
         await _spawnerService.ExecInContainerAsync(containerId,
             $"tmux kill-session -t {vibecastTmux} 2>/dev/null || true",
             timeoutSeconds: 10, user: agentUser);
 
+        // Only reached cancelled by an embedded job (agentics.dk jobs throw out of the delays
+        // above). A wait that had already ended for a real reason keeps that reason.
+        if (ct.IsCancellationRequested && waitEndReason == "max_timeout") waitEndReason = "cancelled";
+
         // 13. PATCH to completed — with the conclusion the run actually earned.
-        if (failureReason != null)
+        // Embedded ALP (operatorConfig.broadcast/serverUrl present): the same PATCH, plus why the
+        // wait ended, the session and a bounded log excerpt, so the job carries something even
+        // when vibecast never delivered its session-event end. agentics.dk jobs never carry those
+        // fields and keep the exact {status, conclusion} body below.
+        if (embeddedJob)
+        {
+            string? taskComplete = null;
+            string? logTail = null;
+            try
+            {
+                taskComplete = (await _spawnerService.ExecInContainerAsync(containerId,
+                    $"head -c 8000 {workspaceFolder}/.task-complete 2>/dev/null || true",
+                    timeoutSeconds: 5, user: agentUser)).Output;
+                logTail = (await _spawnerService.ExecInContainerAsync(containerId,
+                    $"tail -c 12000 {vibecastHome}/vibecast.log 2>/dev/null || true",
+                    timeoutSeconds: 5, user: agentUser)).Output;
+            }
+            catch { /* best-effort: the PATCH still goes out without them */ }
+
+            var embeddedConclusion = EmbeddedSpawnConclusion(waitEndReason, failureReason);
+            var embeddedBody = BuildEmbeddedSpawnCompletionBody(
+                embeddedConclusion,
+                waitEndReason,
+                sessionIdValue,
+                broadcastIdValue,
+                ComposeEmbeddedCompletionLogs(failureReason, taskComplete, logTail));
+            await PatchJobRawAsync(client, baseUrl, runId, job.Id, embeddedBody, embeddedConclusion, CancellationToken.None);
+            await ReportJobResultAsync(registration,
+                embeddedConclusion == "success" ? "success" : "failed",
+                failureReason ?? (embeddedConclusion == "cancelled" ? "cancelled" : null),
+                CancellationToken.None);
+        }
+        else if (failureReason != null)
         {
             await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "failure", ct);
             await ReportJobResultAsync(registration, "failed", failureReason, ct);
@@ -5112,6 +5191,33 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
         }
     }
 
+    /// <summary>Completion PATCH with a pre-serialized JSON body (embedded-ALP spawn completion).</summary>
+    private async Task PatchJobRawAsync(HttpClient client, string baseUrl, string runId, string jobId,
+        string jsonBody, string conclusion, CancellationToken ct)
+    {
+        try
+        {
+            using var msg = new HttpRequestMessage(HttpMethod.Patch, $"{baseUrl}/runs/{runId}/jobs/{jobId}")
+            {
+                Content = new StringContent(jsonBody, Encoding.UTF8, "application/json"),
+            };
+            var resp = await client.SendAsync(msg, ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                var body = await resp.Content.ReadAsStringAsync(ct);
+                _console.MarkupLine($"[yellow]PATCH job status warning: {(int)resp.StatusCode} {body.EscapeMarkup()}[/]");
+            }
+            else
+            {
+                _console.MarkupLine($"[dim]Job {jobId} → completed/{conclusion} (✓)[/]");
+            }
+        }
+        catch (Exception ex)
+        {
+            _console.MarkupLine($"[yellow]PATCH job status error: {ex.Message.EscapeMarkup()}[/]");
+        }
+    }
+
     private async Task PatchJobStatusWithLogsAsync(
         HttpClient client, string baseUrl, string runId, string jobId,
         string status, string conclusion, string logs, CancellationToken ct)
@@ -5315,6 +5421,16 @@ server.listen(TCP_PORT, '127.0.0.1', () => console.log('otlp-bridge: 127.0.0.1:'
             // 5. Resolve AGENTIC_SERVER from registration
             var serverUri = new Uri(registration.Server);
             var agenticServer = $"{serverUri.Host}:{serverUri.Port}";
+            // Embedded ALP: operatorConfig.serverUrl replaces the derived host:port (single-quoted,
+            // since it now carries a scheme); operatorConfig.broadcast=off adds VIBECAST_BROADCAST.
+            // Both absent → the env line below is unchanged.
+            if (RejectedOperatorServerUrlWarning(job.AgentDef?.OperatorConfig?.ServerUrl, agenticServer) is { } inProcessServerUrlWarning)
+                _console.MarkupLine($"[yellow]{inProcessServerUrlWarning.EscapeMarkup()}[/]");
+            if (ValidOperatorServerUrl(job.AgentDef?.OperatorConfig?.ServerUrl) is { } inProcessServerUrl)
+                agenticServer = $"'{inProcessServerUrl.Replace("'", "'\\''")}'";
+            var broadcastEnv = VibecastBroadcastValue(job.AgentDef?.OperatorConfig) is { } broadcastValue
+                ? $" VIBECAST_BROADCAST={broadcastValue}"
+                : "";
             var agenticsBaseUrl = $"{serverUri.Scheme}://{serverUri.Host}{(serverUri.IsDefaultPort ? "" : $":{serverUri.Port}")}";
 
             // 6. Create isolated VIBECAST_HOME for this instance so control socket/sessions don't conflict
@@ -5551,7 +5667,7 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
                 if (job.AgentDef.CommitBackRepository is { } commitBack)
                 {
                     var escapedUrl = commitBack.Url?.Replace("'", "'\\''");
-                    var escapedKind = commitBack.CredentialKind?.Replace("'", "'\\''");
+                    var escapedKind = EffectiveCommitBackCredentialKind(commitBack.CredentialKind, commitBack.Token)?.Replace("'", "'\\''");
                     autoGitEnv += $" AGENTICS_COMMIT_BACK_URL='{escapedUrl}'";
                     autoGitEnv += $" AGENTICS_COMMIT_BACK_CREDENTIAL_KIND='{escapedKind}'";
                     if (!string.IsNullOrWhiteSpace(commitBack.Token))
@@ -5692,7 +5808,7 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             if (!string.IsNullOrEmpty(openaiKeyInProc))
                 anthropicEnv += $" OPENAI_API_KEY='{openaiKeyInProc}'";
 
-            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN='{registration.Token}' AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv}{autoApproveEnv}{disableBackgroundTasksEnv}{disable1mContextEnv}{modelEnv}{modelTierEnv}{effortEnv}{agentEnv}{subagentSuffixEnv}{broadcastIdEnv}{chatSessionEnv}{allowedDirsEnv}{claudeConfigDirEnv}{otelEnv}{agenticsProxyEnv}{anthropicEnv} {vibecastBin}{vibecastLogRedirect}");
+            startPsi.ArgumentList.Add($"cd {jobWorkTree} && HOME={realHome} VIBECAST_HOME={vibecastHome} VIBECAST_BIN={vibecastBin} AGENTICS_SERVER={agenticServer} AGENTIC_SERVER={agenticServer} AGENTICS_PROJECT={registration.Owner}/{registration.Project} AGENTICS_JOB_ID={job.Id} AGENTICS_TOKEN={ShellSingleQuote(registration.Token)} AGENTICS_OWNER='{registration.Owner}' AGENTICS_PROJECT_NAME='{registration.Project}' AGENTICS_BASE_URL='{agenticsBaseUrl}' AGENTICS_JOB_MODE=1{keyboardPinEnv}{initialPromptEnv}{appendPromptEnv}{stageGitEnv}{extraPluginsEnv}{traceparentEnv}{resumeEnv}{autoGitEnv}{autoApproveEnv}{disableBackgroundTasksEnv}{disable1mContextEnv}{modelEnv}{modelTierEnv}{effortEnv}{agentEnv}{broadcastEnv}{subagentSuffixEnv}{broadcastIdEnv}{chatSessionEnv}{allowedDirsEnv}{claudeConfigDirEnv}{otelEnv}{agenticsProxyEnv}{anthropicEnv} {vibecastBin}{vibecastLogRedirect}");
 
             var startProc = Process.Start(startPsi);
             if (startProc != null)
@@ -7658,7 +7774,7 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         public int? MaxTokens { get; set; }
     }
 
-    private class CommitBackRepositoryDefinition
+    internal class CommitBackRepositoryDefinition
     {
         public string? Url { get; set; }
         public string? CredentialKind { get; set; }
@@ -7709,7 +7825,7 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         public int? MemoryMB { get; set; }
     }
 
-    private class RunnerOperatorConfig
+    internal class RunnerOperatorConfig
     {
         public bool AutoApproveImageUploads { get; set; }
         public bool DisableBackgroundTasks { get; set; }
@@ -7735,6 +7851,15 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         /// server-side (station ?? line default). Exported as VIBECAST_AGENT; unset → vibecast
         /// defaults to claude. vibecast owns the per-agent launch + config-seed.</summary>
         public string? Agent { get; set; }
+        /// <summary>Embedded ALP: "on" | "off" (absent = "on"). "off" exports
+        /// VIBECAST_BROADCAST=off, so vibecast runs the job without the broadcast/chat websockets
+        /// while keeping its HTTP lives API traffic (session-event, metadata, pending-answer).</summary>
+        public string? Broadcast { get; set; }
+        /// <summary>Embedded ALP: the platform's base URL as reachable from INSIDE the
+        /// devcontainer, with scheme (e.g. http://172.17.0.1:8080). When set it is exported as
+        /// AGENTICS_SERVER (as written, less trailing slashes) instead of the bare host:port the runner
+        /// derives. A value that is not http(s)://host[:port][/path] is ignored with a warning.</summary>
+        public string? ServerUrl { get; set; }
     }
 
     private class PluginRef

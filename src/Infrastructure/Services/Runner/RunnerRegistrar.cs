@@ -52,6 +52,24 @@ public static class RunnerRegistrar
     }
 
     /// <summary>
+    /// Gives a stored server value a scheme when it has none, without consulting the environment
+    /// (unlike <see cref="NormalizeServer"/>, whose null argument means "read AGENTICS_SERVER").
+    /// <c>http://…</c>/<c>https://…</c> values are returned untouched — byte for byte — so an
+    /// existing registration round-trips unchanged; empty stays empty. A bare <c>host[:port]</c>
+    /// gets the same rule as <see cref="NormalizeServer"/>: localhost/127.0.0.1 → http, else https.
+    /// </summary>
+    public static string EnsureScheme(string? server)
+    {
+        if (string.IsNullOrWhiteSpace(server)) return server ?? "";
+        if (server.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            server.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            return server;
+        }
+        return NormalizeServer(server.Trim());
+    }
+
+    /// <summary>
     /// Default job-targeting labels sent at registration. "self-hosted" matches the convention
     /// used by the (unrelated, GitHub Actions) runner daemon.
     /// </summary>
