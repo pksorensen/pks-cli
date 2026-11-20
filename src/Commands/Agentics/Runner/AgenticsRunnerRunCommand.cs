@@ -2322,12 +2322,21 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
             "# Runner-injected — never commit\nsettings.local.json\n");
 
         await SeedWorkspaceTrustAsync(containerId, workspaceFolder, agentUser, ct);
-        await WriteContainerFileAsync($"{workspaceFolder}/CLAUDE.md", $"""
-            # Job Environment
+        // Never replace the repository's own CLAUDE.md: it is project guidance the agent
+        // needs, and under AutoGit the overwrite becomes a commit that deletes it on the task
+        // branch (the .git/info/exclude entry only hides an *untracked* file). Matches the
+        // in-process path, which also writes only when the file is absent.
+        var claudeMdExists = (await _spawnerService.ExecInContainerAsync(containerId,
+            $"test -e '{workspaceFolder.Replace("'", "'\\''")}/CLAUDE.md'", timeoutSeconds: 30)).ExitCode == 0;
+        if (!claudeMdExists)
+        {
+            await WriteContainerFileAsync($"{workspaceFolder}/CLAUDE.md", $"""
+                # Job Environment
 
-            This is a runner job container. Your workspace is `{workspaceFolder}`.
-            All files must be created under `{workspaceFolder}` — do not write to parent directories.
-            """);
+                This is a runner job container. Your workspace is `{workspaceFolder}`.
+                All files must be created under `{workspaceFolder}` — do not write to parent directories.
+                """);
+        }
 
         var launchScript = $"{vibecastHome}/start.sh";
         var scriptLines = new System.Text.StringBuilder();
