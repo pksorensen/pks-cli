@@ -96,7 +96,11 @@ public class AgenticsRunnerEmbeddedAlpTests
     {
         var registration = new AgenticsRunnerRegistration
         {
-            Id = "r-1", Name = "sandbox", Token = "rnt_abc", Owner = "acme", Project = "widgets",
+            Id = "r-1",
+            Name = "sandbox",
+            Token = "rnt_abc",
+            Owner = "acme",
+            Project = "widgets",
             Server = "http://172.17.0.1:8080",
         };
         var seen = new List<(string Url, string? Auth)>();
@@ -229,7 +233,10 @@ public class AgenticsRunnerEmbeddedAlpTests
         AgenticsRunnerRunCommand.IsEmbeddedOperatorConfig(null).Should().BeFalse();
         AgenticsRunnerRunCommand.IsEmbeddedOperatorConfig(new AgenticsRunnerRunCommand.RunnerOperatorConfig
         {
-            Agent = "claude", Model = "opus", Effort = "high", AutoApproveImageUploads = true,
+            Agent = "claude",
+            Model = "opus",
+            Effort = "high",
+            AutoApproveImageUploads = true,
         }).Should().BeFalse();
     }
 
@@ -366,7 +373,10 @@ public class AgenticsRunnerEmbeddedAlpTests
 
         var info = await command.ProjectRepoInfoAsync(new AgenticsRunnerRegistration
         {
-            Token = "rnt_abc", Owner = "acme", Project = "widgets", Server = "http://172.17.0.1:8080",
+            Token = "rnt_abc",
+            Owner = "acme",
+            Project = "widgets",
+            Server = "http://172.17.0.1:8080",
         });
 
         info.RequiresGitHub.Should().BeFalse();
@@ -383,7 +393,10 @@ public class AgenticsRunnerEmbeddedAlpTests
 
         var info = await command.ProjectRepoInfoAsync(new AgenticsRunnerRegistration
         {
-            Token = "rnt_abc", Owner = "acme", Project = "widgets", Server = "http://172.17.0.1:8080",
+            Token = "rnt_abc",
+            Owner = "acme",
+            Project = "widgets",
+            Server = "http://172.17.0.1:8080",
         });
 
         info.RequiresGitHub.Should().BeTrue();
