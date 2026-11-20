@@ -49,6 +49,19 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.19.0](https://github.com/pksorensen/pks-cli/compare/v7.18.0...v7.19.0) (2026-11-20)
+
+
+### Features
+
+* **agentics:** runner support for an embedded ALP server ([1e1384b](https://github.com/pksorensen/pks-cli/commit/1e1384b084503b6d5cb05984ad5773097e0f085c))
+* **agentics:** runner support for an embedded ALP server ([9b9f26b](https://github.com/pksorensen/pks-cli/commit/9b9f26bf505ac35575da439ce0f1fd4e4dce2940))
+
+
+### Bug Fixes
+
+* **agentics:** never overwrite the repository's own CLAUDE.md in spawn mode ([0e34fd7](https://github.com/pksorensen/pks-cli/commit/0e34fd7084be2efb1bd75c5d6d668375a64edfb5))
+
 ## [7.18.0](https://github.com/pksorensen/pks-cli/compare/v7.17.0...v7.18.0) (2026-11-15)
 
 
