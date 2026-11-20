@@ -19,7 +19,10 @@ public class AgenticsRunnerConfigurationService : IAgenticsRunnerConfigurationSe
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        // Reading only: a config pre-seeded by another tool (the embedded ALP controller writes
+        // {Id, Name, Token, Owner, Project, Server}) must bind too. Writing stays camelCase.
+        PropertyNameCaseInsensitive = true
     };
 
     /// <summary>

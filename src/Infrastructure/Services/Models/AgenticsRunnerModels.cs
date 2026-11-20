@@ -7,7 +7,21 @@ public class AgenticsRunnerRegistration
     public string Token { get; set; } = "";
     public string Owner { get; set; } = "";
     public string Project { get; set; } = "";
-    public string Server { get; set; } = "";
+    private string _server = "";
+
+    /// <summary>
+    /// The platform's base URL. Normally stored with its scheme (registration writes it that way),
+    /// but a pre-seeded <c>agentics-runners.json</c> — e.g. one written by an embedded ALP
+    /// controller — may hold a bare <c>host[:port]</c>. A bare value gets the same scheme rule
+    /// <c>--server</c> has always used (localhost/127.0.0.1 → http, everything else → https), so
+    /// every <c>new Uri(Server)</c> and <c>{ApiBase}/api/…</c> keeps working. A value that already
+    /// carries a scheme is kept exactly as written.
+    /// </summary>
+    public string Server
+    {
+        get => _server;
+        set => _server = PKS.Infrastructure.Services.Runner.RunnerRegistrar.EnsureScheme(value);
+    }
 
     /// <summary>
     /// Where this runner reaches the platform's API from the machine it runs on, when that differs
@@ -16,7 +30,14 @@ public class AgenticsRunnerRegistration
     /// never out over the internet; everything handed to a job or to vibecast keeps
     /// <see cref="Server"/>, the address the rest of the world knows the platform by.
     /// </summary>
-    public string? InternalServer { get; set; }
+    public string? InternalServer
+    {
+        get => _internalServer;
+        set => _internalServer = string.IsNullOrWhiteSpace(value)
+            ? value
+            : PKS.Infrastructure.Services.Runner.RunnerRegistrar.EnsureScheme(value);
+    }
+    private string? _internalServer;
 
     /// <summary>The base URL for the runner's own API calls: <see cref="InternalServer"/> when set.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
