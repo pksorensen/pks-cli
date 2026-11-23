@@ -49,6 +49,14 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.21.0](https://github.com/pksorensen/pks-cli/compare/v7.20.0...v7.21.0) (2026-11-23)
+
+
+### Features
+
+* Hetzner Cloud VM provider and the image --input/--size flags, off a stale local branch ([#169](https://github.com/pksorensen/pks-cli/issues/169)) ([e5be394](https://github.com/pksorensen/pks-cli/commit/e5be39420113d473ec74131b5e84938cc4d0706f))
+* **runner:** register many projects, start once ([#168](https://github.com/pksorensen/pks-cli/issues/168)) ([4673515](https://github.com/pksorensen/pks-cli/commit/467351522dfac4c5542244f0e956bdbddc0d6d34))
+
 ## [7.20.0](https://github.com/pksorensen/pks-cli/compare/v7.19.0...v7.20.0) (2026-11-23)
 
 
