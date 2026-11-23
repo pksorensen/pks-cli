@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.20.0](https://github.com/pksorensen/pks-cli/compare/v7.19.0...v7.20.0) (2026-11-23)
+
+
+### Features
+
+* **runner:** code_step jobs — run one command in the job container ([a8ceba3](https://github.com/pksorensen/pks-cli/commit/a8ceba3ab9933e8d2a8b928c3380e45777b1b5d6))
+
 ## [7.19.0](https://github.com/pksorensen/pks-cli/compare/v7.18.0...v7.19.0) (2026-11-20)
 
 
