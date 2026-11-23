@@ -13,7 +13,8 @@ over SSH.
 | `pks agentics runner status <selector>` | One runner's state plus its last output. |
 | `pks agentics runner logs <selector>` | That runner's output. |
 | `pks agentics runner stop <selector>` | Stop it. |
-| `pks agentics runner register <owner/project>` | Register without starting. `start`/`run` auto-register, so this is rarely needed. |
+| `pks agentics runner register <owner/project> …` | Register one or several without starting. `start`/`run` auto-register a single `--project`, so this matters most when you want *several* projects served. |
+| `pks agentics runner unregister <owner/project> …` | Stop serving a project from this machine, and stop its runner. |
 | `pks agentics runner claude-login <target>` | Seed an SSH target's Claude credentials volume. |
 | `pks agentics runner cleanup` | Remove devcontainers left by previous runner instances (ADR 0002). |
 
@@ -25,6 +26,57 @@ that mode to be something they can enumerate. A flag leaves them guessing.
 handoff launched exactly that string inside a remote tmux session. Both moved together — the
 handoff now launches `runner run`. Anything else that shells out to `agentics runner start` and
 expects it to block (a systemd unit, a supervisor config, a script) wants `run` now.
+
+## One machine, several projects
+
+`register` is an opt-in list and `unregister` the opt-out. **`run` and `start` with no
+`--project` serve every saved registration** — one detached runner per project for `start`, one
+supervised child per project for `run` — which is the GitHub-runner shape: name the projects
+once, start once.
+
+The two differ in when they read that list. `start` is a one-shot: it detaches the runners and
+returns, so a project registered afterwards needs another `start` (which is harmless — a project
+already running is left alone and reported as success). Only `run`'s supervisor re-reads the
+registrations as it goes.
+
+```sh
+pks agentics runner register pksorensen/pksorensen pksorensen/agentics-wire
+pks agentics runner start            # serves both
+pks agentics runner list             # one row per project
+pks agentics runner unregister pksorensen/agentics-wire
+```
+
+`--project` still picks a subset, and repeats: `start --project a/b --project a/c`.
+
+**This changed.** `run` used to take the *first* saved registration and `start` refused outright
+("pass --project to say which one"), so a box with six registrations served one project and said
+nothing about the other five. If you have a script that relied on a project-less `run` serving
+exactly one project, name it with `--project`.
+
+Two things the multi-project path deliberately does not do:
+
+- **It never asks the platform anything and never mints a credential.** That is
+  [installation mode](#installation-mode-self-hosted-platforms)'s job, and it needs an
+  installation identity only `install.sh` writes. Here the saved registrations *are* the project
+  list. A child that keeps exiting is therefore backed off and named in the log — usually a
+  rotated token, which only `register` can repair.
+- **`run` skips a project a detached runner already serves.** Nothing on the platform stops two
+  runners claiming for one project, so `run` after a `start` would otherwise quietly double it.
+  `runner stop <owner/project>` first if you want the foreground one to take over.
+- **It refuses `--work-dir`** when more than one project would share it. Two runners checking out
+  into one directory would overwrite each other.
+
+The failure counter resets once a child has been up two minutes, so a runner that worked for a
+week and then hit a transient error is not made to wait minutes for its first restart.
+
+## Installation mode (self-hosted platforms)
+
+On a box where `install.sh` has installed the whole Agentics platform, the environment carries an
+installation identity (`AGENTICS_INSTALLATION_ID` and friends). A project-less `run` or `start`
+then takes a different path entirely: `InstallationRunnerMode`, which asks the platform which
+projects exist (`GET /api/internal/managed-runners`), bootstraps a credential per project, and
+manages a systemd unit. That mode is for *being* the platform; the multi-project mode above is
+for serving someone else's.
 
 ## One selector, two worlds
 

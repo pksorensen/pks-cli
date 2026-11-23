@@ -175,7 +175,7 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
         public string? VibecastBinary { get; set; }
 
         [CommandOption("--project <owner-project>")]
-        [Description("Project to run for in owner/project format. Auto-registers if not already registered. Without this, uses first saved registration.")]
+        [Description("Project to run for in owner/project format. Auto-registers if not already registered. Without this, every saved registration is served, one child runner each.")]
         public string? Project { get; set; }
 
         [CommandOption("--server <SERVER>")]
@@ -243,6 +243,9 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
     /// <summary>The capability string the platform routes SMS deliveries on.</summary>
     internal const string SmsCapability = "sms";
 
+    private readonly ILocalRunnerStore? _localRunners;
+    private readonly ILocalRunnerSupervisor? _localSupervisor;
+
     public AgenticsRunnerRunCommand(
         IAgenticsRunnerConfigurationService configService,
         IDevcontainerSpawnerService spawnerService,
@@ -263,7 +266,9 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
         PKS.Infrastructure.Services.Runner.IJobTokenService? jobTokens = null,
         PKS.Infrastructure.Services.TypeSafe.ITypeSafeCredentialService? typeSafe = null,
         PKS.Infrastructure.Services.Acs.IAcsSmsService? acsSms = null,
-        PKS.Infrastructure.Services.Providers.IProviderApiKeyService? providerKeys = null)
+        PKS.Infrastructure.Services.Providers.IProviderApiKeyService? providerKeys = null,
+        ILocalRunnerStore? localRunners = null,
+        ILocalRunnerSupervisor? localSupervisor = null)
     {
         _configService = configService ?? throw new ArgumentNullException(nameof(configService));
         _spawnerService = spawnerService ?? throw new ArgumentNullException(nameof(spawnerService));
@@ -287,6 +292,8 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
         _typeSafe = typeSafe;
         _acsSms = acsSms;
         _providerKeys = providerKeys;
+        _localRunners = localRunners;
+        _localSupervisor = localSupervisor;
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -357,6 +364,39 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
                     DisplayError("No runner registrations found. Use --project owner/project to auto-register, or run 'pks agentics runner register <owner/project>' first.");
                     return 1;
                 }
+
+                // Several projects registered and no --project: serve them all, one child runner
+                // each, with this process supervising. It used to take registrations[0] silently,
+                // so a box with six registrations served one project and gave no sign of it.
+                if (registrations.Count > 1)
+                {
+                    DisplayInfo($"{registrations.Count} projects registered — serving all of them " +
+                                "(--project owner/project for just one).");
+                    foreach (var r in registrations)
+                        DisplayInfo($"  {r.Owner}/{r.Project} — {r.Server}");
+
+                    using var multiCts = new CancellationTokenSource();
+                    System.Console.CancelKeyPress += (_, e) =>
+                    {
+                        e.Cancel = true;
+                        multiCts.Cancel();
+                    };
+                    // Same pair as InstallationRunnerMode: without ProcessExit a supervisor taken
+                    // down by anything other than Ctrl+C orphans its children.
+                    AppDomain.CurrentDomain.ProcessExit += (_, _) => multiCts.Cancel();
+
+                    return await LocalMultiProjectRunnerMode.RunAsync(
+                        _configService, _console,
+                        alreadyDetached: _localRunners is null || _localSupervisor is null
+                            ? null
+                            : async (registration, token) =>
+                            {
+                                var record = await _localRunners.FindAsync(registration.Owner, registration.Project, token);
+                                return record is not null && await _localSupervisor.IsAliveAsync(record, token);
+                            },
+                        ct: multiCts.Token);
+                }
+
                 registration = registrations[0];
             }
 
