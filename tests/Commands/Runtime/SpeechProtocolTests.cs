@@ -24,6 +24,17 @@ public class SpeechProtocolTests
         Assert.Contains("24 kHz mono PCM16", error.Message);
     }
 
+    [Theory]
+    [InlineData("da-DK", "da")]
+    [InlineData("en-US", "en")]
+    [InlineData("pt-BR", "pt")]
+    [InlineData("da", "da")]
+    [InlineData(null, null)]
+    public void Normalizes_Bcp47_Language_For_Provider(string? requested, string? expected)
+    {
+        Assert.Equal(expected, SpeechProtocol.NormalizeProviderLanguage(requested));
+    }
+
     [Fact]
     public void Translates_Azure_Final_Transcript()
     {

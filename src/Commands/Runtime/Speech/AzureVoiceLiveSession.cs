@@ -10,11 +10,8 @@ internal sealed class AzureVoiceLiveSession : IAsyncDisposable
 {
     private static readonly TokenRequestContext CognitiveServicesTokenContext = new(["https://cognitiveservices.azure.com/.default"]);
     private static readonly TokenRequestContext FoundryTokenContext = new(["https://ai.azure.com/.default"]);
-    private const int BytesPerSecond = 24000 * sizeof(short);
-    private const int CommitIntervalBytes = BytesPerSecond * 3;
     private readonly SpeechRuntimeOptions _options;
     private readonly ClientWebSocket _socket = new();
-    private int _uncommittedBytes;
 
     public AzureVoiceLiveSession(SpeechRuntimeOptions options) => _options = options;
 
@@ -22,6 +19,7 @@ internal sealed class AzureVoiceLiveSession : IAsyncDisposable
 
     public async Task ConnectAsync(SpeechSessionStart session, CancellationToken cancellationToken)
     {
+        var providerLanguage = SpeechProtocol.NormalizeProviderLanguage(session.Language);
         var credentialOptions = new DefaultAzureCredentialOptions();
         if (!string.IsNullOrWhiteSpace(_options.ManagedIdentityClientId))
             credentialOptions.ManagedIdentityClientId = _options.ManagedIdentityClientId;
@@ -58,11 +56,17 @@ internal sealed class AzureVoiceLiveSession : IAsyncDisposable
                         input = new
                         {
                             format = new { type = "audio/pcm", rate = session.SampleRate },
-                            turn_detection = (object?)null,
+                            turn_detection = new
+                            {
+                                type = "server_vad",
+                                threshold = 0.5,
+                                prefix_padding_ms = 300,
+                                silence_duration_ms = 600,
+                            },
                             transcription = new
                             {
                                 model = _options.TranscriptionModel,
-                                language = string.IsNullOrWhiteSpace(session.Language) ? null : session.Language,
+                                language = providerLanguage,
                             },
                         },
                     },
@@ -80,7 +84,7 @@ internal sealed class AzureVoiceLiveSession : IAsyncDisposable
                     input_audio_transcription = new
                     {
                         model = _options.TranscriptionModel,
-                        language = string.IsNullOrWhiteSpace(session.Language) ? null : session.Language,
+                        language = providerLanguage,
                     },
                     turn_detection = new
                     {
@@ -108,15 +112,6 @@ internal sealed class AzureVoiceLiveSession : IAsyncDisposable
             audio = Convert.ToBase64String(pcm16.Span),
         }, cancellationToken);
 
-        if (!string.Equals(_options.Provider, "azure-openai-realtime-transcription", StringComparison.Ordinal))
-            return;
-
-        _uncommittedBytes += pcm16.Length;
-        if (_uncommittedBytes < CommitIntervalBytes)
-            return;
-
-        await SendJsonAsync(new { type = "input_audio_buffer.commit" }, cancellationToken);
-        _uncommittedBytes = 0;
     }
 
     public async Task<string?> ReceiveTextAsync(CancellationToken cancellationToken)
