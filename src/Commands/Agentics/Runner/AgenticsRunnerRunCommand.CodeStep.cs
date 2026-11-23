@@ -54,6 +54,26 @@ public partial class AgenticsRunnerRunCommand
     }
 
     /// <summary>The timeout to apply, in whole seconds: <c>timeoutMs</c> when positive, else 10 minutes.</summary>
+    /// <summary>
+    /// The line files a job writes into its worktree: paths are made relative and anything
+    /// that climbs out of the workspace is dropped. Files under <c>.agentics/scripts/</c> are
+    /// executable (0755) so a station can name one as its command; everything else is 0644.
+    /// </summary>
+    internal static IReadOnlyList<(string RelPath, string Content, int Mode)> LineFilesToMaterialize(
+        IReadOnlyDictionary<string, string>? files)
+    {
+        var result = new List<(string, string, int)>();
+        if (files is null) return result;
+        foreach (var (relPath, content) in files)
+        {
+            var safeRel = relPath.Replace("\\", "/").TrimStart('/');
+            if (safeRel.Length == 0 || safeRel.Split('/').Any(seg => seg == "..")) continue;
+            var mode = safeRel.StartsWith(".agentics/scripts/", StringComparison.Ordinal) ? 493 /* 0o755 */ : 420 /* 0o644 */;
+            result.Add((safeRel, content, mode));
+        }
+        return result;
+    }
+
     internal static int CodeStepTimeoutSeconds(int? timeoutMs)
     {
         var ms = timeoutMs is > 0 ? timeoutMs.Value : CodeStepDefaultTimeoutMs;
@@ -160,14 +180,15 @@ public partial class AgenticsRunnerRunCommand
         }
 
         // Like mcp_task: a poll may carry only `needs`, with agentDefinition on the claim's job.
-        var payload = job.AgentDef?.CodeStepPayload;
-        if (payload is null
+        var definition = job.AgentDef;
+        if (definition?.CodeStepPayload is null
             && container.ClaimData is { ValueKind: JsonValueKind.Object } claim
             && claim.TryGetProperty("job", out var claimedJob) && claimedJob.ValueKind == JsonValueKind.Object
             && claimedJob.TryGetProperty("agentDefinition", out var claimedDef) && claimedDef.ValueKind == JsonValueKind.Object)
         {
-            payload = claimedDef.Deserialize<RunnerAgentDefinition>(JsonOptions)?.CodeStepPayload;
+            definition = claimedDef.Deserialize<RunnerAgentDefinition>(JsonOptions) ?? definition;
         }
+        var payload = definition?.CodeStepPayload;
         if (string.IsNullOrWhiteSpace(payload?.Command))
         {
             await ConcludeCodeStepAsync(client, baseUrl, runId, registration, job.Id,
@@ -188,6 +209,26 @@ public partial class AgenticsRunnerRunCommand
                 "printf %s \"$HOME\"", timeoutSeconds: 10, user: agentUser);
             if (!home.Success || string.IsNullOrWhiteSpace(home.Output))
                 throw new InvalidOperationException($"could not resolve $HOME in the container (exit {home.ExitCode})");
+            // The line's own files (.agentics/specs, .agentics/scripts) are part of the line,
+            // not of the project repo the job checked out — without them a station whose
+            // command is `.agentics/scripts/watch.sh` finds nothing to run.
+            var lineFiles = LineFilesToMaterialize(definition?.AgenticsSpecFiles);
+            foreach (var (relPath, content, mode) in lineFiles)
+            {
+                await _spawnerService.CopyFileToContainerAsync(containerId, $"{workspaceFolder}/{relPath}",
+                    Encoding.UTF8.GetBytes(content), mode: mode, ct);
+            }
+            if (lineFiles.Count > 0)
+            {
+                if (!string.IsNullOrWhiteSpace(agentUser))
+                {
+                    await _spawnerService.ExecInContainerAsync(containerId,
+                        $"chown -R \"$(id -u {agentUser}):$(id -g {agentUser})\" {ShellSingleQuote($"{workspaceFolder}/.agentics")}",
+                        timeoutSeconds: 30, user: "root");
+                }
+                _console.MarkupLine($"  [green]✓[/] materialized {lineFiles.Count} line file(s) → {workspaceFolder.EscapeMarkup()}/.agentics/");
+            }
+
             scriptDir = $"{home.Output.Trim()}/.code-step-jobs/{job.Id}";
             var scriptPath = $"{scriptDir}/run.sh";
             var pidFile = $"{scriptDir}/pid";

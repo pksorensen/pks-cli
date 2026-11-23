@@ -265,4 +265,27 @@ public class RunnerCodeStepTests
         script.Should().Contain("echo $$ > '/home/node/.code-step-jobs/j/pid'\n");
         script.IndexOf("echo $$").Should().BeLessThan(script.IndexOf("exec bash -lc"));
     }
+
+    [Fact]
+    public void LineFiles_ScriptsAreExecutable_SpecsAreNot_AndNothingClimbsOut()
+    {
+        var files = AgenticsRunnerRunCommand.LineFilesToMaterialize(new Dictionary<string, string>
+        {
+            [".agentics/scripts/watch.sh"] = "#!/usr/bin/env bash\n",
+            ["/.agentics/specs/contract.md"] = "# c",
+            [".agentics/../../etc/passwd"] = "x",
+            ["..\\evil"] = "x",
+            [""] = "x",
+        });
+
+        files.Should().BeEquivalentTo(new[]
+        {
+            (".agentics/scripts/watch.sh", "#!/usr/bin/env bash\n", 493),
+            (".agentics/specs/contract.md", "# c", 420),
+        });
+    }
+
+    [Fact]
+    public void LineFiles_NullIsEmpty() =>
+        AgenticsRunnerRunCommand.LineFilesToMaterialize(null).Should().BeEmpty();
 }

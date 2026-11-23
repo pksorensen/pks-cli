@@ -2355,14 +2355,13 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
         //     the container and the station degrades to guessing the schema.
         if (job.AgentDef?.AgenticsSpecFiles is { Count: > 0 } specFiles)
         {
-            foreach (var (relPath, content) in specFiles)
+            // Same rules as a code step: no path climbs out, .agentics/scripts/* is executable.
+            var lineFiles = LineFilesToMaterialize(specFiles);
+            foreach (var (safeRel, content, mode) in lineFiles)
             {
-                // Guard against path traversal — relPath is a trusted server value but keep it scoped.
-                var safeRel = relPath.Replace("\\", "/").TrimStart('/');
-                if (safeRel.Contains("..")) continue;
-                await WriteContainerFileAsync($"{workspaceFolder}/{safeRel}", content);
+                await WriteContainerFileAsync($"{workspaceFolder}/{safeRel}", content, mode: mode);
             }
-            _console.MarkupLine($"  [green]✓[/] materialized {specFiles.Count} spec file(s) → {workspaceFolder}/.agentics/specs/");
+            _console.MarkupLine($"  [green]✓[/] materialized {lineFiles.Count} line file(s) → {workspaceFolder}/.agentics/");
         }
 
         // 7. Build and write a launch script into the container to avoid shell quoting issues
