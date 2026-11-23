@@ -25,8 +25,8 @@ public class AgenticsRunnerRegisterCommand(
     public class Settings : AgenticsRunnerSettings
     {
         [CommandArgument(0, "<OWNER_PROJECT>")]
-        [Description("Owner/project in owner/project format")]
-        public string OwnerProject { get; set; } = "";
+        [Description("Owner/project in owner/project format; name several to register them all in one go")]
+        public string[] OwnerProjects { get; set; } = [];
 
         [CommandOption("--name <NAME>")]
         [Description("Runner name (defaults to hostname)")]
@@ -46,14 +46,47 @@ public class AgenticsRunnerRegisterCommand(
         return ExecuteAsync(context, settings).GetAwaiter().GetResult();
     }
 
+    /// <summary>
+    /// Register every project named on the command line. Several at once because the saved
+    /// registrations are the opt-in list a project-less <c>runner start</c> serves: naming the
+    /// machine's projects in one command is the whole point, rather than running register once
+    /// per project and hoping none was missed.
+    /// </summary>
     public async Task<int> ExecuteAsync(CommandContext context, Settings settings)
+    {
+        if (settings.OwnerProjects.Length == 0)
+        {
+            DisplayError("Name at least one project: pks agentics runner register owner/project [owner/project ...]");
+            return 1;
+        }
+
+        DisplayBanner();
+
+        var failed = new List<string>();
+        foreach (var ownerProject in settings.OwnerProjects.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (await RegisterOneAsync(context, settings, ownerProject) != 0)
+                failed.Add(ownerProject);
+        }
+
+        if (settings.OwnerProjects.Length > 1)
+        {
+            console.WriteLine();
+            if (failed.Count == 0)
+                DisplaySuccess($"{settings.OwnerProjects.Length} projects registered. 'pks agentics runner start' now serves them all.");
+            else
+                DisplayError($"Failed: {string.Join(", ", failed)}");
+        }
+
+        return failed.Count == 0 ? 0 : 1;
+    }
+
+    private async Task<int> RegisterOneAsync(CommandContext context, Settings settings, string ownerProject)
     {
         try
         {
-            DisplayBanner();
-
             // 1. Parse owner/project from positional argument
-            var (owner, project) = ParseOwnerProject(settings.OwnerProject);
+            var (owner, project) = ParseOwnerProject(ownerProject);
             if (string.IsNullOrEmpty(owner) || string.IsNullOrEmpty(project))
             {
                 DisplayError("Owner/project must be specified in owner/project format.");

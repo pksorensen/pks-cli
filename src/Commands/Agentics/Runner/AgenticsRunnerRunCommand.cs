@@ -175,7 +175,7 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
         public string? VibecastBinary { get; set; }
 
         [CommandOption("--project <owner-project>")]
-        [Description("Project to run for in owner/project format. Auto-registers if not already registered. Without this, uses first saved registration.")]
+        [Description("Project to run for in owner/project format. Auto-registers if not already registered. Without this, every saved registration is served, one child runner each.")]
         public string? Project { get; set; }
 
         [CommandOption("--server <SERVER>")]
@@ -357,6 +357,28 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
                     DisplayError("No runner registrations found. Use --project owner/project to auto-register, or run 'pks agentics runner register <owner/project>' first.");
                     return 1;
                 }
+
+                // Several projects registered and no --project: serve them all, one child runner
+                // each, with this process supervising. It used to take registrations[0] silently,
+                // so a box with six registrations served one project and gave no sign of it.
+                if (registrations.Count > 1)
+                {
+                    DisplayInfo($"{registrations.Count} projects registered — serving all of them " +
+                                "(--project owner/project for just one).");
+                    foreach (var r in registrations)
+                        DisplayInfo($"  {r.Owner}/{r.Project} — {r.Server}");
+
+                    using var multiCts = new CancellationTokenSource();
+                    System.Console.CancelKeyPress += (_, e) =>
+                    {
+                        e.Cancel = true;
+                        multiCts.Cancel();
+                    };
+
+                    return await LocalMultiProjectRunnerMode.RunAsync(
+                        _configService, _console, ct: multiCts.Token);
+                }
+
                 registration = registrations[0];
             }
 

@@ -874,7 +874,8 @@ app.Configure(config =>
                 .WithDescription("Register a runner for an owner/project")
                 .WithExample(new[] { "agentics", "runner", "register", "myorg/myproject" })
                 .WithExample(new[] { "agentics", "runner", "register", "myorg/myproject", "--name", "my-runner" })
-                .WithExample(new[] { "agentics", "runner", "register", "myorg/myproject", "--server", "localhost:3000" });
+                .WithExample(new[] { "agentics", "runner", "register", "myorg/myproject", "--server", "localhost:3000" })
+                .WithExample(new[] { "agentics", "runner", "register", "myorg/one", "myorg/two", "myorg/three" });
 
             // run = foreground, start = background. Same split as `aspire run` / `aspire start`,
             // which this workspace's AGENTS.md already tells agents to observe.
@@ -886,7 +887,12 @@ app.Configure(config =>
             runner.AddCommand<AgenticsRunnerStartCommand>("start")
                 .WithDescription("Start the runner in the background so it survives logout")
                 .WithExample(new[] { "agentics", "runner", "start", "--project", "myorg/myproject" })
-                .WithExample(new[] { "agentics", "runner", "start", "--project", "myorg/myproject", "--restart" });
+                .WithExample(new[] { "agentics", "runner", "start", "--project", "myorg/myproject", "--restart" })
+                .WithExample(new[] { "agentics", "runner", "start" });
+
+            runner.AddCommand<AgenticsRunnerUnregisterCommand>("unregister")
+                .WithDescription("Stop serving a project from this machine (the opt-out for a project-less 'start')")
+                .WithExample(new[] { "agentics", "runner", "unregister", "myorg/myproject" });
 
             runner.AddCommand<AgenticsRunnerListCommand>("list")
                 .WithDescription("List this machine's runners and whether they are running")
