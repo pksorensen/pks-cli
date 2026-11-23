@@ -246,7 +246,12 @@ public class AgenticsRunnerEmbeddedAlpTests
         // start.sh is generated inline in ExecuteSpawnModeAsync; this pins the export at source
         // level so a refactor that drops it fails here rather than at the controller's 401.
         var source = File.ReadAllText(FindSource("src/Commands/Agentics/Runner/AgenticsRunnerRunCommand.cs"));
-        source.Should().Contain("scriptLines.AppendLine($\"export AGENTICS_TOKEN={ShellSingleQuote(registration.Token)}\");");
+        // start.sh takes its AGENTICS_* exports from the helper it shares with code_step jobs.
+        source.Should().Contain("foreach (var line in BuildJobAgenticsExportLines(registration, job.Id, jobToken,");
+        AgenticsRunnerRunCommand.BuildJobAgenticsExportLines(
+                new PKS.Infrastructure.Services.Models.AgenticsRunnerRegistration { Token = "rnt_a'b", Owner = "o", Project = "p" },
+                "job", null, "h:1", null, new Uri("https://x.example/"))
+            .Should().Contain("export AGENTICS_TOKEN='rnt_a'\\''b'");
         source.Should().Contain("AGENTICS_TOKEN={ShellSingleQuote(registration.Token)} AGENTICS_OWNER"); // in-process env line
     }
 

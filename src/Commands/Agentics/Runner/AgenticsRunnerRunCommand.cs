@@ -1081,6 +1081,7 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
         {
             availableCapabilities.Add(ChatSessionCapability);
             availableCapabilities.Add(DevAgentSessionCapability);
+            availableCapabilities.Add(CodeStepCapability);
         }
         availableCapabilities.Add("chat-llm:v1");
         availableCapabilities.Add("git:push");
@@ -1093,7 +1094,7 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
         if (!dockerAvailable && !settings.InProcess)
         {
             var reason = spawnCapabilityStatus?.Reason ?? "Docker availability check did not run";
-            _console.MarkupLine($"[dim]alp_operator / {ChatSessionCapability} / {DevAgentSessionCapability} are unavailable right now ({reason.EscapeMarkup()}) and are not offered below.[/]");
+            _console.MarkupLine($"[dim]alp_operator / {ChatSessionCapability} / {DevAgentSessionCapability} / {CodeStepCapability} are unavailable right now ({reason.EscapeMarkup()}) and are not offered below.[/]");
         }
 
         var capabilityPrompt = new MultiSelectionPrompt<string>()
@@ -1276,6 +1277,9 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
         {
             caps.Add(ChatSessionCapability);
             caps.Add(DevAgentSessionCapability);
+            // code-step:v1 runs in the same spawned devcontainer as alp_operator (never in
+            // --inprocess, which has no container to run it in).
+            caps.Add(CodeStepCapability);
         }
 
         if (!string.IsNullOrEmpty(chatLlmBackendUrl))
@@ -1353,7 +1357,11 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
         // every poll (not just once at configure time) so a capability the operator opted into stays
         // honest if the underlying probe later says it's unavailable (e.g. Docker stops mid-run).
         if (capabilityOverride is { Count: > 0 })
-            caps = caps.Where(c => capabilityOverride.Contains(c, StringComparer.OrdinalIgnoreCase)).ToList();
+            caps = caps.Where(c => capabilityOverride.Contains(c, StringComparer.OrdinalIgnoreCase)
+                // A profile saved before code_step existed lists alp_operator but not code-step:v1.
+                // code_step is the same container path, so it follows alp_operator rather than
+                // being silently stripped.
+                || (c == CodeStepCapability && capabilityOverride.Contains("alp_operator", StringComparer.OrdinalIgnoreCase))).ToList();
 
         // mcp_task (customers/famai/docs/mcp-task-protocol.md): mcp-task:v1 + mcp-server:<name> only
         // while the host allowlist file exists and parses. Added AFTER the operator override on
@@ -1575,6 +1583,28 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
                 jobsProcessed++;
                 _console.MarkupLine($"[green]Git distribute job completed.[/]");
             }
+            else if (job.IsCodeStep)
+            {
+                // code_step: one shell command in the same devcontainer an agent job gets, no
+                // Operator/Claude. Runs inline like the agent spawn path below, for the same reason:
+                // the warm container and its per-task socket dirs are not shared between two jobs
+                // at once. Same pre-claim refusal as the spawn path, so a runner that cannot spawn
+                // leaves the job queued instead of claiming and failing it.
+                var spawnStatus = credentialServer != null && !settings.InProcess ? await _capabilityProbe.GetStatusAsync(ct) : null;
+                if (credentialServer == null || settings.InProcess || spawnStatus is not { DockerAvailable: true })
+                {
+                    var reason = settings.InProcess
+                        ? "--inprocess runners have no job container"
+                        : spawnStatus?.Reason ?? "devcontainer spawning was unavailable at startup";
+                    if (_declinedSpawnJobIds.Add(job.Id))
+                        _console.MarkupLine($"[grey]Declining code_step job {job.Id.EscapeMarkup()} — {reason.EscapeMarkup()}; leaving it queued for a capable runner.[/]");
+                }
+                else
+                {
+                    await ExecuteCodeStepJobAsync(registration, job, credentialServer, ct);
+                    jobsProcessed++;
+                }
+            }
             else if (job.AgentDef?.JobType == "chat_llm")
             {
                 // Kind B (chat-llm:v1, external/alp-spec/2026-03-30-draft/spec/13-chat.md): a bare
@@ -1702,25 +1732,36 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
     }
 
     /// <summary>
-    /// Full lifecycle for devcontainer spawn mode:
-    ///   claim → in_progress → spawn container → exec agent → completed
+    /// The shared prefix of every job that runs inside a devcontainer -- the agent (alp_operator)
+    /// path and the code_step path: start the per-job proxies, claim the job, build the spawn
+    /// options (credentials volume, vault identity, labels), reuse a warm container or spawn a new
+    /// one, and PATCH the job to in_progress.
+    ///
+    /// The caller owns <paramref name="ctx"/> (<c>await using</c>) for the whole job: the proxies
+    /// started here are stored on it as soon as they exist, so they are disposed however this
+    /// returns or throws. Returns false when the claim failed (someone else has the job; nothing
+    /// to report). When the spawn itself failed it returns true with
+    /// <see cref="JobContainerContext.FailureMessage"/> set and no container; the caller reports
+    /// that failure in its own shape.
     /// </summary>
-    private async Task ExecuteSpawnModeAsync(
+    private async Task<bool> ProvisionJobContainerAsync(
+        JobContainerContext ctx,
         AgenticsRunnerRegistration registration,
         RunnerJob job,
-        Settings settings,
         GitCredentialServer credentialServer,
+        HttpClient client,
+        string baseUrl,
         CancellationToken ct)
     {
         // Start AgenticsProxy + OtlpProxy. Per ADR 0003, socket dirs are stable per-task so the
         // warm container's bind mount remains valid across job cycles within the same task.
         // Falls back to per-job dirs for legacy/jobless dispatches with no taskId.
         var taskKeyForSockets = job.AgentDef?.TaskId is { Length: > 0 } tid ? $"task-{tid}" : null;
-        var agenticsProxyOptions = await BuildAgenticsProxyOptionsAsync(job, ct);
+        var agenticsProxyOptions = ctx.AgenticsProxyOptions = await BuildAgenticsProxyOptionsAsync(job, ct);
         var agenticsSocketDir = taskKeyForSockets != null
             ? Path.Combine(Path.GetTempPath(), $"pks-agentics-{taskKeyForSockets}")
             : null;
-        await using var agenticsProxy = await AgenticsProxy.StartAsync(
+        var agenticsProxy = ctx.AgenticsProxy = await AgenticsProxy.StartAsync(
             agenticsProxyOptions, _foundryAuthService,
             createSocket: true,
             socketDirOverride: agenticsSocketDir,
@@ -1733,7 +1774,7 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
         var otlpSocketDir = taskKeyForSockets != null
             ? Path.Combine(Path.GetTempPath(), $"pks-otlp-{taskKeyForSockets}")
             : null;
-        await using var otlpProxy = await OtlpProxy.StartAsync(
+        var otlpProxy = ctx.OtlpProxy = await OtlpProxy.StartAsync(
             analysisBaseUrl: otlpAnalysisBaseUrl,
             jobId: job.Id,
             createSocket: true,
@@ -1745,7 +1786,7 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
         // `git config insteadOf` lines route private marketplace URLs through
         // this port; the daemon injects the right Bearer per upstream so the
         // marketplace token never enters the container.
-        await using var gitProxy = new PKS.Infrastructure.Services.GitProxy.GitProxyDaemon();
+        var gitProxy = ctx.GitProxy = new PKS.Infrastructure.Services.GitProxy.GitProxyDaemon();
         var hasMarketplaceTokens = job.AgentDef?.MarketplaceTokens?.Count > 0;
         if (hasMarketplaceTokens)
         {
@@ -1762,12 +1803,6 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
             _console.MarkupLine($"[dim]GitProxy listening on port {gitProxy.Port} ({job.AgentDef!.MarketplaceTokens!.Count} marketplace authority/ies)[/]");
         }
 
-        using var client = _httpClientFactory.CreateClient();
-        client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", registration.Token);
-
-        var baseUrl = $"{registration.ApiBase}/api/owners/{registration.Owner}/projects/{registration.Project}";
-
         // 1. Claim the job so findQueuedJobs stops returning it
         _console.MarkupLine($"[cyan]Claiming job {job.Id}...[/]");
         var claimResp = await client.PostAsJsonAsync(
@@ -1778,12 +1813,13 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
         if (!claimResp.IsSuccessStatusCode)
         {
             _console.MarkupLine($"[yellow]Could not claim job {job.Id} (already claimed?), skipping.[/]");
-            return;
+            return false;
         }
 
         var claimJson = await claimResp.Content.ReadAsStringAsync(ct);
         var claimData = JsonSerializer.Deserialize<JsonElement>(claimJson, JsonOptions);
-        var runId = claimData.GetProperty("runId").GetString()!;
+        var runId = ctx.RunId = claimData.GetProperty("runId").GetString()!;
+        ctx.ClaimData = claimData;
 
         // 2. Check for a warm container via Docker labels (survives pks-cli restarts).
         // Per ADR 0003 the fingerprint includes taskId, so each task gets its own dedicated
@@ -1827,7 +1863,7 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
         // the spawner as well, so a job that gets its devcontainer from a curated template, from the
         // repo's own .devcontainer, or from the built-in fallback also has credentials. The scope
         // decision stays where it is made — assembly-line setting → project setting → "project".
-        spawnOptions.ClaudeCredentialVolumeName = claudeVolumeName;
+        spawnOptions.ClaudeCredentialVolumeName = ctx.ClaudeVolumeName = claudeVolumeName;
         var claudeScope = job.AgentDef?.ClaudeCredentialsScope ?? "project";
         _console.MarkupLine($"[dim]Claude credentials volume: [cyan]{claudeVolumeName.EscapeMarkup()}[/] (scope: {claudeScope})[/]");
 
@@ -1922,9 +1958,6 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
 
         // Plugins are no longer a Docker volume per ADR 0003 — they're files inside the container
         // at $HOME/.alp/plugins/, swapped on every job dispatch (after the container is up).
-        var hasPlugins = job.AgentDef?.Plugins?.Count > 0;
-        var hasAgents = job.AgentDef?.Agents?.Count > 0;
-        var pluginContainerPaths = new List<string>();
 
         string containerId;
         // The user the agent must run as. A raw `docker exec` lands on the image's USER, which is
@@ -1997,9 +2030,8 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
                     _console.MarkupLine($"[yellow]Hint:[/] [dim]Docker is no longer reachable ({postFailureStatus.Reason.EscapeMarkup()}) — this looks like Docker went away mid-job rather than a build/config error. Future jobs will be left queued for a capable runner instead of claimed and failed.[/]");
                 }
 
-                await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "failure", ct);
-                await ReportJobResultAsync(registration, "failed", errorMsg, ct);
-                return;
+                ctx.FailureMessage = errorMsg;
+                return true;
             }
 
             containerId = spawnResult.ContainerId;
@@ -2010,6 +2042,58 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
 
         // 4. PATCH to in_progress now that the container is running
         await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "in_progress", null, ct);
+
+        ctx.ContainerId = containerId;
+        ctx.AgentUser = agentUser;
+        ctx.SpawnOptions = spawnOptions;
+        ctx.JobToken = jobToken;
+        ctx.HasMarketplaceTokens = hasMarketplaceTokens;
+        return true;
+    }
+
+    /// <summary>
+    /// Full lifecycle for devcontainer spawn mode:
+    ///   claim → in_progress → spawn container → exec agent → completed
+    /// </summary>
+    private async Task ExecuteSpawnModeAsync(
+        AgenticsRunnerRegistration registration,
+        RunnerJob job,
+        Settings settings,
+        GitCredentialServer credentialServer,
+        CancellationToken ct)
+    {
+        using var client = _httpClientFactory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", registration.Token);
+
+        var baseUrl = $"{registration.ApiBase}/api/owners/{registration.Owner}/projects/{registration.Project}";
+
+        // Steps 1-4 (proxies, claim, spawn options, warm reuse or spawn, in_progress) are shared
+        // with code_step jobs -- see ProvisionJobContainerAsync.
+        await using var container = new JobContainerContext();
+        if (!await ProvisionJobContainerAsync(container, registration, job, credentialServer, client, baseUrl, ct)) return;
+        var runId = container.RunId!;
+        if (container.FailureMessage is { } spawnFailure)
+        {
+            await PatchJobStatusAsync(client, baseUrl, runId, job.Id, "completed", "failure", ct);
+            await ReportJobResultAsync(registration, "failed", spawnFailure, ct);
+            return;
+        }
+        var containerId = container.ContainerId!;
+        var agentUser = container.AgentUser;
+        var spawnOptions = container.SpawnOptions!;
+        var jobToken = container.JobToken;
+        var agenticsProxy = container.AgenticsProxy!;
+        var agenticsProxyOptions = container.AgenticsProxyOptions!;
+        var claudeVolumeName = container.ClaudeVolumeName!;
+        var otlpProxy = container.OtlpProxy!;
+        var gitProxy = container.GitProxy!;
+        var hasMarketplaceTokens = container.HasMarketplaceTokens;
+        var taskId = job.AgentDef?.TaskId;
+
+        var hasPlugins = job.AgentDef?.Plugins?.Count > 0;
+        var hasAgents = job.AgentDef?.Agents?.Count > 0;
+        var pluginContainerPaths = new List<string>();
 
         // 4b. Install plugins INSIDE the container at $HOME/.alp/plugins (per ADR 0003).
         // Clean slate every job so station transitions get the right tool belt without
@@ -2138,14 +2222,7 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
         // A warm container was not spawned this run, so there is no devcontainer CLI answer to use.
         // The workspace's own owner is the same thing by another route: the spawner chowns the
         // volume to the remote user, so whoever owns the checkout is who should be running in it.
-        if (string.IsNullOrWhiteSpace(agentUser))
-        {
-            var owner = await _spawnerService.ExecInContainerAsync(containerId,
-                $"stat -c %U {workspaceFolder} 2>/dev/null", timeoutSeconds: 10);
-            var resolved = owner.Output?.Trim();
-            if (!string.IsNullOrWhiteSpace(resolved) && resolved != "UNKNOWN")
-                agentUser = resolved;
-        }
+        agentUser = await ResolveAgentUserAsync(containerId, workspaceFolder, agentUser);
         _console.MarkupLine($"[dim]Agent runs as: [cyan]{(agentUser ?? "<image default>").EscapeMarkup()}[/][/]");
 
         // localhost on the host is not localhost inside the container.
@@ -2153,13 +2230,7 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
         // Linux Docker / dind we use the bridge gateway IP — same pattern as the
         // git proxy's hostGatewayIp above. AGENTICS_CONTAINER_HOST overrides for
         // custom bridge subnets.
-        var serverUri = new Uri(registration.Server);
-        var containerHostIp = Environment.GetEnvironmentVariable("AGENTICS_CONTAINER_HOST")
-            ?? (OperatingSystem.IsLinux() ? "172.17.0.1" : "host.docker.internal");
-        var hostForContainer = serverUri.Host is "localhost" or "127.0.0.1"
-            ? containerHostIp
-            : serverUri.Host;
-        var agenticServerForContainer = $"{hostForContainer}:{serverUri.Port}";
+        var (serverUri, containerHostIp, hostForContainer, agenticServerForContainer) = ResolveContainerServer(registration);
 
         // 6. Set up vibecast working directory in the container.
         // We cannot use /tmp here: the dind devcontainer feature mounts /tmp as
@@ -2369,27 +2440,14 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
         var operatorServerUrl = job.AgentDef?.OperatorConfig?.ServerUrl;
         if (RejectedOperatorServerUrlWarning(operatorServerUrl, agenticServerForContainer) is { } serverUrlWarning)
             _console.MarkupLine($"[yellow]{serverUrlWarning.EscapeMarkup()}[/]");
-        foreach (var line in BuildAgenticsServerExportLines(agenticServerForContainer, operatorServerUrl))
+        // AGENTICS_SERVER/AGENTIC_SERVER, AGENTICS_PROJECT, AGENTICS_JOB_ID, PKS_TOKEN, AGENTICS_TOKEN,
+        // AGENTICS_OWNER, AGENTICS_PROJECT_NAME, AGENTICS_BASE_URL -- one helper shared with
+        // code_step jobs so the two environments cannot drift.
+        foreach (var line in BuildJobAgenticsExportLines(registration, job.Id, jobToken, agenticServerForContainer, operatorServerUrl, serverUri))
             scriptLines.AppendLine(line);
         // operatorConfig.broadcast == "off" → VIBECAST_BROADCAST=off; nothing otherwise.
         foreach (var line in BuildBroadcastExportLines(job.AgentDef?.OperatorConfig))
             scriptLines.AppendLine(line);
-        scriptLines.AppendLine($"export AGENTICS_PROJECT={registration.Owner}/{registration.Project}");
-        scriptLines.AppendLine($"export AGENTICS_JOB_ID={job.Id}");
-        // The bearer for this job's credential socket. The helper and askpass scripts read
-        // PKS_TOKEN first and fall back to a value baked in when they were generated — and those
-        // scripts are written by `devcontainer up`, which a *warm* container skips entirely. A
-        // reused container therefore carries the previous job's baked token, and after a runner
-        // restart carries one nobody can verify, since the signing key is per process. This line
-        // is what makes the current job's token the one that is actually sent: start.sh is
-        // rewritten for every job, warm or cold, and everything vibecast spawns inherits it.
-        if (jobToken is not null)
-            scriptLines.AppendLine($"export PKS_TOKEN='{jobToken}'");
-        scriptLines.AppendLine($"export AGENTICS_TOKEN={ShellSingleQuote(registration.Token)}");
-        scriptLines.AppendLine($"export AGENTICS_OWNER='{registration.Owner}'");
-        scriptLines.AppendLine($"export AGENTICS_PROJECT_NAME='{registration.Project}'");
-        var agenticsBaseUrl = $"{serverUri.Scheme}://{serverUri.Host}{(serverUri.IsDefaultPort ? "" : $":{serverUri.Port}")}";
-        scriptLines.AppendLine($"export AGENTICS_BASE_URL='{agenticsBaseUrl}'");
         // Enable keyboard input from viewers (PIN = first 8 chars of job ID)
         var keyboardPin = job.Id[..8].ToUpperInvariant();
         scriptLines.AppendLine($"export VIBECAST_KEYBOARD_PIN={keyboardPin}");
@@ -7654,6 +7712,13 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
             (Needs?.Contains(PKS.Infrastructure.Services.Runner.McpTask.McpTaskConfig.TaskCapability) ?? false) ||
             (AgentDefinition?.Needs?.Contains(PKS.Infrastructure.Services.Runner.McpTask.McpTaskConfig.TaskCapability) ?? false);
 
+        /// <summary>code_step job. Matched on jobType OR needs, like IsMcpTask, so it can never fall
+        /// through to the agent spawn path.</summary>
+        public bool IsCodeStep =>
+            AgentDefinition?.JobType == "code_step" ||
+            (Needs?.Contains(CodeStepCapability) ?? false) ||
+            (AgentDefinition?.Needs?.Contains(CodeStepCapability) ?? false);
+
         public bool IsDevAgentSession =>
             (Needs?.Contains(DevAgentSessionCapability) ?? false) ||
             (AgentDefinition?.Needs?.Contains(DevAgentSessionCapability) ?? false);
@@ -7764,6 +7829,9 @@ All files must be created under `{jobWorkTree}`. Do not write to parent director
         /// TargetRepo working tree with the filtered subset, commits, and pushes. No credentials carried
         /// here — runner resolves source/target auth on its own.</summary>
         public DistributePayloadModel? DistributePayload { get; set; }
+        /// <summary>Payload for code_step jobs (<c>codeStepPayload</c>): one shell command run in the
+        /// job container's checkout. See AgenticsRunnerRunCommand.CodeStep.cs.</summary>
+        public CodeStepPayloadModel? CodeStepPayload { get; set; }
         /// <summary>Set only for the reserved devagent Task (plan `snappy-wandering-mochi` Phase 3) —
         /// the project's dedicated pks-agent-share inbox the outer chat's `delegate_to_devagent` tool
         /// pushes tasks into. Whenever this is present — regardless of IsDevAgentSession/needs, since
