@@ -9,6 +9,7 @@ using PKS.Infrastructure.Services.Models;
 using PKS.Infrastructure.Services.Runner;
 using Xunit;
 
+using PKS.Infrastructure.Services.Agentics;
 namespace PKS.CLI.Tests.Services.Runner;
 
 /// <summary>
@@ -31,7 +32,7 @@ public class AgenticsRunnerSshHandoffServiceTests
     private static AgenticsRunnerSshHandoffService MakeService(Mock<ISshCommandRunner> sshRunner) =>
         new AgenticsRunnerSshHandoffService(
             sshRunner.Object, new Mock<ISshKeyStore>().Object, new Mock<IHttpClientFactory>().Object,
-            FakeSecretResolver.Empty, new Mock<ISecretStore>().Object);
+            FakeSecretResolver.Empty, new Mock<ISecretStore>().Object, new Mock<IAgenticsAuthService>().Object);
 
     /// <summary>
     /// A service whose secret store is a throwaway directory holding exactly one credential. The
@@ -46,7 +47,8 @@ public class AgenticsRunnerSshHandoffServiceTests
         var store = new SecretStore(dir);
         store.SetAsync(key, value).GetAwaiter().GetResult();
         return new AgenticsRunnerSshHandoffService(
-            sshRunner.Object, new Mock<ISshKeyStore>().Object, new Mock<IHttpClientFactory>().Object, store, store);
+            sshRunner.Object, new Mock<ISshKeyStore>().Object, new Mock<IHttpClientFactory>().Object, store, store,
+            new Mock<IAgenticsAuthService>().Object);
     }
 
     [Fact]

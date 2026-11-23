@@ -1,6 +1,8 @@
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using PKS.Infrastructure.Services.Agentics;
 using PKS.Infrastructure.Services.Models;
 using PKS.Infrastructure.Services.Security;
 
@@ -116,16 +118,18 @@ public sealed class AgenticsRunnerSshHandoffService : IAgenticsRunnerSshHandoffS
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ISecretResolver _secrets;
     private readonly ISecretStore _secretStore;
+    private readonly IAgenticsAuthService _auth;
 
     public AgenticsRunnerSshHandoffService(
         ISshCommandRunner sshRunner, ISshKeyStore keyStore, IHttpClientFactory httpClientFactory,
-        ISecretResolver secrets, ISecretStore secretStore)
+        ISecretResolver secrets, ISecretStore secretStore, IAgenticsAuthService auth)
     {
         _sshRunner = sshRunner ?? throw new ArgumentNullException(nameof(sshRunner));
         _keyStore = keyStore ?? throw new ArgumentNullException(nameof(keyStore));
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _secrets = secrets ?? throw new ArgumentNullException(nameof(secrets));
         _secretStore = secretStore ?? throw new ArgumentNullException(nameof(secretStore));
+        _auth = auth ?? throw new ArgumentNullException(nameof(auth));
     }
 
     public string BuildTmuxSessionName(string owner, string project) =>
@@ -417,7 +421,24 @@ public sealed class AgenticsRunnerSshHandoffService : IAgenticsRunnerSshHandoffS
     private async Task<List<RunnerListEntry>> FetchServerRunnersAsync(string server, string owner, string project, CancellationToken ct)
     {
         using var client = _httpClientFactory.CreateClient();
-        var response = await client.GetAsync($"{server}/api/owners/{owner}/projects/{project}/runners", ct);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get, $"{server}/api/owners/{owner}/projects/{project}/runners");
+
+        // The runner list used to be world-readable, so this call presented nothing.
+        // www-site closed that on 2026-11-16: the read now answers 401 without a
+        // credential whenever AUTH_REQUIRED is set, which production does. Same chain
+        // the registrar presents one file over — the signed-in human first, then the
+        // stored runner token — and a null token still sends the bare request, which
+        // is what a local stack with AUTH_REQUIRED=false expects.
+        var audience = $"{server}/p/{owner}/{project}";
+        var token = await _auth.GetUserTokenAsync(audience, null)
+                    ?? await _auth.GetTokenAsync(audience, null, owner, project);
+        if (!string.IsNullOrEmpty(token))
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        }
+
+        using var response = await client.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
         var entries = await response.Content.ReadFromJsonAsync<List<RunnerListEntry>>(ResponseJsonOptions, ct);
         return entries ?? new List<RunnerListEntry>();
