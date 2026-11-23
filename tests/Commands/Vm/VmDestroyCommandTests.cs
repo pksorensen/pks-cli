@@ -48,6 +48,47 @@ public class VmDestroyCommandTests
 
     [Fact]
     [Trait("Category", "VmDestroy")]
+    public async Task ExecuteAsync_WithNameArgument_PicksThatVmWithoutPrompting()
+    {
+        // `pks vm init` and `pks vm stop` print "pks vm destroy <name>" as the off switch, so the
+        // name must resolve directly — a selection prompt here would fail in non-interactive shells.
+        var meta = new Mock<IAzureVmMetadataService>();
+        meta.Setup(x => x.ListAsync()).ReturnsAsync(new List<AzureVmRecord> { MakeVm("pks-vm-a"), MakeVm("pks-vm-b") });
+        var auth = new Mock<IAzureAuthService>();
+        auth.Setup(x => x.IsAuthenticatedAsync()).ReturnsAsync(true);
+        var vmSvc = new Mock<IAzureVmService>();
+
+        var console = new TestConsole().Interactive();
+        console.Input.PushTextWithEnter("n"); // decline the confirmation — we only test the pick
+        var cmd = new VmDestroyCommand(RegistryWith(auth, vmSvc), meta.Object,
+            new Mock<ISshTargetConfigurationService>().Object, console);
+
+        var result = await cmd.ExecuteAsync(new VmDestroyCommand.Settings { VmName = "PKS-VM-B" });
+
+        result.Should().Be(0);
+        console.Output.Should().Contain("pks-vm-b").And.NotContain("Pick a VM");
+    }
+
+    [Fact]
+    [Trait("Category", "VmDestroy")]
+    public async Task ExecuteAsync_WithUnknownName_ReturnsOneAndSaysNotFound()
+    {
+        var meta = new Mock<IAzureVmMetadataService>();
+        meta.Setup(x => x.ListAsync()).ReturnsAsync(new List<AzureVmRecord> { MakeVm("pks-vm-a") });
+        var vmSvc = new Mock<IAzureVmService>();
+
+        var console = new TestConsole().Interactive();
+        var cmd = new VmDestroyCommand(RegistryWith(new Mock<IAzureAuthService>(), vmSvc), meta.Object,
+            new Mock<ISshTargetConfigurationService>().Object, console);
+
+        var result = await cmd.ExecuteAsync(new VmDestroyCommand.Settings { VmName = "nope" });
+
+        result.Should().Be(1);
+        console.Output.Should().Contain("not found");
+    }
+
+    [Fact]
+    [Trait("Category", "VmDestroy")]
     public async Task DestroyVmAsync_WhenConfirmed_CallsDestroyAndRemovesRecord()
     {
         var vm = MakeVm();

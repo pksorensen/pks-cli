@@ -206,7 +206,11 @@ public class RunnerCodeStepTests
 
     private static AgenticsRunnerRegistration Registration() => new()
     {
-        Id = "r1", Name = "runner", Token = "run'tok", Owner = "acme", Project = "line",
+        Id = "r1",
+        Name = "runner",
+        Token = "run'tok",
+        Owner = "acme",
+        Project = "line",
     };
 
     [Fact]

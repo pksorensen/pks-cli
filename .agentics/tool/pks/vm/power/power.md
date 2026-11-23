@@ -6,7 +6,7 @@ category: infrastructure
 status: stable
 author: Poul Kjeldager
 component: pks
-usage: "pks vm start|stop [VM_NAME] · pks vm destroy"
+usage: "pks vm start|stop|destroy [VM_NAME]"
 examples:
   - command: "pks vm start my-vm"
     description: "Start a VM and wait until SSH answers"
@@ -56,15 +56,17 @@ The machine is deallocated. Its disk and attached storage are preserved, so `pks
 
 `vm.stop` does not require a second factor by default, unlike start, create, and destroy.
 
+> **Hetzner Cloud.** On Hetzner `stop` is a graceful ACPI shutdown and **does not stop billing** — a powered-off server costs the full hourly rate up to its monthly cap, plus its IPv4. The command says so after it runs. `pks vm destroy` is the only off switch there; snapshot the disk first if you want it back. See [pks hetzner](/tools/pks/hetzner).
+
 ## destroy
 
 ```bash
-pks vm destroy
+pks vm destroy [VM_NAME]
 ```
 
 This permanently deletes the VM and the cloud resources it owns — the Azure resources created for it, or the Scaleway server. On success it also removes the local SSH target and the tracked metadata record. There is no undo.
 
-`pks vm destroy` takes no VM name argument. It auto-picks when only one VM is tracked, otherwise it shows a selection prompt. Two gates stand in front of the deletion: a plain-text confirmation defaulting to no, and the `vm.destroy` second-factor action, which is required by default.
+`pks vm destroy` takes an optional VM name, matched case-insensitively, and this is what the off-switch hints from `pks vm init` and `pks vm stop` print. Without a name it auto-picks when only one VM is tracked, otherwise it shows a selection prompt; an unknown name exits with status 1. Two gates stand in front of the deletion: a plain-text confirmation defaulting to no, and the `vm.destroy` second-factor action, which is required by default.
 
 Removal of the SSH target is best-effort — a failure there is swallowed and the command still reports the destroy as successful. Removal of the metadata record is not: an exception there is not caught and would surface as a command failure even though the cloud resources are already gone.
 

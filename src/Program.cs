@@ -487,6 +487,8 @@ services.AddSingleton<PKS.Infrastructure.Services.ISshExecutor, PKS.Infrastructu
 
 // Scaleway (GPU instances) + cloud-agnostic VM provider abstraction
 services.AddHttpClient<PKS.Infrastructure.Services.IScalewayService, PKS.Infrastructure.Services.ScalewayService>();
+// Hetzner Cloud (per-hour servers, billed until deleted)
+services.AddHttpClient<PKS.Infrastructure.Services.IHetznerCloudService, PKS.Infrastructure.Services.HetznerCloudService>();
 services.AddHttpClient<PKS.Infrastructure.Services.IMoonshotService, PKS.Infrastructure.Services.MoonshotService>();
 services.AddHttpClient<PKS.Infrastructure.Services.IOpenRouterService, PKS.Infrastructure.Services.OpenRouterService>();
 services.AddHttpClient<PKS.Infrastructure.Services.INvidiaService, PKS.Infrastructure.Services.NvidiaService>();
@@ -519,11 +521,15 @@ services.AddSingleton<PKS.Infrastructure.Services.Update.IUpdateService, PKS.Inf
 // second factor. The registry sees the guarded instances, so all command paths are covered.
 services.AddSingleton<PKS.Infrastructure.Services.AzureVmProvider>();
 services.AddSingleton<PKS.Infrastructure.Services.ScalewayVmProvider>();
+services.AddSingleton<PKS.Infrastructure.Services.HetznerVmProvider>();
 services.AddSingleton<PKS.Infrastructure.Services.IVmProvider>(sp => new PKS.Infrastructure.Services.GuardedVmProvider(
     sp.GetRequiredService<PKS.Infrastructure.Services.AzureVmProvider>(),
     sp.GetRequiredService<PKS.Infrastructure.Services.Security.IActionGuard>()));
 services.AddSingleton<PKS.Infrastructure.Services.IVmProvider>(sp => new PKS.Infrastructure.Services.GuardedVmProvider(
     sp.GetRequiredService<PKS.Infrastructure.Services.ScalewayVmProvider>(),
+    sp.GetRequiredService<PKS.Infrastructure.Services.Security.IActionGuard>()));
+services.AddSingleton<PKS.Infrastructure.Services.IVmProvider>(sp => new PKS.Infrastructure.Services.GuardedVmProvider(
+    sp.GetRequiredService<PKS.Infrastructure.Services.HetznerVmProvider>(),
     sp.GetRequiredService<PKS.Infrastructure.Services.Security.IActionGuard>()));
 services.AddSingleton<PKS.Infrastructure.Services.VmProviderRegistry>();
 
@@ -657,7 +663,8 @@ services.AddHttpClient<IGoogleAiService, GoogleAiService>();
 // Register image providers (resolved by --model in pks image).
 // Order matters: when multiple providers claim the same model name, the first authenticated one wins.
 services.AddSingleton<PKS.Infrastructure.Services.Images.IImageProvider, PKS.Infrastructure.Services.Images.GoogleImageProvider>();
-services.AddHttpClient<PKS.Infrastructure.Services.Images.AzureFoundryImageProvider>();
+// gpt-image-2 edits at 2K/high routinely take 2-4 minutes, well past the 100 s default.
+services.AddHttpClient<PKS.Infrastructure.Services.Images.AzureFoundryImageProvider>(c => c.Timeout = TimeSpan.FromMinutes(10));
 services.AddSingleton<PKS.Infrastructure.Services.Images.IImageProvider>(sp =>
     sp.GetRequiredService<PKS.Infrastructure.Services.Images.AzureFoundryImageProvider>());
 
@@ -1521,6 +1528,15 @@ app.Configure(config =>
         scaleway.AddCommand<PKS.Commands.Scaleway.ScalewayInitCommand>("init")
             .WithDescription("Authenticate with Scaleway and select a default project and zone")
             .WithExample(new[] { "scaleway", "init" });
+    });
+
+    // Add Hetzner Cloud branch command
+    config.AddBranch<PKS.Commands.Hetzner.HetznerSettings>("hetzner", hetzner =>
+    {
+        hetzner.SetDescription("Manage Hetzner Cloud authentication (per-hour servers for pks vm)");
+        hetzner.AddCommand<PKS.Commands.Hetzner.HetznerInitCommand>("init")
+            .WithDescription("Authenticate with Hetzner Cloud and select a default location")
+            .WithExample(new[] { "hetzner", "init" });
     });
 
     config.AddBranch<PKS.Commands.Moonshot.MoonshotSettings>("moonshot", moonshot =>

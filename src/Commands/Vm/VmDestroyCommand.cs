@@ -26,7 +26,12 @@ public class VmDestroyCommand : Command<VmDestroyCommand.Settings>
         _console = console;
     }
 
-    public class Settings : VmSettings { }
+    public class Settings : VmSettings
+    {
+        [CommandArgument(0, "[VM_NAME]")]
+        [Description("VM name (interactive picker if omitted)")]
+        public string? VmName { get; set; }
+    }
 
     public override int Execute(CommandContext context, Settings settings)
         => ExecuteAsync(settings).GetAwaiter().GetResult();
@@ -41,18 +46,11 @@ public class VmDestroyCommand : Command<VmDestroyCommand.Settings>
             return 0;
         }
 
-        AzureVmRecord record;
-        if (vms.Count == 1)
+        var record = VmSelection.Pick(_console, vms, settings.VmName, "[cyan]Pick a VM to destroy:[/]");
+        if (record == null)
         {
-            record = vms[0];
-        }
-        else
-        {
-            var choice = _console.Prompt(
-                new SelectionPrompt<string>()
-                    .Title("[cyan]Pick a VM to destroy:[/]")
-                    .AddChoices(vms.Select(v => v.VmName)));
-            record = vms.First(v => v.VmName == choice);
+            _console.MarkupLine($"[red]VM '{Markup.Escape(settings.VmName ?? "")}' not found.[/]");
+            return 1;
         }
 
         var provider = _providers.Resolve(record);
