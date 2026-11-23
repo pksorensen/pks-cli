@@ -243,6 +243,9 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
     /// <summary>The capability string the platform routes SMS deliveries on.</summary>
     internal const string SmsCapability = "sms";
 
+    private readonly ILocalRunnerStore? _localRunners;
+    private readonly ILocalRunnerSupervisor? _localSupervisor;
+
     public AgenticsRunnerRunCommand(
         IAgenticsRunnerConfigurationService configService,
         IDevcontainerSpawnerService spawnerService,
@@ -263,7 +266,9 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
         PKS.Infrastructure.Services.Runner.IJobTokenService? jobTokens = null,
         PKS.Infrastructure.Services.TypeSafe.ITypeSafeCredentialService? typeSafe = null,
         PKS.Infrastructure.Services.Acs.IAcsSmsService? acsSms = null,
-        PKS.Infrastructure.Services.Providers.IProviderApiKeyService? providerKeys = null)
+        PKS.Infrastructure.Services.Providers.IProviderApiKeyService? providerKeys = null,
+        ILocalRunnerStore? localRunners = null,
+        ILocalRunnerSupervisor? localSupervisor = null)
     {
         _configService = configService ?? throw new ArgumentNullException(nameof(configService));
         _spawnerService = spawnerService ?? throw new ArgumentNullException(nameof(spawnerService));
@@ -287,6 +292,8 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
         _typeSafe = typeSafe;
         _acsSms = acsSms;
         _providerKeys = providerKeys;
+        _localRunners = localRunners;
+        _localSupervisor = localSupervisor;
     }
 
     public override int Execute(CommandContext context, Settings settings)
@@ -374,9 +381,20 @@ public partial class AgenticsRunnerRunCommand : Command<AgenticsRunnerRunCommand
                         e.Cancel = true;
                         multiCts.Cancel();
                     };
+                    // Same pair as InstallationRunnerMode: without ProcessExit a supervisor taken
+                    // down by anything other than Ctrl+C orphans its children.
+                    AppDomain.CurrentDomain.ProcessExit += (_, _) => multiCts.Cancel();
 
                     return await LocalMultiProjectRunnerMode.RunAsync(
-                        _configService, _console, ct: multiCts.Token);
+                        _configService, _console,
+                        alreadyDetached: _localRunners is null || _localSupervisor is null
+                            ? null
+                            : async (registration, token) =>
+                            {
+                                var record = await _localRunners.FindAsync(registration.Owner, registration.Project, token);
+                                return record is not null && await _localSupervisor.IsAliveAsync(record, token);
+                            },
+                        ct: multiCts.Token);
                 }
 
                 registration = registrations[0];

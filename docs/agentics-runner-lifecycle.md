@@ -34,6 +34,11 @@ expects it to block (a systemd unit, a supervisor config, a script) wants `run` 
 supervised child per project for `run` — which is the GitHub-runner shape: name the projects
 once, start once.
 
+The two differ in when they read that list. `start` is a one-shot: it detaches the runners and
+returns, so a project registered afterwards needs another `start` (which is harmless — a project
+already running is left alone and reported as success). Only `run`'s supervisor re-reads the
+registrations as it goes.
+
 ```sh
 pks agentics runner register pksorensen/pksorensen pksorensen/agentics-wire
 pks agentics runner start            # serves both
@@ -53,9 +58,11 @@ Two things the multi-project path deliberately does not do:
 - **It never asks the platform anything and never mints a credential.** That is
   [installation mode](#installation-mode-self-hosted-platforms)'s job, and it needs an
   installation identity only `install.sh` writes. Here the saved registrations *are* the project
-  list, re-read on every supervise pass so `register` and `unregister` take effect without a
-  restart. A child that keeps exiting is therefore backed off and named in the log — usually a
+  list. A child that keeps exiting is therefore backed off and named in the log — usually a
   rotated token, which only `register` can repair.
+- **`run` skips a project a detached runner already serves.** Nothing on the platform stops two
+  runners claiming for one project, so `run` after a `start` would otherwise quietly double it.
+  `runner stop <owner/project>` first if you want the foreground one to take over.
 - **It refuses `--work-dir`** when more than one project would share it. Two runners checking out
   into one directory would overwrite each other.
 

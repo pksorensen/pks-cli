@@ -131,6 +131,25 @@ public class LocalMultiProjectRunnerModeTests
     }
 
     [Fact]
+    public async Task Skips_a_project_that_a_detached_runner_already_serves()
+    {
+        // `runner start` detaches runners that outlive the shell. Nothing on the platform stops
+        // two runners claiming for one project, so a foreground `run` afterwards must not double
+        // what start already has.
+        var registrations = new InMemoryRegistrations(Reg("demo", "a"), Reg("demo", "b"));
+        var launcher = new FakeLauncher();
+        using var cts = new CancellationTokenSource();
+
+        await LocalMultiProjectRunnerMode.RunAsync(
+            registrations, new TestConsole(), launcher,
+            delay: (_, _) => { cts.Cancel(); return Task.CompletedTask; },
+            alreadyDetached: (r, _) => Task.FromResult(r.Project == "a"),
+            ct: cts.Token);
+
+        launcher.Started.Select(r => r.Project).Should().BeEquivalentTo("b");
+    }
+
+    [Fact]
     public async Task Refuses_when_nothing_is_registered()
     {
         var console = new TestConsole();

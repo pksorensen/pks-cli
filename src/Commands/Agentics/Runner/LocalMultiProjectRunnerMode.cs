@@ -43,6 +43,7 @@ public static class LocalMultiProjectRunnerMode
         IProjectRunnerLauncher? launcher = null,
         Func<TimeSpan, CancellationToken, Task>? delay = null,
         Func<DateTimeOffset>? now = null,
+        Func<AgenticsRunnerRegistration, CancellationToken, Task<bool>>? alreadyDetached = null,
         CancellationToken ct = default)
     {
         void Log(string message) => console.MarkupLine($"[dim]{message.EscapeMarkup()}[/]");
@@ -52,6 +53,9 @@ public static class LocalMultiProjectRunnerMode
         now ??= () => DateTimeOffset.UtcNow;
 
         var running = new Dictionary<string, Child>(StringComparer.OrdinalIgnoreCase);
+
+        // Logged once per project, not once per pass — a 10s loop would otherwise fill the screen.
+        var skippedAsDetached = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         try
         {
@@ -71,6 +75,18 @@ public static class LocalMultiProjectRunnerMode
 
                 foreach (var (key, registration) in wanted)
                 {
+                    // `runner start` may already have a detached runner for this project. Nothing
+                    // in the platform stops two runners claiming for one project, so starting a
+                    // second here would quietly double it.
+                    if (!running.ContainsKey(key)
+                        && alreadyDetached is not null
+                        && await alreadyDetached(registration, ct))
+                    {
+                        if (skippedAsDetached.Add(key))
+                            Log($"{key}: already served by a detached runner ('runner stop {key}' to take it over) — skipping");
+                        continue;
+                    }
+
                     if (running.TryGetValue(key, out var child))
                     {
                         if (!child.Process.HasExited)
@@ -102,7 +118,7 @@ public static class LocalMultiProjectRunnerMode
                     Log($"{key}: runner started");
                 }
 
-                if (running.Count == 0)
+                if (running.Count == 0 && skippedAsDetached.Count == 0)
                 {
                     console.MarkupLine("[yellow]No runner registrations saved — nothing to serve.[/]");
                     console.MarkupLine("[dim]pks agentics runner register owner/project[/]");

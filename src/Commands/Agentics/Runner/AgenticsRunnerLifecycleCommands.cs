@@ -111,6 +111,16 @@ public class AgenticsRunnerStartCommand : AsyncCommand<AgenticsRunnerStartComman
             return 1;
         }
 
+        // After resolution, so it also catches repeated --project: one directory shared by two
+        // runners would have them check out two projects over each other.
+        if (registrations.Count > 1 && !string.IsNullOrWhiteSpace(settings.WorkDir))
+        {
+            _console.MarkupLine(
+                $"[red]--work-dir names a single directory, but this would start {registrations.Count} runners.[/]");
+            _console.MarkupLine("[dim]Name one project with --project, or drop --work-dir to give each its own.[/]");
+            return 1;
+        }
+
         // Once, not per project: the device-code login is a single operator credential for the
         // whole machine, and asking twice in one command would print a second verification URL
         // that invalidates the first. Same reason it happens here rather than in the detached
@@ -220,9 +230,13 @@ public class AgenticsRunnerStartCommand : AsyncCommand<AgenticsRunnerStartComman
 
     /// <summary>
     /// Which projects this invocation serves. No <c>--project</c> means **every saved
-    /// registration** — the GitHub-runner shape Poul asked for: <c>register</c> the projects once,
-    /// then one <c>start</c> serves them all, and each gets its own detached runner so a long job
-    /// in one project does not hold up another.
+    /// registration** — the GitHub-runner shape: <c>register</c> the projects once, then one
+    /// <c>start</c> serves them all, and each gets its own detached runner so a long job in one
+    /// project does not hold up another.
+    ///
+    /// <c>start</c> is a one-shot, so this list is read once: a project registered afterwards
+    /// needs another <c>start</c>. Only the foreground supervisor in
+    /// <see cref="LocalMultiProjectRunnerMode"/> re-reads it as it runs.
     ///
     /// This used to refuse more than one registration ("pass --project to say which one"), which
     /// made the saved list unusable as what it already was: an opt-in list. Six registrations on a
@@ -250,15 +264,6 @@ public class AgenticsRunnerStartCommand : AsyncCommand<AgenticsRunnerStartComman
         var registrations = await _configService.ListRegistrationsAsync();
         if (registrations.Count == 0)
             throw new InvalidOperationException("No runner registrations found. Pass --project owner/project to register one.");
-
-        // `--work-dir` names one directory. Two runners sharing it would check out two projects
-        // over each other, so it is refused rather than silently applied to the first.
-        if (registrations.Count > 1 && !string.IsNullOrWhiteSpace(settings.WorkDir))
-        {
-            throw new InvalidOperationException(
-                $"--work-dir names a single directory, but {registrations.Count} registrations are saved. " +
-                "Pass --project owner/project to start one, or drop --work-dir to give each project its own.");
-        }
 
         return registrations;
     }
@@ -567,10 +572,10 @@ public class AgenticsRunnerUnregisterCommand : AsyncCommand<AgenticsRunnerUnregi
             return 1;
         }
 
-        var configuration = await _configService.LoadAsync();
-        var removed = new List<string>();
-        var missing = new List<string>();
-
+        // Every argument is parsed before anything is stopped or removed. Bailing out halfway
+        // would leave one project's runner killed and its registration still on disk, because the
+        // save happens at the end.
+        var targets = new List<(string Owner, string Project)>();
         foreach (var ownerProject in settings.OwnerProjects.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             var parts = ownerProject.Split('/', 2);
@@ -580,7 +585,15 @@ public class AgenticsRunnerUnregisterCommand : AsyncCommand<AgenticsRunnerUnregi
                 return 1;
             }
 
-            var (owner, project) = (parts[0], parts[1]);
+            targets.Add((parts[0], parts[1]));
+        }
+
+        var configuration = await _configService.LoadAsync();
+        var removed = new List<string>();
+        var missing = new List<string>();
+
+        foreach (var (owner, project) in targets)
+        {
             var matches = configuration.Registrations
                 .Where(r => string.Equals(r.Owner, owner, StringComparison.OrdinalIgnoreCase)
                          && string.Equals(r.Project, project, StringComparison.OrdinalIgnoreCase))
