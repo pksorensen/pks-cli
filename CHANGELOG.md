@@ -49,6 +49,13 @@ For template-specific changes, see their respective CHANGELOG files:
 - [Claude .NET 10 Full Template](../templates/claude-dotnet-10-full/CHANGELOG.md)
 - [PKS Fullstack Template](../templates/pks-fullstack/CHANGELOG.md)
 
+## [7.22.0](https://github.com/pksorensen/pks-cli/compare/v7.21.0...v7.22.0) (2026-11-23)
+
+
+### Features
+
+* **runner:** code_step-jobs får linjens filer, og .agentics/scripts er eksekverbare ([d747542](https://github.com/pksorensen/pks-cli/commit/d7475421b3b083933afc178d69482bc287cb5ac4))
+
 ## [7.21.0](https://github.com/pksorensen/pks-cli/compare/v7.20.0...v7.21.0) (2026-11-23)
 
 
