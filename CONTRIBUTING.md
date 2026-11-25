@@ -6,13 +6,15 @@ Thank you for contributing to PKS CLI! This guide covers the development workflo
 
 PKS CLI uses a **single-branch model** with `main` as the only long-lived branch:
 
-- All PRs target **main**
+- Maintainers (and agents working for them) commit and push directly to **main**
+- Everyone else opens a PR against **main**; without write access a direct push is rejected
 - Every push to main publishes **preview packages** automatically (`X.Y.Z-preview.{build}`)
 - [Release Please](https://github.com/googleapis/release-please) creates **Release PRs** on main
 - Merging a Release PR publishes **stable releases** to NuGet and npm
 
 ```
-feature branch → PR to main (CI validates) → merge
+maintainer: push to main (CI validates after the push)
+external:   fork → PR to main (CI validates) → merge
                                  ↓
               Preview package published (6.3.0-preview.42)
               Release Please updates the Release PR
@@ -42,8 +44,13 @@ dotnet run -- [command] [options]
 
 ## Making Changes
 
+Maintainers: run the [CI checks](#ci-checks) locally, then commit and push to
+`main`. There is no branch or PR step.
+
+External contributors:
+
 ```bash
-# 1. Create feature branch from main
+# 1. Fork the repository, then create a feature branch from main
 git checkout main
 git pull origin main
 git checkout -b feat/my-feature
@@ -128,7 +135,7 @@ Scopes map to Release Please package components:
 5. Use the body to explain *what* and *why*, not *how*
 6. Reference issues in the footer (`Closes #42`)
 
-## Pull Request Workflow
+## Pull Request Workflow (external contributions)
 
 1. Open PRs against **main**
 2. CI runs automatically: format check, build, tests, hooks validation
@@ -138,7 +145,7 @@ Scopes map to Release Please package components:
 
 ### CI Checks
 
-Every PR must pass:
+CI runs on every PR and on every push to `main`. All of these must pass:
 
 - `dotnet format --verify-no-changes` — code formatting
 - `dotnet build --warnaserror` — clean build
@@ -171,7 +178,7 @@ PKS CLI uses Release Please in **manifest mode** with per-package versioning.
 ### The Release Cycle
 
 ```
-1. Merge PRs with conventional commits into main
+1. Conventional commits land on main (maintainer push or merged PR)
        ↓
 2. Preview NuGet packages published automatically (X.Y.Z-preview.{build})
        ↓

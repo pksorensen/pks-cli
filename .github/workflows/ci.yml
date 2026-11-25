@@ -3,6 +3,10 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  # Maintainers push straight to main (CONTRIBUTING.md), so main is checked too.
+  # Otherwise a formatting error lands unseen and turns the next PR red.
+  push:
+    branches: [main]
 
 env:
   DOTNET_VERSION: '10.0.x'
